@@ -1,0 +1,208 @@
+{
+  "head": {
+    "chn_name": "遥控定义表",
+    "eng_name": "fes_yk_define"
+  },
+  "columns": [
+    {
+      "chn_name": "所属RTU",
+      "eng_name": "rtu_id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "KEYID类型",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "点号",
+      "eng_name": "pnt_no",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "英文标识",
+      "eng_name": "code",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "中文名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "RDFID",
+      "eng_name": "rdfid",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "0值名称",
+      "eng_name": "name_0",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "1值名称",
+      "eng_name": "name_1",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "指令最长等待时间",
+      "eng_name": "max_wait_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控功能码",
+      "eng_name": "icode",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控ID",
+      "eng_name": "yk_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带域号的KEYID",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控方向",
+      "eng_name": "yk_dir",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控值",
+      "eng_name": "value",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "UCHAR",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "状态",
+      "eng_name": "status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "多选菜单",
+      "disp_menu": "遥信状态"
+    },
+    {
+      "chn_name": "遥控时间0",
+      "eng_name": "refresh_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "人工禁止遥控",
+      "eng_name": "man_disable",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "人工禁止遥控时刻",
+      "eng_name": "man_disable_tm",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "自动禁止遥控",
+      "eng_name": "auto_disable",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "自动禁止遥控时刻",
+      "eng_name": "auto_disable_tm",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "人工禁止遥控闭锁时间(秒)",
+      "eng_name": "man_disable_last_tm",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控时间1",
+      "eng_name": "refresh_time1",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控时间2",
+      "eng_name": "refresh_time2",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控时间3",
+      "eng_name": "refresh_time3",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "本地下发命令时间",
+      "eng_name": "cmd_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "本地下发命令时间",
+      "eng_name": "cmd_handle_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "五防定义表ID",
+      "eng_name": "cmd_check_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": ""
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<table_info>
+@   table_id     table_name_eng     table_name_chn     app_type     max_record_num     down_load     is_model       module_name      
+#   728          fes_ytyk_message      遥调遥控下发信息表         fes          20000              1             0              scada              
+</table_info>
+<fes_ytyk_message>
+@   column_id     column_name_eng         column_name_chn                data_type     data_length     is_key       app_type                                               display_type         menu_name     reference_display     reference_flag     reference_table     is_model     column_special     
+#   1             cmd_time                本地下发命令时间                 LONG          8               1            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public     带毫秒的DATETIME     ''            0                     0                  0                   0            0
+#   2             is_yk                   遥控/遥调                       SHORT         2               1            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public     单选菜单             二值判断       0                     0                  0                   0            0                  
+#   3             rtu_id                  所属RTU                        INT           4               1            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public     KEYID类型            ''            0                     1                  700                 0            0                  
+#   4             pnt_no                  点号                           SHORT         2               1            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public     LONG                 ''            0                     0                  0                   0            0                  
+#   5             name                    遥控/遥调名称                    STRING        64              0            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public     STRING               ''            0                     0                  0                   0            0                  
+#   6             value                   遥调/遥控值                      FLOAT         4               0            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public      FLOAT                ''            0                     0                  0                   0            0                  
+#   7             source                  来源                            SHORT         2               0            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public      单选菜单               遥调遥控来源            0                     0                  0                   0            0                  
+#   8             logs                    日志                            STRING         256               0            scada/pas/dts/fes/agc/avc/wams/schedule/dsa/public      STRING                ''            0                     0                  0                   0            0                  
+</fes_ytyk_message>

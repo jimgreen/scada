@@ -1,0 +1,10 @@
+# Targeted for Python 3.11 on Windows x64 and Linux x86_64. c104 publishes
+# CPython wheels for Windows x64 and Linux manylinux x86_64/aarch64; use a
+# supported wheel or build from source for another Python/architecture pair.
+pyModbusTCP==0.3.1
+pymodbus[serial]==3.16.1
+pyserial==3.5
+c104==2.2.1
+python-can==4.6.1
+bacpypes3==0.0.110
+asyncua==2.1.0

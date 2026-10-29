@@ -1,0 +1,177 @@
+{
+  "head": {
+    "chn_name": "scdfe_c主进程控制表",
+    "eng_name": "fes_scdfe_c_define"
+  },
+  "columns": [
+    {
+      "chn_name": "固定编号",
+      "eng_name": "id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "主进程启用",
+      "eng_name": "process_enable",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 1
+    },
+    {
+      "chn_name": "主进程重启请求",
+      "eng_name": "process_restart",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程状态",
+      "eng_name": "process_status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程号",
+      "eng_name": "process_pid",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程启动时间",
+      "eng_name": "process_start_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程停止时间",
+      "eng_name": "process_stop_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程重启时间",
+      "eng_name": "process_restart_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程心跳时间",
+      "eng_name": "process_heartbeat_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程退出码",
+      "eng_name": "process_exit_code",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程重启次数",
+      "eng_name": "process_restart_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "主进程错误信息",
+      "eng_name": "process_error",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "日志目录（相对数据库目录）",
+      "eng_name": "log_dir",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": "logs"
+    },
+    {
+      "chn_name": "日志保留小时数",
+      "eng_name": "log_retention_hours",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 720
+    },
+    {
+      "chn_name": "主进程扫描周期（毫秒）",
+      "eng_name": "scan_interval_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 2000
+    },
+    {
+      "chn_name": "通讯采集周期（毫秒）",
+      "eng_name": "poll_interval_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 1000
+    },
+    {
+      "chn_name": "失败重试周期（毫秒）",
+      "eng_name": "retry_interval_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 5000
+    },
+    {
+      "chn_name": "通信线程启动间隔（毫秒）",
+      "eng_name": "worker_start_delay_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 250
+    }
+  ]
+}

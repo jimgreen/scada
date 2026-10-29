@@ -1,0 +1,18 @@
+<table_info>
+@   table_id     table_name_eng         table_name_chn     app_type     max_record_num     down_load     is_model     module_name
+#   720          fes_channel_modbus_tcp_defineMODBUS-TCP通道参数定义表   public/fes/scada     200                1             0              scada
+</table_info>
+<fes_channel_modbus_tcp_define>
+@   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key       app_type                                               display_type     menu_name
+#   1            rtu_id              所属RTU             INT           4             1            public/fes/scada     KEYID类型         
+#   2            code                英文标识              STRING        64            0            public/fes/scada     STRING          
+#   3            name                中文名称              STRING        64            0            public/fes/scada     STRING          
+#   4            rdfid               RDFID             STRING        64            0            public/fes/scada     STRING          
+#   5            remote_host         远端主机              STRING        64            0            public/fes/scada     STRING          
+#   6            remote_port         远端端口              INT           4             0            public/fes/scada     INT             
+#   7            unit_id             默认从站地址            INT           4             0            public/fes/scada     INT             
+#   8            connect_timeout     连接超时（秒）           FLOAT         8             0            public/fes/scada     FLOAT           
+#   9            response_timeout    响应超时（秒）           FLOAT         8             0            public/fes/scada     FLOAT           
+#   10           retry_count         重试次数              INT           4             0            public/fes/scada     INT             
+#   11           keep_alive          保持连接              INT           4             0            public/fes/scada     单选菜单            二值判断
+</fes_channel_modbus_tcp_define>

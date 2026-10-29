@@ -1,0 +1,88 @@
+{
+  "head": {
+    "chn_name": "MODBUS召唤定义表",
+    "eng_name": "fes_channel_modbus_define_call"
+  },
+  "columns": [
+    {
+      "chn_name": "标识",
+      "eng_name": "id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "英文标识",
+      "eng_name": "code",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "中文名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "RDFID",
+      "eng_name": "rdfid",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "所属RTU",
+      "eng_name": "rtu_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "modbus通道的子站地址",
+      "eng_name": "irtuaddr",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "召唤序号",
+      "eng_name": "call_seq",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "每帧召唤的起始地址",
+      "eng_name": "iplace",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "每帧召唤的寄存器个数",
+      "eng_name": "inum",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "每帧召唤的功能码",
+      "eng_name": "icode",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    }
+  ]
+}

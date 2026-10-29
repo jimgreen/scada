@@ -1,0 +1,17 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local tooling and browser inspection output
+.ruff_cache/
+.playwright-cli/
+.vendor_inspect/
+output/
+
+# Generated runtime logs and SQLite rollback snapshots
+db/logs/
+db/backups/
+
+# Local test result transcripts
+tests/*_result.txt

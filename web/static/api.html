@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCADA API 文档</title><link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="docs-page"><div class="docs">
+<p class="eyebrow">SCADA / API</p><h1>SCADA 数据访问接口</h1>
+<p>服务默认读取 <code>D:\codex\scada\db\scada.sqlite3</code>，表结构来自 <code>D:\codex\scada\dbdef\json</code>。写请求使用 UTF-8 JSON，单条响应包含 <code>_version</code>，更新和删除可用 <code>If-Match</code> 做并发保护。</p>
+<div class="endpoint"><span class="method get">GET</span><code>/api/schemas</code><p>返回全部 18 张表的字段定义、主键、唯一关系和显示元数据。RTU 与通道已经合并到 <code>fes_rtu_define</code>，<code>fes_scdfe_c_define</code> 保存主进程控制记录。</p></div>
+<div class="endpoint"><span class="method get">GET</span><code>/api/overview</code><p>返回全部表的记录数量；使用 <code>?rtu_id=7</code> 查看给定 RTU 的关联数量。</p></div>
+<div class="endpoint"><span class="method get">GET</span><code>/api/rtus</code><br><span class="method post">POST</span><code>/api/rtus</code><p>RTU 定义增删改查：单条使用 <code>/api/rtus/{rtu_id}</code>，支持 <code>q/limit/offset/sort/order</code>。</p></div>
+<div class="endpoint"><span class="method get">GET</span><span class="method patch">PATCH</span><span class="method delete">DELETE</span><code>/api/rtus/{rtu_id}</code><p>RTU 和通道共用一条记录。新建时必须提供 <code>channel_id</code> 和 <code>channel_type</code>；字段还包括 <code>chan_addr</code>、<code>chan_port</code>、<code>status</code>。支持 <code>iec104</code>、<code>modbus-rtu</code>、<code>modbus-tcp</code>、<code>can</code>、<code>bacnet</code>、<code>opc</code>、<code>custom</code>。<code>process_enable</code> 控制通信线程启停，<code>process_restart=1</code> 请求一次重启；<code>process_status</code>、<code>process_pid</code>（通信线程宿主 PID）、时间、心跳、退出码和错误字段由 <code>scdfe_c</code> 回写。</p></div>
+<div class="endpoint"><span class="method get">GET</span><span class="method post">POST</span><span class="method patch">PATCH</span><span class="method delete">DELETE</span><code>/api/rtus/{rtu_id}/channel/parameters</code><p>管理该 RTU 的个性化通道参数。参数表按类型选择 <code>fes_channel_iec104_define</code>、<code>fes_channel_modbus_rtu_define</code>、<code>fes_channel_modbus_tcp_define</code>、<code>fes_channel_can_define</code>、<code>fes_channel_bacnet_define</code> 或 <code>fes_channel_opc_define</code>。</p></div>
+<div class="endpoint"><span class="method get">GET</span><br><span class="method post">POST</span><code>/api/rtus/{rtu_id}/points/{yc|yx|yt|yk}</code><p>按 RTU 作用域管理四遥数据；单条使用末尾点号，例如 <code>/api/rtus/7/points/yc/12</code>。</p></div>
+<div class="endpoint"><span class="method get">GET</span><br><span class="method post">POST</span><code>/api/points/{yc|yx|yt|yk}</code><p>跨 RTU 查询或新增四遥记录；也可使用 <code>/api/tables/{table}/rows</code> 操作所有辅助定义表。</p></div>
+<div class="endpoint"><span class="method patch">PATCH</span><br><span class="method delete">DELETE</span><code>/api/rtus/{id}</code> <code>/api/rtus/{id}/points/{kind}/{pnt_no}</code><p>PATCH 只提交需要修改的字段；主键不可修改。删除 RTU 前必须先删除其协议参数和四遥记录。</p></div>
+<div class="endpoint"><span class="method get">GET</span><code>/api/scdfe_c/status</code><br><span class="method patch">PATCH</span><code>/api/scdfe_c/control</code><p>查询或控制 scdfe_c 主进程。控制字段包括 <code>process_enable</code>、<code>process_restart</code>、运行周期、<code>log_retention_hours</code>（日志保留小时数，1–87600）和 <code>worker_start_delay_ms</code>（通信线程顺序启动间隔，默认 250 ms）；修改采集周期、失败重试周期或日志目录会在下一次扫描中平滑重载通信线程；PID、状态、时间、心跳、退出码和错误由进程回写。</p></div>
+<div class="endpoint"><span class="method get">GET</span><code>/api/scdfe_c/logs[?process=...&amp;rtu_id=...&amp;channel_id=...]</code><br><span class="method get">GET</span><code>/api/scdfe_c/logs/{filename}?tail=200</code><p>列出主进程、通信线程或数据库写进程的按小时日志文件，或安全读取日志尾部。文件名不能包含路径分隔符，单次读取最多 5000 行；日志级别写在行内容中，不再按 normal/alarm/error/process 拆文件。</p></div>
+<pre>POST /api/rtus
+Content-Type: application/json
+
+{"rtu_id":7,"channel_id":70,"channel_type":"modbus-tcp","chan_addr":"127.0.0.1","chan_port":502,"code":"station-7","name":"示例站"}
+
+POST /api/rtus/7/points/yc
+{"pnt_no":12,"code":"U_A","name":"A相电压","value":220.5,"status":0}</pre>
+<p>泛型单条路径为 <code>/api/tables/{table}/rows/{key}</code>，联合主键按表结构顺序用逗号拼接。跨 RTU 点表的单条路径为 <code>/api/points/yc/7,12</code>；指定 RTU 路径只接受点号，不接受另一个 RTU 的复合键。旧的 <code>/api/channels</code> 接口和旧协议表名已删除。</p>
+<p>集合支持 q、limit（1–500，默认 25）、offset、sort、order 和字段等值过滤（例如 rtu_id=7）。PATCH 支持传 null 清空数值字段，传空字符串清空文本。超出 JavaScript 安全整数范围的 KEYID 等整数以十进制字符串传输。</p>
+<p>400 表示参数或字段无效，404 表示记录不存在，409 表示重复主键、版本冲突或仍有关联数据。所有四遥写入均为数据库记录编辑，不下发现场设备命令。</p>
+<p><a href="/">← 返回管理页面</a></p>
+</div></body></html>

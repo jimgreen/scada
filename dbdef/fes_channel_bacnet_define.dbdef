@@ -1,0 +1,15 @@
+<table_info>
+@   table_id     table_name_eng        table_name_chn       app_type                                               max_record_num     down_load     is_model       module_name      
+#   716          fes_channel_bacnet_define     bacnet通道定义表     public/fes/scada     200                1             0              scada              
+</table_info>
+<fes_channel_bacnet_define>
+@   column_id     column_name_eng         column_name_chn        data_type     data_length     is_key       app_type                                               display_type     menu_name          reference_display     reference_flag     reference_table     is_model     column_special     
+#   1             id                      标识                   LONG          8               1            public/fes/scada     LONG             ''                 0                     0                  0                   0            0                  
+#   2             code                    英文标识               STRING        64              0            public/fes/scada     STRING           ''                 0                     0                  0                   0            0                  
+#   3             name                    中文名称               STRING        64              0            public/fes/scada     STRING           ''                 0                     0                  0                   0            0                  
+#   4             rdfid                   RDFID                  STRING        64              0            public/fes/scada     STRING           ''                 0                     0                  0                   0            0                  
+#   5             rtu_id                  所属RTU                INT           4               0            public/fes/scada     KEYID类型            ''            0                     1                  700                 0            0                  
+#   6             bind_ip                   绑定本端IP                  STRING        64              0            public/fes/scada     STRING           ''                 0                     0                  0                   0            0                  
+#   7             bind_port                绑定本端UDP端口               INT           4               0            public/fes/scada     INT              ''                 0                     0                  0                   0            0                  
+#   8             dev_id                对端设备ID               INT           4               0            public/fes/scada     INT              ''                 0                     0                  0                   0            0                  
+</fes_channel_bacnet_define>

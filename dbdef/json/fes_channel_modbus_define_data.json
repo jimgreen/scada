@@ -1,0 +1,120 @@
+{
+  "head": {
+    "chn_name": "MODBUS数据定义表",
+    "eng_name": "fes_channel_modbus_define_data"
+  },
+  "columns": [
+    {
+      "chn_name": "标识",
+      "eng_name": "id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "英文标识",
+      "eng_name": "code",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "中文名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "所属RTU",
+      "eng_name": "rtu_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "召唤序号",
+      "eng_name": "call_seq",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "是否遥信",
+      "eng_name": "if_yx",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断"
+    },
+    {
+      "chn_name": "点号",
+      "eng_name": "cnt",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "解释方式",
+      "eng_name": "trans_type",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "MODBUS数据解析类型"
+    },
+    {
+      "chn_name": "寄存器地址",
+      "eng_name": "reg_addr",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "偏移位数",
+      "eng_name": "offset_bit",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "占用总位数",
+      "eng_name": "all_bit",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥信是否取反",
+      "eng_name": "if_reverse",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断"
+    },
+    {
+      "chn_name": "两字节数据字节顺序",
+      "eng_name": "twobytedata_byteseq",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "UCHAR",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "四字节数据字节顺序",
+      "eng_name": "fourbytedata_byteseq",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "UCHAR",
+      "disp_menu": ""
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "head": {
+    "chn_name": "遥调遥控下发信息表",
+    "eng_name": "fes_ytyk_message"
+  },
+  "columns": [
+    {
+      "chn_name": "本地下发命令时间",
+      "eng_name": "cmd_time",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控/遥调",
+      "eng_name": "is_yk",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断"
+    },
+    {
+      "chn_name": "所属RTU",
+      "eng_name": "rtu_id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "KEYID类型",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "点号",
+      "eng_name": "pnt_no",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥控/遥调名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "遥调/遥控值",
+      "eng_name": "value",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "来源",
+      "eng_name": "source",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "遥调遥控来源"
+    },
+    {
+      "chn_name": "日志",
+      "eng_name": "logs",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    }
+  ]
+}
