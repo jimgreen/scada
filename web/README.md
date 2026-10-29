@@ -34,7 +34,7 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 
 18 张业务表使用与 JSON 一致的表名、列名和联合主键。RTU 与通道已经合并到 `fes_rtu_define`；`fes_scdfe_c_define` 的 `id=1` 行记录和控制 scdfe_c 主进程。协议参数表统一使用 `fes_channel_*_define` 命名。额外 `_version` 列用于本服务的乐观并发检查，`_scada_schema` 保存结构指纹。数据库必须使用当前 JSON schema；表结构不一致时直接报错，不做旧表、旧字段或旧名称迁移。
 
-`fes_rtu_define` 还包含 `process_enable`、`process_restart`、`process_status`、`process_pid`、`process_start_time`、`process_stop_time`、`process_restart_time`、`process_heartbeat_time`、`process_exit_code`、`process_restart_count` 和 `process_error`。这些字段供 `scdfe_c.py` 控制及观察 RTU-通道通信线程：`process_enable=0` 停止，`process_enable=1` 保持运行，`process_restart=1` 请求一次重启并由守护器自动清零。状态码为 0 停止、1 启动中、2 运行、3 停止中、4 重启中、5 错误；时间字段为 Unix 毫秒时间戳。线程没有独立 OS PID，运行时 `process_pid` 保存承载它的 `scdfe_c` 主进程 PID，停止后为 `0`。
+`fes_rtu_define` 还包含 `process_enable`、`process_restart`、`process_status`、`process_pid`、`process_start_time`、`process_stop_time`、`process_restart_time`、`process_heartbeat_time`、`process_exit_code`、`process_restart_count` 和 `process_error`。这些字段供 `scdfe_c.py` 控制及观察 RTU-通道通信线程：`process_enable=0` 停止，`process_enable=1` 保持运行，`process_restart=1` 请求一次重启并由守护器自动清零。状态码为 0 停止、1 启动中、2 运行、3 停止中、4 重启中、5 错误；时间字段为 Unix 毫秒时间戳。`process_pid` 保存对应通信线程的 native ID，停止后为 `0`。
 
 存储使用原生 SQLite（单文件多表），采用 WAL、每次操作独立连接、`BEGIN IMMEDIATE` 写事务、外键约束、30 秒 busy_timeout 和 mmap_size。此文件格式不是 `D:\codex\rtdb` 的每表独立 SQLite 封装格式；复用了它的 JSON 公共定义约定。旧 EMS 共享内存/二进制 RTDB 文件未直接接入。
 
@@ -77,7 +77,7 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 - `GET /api/schemas`：全部结构定义。
 - `GET /api/tables/{table}/schema`：单表结构。
 - `GET /api/overview[?rtu_id=7]`：全部或指定 RTU 的数量概览。
-- `GET /api/scdfe_c/status`：scdfe_c 主进程控制记录及 RTU-通道通信线程状态。
+- `GET /api/scdfe_c/status`：scdfe_c 主进程控制记录及 RTU-通道通信线程状态；主进程使用 `item.process_pid`，每个 RTU 通信线程使用 `rtus[].thread_id`。
 - `GET /api/scdfe_c/logs[?process=...&rtu_id=...&channel_id=...]`：按进程筛选按小时轮转的日志文件元数据。
 - `GET /api/scdfe_c/logs/{filename}?tail=200`：安全读取指定日志尾部。
 

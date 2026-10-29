@@ -71,6 +71,18 @@ PROCESS_CONTROL_FIELDS = {
     "process_error",
 }
 
+
+def _current_thread_id() -> int:
+    """Return the native ID of the current communication thread."""
+    native_id = getattr(threading.current_thread(), "native_id", None)
+    return int(native_id or threading.get_ident())
+
+
+def _thread_id(thread: threading.Thread) -> int:
+    """Return a worker's native ID, including lightweight test threads."""
+    native_id = getattr(thread, "native_id", None)
+    return int(native_id or getattr(thread, "ident", 0) or 0)
+
 # 这些字段是设备实时状态或命令运行字段。它们由 scdfe_c 自己更新，不能触发
 # 通道重启；其余四遥字段仍然属于点表定义，修改后会重新加载主站。
 RUNTIME_FIELDS = {
@@ -758,10 +770,11 @@ class ChannelWorker:
         """
         self.logger.process(f"通信线程启动，规约={self.spec.channel_type}")
         cycles = 0
+        thread_id = _current_thread_id()
         process_start = _now_ms()
         try:
             self._write_process_state(
-                process_status=PROCESS_STARTING, process_pid=os.getpid(),
+                process_status=PROCESS_STARTING, process_pid=thread_id,
                 process_start_time=process_start, process_heartbeat_time=process_start,
                 process_exit_code=0, process_error="",
             )
@@ -776,7 +789,7 @@ class ChannelWorker:
                     self._write_rtu_status(1)
                     self._write_process_state(
                         process_status=PROCESS_RUNNING,
-                        process_pid=os.getpid(), process_heartbeat_time=_now_ms(),
+                        process_pid=thread_id, process_heartbeat_time=_now_ms(),
                         process_error="",
                     )
                     self.logger.process("通道连接成功，开始实时采集")
@@ -801,7 +814,7 @@ class ChannelWorker:
                         self.stats.sent_yt += sent_yt
                         self._write_process_state(
                             process_status=PROCESS_RUNNING,
-                            process_pid=os.getpid(), process_heartbeat_time=_now_ms(),
+                            process_pid=thread_id, process_heartbeat_time=_now_ms(),
                         )
                         if monotonic_now >= self._next_cycle_log:
                             self.logger.normal(
@@ -821,7 +834,7 @@ class ChannelWorker:
                         self.logger.error(f"写入 RTU 错误状态失败: {db_exc}")
                     try:
                         self._write_process_state(
-                            process_status=PROCESS_ERROR, process_pid=os.getpid(),
+                            process_status=PROCESS_ERROR, process_pid=thread_id,
                             process_heartbeat_time=_now_ms(), process_error=str(exc),
                         )
                     except Exception as state_exc:  # noqa: BLE001
@@ -1138,10 +1151,7 @@ class ScdfeSupervisor:
         try:
             self._update_process_state(
                 key.rtu_id, process_status=PROCESS_STOPPING,
-                # A communication thread has no independent OS PID.  Keep
-                # the hosting scdfe_c PID in the existing status column so Web
-                # clients can still identify the owning daemon process.
-                process_pid=os.getpid(), process_stop_time=0,
+                process_pid=_thread_id(managed.thread), process_stop_time=0,
                 process_error=reason,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1156,7 +1166,7 @@ class ScdfeSupervisor:
             try:
                 self._update_process_state(
                     key.rtu_id, process_status=PROCESS_ERROR,
-                    process_pid=os.getpid(), process_heartbeat_time=_now_ms(),
+                    process_pid=_thread_id(managed.thread), process_heartbeat_time=_now_ms(),
                     process_exit_code=-1, process_error=f"通信线程停止超时: {reason}",
                 )
             except Exception as exc:  # noqa: BLE001
@@ -1186,10 +1196,10 @@ class ScdfeSupervisor:
                 if self.stop_event.is_set():
                     return False
         try:
-            # 启动阶段先写入宿主 PID，防止界面在新线程开始前继续显示旧状态。
+            # 启动阶段先清空线程 ID，待新线程启动后写入其 native ID。
             updates: dict[str, Any] = {
                 "process_status": PROCESS_RESTARTING if restarted else PROCESS_STARTING,
-                "process_pid": os.getpid(), "process_start_time": start_time,
+                "process_pid": 0, "process_start_time": start_time,
                 "process_heartbeat_time": start_time, "process_exit_code": 0,
                 "process_error": "",
             }
@@ -1204,7 +1214,7 @@ class ScdfeSupervisor:
                         "process_restart_time=?, process_heartbeat_time=?, "
                         "process_exit_code=0, process_error='', _version=_version+1 "
                         "WHERE rtu_id=?",
-                        (PROCESS_RESTARTING, os.getpid(), start_time, start_time, start_time, spec.rtu_id),
+                        (PROCESS_RESTARTING, 0, start_time, start_time, start_time, spec.rtu_id),
                     )
                     connection.commit()
             else:
@@ -1238,9 +1248,14 @@ class ScdfeSupervisor:
             self.logger.error(f"启动通信线程失败 rtu={spec.rtu_id} channel={spec.channel_id}: {exc}")
             return False
         self._workers[spec.key] = _ManagedWorker(spec, signature, thread, event)
-        thread_id = getattr(thread, "native_id", None) or thread.ident or 0
+        thread_id = _thread_id(thread)
+        if thread.is_alive():
+            try:
+                self._update_process_state(spec.rtu_id, process_pid=thread_id)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error(f"写入通信线程 ID 失败: {exc}")
         self.logger.process(
-            f"启动通信线程 pid={os.getpid()} tid={thread_id} "
+            f"启动通信线程 tid={thread_id} "
             f"rtu={spec.rtu_id} channel={spec.channel_id}",
         )
         return True

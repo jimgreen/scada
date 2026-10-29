@@ -245,7 +245,8 @@ class ScdfeCTest(unittest.TestCase):
         self.assertTrue(supervisor._writer_process.is_alive())
         worker = next(iter(supervisor.workers.values()))
         self.assertTrue(worker.thread.is_alive())
-        self.assertEqual(self.store.get_row("fes_rtu_define", [7])["process_pid"], os.getpid())
+        expected_thread_id = worker.thread.native_id or worker.thread.ident
+        self.assertEqual(self.store.get_row("fes_rtu_define", [7])["process_pid"], expected_thread_id)
         supervisor.stop()
         self.assertEqual(supervisor.workers, {})
         self.assertIsNone(supervisor._writer_process)

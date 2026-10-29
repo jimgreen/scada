@@ -329,7 +329,7 @@ async function loadScdfe() {
     $('#scdfe-worker-delay').value = item.worker_start_delay_ms ?? 250;
     $('#scdfe-retention-hours').value = item.log_retention_hours ?? 720;
     $('#scdfe-status').innerHTML = '<div class="metric"><strong>' + esc(statusLabel(item.process_status)) + '</strong><span>主进程状态</span></div><div class="metric"><strong>' + esc(item.process_pid || 0) + '</strong><span>主进程 PID</span></div><div class="metric"><strong>' + esc(item.process_restart_count || 0) + '</strong><span>重启次数</span></div><div class="metric"><strong>' + esc(fmtTime(item.process_heartbeat_time)) + '</strong><span>最近心跳</span></div><div class="metric"><strong>' + esc(item.process_error || '—') + '</strong><span>最近错误</span></div>';
-    $('#scdfe-rtus').innerHTML = status.rtus.map(row => '<tr><td>' + esc(row.rtu_id) + '</td><td>' + esc(row.channel_id) + '</td><td>' + esc(channelTypeLabel(row.channel_type)) + '</td><td>' + esc(statusLabel(row.process_status)) + '</td><td>' + esc(row.process_pid || 0) + '</td><td>' + esc(fmtTime(row.process_heartbeat_time)) + '</td><td>' + esc(row.process_error || '—') + '</td></tr>').join('') || '<tr><td colspan="7">暂无 RTU 通信线程</td></tr>';
+    $('#scdfe-rtus').innerHTML = status.rtus.map(row => '<tr><td>' + esc(row.rtu_id) + '</td><td>' + esc(row.channel_id) + '</td><td>' + esc(channelTypeLabel(row.channel_type)) + '</td><td>' + esc(statusLabel(row.process_status)) + '</td><td>' + esc(row.thread_id || 0) + '</td><td>' + esc(fmtTime(row.process_heartbeat_time)) + '</td><td>' + esc(row.process_error || '—') + '</td></tr>').join('') || '<tr><td colspan="7">暂无 RTU 通信线程</td></tr>';
     await loadScdfeLogs();
   } catch (error) { toast(error.message, true); }
 }

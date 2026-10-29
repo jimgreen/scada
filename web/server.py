@@ -262,7 +262,22 @@ class ScadaHandler(BaseHTTPRequestHandler):
                         "process_heartbeat_time": int(time.time() * 1000),
                     })
             rows = self.store.list_rows("fes_rtu_define", limit=500, sort="rtu_id")["items"]
-            rtus = [{key: row.get(key) for key in ("rtu_id", "channel_id", "channel_type", "process_enable", "process_status", "process_pid", "process_start_time", "process_heartbeat_time", "process_error")} for row in rows]
+            # ``process_pid`` is the RTU table's storage column for the native
+            # communication-thread ID.  The main-process control row keeps its
+            # own ``process_pid`` as the supervisor PID, so expose a distinct
+            # API name here and avoid implying that an RTU row contains a
+            # process identifier.
+            rtus = [{
+                "rtu_id": row.get("rtu_id"),
+                "channel_id": row.get("channel_id"),
+                "channel_type": row.get("channel_type"),
+                "process_enable": row.get("process_enable"),
+                "process_status": row.get("process_status"),
+                "thread_id": row.get("process_pid"),
+                "process_start_time": row.get("process_start_time"),
+                "process_heartbeat_time": row.get("process_heartbeat_time"),
+                "process_error": row.get("process_error"),
+            } for row in rows]
             return self._json(200, {"item": control, "rtus": rtus})
         if parts[:3] == ["api", "scdfe_c", "control"]:
             if len(parts) != 3:

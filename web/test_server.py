@@ -268,9 +268,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(sources, {p: p.read_bytes() for p in sources})
 
     def test_scdfe_control_status_and_log_routes(self):
+        self.rtu()
         status, body = self.call('/api/scdfe_c/status')
         self.assertEqual(status, 200)
         self.assertEqual(body['item']['id'], 1)
+        self.assertEqual(body['rtus'][0]['thread_id'], 0)
+        self.assertNotIn('process_pid', body['rtus'][0])
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_pid': 1})[0], 400)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'worker_start_delay_ms': 60001})[0], 400)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'log_retention_hours': 87601})[0], 400)

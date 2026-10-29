@@ -48,7 +48,7 @@ cd /opt/scada
 | `process_enable` | `1` 启用并保持通信线程，`0` 停止并保持停用 |
 | `process_restart` | 写 `1` 请求一次重启；守护器消费后自动写回 `0` |
 | `process_status` | `0` 停止、`1` 启动中、`2` 运行、`3` 停止中、`4` 重启中、`5` 错误 |
-| `process_pid` | 承载该通信线程的 `scdfe_c` 主进程 PID；线程没有独立 OS PID，停止后为 `0` |
+| `process_pid` | 该通信线程的 native ID；停止后为 `0` |
 | `process_start_time` | 最近一次启动时间，Unix 毫秒时间戳 |
 | `process_stop_time` | 最近一次停止时间，Unix 毫秒时间戳 |
 | `process_restart_time` | 最近一次重启请求/执行时间，Unix 毫秒时间戳 |
@@ -75,7 +75,7 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 ```
 
 `process_restart` 是一次性命令位，不能用作持续启停开关；持续运行由
-`process_enable` 控制。主调度线程写入启动/停止/重启过渡状态，通信线程写入宿主 PID、
+`process_enable` 控制。主调度线程写入启动/停止/重启过渡状态，通信线程写入线程 ID、
 运行状态、心跳和连接错误。所有状态写入都使用短事务和 `_version` 递增，Web 的乐观
 并发检查仍然有效。
 
