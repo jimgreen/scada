@@ -245,6 +245,26 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(every_poll_worker._sync_measurements(values), (1, 1))
         self.assertEqual(len(every_poll_queue.messages), 2)
 
+    def test_worker_accepts_mapping_measurements(self):
+        class Queue:
+            def __init__(self):
+                self.messages = []
+
+            def put(self, message, **_kwargs):
+                self.messages.append(message)
+
+        queue = Queue()
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs", writer_queue=queue,
+            measurement_heartbeat_interval=0,
+        )
+        self.assertEqual(worker._sync_measurements([
+            {"kind": "yc", "point_no": 1, "value": 12.5},
+            {"kind": "yx", "point_no": 1, "value": True, "quality": None},
+        ]), (1, 1))
+        self.assertEqual(len(queue.messages), 1)
+
     def test_command_poll_skips_rows_when_command_versions_are_unchanged(self):
         worker = ChannelWorker(
             self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),

@@ -59,7 +59,9 @@ BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
-_SIGNATURE_PROJECTION_CACHE: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {}
+_SIGNATURE_PROJECTION_CACHE: dict[
+    tuple[str, str], tuple[tuple[str, ...], str, str]
+] = {}
 
 # fes_rtu_define.process_status 的约定。
 PROCESS_STOPPED = 0
@@ -516,38 +518,69 @@ def _batch_writer_entry(
         logger.process("批量数据库写入进程停止")
 
 
-def _tables_for_signature(
+def _signature_tables(store: ScadaStore) -> tuple[str, ...]:
+    """Return the fixed table order used by the definition fingerprint."""
+    return tuple(dict.fromkeys(
+        ["fes_rtu_define", *CHANNEL_PARAMETER_TABLES.values(),
+         "fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define",
+         "fes_channel_modbus_define", "fes_channel_modbus_define_call",
+         "fes_channel_modbus_define_data", "fes_channel_modbus_define_ytyk"]
+    ))
+
+
+def _signature_projection(
+    store: ScadaStore,
+    table: str,
+) -> tuple[tuple[str, ...], str, str]:
+    """Cache static columns and deterministic primary-key ordering per table."""
+    cache_key = (str(store.catalog.directory), table)
+    projection_info = _SIGNATURE_PROJECTION_CACHE.get(cache_key)
+    if projection_info is None:
+        schema = store.schema(table)
+        columns = tuple(column["eng_name"] for column in schema["columns"]
+                        if column["eng_name"] not in RUNTIME_FIELDS)
+        primary_keys = tuple(column["eng_name"] for column in schema["columns"]
+                             if column.get("primary_key"))
+        projection_info = (
+            columns,
+            ", ".join(quote_identifier(column) for column in columns),
+            ", ".join(quote_identifier(column) for column in primary_keys),
+        )
+        _SIGNATURE_PROJECTION_CACHE[cache_key] = projection_info
+    return projection_info
+
+
+def _definition_digest(
     store: ScadaStore,
     rtu_id: int,
     connection: sqlite3.Connection | None = None,
-) -> list[tuple[str, list[dict[str, Any]]]]:
-    """在一个只读事务中加载通道和四遥定义。"""
-    names = ["fes_rtu_define", *CHANNEL_PARAMETER_TABLES.values(),
-             "fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define",
-             "fes_channel_modbus_define", "fes_channel_modbus_define_call",
-             "fes_channel_modbus_define_data", "fes_channel_modbus_define_ytyk"]
-    result: list[tuple[str, list[dict[str, Any]]]] = []
+) -> str:
+    """Hash static definitions as an ordered stream without materializing rows."""
     owned = connection is None
     active = connection or store.open_connection()
+    digest = hashlib.sha256()
     try:
         active.execute("BEGIN")
-        for table in dict.fromkeys(names):
-            # Runtime values change on every poll.  Selecting only static
-            # definition columns avoids copying hundreds of live/status fields
-            # into Python merely to discard them below.
-            cache_key = (str(store.catalog.directory), table)
-            projection_info = _SIGNATURE_PROJECTION_CACHE.get(cache_key)
-            if projection_info is None:
-                columns = tuple(column["eng_name"] for column in store.schema(table)["columns"]
-                                if column["eng_name"] not in RUNTIME_FIELDS)
-                projection_info = (columns, ", ".join(quote_identifier(column) for column in columns))
-                _SIGNATURE_PROJECTION_CACHE[cache_key] = projection_info
-            _, projection = projection_info
-            rows = [dict(row) for row in active.execute(
-                f"SELECT {projection} FROM {quote_identifier(table)} WHERE rtu_id=?", (rtu_id,))]
-            result.append((table, rows))
+        for table in _signature_tables(store):
+            columns, projection, order_by = _signature_projection(store, table)
+            digest.update(table.encode("utf-8"))
+            digest.update(b"\0")
+            order_clause = f" ORDER BY {order_by}" if order_by else ""
+            column_indexes = range(len(columns))
+            for row in active.execute(
+                f"SELECT {projection} FROM {quote_identifier(table)} "
+                f"WHERE rtu_id=?{order_clause}", (rtu_id,),
+            ):
+                encoded = json.dumps(
+                    [_jsonable(row[index]) for index in column_indexes],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
+            digest.update(b"\xff")
         active.commit()
-        return result
+        return digest.hexdigest()
     except Exception:
         if active.in_transaction:
             active.rollback()
@@ -568,15 +601,7 @@ def definition_signature(
     触发自身重启；编辑点号、地址、比例、名称、通道参数或点表增删会改变
     指纹并被父进程自动响应。
     """
-    payload: list[dict[str, Any]] = []
-    for table, rows in _tables_for_signature(store, rtu_id, connection):
-        for row in rows:
-            filtered = {key: _jsonable(value) for key, value in row.items()}
-            payload.append({"table": table, "row": filtered})
-    payload.sort(key=lambda item: (item["table"], json.dumps(item["row"], sort_keys=True,
-                                                            ensure_ascii=False)))
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return _definition_digest(store, rtu_id, connection)
 
 
 def discover_channels(store: ScadaStore) -> list[ChannelSpec]:
@@ -658,10 +683,46 @@ def build_master(store: ScadaStore, spec: ChannelSpec):
 
 def _measurement(item: Any) -> tuple[str | None, int | None, Any, Any]:
     """统一协议返回值为 kind、点号、值、质量。"""
-    kind = _field(item, "kind")
-    point_no = _field(item, "point_no")
-    value = _field(item, "value")
-    quality = _field(item, "quality", 0)
+    # This function runs once for every YC/YX on every poll.  Resolve the
+    # container shape once instead of calling the generic four-field helper
+    # repeatedly (which otherwise performs four isinstance checks per point).
+    try:
+        # All built-in protocol adapters return frozen dataclasses, so take
+        # this branch without any ABC checks in the normal hot path.
+        kind = item.kind
+        point_no = item.point_no
+        value = item.value
+        quality = getattr(item, "quality", 0)
+    except AttributeError:
+        if isinstance(item, Mapping):
+            kind = item.get("kind")
+            point_no = item.get("point_no")
+            value = item.get("value")
+            quality = item.get("quality", 0)
+        elif isinstance(item, sqlite3.Row):
+            try:
+                kind = item["kind"]
+            except (IndexError, KeyError):
+                kind = None
+            try:
+                point_no = item["point_no"]
+            except (IndexError, KeyError):
+                point_no = None
+            try:
+                value = item["value"]
+            except (IndexError, KeyError):
+                value = None
+            try:
+                quality = item["quality"]
+            except (IndexError, KeyError):
+                quality = 0
+        else:
+            kind = getattr(item, "kind", None)
+            point_no = getattr(item, "point_no", None)
+            value = getattr(item, "value", None)
+            quality = getattr(item, "quality", 0)
+    if quality is None:
+        quality = 0
     if kind is None or point_no is None:
         return None, None, None, None
     return str(kind), int(point_no), value, quality
@@ -796,10 +857,13 @@ class ChannelWorker:
 
     @staticmethod
     def _measurement_state(kind: str, value: Any, quality: Any) -> tuple[Any, int]:
-        try:
-            quality_value = int(getattr(quality, "value", quality or 0))
-        except (TypeError, ValueError):
-            quality_value = 0
+        if isinstance(quality, int):
+            quality_value = int(quality)
+        else:
+            try:
+                quality_value = int(getattr(quality, "value", quality or 0))
+            except (TypeError, ValueError):
+                quality_value = 0
         if kind == "yc":
             return float(value), quality_value
         if kind == "yx":
@@ -807,9 +871,8 @@ class ChannelWorker:
         raise ValueError(f"不支持的实时点类型: {kind}")
 
     @staticmethod
-    def _measurement_update(kind: str, value: Any, quality: Any, *, now: int | None = None) -> tuple[str, dict[str, Any]]:
-        now = _now_ms() if now is None else now
-        value, quality_value = ChannelWorker._measurement_state(kind, value, quality)
+    def _measurement_update_from_state(kind: str, value: Any, quality_value: int,
+                                       *, now: int) -> tuple[str, dict[str, Any]]:
         if kind == "yc":
             updates = {
                 "raw_value": value, "raw_status": quality_value, "raw_time": now,
@@ -828,6 +891,13 @@ class ChannelWorker:
         else:
             raise ValueError(f"不支持的实时点类型: {kind}")
         return table, updates
+
+    @staticmethod
+    def _measurement_update(kind: str, value: Any, quality: Any, *, now: int | None = None) -> tuple[str, dict[str, Any]]:
+        value, quality_value = ChannelWorker._measurement_state(kind, value, quality)
+        return ChannelWorker._measurement_update_from_state(
+            kind, value, quality_value, now=_now_ms() if now is None else now,
+        )
 
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
         yc = yx = 0
@@ -858,7 +928,9 @@ class ChannelWorker:
                 )
                 if not value_changed and not heartbeat_due:
                     continue
-                table, updates = self._measurement_update(kind, *state, now=now)
+                table, updates = self._measurement_update_from_state(
+                    kind, state[0], state[1], now=now,
+                )
                 if not value_changed:
                     updates = {
                         "refresh_time": now,
