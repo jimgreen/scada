@@ -58,6 +58,7 @@ BATCH_WRITER_INTERVAL = 0.2
 BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
+_SIGNATURE_PROJECTION_CACHE: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {}
 
 # fes_rtu_define.process_status 的约定。
 PROCESS_STOPPED = 0
@@ -533,9 +534,14 @@ def _tables_for_signature(
             # Runtime values change on every poll.  Selecting only static
             # definition columns avoids copying hundreds of live/status fields
             # into Python merely to discard them below.
-            columns = [column["eng_name"] for column in store.schema(table)["columns"]
-                       if column["eng_name"] not in RUNTIME_FIELDS]
-            projection = ", ".join(quote_identifier(column) for column in columns)
+            cache_key = (str(store.catalog.directory), table)
+            projection_info = _SIGNATURE_PROJECTION_CACHE.get(cache_key)
+            if projection_info is None:
+                columns = tuple(column["eng_name"] for column in store.schema(table)["columns"]
+                                if column["eng_name"] not in RUNTIME_FIELDS)
+                projection_info = (columns, ", ".join(quote_identifier(column) for column in columns))
+                _SIGNATURE_PROJECTION_CACHE[cache_key] = projection_info
+            _, projection = projection_info
             rows = [dict(row) for row in active.execute(
                 f"SELECT {projection} FROM {quote_identifier(table)} WHERE rtu_id=?", (rtu_id,))]
             result.append((table, rows))
