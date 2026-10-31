@@ -170,7 +170,7 @@ ruff check api web tests scdfe_c.py
 环境已执行协议回环和全套回归；Linux 分支通过平台模拟、静态检查和编译检查，尚未
 在本机 Linux 内核中执行。
 
-可以用下面的基准复测写库路径，固定模拟每站 100 个遥测和 100 个遥信：
+可以用下面的基准复测写库路径，固定模拟每站 1000 个遥测和 1000 个遥信：
 
 ```powershell
 \.venv\Scripts\python.exe tools/benchmark_scdfe.py --cycles 1000 --db-cycles 20
@@ -178,3 +178,12 @@ ruff check api web tests scdfe_c.py
 
 输出同时给出旧的“每点一条队列消息”和当前批消息的队列条数、Python 序列化耗时，
 命令轮询、定义指纹检查以及 SQLite 更新基准；实际结果会受操作系统、磁盘和 SQLite 缓存影响。
+
+
+多 RTU 扩容基准：
+
+```powershell
+.\.venv\Scripts\python.exe tools/benchmark_rtu_scale.py --replicas 1 10 --cycles 1000 --db-cycles 20 --command-cycles 1000 --definition-cycles 10 --scan-cycles 1000 --output reports/rtu_scale_20261101.json
+```
+
+该工具独立生成 6/60 个 RTU，每站 YC1000/YX1000/YK200/YT200，分别记录串行阶段计时；随后用 6/60 个通信线程和真实独立写库进程测试变化值完整写回。排空并提交后才停止计时，逐点验证最终值和版本号。不连接现场设备，不改动正式数据库。默认定义扫描每站测 10 次，其余循环数见命令。

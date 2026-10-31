@@ -13,6 +13,8 @@ output/
 db/logs/
 db/backups/
 db/*.scdfe_c-*.lock
+db/*.sqlite3-wal
+db/*.sqlite3-shm
 
 # Local test result transcripts
 tests/*_result.txt
