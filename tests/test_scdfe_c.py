@@ -206,6 +206,45 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(queue.messages[0]["op"], "batch")
         self.assertEqual(len(queue.messages[0]["updates"]), 2)
 
+    def test_worker_skips_stable_measurements_until_heartbeat(self):
+        class Queue:
+            def __init__(self):
+                self.messages = []
+
+            def put(self, message, **_kwargs):
+                self.messages.append(message)
+
+        queue = Queue()
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs", writer_queue=queue,
+            measurement_heartbeat_interval=60,
+        )
+        values = [Value("yc", 1, 221.5), Value("yx", 1, True)]
+        self.assertEqual(worker._sync_measurements(values), (1, 1))
+        self.assertEqual(worker._sync_measurements(values), (0, 0))
+        self.assertEqual(len(queue.messages), 1)
+        changed = [Value("yc", 1, 222.5), Value("yx", 1, True)]
+        self.assertEqual(worker._sync_measurements(changed), (1, 0))
+        self.assertEqual(len(queue.messages), 2)
+        worker._measurement_cache[("yc", 1)] = (222.5, 0, time.monotonic() - 61)
+        worker._measurement_cache[("yx", 1)] = (1, 0, time.monotonic() - 61)
+        self.assertEqual(worker._sync_measurements(changed), (1, 1))
+        heartbeat_updates = queue.messages[2]["updates"]
+        self.assertEqual(set(heartbeat_updates[0]["values"]), {"refresh_time", "refresh_time_dev", "raw_time"})
+
+        # A zero interval keeps an explicit full-write mode for installations
+        # that require every poll to refresh all fields.
+        every_poll_queue = Queue()
+        every_poll_worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs", writer_queue=every_poll_queue,
+            measurement_heartbeat_interval=0,
+        )
+        self.assertEqual(every_poll_worker._sync_measurements(values), (1, 1))
+        self.assertEqual(every_poll_worker._sync_measurements(values), (1, 1))
+        self.assertEqual(len(every_poll_queue.messages), 2)
+
     def test_command_poll_skips_rows_when_command_versions_are_unchanged(self):
         worker = ChannelWorker(
             self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),

@@ -85,6 +85,7 @@ def main() -> None:
         legacy_worker = LegacyWorker(
             None, ChannelSpec(1, 1, "custom", None, None),
             log_dir=log_dir, writer_queue=legacy_queue,
+            measurement_heartbeat_interval=0,
         )
         legacy_started = time.perf_counter()
         for _ in range(args.cycles):
@@ -111,6 +112,10 @@ def main() -> None:
     for _ in range(args.cycles):
         pickle.dumps(batch_payload, protocol=pickle.HIGHEST_PROTOCOL)
     pickle_elapsed = time.perf_counter() - pickle_started
+    actual_pickle_started = time.perf_counter()
+    for payload in queue.messages:
+        pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    actual_pickle_elapsed = time.perf_counter() - actual_pickle_started
     legacy_db_elapsed = db_elapsed = 0.0
     if args.db_cycles:
         with tempfile.TemporaryDirectory() as database_dir:
@@ -233,9 +238,12 @@ def main() -> None:
     print(f"queue_puts={queue.puts}")
     print(f"elapsed_ms={elapsed * 1000:.3f}")
     print(f"pickle_ms={pickle_elapsed * 1000:.3f}")
+    print(f"actual_stable_pickle_ms={actual_pickle_elapsed * 1000:.3f}")
     print(f"per_cycle_ms={elapsed * 1000 / args.cycles:.6f}")
-    print(f"queue_put_reduction_pct={(1 - queue.puts / legacy_queue.puts) * 100:.2f}")
+    print(f"queue_put_reduction_pct={(1 - queue.puts / legacy_queue.puts) * 100:.4f}")
+    print(f"stable_filter_reduction_pct={(1 - queue.puts / args.cycles) * 100:.2f}")
     print(f"pickle_time_reduction_pct={(1 - pickle_elapsed / legacy_pickle_elapsed) * 100:.2f}")
+    print(f"stable_pickle_reduction_pct={(1 - actual_pickle_elapsed / legacy_pickle_elapsed) * 100:.2f}")
     if args.db_cycles:
         print(f"legacy_db_ms={legacy_db_elapsed * 1000:.3f}")
         print(f"db_ms={db_elapsed * 1000:.3f}")

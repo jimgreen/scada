@@ -58,6 +58,7 @@ BATCH_WRITER_INTERVAL = 0.2
 BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
+MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
 _SIGNATURE_PROJECTION_CACHE: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {}
 
 # fes_rtu_define.process_status 的约定。
@@ -672,13 +673,17 @@ class ChannelWorker:
     def __init__(self, store: ScadaStore, spec: ChannelSpec, *, log_dir: Path | str,
                  poll_interval: float = 1.0, retry_interval: float = 5.0,
                  master_factory: Callable[[ScadaStore, ChannelSpec], Any] | None = None,
-                 stop_event: Any | None = None, writer_queue: Any | None = None):
+                 stop_event: Any | None = None, writer_queue: Any | None = None,
+                 measurement_heartbeat_interval: float = MEASUREMENT_HEARTBEAT_INTERVAL):
         if poll_interval < 0 or retry_interval <= 0:
             raise ValueError("poll_interval 必须非负，retry_interval 必须为正")
+        if measurement_heartbeat_interval < 0:
+            raise ValueError("measurement_heartbeat_interval 不能为负")
         self.store = store
         self.spec = spec
         self.poll_interval = float(poll_interval)
         self.retry_interval = float(retry_interval)
+        self.measurement_heartbeat_interval = float(measurement_heartbeat_interval)
         self.master_factory = master_factory or build_master
         self.stop_event = stop_event or threading.Event()
         self.writer_queue = writer_queue
@@ -691,6 +696,7 @@ class ChannelWorker:
         self._next_cycle_log = 0.0
         self._master: Any | None = None
         self._command_connection: sqlite3.Connection | None = None
+        self._measurement_cache: dict[tuple[str, int], tuple[Any, Any, float]] = {}
 
     def _close_command_connection(self) -> None:
         connection = self._command_connection
@@ -789,25 +795,32 @@ class ChannelWorker:
             connection.commit()
 
     @staticmethod
-    def _measurement_update(kind: str, value: Any, quality: Any) -> tuple[str, dict[str, Any]]:
-        now = _now_ms()
+    def _measurement_state(kind: str, value: Any, quality: Any) -> tuple[Any, int]:
         try:
             quality_value = int(getattr(quality, "value", quality or 0))
         except (TypeError, ValueError):
             quality_value = 0
         if kind == "yc":
-            numeric = float(value)
+            return float(value), quality_value
+        if kind == "yx":
+            return int(bool(value)), quality_value
+        raise ValueError(f"不支持的实时点类型: {kind}")
+
+    @staticmethod
+    def _measurement_update(kind: str, value: Any, quality: Any, *, now: int | None = None) -> tuple[str, dict[str, Any]]:
+        now = _now_ms() if now is None else now
+        value, quality_value = ChannelWorker._measurement_state(kind, value, quality)
+        if kind == "yc":
             updates = {
-                "raw_value": numeric, "raw_status": quality_value, "raw_time": now,
-                "value": numeric, "value_dev": numeric, "status": quality_value,
+                "raw_value": value, "raw_status": quality_value, "raw_time": now,
+                "value": value, "value_dev": value, "status": quality_value,
                 "status_dev": quality_value, "refresh_time": now,
                 "refresh_time_dev": now,
             }
             table = "fes_yc_define"
         elif kind == "yx":
-            binary = int(bool(value))
             updates = {
-                "value": binary, "value_dev": binary, "status": quality_value,
+                "value": value, "value_dev": value, "status": quality_value,
                 "status_dev": quality_value, "refresh_time": now,
                 "refresh_time_dev": now,
             }
@@ -819,23 +832,52 @@ class ChannelWorker:
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
         yc = yx = 0
         pending: list[tuple[str, int, int, Mapping[str, Any]]] = []
-        kinds: list[str] = []
+        metadata: list[tuple[str, tuple[str, int], tuple[Any, Any], float]] = []
+        # Only retain states seen in this result.  Copying the whole cache on
+        # every poll made stable 200-point scans O(points) before any work was
+        # selected, and is unnecessary because duplicate point numbers are the
+        # only case that needs a tentative state within the current result.
+        candidate_cache: dict[tuple[str, int], tuple[Any, Any, float]] = {}
+        monotonic_now = time.monotonic()
+        now = _now_ms()
         for item in values or ():
             try:
                 kind, point_no, value, quality = _measurement(item)
                 if kind not in {"yc", "yx"} or point_no is None:
                     continue
-                table, updates = self._measurement_update(kind, value, quality)
+                state = self._measurement_state(kind, value, quality)
+                cache_key = (kind, point_no)
+                previous = candidate_cache.get(cache_key)
+                if previous is None:
+                    previous = self._measurement_cache.get(cache_key)
+                value_changed = previous is None or previous[:2] != state
+                heartbeat_due = (
+                    previous is None
+                    or self.measurement_heartbeat_interval == 0
+                    or monotonic_now - previous[2] >= self.measurement_heartbeat_interval
+                )
+                if not value_changed and not heartbeat_due:
+                    continue
+                table, updates = self._measurement_update(kind, *state, now=now)
+                if not value_changed:
+                    updates = {
+                        "refresh_time": now,
+                        "refresh_time_dev": now,
+                    }
+                    if kind == "yc":
+                        updates["raw_time"] = now
                 pending.append((table, self.spec.rtu_id, point_no, updates))
-                kinds.append(kind)
+                metadata.append((kind, cache_key, state, monotonic_now))
+                candidate_cache[cache_key] = (*state, monotonic_now)
             except Exception as exc:  # noqa: BLE001 - 单点异常不能中断整站采集
                 self.stats.errors += 1
                 self.logger.error(f"写回实时点失败: {exc}")
         if pending:
             changed = self._write_rows(pending)
             # _write_rows 保持输入顺序；数据库更新不存在的点时对应项为 False。
-            for kind, was_changed in zip(kinds, changed):
+            for (kind, cache_key, state, write_time), was_changed in zip(metadata, changed):
                 if was_changed:
+                    self._measurement_cache[cache_key] = (*state, write_time)
                     if kind == "yc":
                         yc += 1
                     else:
@@ -973,6 +1015,7 @@ class ChannelWorker:
                     )
                     self._master = self.master_factory(self.store, self.spec)
                     self._master.connect()
+                    self._measurement_cache.clear()
                     self._write_rtu_status(1)
                     self._write_process_state(
                         process_status=PROCESS_RUNNING,

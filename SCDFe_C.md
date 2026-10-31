@@ -112,6 +112,8 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 
 通信线程连接成功后持续调用主站的 `collect_once()`，把 `yc`、`yx` 返回值和质量/状态写回
 `fes_yc_define`、`fes_yx_define`，同时更新 `raw_*`、`value*`、`status*` 和刷新时间字段。
+值和质量发生变化时立即写入；值和质量稳定时，默认每 5 秒写一次刷新时间心跳，避免稳定点
+在每个采集周期重复产生完整数据库更新，同时保留数据新鲜度信息。
 它读取 `fes_yk_define`、`fes_yt_define` 的命令时间和值；首次启动只下发满足
 `cmd_time > cmd_handle_time` 的明确未处理命令，运行期间仅下发命令时间或值发生变化的命令。
 通信线程复用自己的只读 SQLite 连接，通过命令点表 `_version` 汇总值判断是否有变化；
