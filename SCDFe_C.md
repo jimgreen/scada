@@ -94,7 +94,8 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 主进程启用后还会启动一个独立的 `scdfe_c-db-writer` 批量写库进程。通信线程不直接
 写 SQLite，而是把遥测、遥信、遥控/遥调状态和 RTU/线程状态更新投递到有界队列；同一采集周期的
 遥测、遥信更新合并为一条批消息，写库进程每 200 ms 或累计 500 个点更新统一提交一次事务，
-并按相同 SQL 更新形状使用 `executemany`。通信线程按 `worker_start_delay_ms`（默认 250 ms）
+并按相同 SQL 更新形状使用 `executemany`。写库进程独占并复用一个 SQLite 写连接，批次之间只提交
+和重新开启事务。通信线程按 `worker_start_delay_ms`（默认 250 ms）
 顺序拉起，避免多个协议栈同时初始化。主进程停止、重载或修改日志目录/运行参数时，
 会先通知通信线程退出、等待队列完成，再停止写库进程。修改 `poll_interval_ms`、`retry_interval_ms`
 或日志目录会平滑重载现有通信线程；`scan_interval_ms`、日志保留小时数和启动间隔在下一轮

@@ -158,13 +158,14 @@ def main() -> None:
                 connection.execute("BEGIN IMMEDIATE")
                 _apply_batch_updates(connection, updates)
                 connection.commit()
+            persistent_connection = store.open_connection()
             started = time.perf_counter()
             for _ in range(args.db_cycles):
-                with store.connection() as connection:
-                    connection.execute("BEGIN IMMEDIATE")
-                    _apply_batch_updates(connection, updates)
-                    connection.commit()
+                persistent_connection.execute("BEGIN IMMEDIATE")
+                _apply_batch_updates(persistent_connection, updates)
+                persistent_connection.commit()
             db_elapsed = time.perf_counter() - started
+            persistent_connection.close()
     with tempfile.TemporaryDirectory() as command_dir:
         command_store = ScadaStore(Path(command_dir) / "scada.sqlite3")
         command_store.create_row("fes_rtu_define", {

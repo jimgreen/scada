@@ -340,6 +340,7 @@ def _flush_batch(
     logger: ScdfeLogger,
     messages: list[Mapping[str, Any]],
     queue: Any,
+    connection: sqlite3.Connection | None = None,
 ) -> bool:
     if not messages:
         return True
@@ -416,26 +417,33 @@ def _flush_batch(
             existing["values"].update(values)
     pending_messages = list(coalesced.values())
     error: Exception | None = None
+    owned_connection = connection is None
+    active_connection = connection or store.open_connection()
     for attempt in range(4):
         try:
-            with store.connection() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                _apply_batch_updates(connection, pending_messages)
-                connection.commit()
+            active_connection.execute("BEGIN IMMEDIATE")
+            _apply_batch_updates(active_connection, pending_messages)
+            active_connection.commit()
             error = None
             break
         except sqlite3.OperationalError as exc:
             error = exc
+            if active_connection.in_transaction:
+                active_connection.rollback()
             if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                 break
             time.sleep(0.05 * (attempt + 1))
         except Exception as exc:  # noqa: BLE001 - malformed internal message
             error = exc
+            if active_connection.in_transaction:
+                active_connection.rollback()
             break
     if error is not None:
         logger.error(f"批量写数据库失败，数量={len(pending_messages)}（原始消息 {len(messages)}）: {error}")
     for _ in messages:
         queue.task_done()
+    if owned_connection:
+        active_connection.close()
     return error is None
 
 
@@ -460,8 +468,10 @@ def _batch_writer_entry(
     logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer")
     pending: list[Mapping[str, Any]] = []
     pending_updates = 0
+    connection: sqlite3.Connection | None = None
     try:
         store = ScadaStore(db_path, schema_dir)
+        connection = store.open_connection()
         logger.process("批量数据库写入进程启动")
         while True:
             try:
@@ -469,13 +479,13 @@ def _batch_writer_entry(
             except Empty:
                 batch, pending = pending, []
                 pending_updates = 0
-                if not _flush_batch(store, logger, batch, queue):
+                if not _flush_batch(store, logger, batch, queue, connection):
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 continue
             if message == BATCH_WRITER_STOP:
                 batch, pending = pending, []
                 pending_updates = 0
-                flush_ok = _flush_batch(store, logger, batch, queue)
+                flush_ok = _flush_batch(store, logger, batch, queue, connection)
                 queue.task_done()
                 if not flush_ok:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
@@ -485,7 +495,7 @@ def _batch_writer_entry(
             if pending_updates >= max_batch:
                 batch, pending = pending, []
                 pending_updates = 0
-                if not _flush_batch(store, logger, batch, queue):
+                if not _flush_batch(store, logger, batch, queue, connection):
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
     except Exception as exc:  # noqa: BLE001 - parent reports/restarts the writer
         logger.error(f"批量数据库写入进程异常退出: {exc}")
@@ -496,6 +506,11 @@ def _batch_writer_entry(
             # account for queue items so a stopping supervisor cannot deadlock.
             for _ in pending:
                 queue.task_done()
+        if connection is not None:
+            try:
+                connection.close()
+            except (OSError, sqlite3.Error):
+                pass
         logger.process("批量数据库写入进程停止")
 
 

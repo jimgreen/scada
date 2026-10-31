@@ -191,6 +191,7 @@ class ScdfeControlTests(unittest.TestCase):
             })
             queue = Queue()
             logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
+            connection = store.open_connection()
             messages = [
                 {"op": "batch", "updates": [
                     {"op": "update", "table": "fes_yc_define",
@@ -201,12 +202,14 @@ class ScdfeControlTests(unittest.TestCase):
                      "values": {"value": 222.5, "refresh_time": 124}},
                 ]},
             ]
-            self.assertTrue(_flush_batch(store, logger, messages, queue))
+            self.assertTrue(_flush_batch(store, logger, messages, queue, connection))
             row = store.get_row("fes_yc_define", [7, 1])
             self.assertEqual(row["value"], 222.5)
             self.assertEqual(row["refresh_time"], 124)
             self.assertEqual(row["_version"], 2)
             self.assertEqual(queue.acknowledged, 1)
+            self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+            connection.close()
 
     def test_batch_writer_failure_exits_after_acknowledging_failed_batch(self):
         with tempfile.TemporaryDirectory() as directory:
