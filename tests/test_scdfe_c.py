@@ -185,6 +185,25 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(pending_worker._sync_commands(), (1, 0))
         self.assertEqual(pending_master.yk, [(1, False)])
 
+    def test_worker_queues_one_batch_for_a_measurement_cycle(self):
+        class Queue:
+            def __init__(self):
+                self.messages = []
+
+            def put(self, message, **_kwargs):
+                self.messages.append(message)
+
+        queue = Queue()
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs", writer_queue=queue,
+        )
+        values = [Value("yc", 1, 221.5), Value("yx", 1, True)]
+        self.assertEqual(worker._sync_measurements(values), (1, 1))
+        self.assertEqual(len(queue.messages), 1)
+        self.assertEqual(queue.messages[0]["op"], "batch")
+        self.assertEqual(len(queue.messages[0]["updates"]), 2)
+
     def test_worker_entry_catches_unexpected_thread_exception(self):
         # A bad schema path fails during thread-local store construction.  The
         # entry point must log and return instead of raising into the scheduler

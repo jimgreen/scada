@@ -92,8 +92,9 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 7. 按配置的保留小时数定期清理各进程的过期小时日志。
 
 主进程启用后还会启动一个独立的 `scdfe_c-db-writer` 批量写库进程。通信线程不直接
-写 SQLite，而是把遥测、遥信、遥控/遥调状态和 RTU/线程状态更新投递到有界队列；写库进程
-每 200 ms 或累计 500 条消息统一提交一次事务。通信线程按 `worker_start_delay_ms`（默认 250 ms）
+写 SQLite，而是把遥测、遥信、遥控/遥调状态和 RTU/线程状态更新投递到有界队列；同一采集周期的
+遥测、遥信更新合并为一条批消息，写库进程每 200 ms 或累计 500 个点更新统一提交一次事务，
+并按相同 SQL 更新形状使用 `executemany`。通信线程按 `worker_start_delay_ms`（默认 250 ms）
 顺序拉起，避免多个协议栈同时初始化。主进程停止、重载或修改日志目录/运行参数时，
 会先通知通信线程退出、等待队列完成，再停止写库进程。修改 `poll_interval_ms`、`retry_interval_ms`
 或日志目录会平滑重载现有通信线程；`scan_interval_ms`、日志保留小时数和启动间隔在下一轮
@@ -164,3 +165,12 @@ ruff check api web tests scdfe_c.py
 变化命令、按进程小时日志清理和父进程的启动/停止；不会连接现场设备。当前 Windows
 环境已执行协议回环和全套回归；Linux 分支通过平台模拟、静态检查和编译检查，尚未
 在本机 Linux 内核中执行。
+
+可以用下面的基准复测写库路径，固定模拟每站 100 个遥测和 100 个遥信：
+
+```powershell
+\.venv\Scripts\python.exe tools/benchmark_scdfe.py --cycles 1000 --db-cycles 20
+```
+
+输出同时给出旧的“每点一条队列消息”和当前批消息的队列条数、Python 序列化耗时，
+以及 SQLite 更新基准；实际结果会受操作系统、磁盘和 SQLite 缓存影响。

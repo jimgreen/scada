@@ -154,9 +154,11 @@ class ScdfeControlTests(unittest.TestCase):
             )
             process.start()
             queue.put({
-                "op": "update", "table": "fes_yc_define",
-                "key": {"rtu_id": 7, "pnt_no": 1},
-                "values": {"value": 221.5, "refresh_time": 123},
+                "op": "batch", "updates": [{
+                    "table": "fes_yc_define",
+                    "key": {"rtu_id": 7, "pnt_no": 1},
+                    "values": {"value": 221.5, "refresh_time": 123},
+                }],
             })
             queue.join()
             self.assertEqual(store.get_row("fes_yc_define", [7, 1])["value"], 221.5)
@@ -190,19 +192,21 @@ class ScdfeControlTests(unittest.TestCase):
             queue = Queue()
             logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
             messages = [
-                {"op": "update", "table": "fes_yc_define",
-                 "key": {"rtu_id": 7, "pnt_no": 1},
-                 "values": {"value": 221.5, "refresh_time": 123}},
-                {"op": "update", "table": "fes_yc_define",
-                 "key": {"rtu_id": 7, "pnt_no": 1},
-                 "values": {"value": 222.5, "refresh_time": 124}},
+                {"op": "batch", "updates": [
+                    {"op": "update", "table": "fes_yc_define",
+                     "key": {"rtu_id": 7, "pnt_no": 1},
+                     "values": {"value": 221.5, "refresh_time": 123}},
+                    {"op": "update", "table": "fes_yc_define",
+                     "key": {"rtu_id": 7, "pnt_no": 1},
+                     "values": {"value": 222.5, "refresh_time": 124}},
+                ]},
             ]
             self.assertTrue(_flush_batch(store, logger, messages, queue))
             row = store.get_row("fes_yc_define", [7, 1])
             self.assertEqual(row["value"], 222.5)
             self.assertEqual(row["refresh_time"], 124)
             self.assertEqual(row["_version"], 2)
-            self.assertEqual(queue.acknowledged, 2)
+            self.assertEqual(queue.acknowledged, 1)
 
     def test_batch_writer_failure_exits_after_acknowledging_failed_batch(self):
         with tempfile.TemporaryDirectory() as directory:

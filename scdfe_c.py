@@ -305,20 +305,34 @@ class ScdfeLogger:
 
 def _apply_batch_update(connection: sqlite3.Connection, message: Mapping[str, Any]) -> None:
     """Apply one queued update. The writer owns the surrounding transaction."""
-    if message.get("op") != "update":
-        raise ValueError(f"未知批量写入消息: {message.get('op')!r}")
-    table = str(message["table"])
-    key = message.get("key")
-    values = message.get("values")
-    if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
-        raise ValueError("批量写入消息缺少 key/values")
-    assignments = ", ".join(f"{quote_identifier(name)}=?" for name in values)
-    predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in key)
-    params = [*values.values(), *key.values()]
-    connection.execute(
-        f"UPDATE {quote_identifier(table)} SET {assignments}, _version=_version+1 "
-        f"WHERE {predicate}", params,
-    )
+    _apply_batch_updates(connection, [message])
+
+
+def _apply_batch_updates(connection: sqlite3.Connection,
+                         messages: list[Mapping[str, Any]]) -> None:
+    """Apply updates grouped by identical SQL shape in one transaction."""
+    groups: dict[str, list[list[Any]]] = {}
+    for message in messages:
+        if message.get("op") != "update":
+            raise ValueError(f"未知批量写入消息: {message.get('op')!r}")
+        table = str(message["table"])
+        key = message.get("key")
+        values = message.get("values")
+        if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
+            raise ValueError("批量写入消息缺少 key/values")
+        value_names = tuple(sorted(values))
+        key_names = tuple(sorted(key))
+        assignments = ", ".join(f"{quote_identifier(name)}=?" for name in value_names)
+        predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in key_names)
+        sql = (
+            f"UPDATE {quote_identifier(table)} SET {assignments}, _version=_version+1 "
+            f"WHERE {predicate}"
+        )
+        groups.setdefault(sql, []).append(
+            [values[name] for name in value_names] + [key[name] for name in key_names]
+        )
+    for sql, params in groups.items():
+        connection.executemany(sql, params)
 
 
 def _flush_batch(
@@ -336,26 +350,53 @@ def _flush_batch(
     # accounting remains exact while SQLite work and _version churn drop
     # substantially during fast polling.
     coalesced: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, Any]] = {}
+    expanded: list[Mapping[str, Any]] = []
     for message in messages:
-        if message.get("op") != "update":
-            logger.error(f"批量写数据库消息无法合并，op={message.get('op')!r}")
+        if not isinstance(message, Mapping):
+            logger.error("批量写数据库消息无法合并，消息不是对象")
             for _ in messages:
                 queue.task_done()
             return False
-        raw_table = message.get("table")
-        if not isinstance(raw_table, str) or not raw_table:
-            logger.error("批量写数据库消息无法合并，缺少有效 table")
+        op = message.get("op")
+        if op == "update":
+            candidates: Any = (message,)
+        elif op == "batch":
+            candidates = message.get("updates")
+            if not isinstance(candidates, list) or not candidates:
+                logger.error("批量写数据库消息无法合并，batch 缺少 updates")
+                for _ in messages:
+                    queue.task_done()
+                return False
+        else:
+            logger.error(f"批量写数据库消息无法合并，op={op!r}")
             for _ in messages:
                 queue.task_done()
             return False
-        table = raw_table
-        key = message.get("key")
-        values = message.get("values")
-        if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
-            logger.error("批量写数据库消息无法合并，缺少 key/values")
-            for _ in messages:
-                queue.task_done()
-            return False
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                logger.error("批量写数据库消息无法合并，update 不是对象")
+                for _ in messages:
+                    queue.task_done()
+                return False
+            raw_table = candidate.get("table")
+            if not isinstance(raw_table, str) or not raw_table:
+                logger.error("批量写数据库消息无法合并，缺少有效 table")
+                for _ in messages:
+                    queue.task_done()
+                return False
+            key = candidate.get("key")
+            values = candidate.get("values")
+            if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
+                logger.error("批量写数据库消息无法合并，缺少 key/values")
+                for _ in messages:
+                    queue.task_done()
+                return False
+            expanded.append(candidate)
+
+    for candidate in expanded:
+        table = str(candidate["table"])
+        key = candidate["key"]
+        values = candidate["values"]
         try:
             key_items = tuple(sorted((str(name), value) for name, value in key.items()))
             hash(key_items)
@@ -379,8 +420,7 @@ def _flush_batch(
         try:
             with store.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                for message in pending_messages:
-                    _apply_batch_update(connection, message)
+                _apply_batch_updates(connection, pending_messages)
                 connection.commit()
             error = None
             break
@@ -399,6 +439,15 @@ def _flush_batch(
     return error is None
 
 
+def _batch_message_size(message: Any) -> int:
+    """Return the number of point updates represented by one queue message."""
+    if isinstance(message, Mapping) and message.get("op") == "batch":
+        updates = message.get("updates")
+        if isinstance(updates, list):
+            return max(1, len(updates))
+    return 1
+
+
 def _batch_writer_entry(
     db_path: str,
     schema_dir: str,
@@ -410,6 +459,7 @@ def _batch_writer_entry(
     """Dedicated SQLite writer process for all communication-worker updates."""
     logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer")
     pending: list[Mapping[str, Any]] = []
+    pending_updates = 0
     try:
         store = ScadaStore(db_path, schema_dir)
         logger.process("批量数据库写入进程启动")
@@ -418,19 +468,23 @@ def _batch_writer_entry(
                 message = queue.get(timeout=batch_interval)
             except Empty:
                 batch, pending = pending, []
+                pending_updates = 0
                 if not _flush_batch(store, logger, batch, queue):
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 continue
             if message == BATCH_WRITER_STOP:
                 batch, pending = pending, []
+                pending_updates = 0
                 flush_ok = _flush_batch(store, logger, batch, queue)
                 queue.task_done()
                 if not flush_ok:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 break
             pending.append(message)
-            if len(pending) >= max_batch:
+            pending_updates += _batch_message_size(message)
+            if pending_updates >= max_batch:
                 batch, pending = pending, []
+                pending_updates = 0
                 if not _flush_batch(store, logger, batch, queue):
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
     except Exception as exc:  # noqa: BLE001 - parent reports/restarts the writer
@@ -606,12 +660,18 @@ class ChannelWorker:
             coalesced: dict[tuple[str, int, int], dict[str, Any]] = {}
             for table, rtu_id, point_no, updates in rows:
                 coalesced.setdefault((table, rtu_id, point_no), {}).update(updates)
-            for (table, rtu_id, point_no), updates in coalesced.items():
-                self.writer_queue.put({
-                    "op": "update", "table": table,
+            updates = [
+                {
+                    "table": table,
                     "key": {"rtu_id": rtu_id, "pnt_no": point_no},
-                    "values": updates,
-                }, timeout=max(1.0, self.retry_interval))
+                    "values": point_updates,
+                }
+                for (table, rtu_id, point_no), point_updates in coalesced.items()
+            ]
+            self.writer_queue.put(
+                {"op": "batch", "updates": updates},
+                timeout=max(1.0, self.retry_interval),
+            )
             # The writer owns the connection, so existence is confirmed when
             # it commits. The worker's counters represent accepted updates.
             return [True] * len(rows)

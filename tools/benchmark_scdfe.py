@@ -1,0 +1,170 @@
+"""Small repeatable benchmark for the scdfe_c runtime write path."""
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import pickle
+from pathlib import Path
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scdfe_c import ChannelSpec, ChannelWorker, _apply_batch_updates
+from web.service import ScadaStore, quote_identifier
+
+
+@dataclass
+class Value:
+    kind: str
+    point_no: int
+    value: object
+    quality: int = 0
+
+
+class CountingQueue:
+    def __init__(self) -> None:
+        self.puts = 0
+        self.messages: list[object] = []
+
+    def put(self, message: object, **_kwargs: object) -> None:
+        self.puts += 1
+        self.messages.append(message)
+
+
+class LegacyWorker(ChannelWorker):
+    """Use the previous one-queue-message-per-point write protocol."""
+
+    def _write_rows(self, rows):  # type: ignore[no-untyped-def]
+        rows = [(table, rtu_id, point_no, updates) for table, rtu_id, point_no, updates in rows
+                if updates]
+        if not rows:
+            return []
+        coalesced = {}
+        for table, rtu_id, point_no, updates in rows:
+            coalesced.setdefault((table, rtu_id, point_no), {}).update(updates)
+        for (table, rtu_id, point_no), updates in coalesced.items():
+            self.writer_queue.put({
+                "op": "update", "table": table,
+                "key": {"rtu_id": rtu_id, "pnt_no": point_no},
+                "values": updates,
+            })
+        return [True] * len(rows)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cycles", type=int, default=1000)
+    parser.add_argument("--db-cycles", type=int, default=20)
+    args = parser.parse_args()
+    if args.cycles < 1 or args.db_cycles < 0:
+        raise SystemExit("--cycles must be positive and --db-cycles cannot be negative")
+    values = [
+        *(Value("yc", point_no, float(point_no)) for point_no in range(1, 101)),
+        *(Value("yx", point_no, point_no % 2) for point_no in range(1, 101)),
+    ]
+    with tempfile.TemporaryDirectory() as log_dir:
+        legacy_queue = CountingQueue()
+        legacy_worker = LegacyWorker(
+            None, ChannelSpec(1, 1, "custom", None, None),
+            log_dir=log_dir, writer_queue=legacy_queue,
+        )
+        legacy_started = time.perf_counter()
+        for _ in range(args.cycles):
+            legacy_worker._sync_measurements(values)
+        legacy_elapsed = time.perf_counter() - legacy_started
+
+        queue = CountingQueue()
+        worker = ChannelWorker(
+            None, ChannelSpec(1, 1, "custom", None, None),
+            log_dir=log_dir, writer_queue=queue,
+        )
+        started = time.perf_counter()
+        for _ in range(args.cycles):
+            worker._sync_measurements(values)
+        elapsed = time.perf_counter() - started
+    legacy_payloads = legacy_queue.messages[:len(values)]
+    batch_payload = queue.messages[0]
+    legacy_pickle_started = time.perf_counter()
+    for _ in range(args.cycles):
+        for payload in legacy_payloads:
+            pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    legacy_pickle_elapsed = time.perf_counter() - legacy_pickle_started
+    pickle_started = time.perf_counter()
+    for _ in range(args.cycles):
+        pickle.dumps(batch_payload, protocol=pickle.HIGHEST_PROTOCOL)
+    pickle_elapsed = time.perf_counter() - pickle_started
+    legacy_db_elapsed = db_elapsed = 0.0
+    if args.db_cycles:
+        with tempfile.TemporaryDirectory() as database_dir:
+            store = ScadaStore(Path(database_dir) / "scada.sqlite3")
+            store.create_row("fes_rtu_define", {
+                "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
+            })
+            for point_no in range(1, 101):
+                store.create_row("fes_yc_define", {
+                    "rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}",
+                })
+                store.create_row("fes_yx_define", {
+                    "rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}",
+                })
+            updates = [
+                *legacy_payloads,
+            ]
+
+            def legacy_db_cycle() -> None:
+                with store.connection() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    for message in updates:
+                        table = message["table"]
+                        key = message["key"]
+                        values = message["values"]
+                        assignments = ", ".join(
+                            f"{quote_identifier(name)}=?" for name in values
+                        )
+                        predicate = " AND ".join(
+                            f"{quote_identifier(name)}=?" for name in key
+                        )
+                        connection.execute(
+                            f"UPDATE {quote_identifier(table)} SET {assignments}, "
+                            f"_version=_version+1 WHERE {predicate}",
+                            [*values.values(), *key.values()],
+                        )
+                    connection.commit()
+
+            legacy_db_cycle()
+            started = time.perf_counter()
+            for _ in range(args.db_cycles):
+                legacy_db_cycle()
+            legacy_db_elapsed = time.perf_counter() - started
+            with store.connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                _apply_batch_updates(connection, updates)
+                connection.commit()
+            started = time.perf_counter()
+            for _ in range(args.db_cycles):
+                with store.connection() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    _apply_batch_updates(connection, updates)
+                    connection.commit()
+            db_elapsed = time.perf_counter() - started
+    print(f"cycles={args.cycles}")
+    print(f"points_per_cycle={len(values)}")
+    print(f"legacy_queue_puts={legacy_queue.puts}")
+    print(f"legacy_elapsed_ms={legacy_elapsed * 1000:.3f}")
+    print(f"legacy_pickle_ms={legacy_pickle_elapsed * 1000:.3f}")
+    print(f"queue_puts={queue.puts}")
+    print(f"elapsed_ms={elapsed * 1000:.3f}")
+    print(f"pickle_ms={pickle_elapsed * 1000:.3f}")
+    print(f"per_cycle_ms={elapsed * 1000 / args.cycles:.6f}")
+    print(f"queue_put_reduction_pct={(1 - queue.puts / legacy_queue.puts) * 100:.2f}")
+    print(f"pickle_time_reduction_pct={(1 - pickle_elapsed / legacy_pickle_elapsed) * 100:.2f}")
+    if args.db_cycles:
+        print(f"legacy_db_ms={legacy_db_elapsed * 1000:.3f}")
+        print(f"db_ms={db_elapsed * 1000:.3f}")
+        print(f"db_time_reduction_pct={(1 - db_elapsed / legacy_db_elapsed) * 100:.2f}")
+
+
+if __name__ == "__main__":
+    main()
