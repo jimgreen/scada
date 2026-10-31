@@ -9,6 +9,7 @@ import threading
 import time
 import unittest
 
+import scdfe_c as runtime
 from scdfe_c import (
     ChannelSpec,
     ChannelWorker,
@@ -94,6 +95,34 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(before, definition_signature(self.store, 7))
         self.store.update_row("fes_yc_define", [7, 1], {"name": "新电压"})
         self.assertNotEqual(before, definition_signature(self.store, 7))
+
+    def test_worker_exits_after_definition_change_for_supervisor_reload(self):
+        previous_interval = runtime.WORKER_DEFINITION_CHECK_INTERVAL
+        runtime.WORKER_DEFINITION_CHECK_INTERVAL = 0.0
+        self.addCleanup(setattr, runtime, "WORKER_DEFINITION_CHECK_INTERVAL", previous_interval)
+
+        class DefinitionChangingMaster(FakeMaster):
+            def __init__(self, store):
+                super().__init__()
+                self.store = store
+                self.collected = False
+
+            def collect_once(self):
+                if not self.collected:
+                    self.collected = True
+                    self.store.update_row("fes_rtu_define", [7], {"name": "测试站-定义已变更"})
+                return []
+
+        master = DefinitionChangingMaster(self.store)
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs", poll_interval=0,
+            master_factory=lambda _store, _spec: master,
+        )
+        stats = worker.run(max_cycles=2)
+        self.assertEqual(stats.cycles, 1)
+        self.assertTrue(master.closed)
+        self.assertEqual(self.store.get_row("fes_rtu_define", [7])["status"], 0)
 
     def test_per_process_hourly_log_and_retention_cleanup(self):
         log_dir = self.root / "logs"
@@ -334,8 +363,8 @@ class ScdfeCTest(unittest.TestCase):
             worker_start_delay=0.08, thread_factory=thread_factory,
         )
         self.addCleanup(supervisor.stop)
-        supervisor._start_worker(ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"), "one")
-        supervisor._start_worker(ChannelSpec(8, 80, "modbus-tcp", "127.0.0.1", 1503, "测试站2"), "two")
+        supervisor._start_worker(ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"))
+        supervisor._start_worker(ChannelSpec(8, 80, "modbus-tcp", "127.0.0.1", 1503, "测试站2"))
 
         self.assertEqual(len(starts), 2)
         self.assertGreaterEqual(starts[1] - starts[0], 0.07)

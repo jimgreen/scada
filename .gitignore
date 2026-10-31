@@ -12,6 +12,7 @@ output/
 # Generated runtime logs and SQLite rollback snapshots
 db/logs/
 db/backups/
+db/*.scdfe_c-*.lock
 
 # Local test result transcripts
 tests/*_result.txt

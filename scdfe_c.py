@@ -56,6 +56,8 @@ LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_INTERVAL = 0.2
 BATCH_WRITER_MAX_BATCH = 500
+WORKER_HEARTBEAT_INTERVAL = 5.0
+WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 
 # fes_rtu_define.process_status 的约定。
 PROCESS_STOPPED = 0
@@ -327,12 +329,57 @@ def _flush_batch(
 ) -> bool:
     if not messages:
         return True
+    # Several communication threads can enqueue successive values for the
+    # same row before the writer commits.  Keep the latest field value for
+    # each (table, primary-key) pair and execute one UPDATE per row.  The
+    # original message count is still acknowledged below, so JoinableQueue
+    # accounting remains exact while SQLite work and _version churn drop
+    # substantially during fast polling.
+    coalesced: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, Any]] = {}
+    for message in messages:
+        if message.get("op") != "update":
+            logger.error(f"批量写数据库消息无法合并，op={message.get('op')!r}")
+            for _ in messages:
+                queue.task_done()
+            return False
+        raw_table = message.get("table")
+        if not isinstance(raw_table, str) or not raw_table:
+            logger.error("批量写数据库消息无法合并，缺少有效 table")
+            for _ in messages:
+                queue.task_done()
+            return False
+        table = raw_table
+        key = message.get("key")
+        values = message.get("values")
+        if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
+            logger.error("批量写数据库消息无法合并，缺少 key/values")
+            for _ in messages:
+                queue.task_done()
+            return False
+        try:
+            key_items = tuple(sorted((str(name), value) for name, value in key.items()))
+            hash(key_items)
+        except (TypeError, ValueError):
+            logger.error("批量写数据库消息无法合并，key 包含不可哈希值")
+            for _ in messages:
+                queue.task_done()
+            return False
+        token = (table, key_items)
+        existing = coalesced.get(token)
+        if existing is None:
+            coalesced[token] = {
+                "op": "update", "table": table,
+                "key": dict(key), "values": dict(values),
+            }
+        else:
+            existing["values"].update(values)
+    pending_messages = list(coalesced.values())
     error: Exception | None = None
     for attempt in range(4):
         try:
             with store.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                for message in messages:
+                for message in pending_messages:
                     _apply_batch_update(connection, message)
                 connection.commit()
             error = None
@@ -346,7 +393,7 @@ def _flush_batch(
             error = exc
             break
     if error is not None:
-        logger.error(f"批量写数据库失败，数量={len(messages)}: {error}")
+        logger.error(f"批量写数据库失败，数量={len(pending_messages)}（原始消息 {len(messages)}）: {error}")
     for _ in messages:
         queue.task_done()
     return error is None
@@ -685,7 +732,8 @@ class ChannelWorker:
             connection.execute("BEGIN")
             for table, kind in (("fes_yk_define", "yk"), ("fes_yt_define", "yt")):
                 rows = connection.execute(
-                    f"SELECT * FROM {quote_identifier(table)} WHERE rtu_id=? ORDER BY pnt_no",
+                    f"SELECT pnt_no, value, cmd_time, cmd_handle_time "
+                    f"FROM {quote_identifier(table)} WHERE rtu_id=? ORDER BY pnt_no",
                     (self.spec.rtu_id,),
                 ).fetchall()
                 result.extend((kind, dict(row)) for row in rows)
@@ -772,6 +820,7 @@ class ChannelWorker:
         cycles = 0
         thread_id = _current_thread_id()
         process_start = _now_ms()
+        next_heartbeat = 0.0
         try:
             self._write_process_state(
                 process_status=PROCESS_STARTING, process_pid=thread_id,
@@ -792,6 +841,7 @@ class ChannelWorker:
                         process_pid=thread_id, process_heartbeat_time=_now_ms(),
                         process_error="",
                     )
+                    next_heartbeat = time.monotonic() + WORKER_HEARTBEAT_INTERVAL
                     self.logger.process("通道连接成功，开始实时采集")
                     self.logger.normal("通道进入正常运行状态")
                     while not self.stop_event.is_set():
@@ -800,7 +850,9 @@ class ChannelWorker:
                         monotonic_now = time.monotonic()
                         if monotonic_now >= self._next_definition_check:
                             current_signature = definition_signature(self.store, self.spec.rtu_id)
-                            self._next_definition_check = monotonic_now + max(1.0, self.poll_interval)
+                            self._next_definition_check = monotonic_now + max(
+                                WORKER_DEFINITION_CHECK_INTERVAL, self.poll_interval,
+                            )
                             if current_signature != self._last_signature:
                                 self.logger.process("检测到通道或四遥定义变化，退出并请求重载")
                                 return self.stats
@@ -812,10 +864,12 @@ class ChannelWorker:
                         self.stats.updated_yx += yx
                         self.stats.sent_yk += sent_yk
                         self.stats.sent_yt += sent_yt
-                        self._write_process_state(
-                            process_status=PROCESS_RUNNING,
-                            process_pid=thread_id, process_heartbeat_time=_now_ms(),
-                        )
+                        if monotonic_now >= next_heartbeat:
+                            self._write_process_state(
+                                process_status=PROCESS_RUNNING,
+                                process_pid=thread_id, process_heartbeat_time=_now_ms(),
+                            )
+                            next_heartbeat = monotonic_now + WORKER_HEARTBEAT_INTERVAL
                         if monotonic_now >= self._next_cycle_log:
                             self.logger.normal(
                                 f"采集周期摘要 cycles={self.stats.cycles} yc={self.stats.updated_yc} "
@@ -888,7 +942,6 @@ def _worker_thread_entry(db_path: str, schema_dir: str, spec_data: dict[str, Any
 @dataclass
 class _ManagedWorker:
     spec: ChannelSpec
-    signature: str
     thread: threading.Thread
     stop_event: threading.Event
     started_at: float = field(default_factory=time.time)
@@ -1187,7 +1240,7 @@ class ScdfeSupervisor:
             self.logger.error(f"写入通信线程最终状态失败: {exc}")
         return True
 
-    def _start_worker(self, spec: ChannelSpec, signature: str, *, restarted: bool = False) -> bool:
+    def _start_worker(self, spec: ChannelSpec, *, restarted: bool = False) -> bool:
         start_time = _now_ms()
         if self._last_worker_start:
             remaining = self.worker_start_delay - (time.monotonic() - self._last_worker_start)
@@ -1247,7 +1300,7 @@ class ScdfeSupervisor:
                 self.logger.error(f"写入通信线程启动错误状态失败: {state_exc}")
             self.logger.error(f"启动通信线程失败 rtu={spec.rtu_id} channel={spec.channel_id}: {exc}")
             return False
-        self._workers[spec.key] = _ManagedWorker(spec, signature, thread, event)
+        self._workers[spec.key] = _ManagedWorker(spec, thread, event)
         thread_id = _thread_id(thread)
         if thread.is_alive():
             try:
@@ -1304,7 +1357,6 @@ class ScdfeSupervisor:
                 self._stop_worker(key, reason="RTU-通道已删除或禁用")
                 stopped += 1
         for key, spec in specs.items():
-            signature = definition_signature(self.store, spec.rtu_id)
             managed = self._workers.get(key)
             restart_requested = spec.process_restart and self._consume_restart(spec.rtu_id)
             if not spec.process_enable:
@@ -1336,22 +1388,18 @@ class ScdfeSupervisor:
                 stopped_ok = True
                 if managed is not None:
                     stopped_ok = self._stop_worker(key, reason="RTU process_restart=1，执行重启")
-                if stopped_ok and self._start_worker(spec, signature, restarted=True):
+                if stopped_ok and self._start_worker(spec, restarted=True):
                     reloaded += 1
                 continue
             if managed is None:
-                if self._start_worker(spec, signature):
+                if self._start_worker(spec):
                     started += 1
                 continue
             if not managed.thread.is_alive():
                 stopped_ok = self._stop_worker(key, reason="通信线程已退出", unexpected=True)
-                if stopped_ok and self._start_worker(spec, signature, restarted=True):
+                if stopped_ok and self._start_worker(spec, restarted=True):
                     started += 1
                 continue
-            if managed.signature != signature:
-                stopped_ok = self._stop_worker(key, reason="通道或四遥定义已更新")
-                if stopped_ok and self._start_worker(spec, signature, restarted=True):
-                    reloaded += 1
         self._scan_count += 1
         removed = ScdfeLogger.cleanup(self.log_dir, retention_hours=self.retention_hours)
         if removed:

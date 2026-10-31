@@ -6,7 +6,7 @@ import threading
 import time
 import unittest
 
-from scdfe_c import BATCH_WRITER_STOP, ScdfeLogger, _batch_writer_entry
+from scdfe_c import BATCH_WRITER_STOP, ScdfeLogger, _batch_writer_entry, _flush_batch
 from scdfe_c import ScdfeSupervisor
 from core.scdfe_control import CONTROL_TABLE, InstanceLock, ensure_control_row, validate_control
 from web.service import ScadaStore
@@ -169,6 +169,40 @@ class ScdfeControlTests(unittest.TestCase):
             queue.close()
             queue.join_thread()
             self.assertEqual(process.exitcode, 0)
+
+    def test_batch_flush_coalesces_duplicate_row_updates(self):
+        class Queue:
+            def __init__(self):
+                self.acknowledged = 0
+
+            def task_done(self):
+                self.acknowledged += 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = ScadaStore(root / "scada.sqlite3")
+            store.create_row("fes_rtu_define", {
+                "rtu_id": 7, "channel_id": 70, "channel_type": "custom",
+            })
+            store.create_row("fes_yc_define", {
+                "rtu_id": 7, "pnt_no": 1, "name": "电压", "value": 0.0,
+            })
+            queue = Queue()
+            logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
+            messages = [
+                {"op": "update", "table": "fes_yc_define",
+                 "key": {"rtu_id": 7, "pnt_no": 1},
+                 "values": {"value": 221.5, "refresh_time": 123}},
+                {"op": "update", "table": "fes_yc_define",
+                 "key": {"rtu_id": 7, "pnt_no": 1},
+                 "values": {"value": 222.5, "refresh_time": 124}},
+            ]
+            self.assertTrue(_flush_batch(store, logger, messages, queue))
+            row = store.get_row("fes_yc_define", [7, 1])
+            self.assertEqual(row["value"], 222.5)
+            self.assertEqual(row["refresh_time"], 124)
+            self.assertEqual(row["_version"], 2)
+            self.assertEqual(queue.acknowledged, 2)
 
     def test_batch_writer_failure_exits_after_acknowledging_failed_batch(self):
         with tempfile.TemporaryDirectory() as directory:
