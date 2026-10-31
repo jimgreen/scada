@@ -5,7 +5,7 @@
 
 * IEC104 参数表；
 * Modbus TCP、Modbus RTU、CAN、BACnet/IP、OPC UA 五个测试站；
-* 每个测试站 100 个遥测、100 个遥信、20 个遥控、20 个遥调；
+* 每个测试站 1000 个遥测、1000 个遥信、200 个遥控、200 个遥调；
 * Modbus 的召唤、数据解析和遥控/遥调定义。
 
 只增加带 ``TEST_PROTO_`` 标识的记录。重复执行不会覆盖用户修改；插入前会
@@ -28,7 +28,7 @@ from .service import DEFAULT_DB, ScadaStore, quote_identifier
 PREFIX = "TEST_PROTO"
 RTU_TABLE = "fes_rtu_define"
 POINT_TABLES = ("fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define")
-COUNTS = {"yc": 100, "yx": 100, "yk": 20, "yt": 20}
+COUNTS = {"yc": 1000, "yx": 1000, "yk": 200, "yt": 200}
 
 PROTOCOLS = (
     {
@@ -233,7 +233,8 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         "rdfid": channel_code, "name": f"{spec['name']}Modbus通道",
         "irtuaddr": 3 if key == "modbus-tcp" else 4,
     }, seen_codes)
-    for seq, function_code, count in ((0, 3, 100), (1, 1, 100)):
+    for seq, function_code, kind in ((0, 3, "yc"), (1, 1, "yx")):
+        count = COUNTS[kind]
         call_code = f"{prefix}_CALL_{seq}"
         call_id = _id_for_code(connection, "fes_channel_modbus_define_call", call_code, ids)
         _add_record(connection, store, pending, "fes_channel_modbus_define_call", {

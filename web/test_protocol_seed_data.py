@@ -13,10 +13,10 @@ class ProtocolSeedTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = ScadaStore(Path(self.temp.name) / "scada.sqlite3")
 
-    def test_each_protocol_station_has_100_100_20_20_points(self):
+    def test_each_protocol_station_has_1000_1000_200_200_points(self):
         report = seed_protocol_test_data(self.store)
         self.assertEqual(report["rtu_count"], 6)
-        self.assertEqual(report["points_per_rtu"], {"yc": 100, "yx": 100, "yk": 20, "yt": 20})
+        self.assertEqual(report["points_per_rtu"], {"yc": 1000, "yx": 1000, "yk": 200, "yt": 200})
         with self.store.connection() as connection:
             stations = connection.execute(
                 "SELECT rtu_id, channel_type FROM fes_rtu_define WHERE code LIKE 'TEST_%' ORDER BY rtu_id"
@@ -27,15 +27,15 @@ class ProtocolSeedTests(unittest.TestCase):
                 counts = [connection.execute(
                     f"SELECT COUNT(*) FROM fes_{kind}_define WHERE rtu_id=?", (row[0],)
                 ).fetchone()[0] for kind in ("yc", "yx", "yk", "yt")]
-                self.assertEqual(counts, [100, 100, 20, 20])
+                self.assertEqual(counts, [1000, 1000, 200, 200])
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM fes_channel_modbus_define_data"
-            ).fetchone()[0], 400)
+            ).fetchone()[0], 4000)
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM fes_channel_modbus_define_ytyk"
-            ).fetchone()[0], 80)
+            ).fetchone()[0], 800)
 
     def test_repeat_does_not_modify_or_create_backup(self):
         first = seed_protocol_test_data(self.store)

@@ -23,6 +23,11 @@ class Value:
     quality: int = 0
 
 
+# Match the enlarged protocol seed data: each station has ten times the
+# previous YC/YX/YK/YT population.
+POINT_COUNTS = {"yc": 1000, "yx": 1000, "yk": 200, "yt": 200}
+
+
 class CountingQueue:
     def __init__(self) -> None:
         self.puts = 0
@@ -31,6 +36,25 @@ class CountingQueue:
     def put(self, message: object, **_kwargs: object) -> None:
         self.puts += 1
         self.messages.append(message)
+
+
+def _bulk_create(store: ScadaStore, table: str, rows: list[dict[str, object]]) -> None:
+    """Insert benchmark fixtures in one transaction, excluding setup cost."""
+    if not rows:
+        return
+    normalised = [store._normalise(table, row) for row in rows]
+    columns = [column["eng_name"] for column in store.schema(table)["columns"]
+               if all(column["eng_name"] in row for row in normalised)]
+    placeholders = ", ".join("?" for _ in columns)
+    sql = (
+        f"INSERT INTO {quote_identifier(table)} "
+        f"({', '.join(quote_identifier(name) for name in columns)}) "
+        f"VALUES ({placeholders})"
+    )
+    with store.connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.executemany(sql, [[row[name] for name in columns] for row in normalised])
+        connection.commit()
 
 
 class LegacyWorker(ChannelWorker):
@@ -77,8 +101,10 @@ def main() -> None:
             or args.definition_cycles < 1):
         raise SystemExit("cycle counts must be positive and --db-cycles cannot be negative")
     values = [
-        *(Value("yc", point_no, float(point_no)) for point_no in range(1, 101)),
-        *(Value("yx", point_no, point_no % 2) for point_no in range(1, 101)),
+        *(Value("yc", point_no, float(point_no))
+          for point_no in range(1, POINT_COUNTS["yc"] + 1)),
+        *(Value("yx", point_no, point_no % 2)
+          for point_no in range(1, POINT_COUNTS["yx"] + 1)),
     ]
     with tempfile.TemporaryDirectory() as log_dir:
         legacy_queue = CountingQueue()
@@ -120,16 +146,17 @@ def main() -> None:
     if args.db_cycles:
         with tempfile.TemporaryDirectory() as database_dir:
             store = ScadaStore(Path(database_dir) / "scada.sqlite3")
-            store.create_row("fes_rtu_define", {
+            _bulk_create(store, "fes_rtu_define", [{
                 "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
-            })
-            for point_no in range(1, 101):
-                store.create_row("fes_yc_define", {
-                    "rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}",
-                })
-                store.create_row("fes_yx_define", {
-                    "rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}",
-                })
+            }])
+            _bulk_create(store, "fes_yc_define", [
+                {"rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}"}
+                for point_no in range(1, POINT_COUNTS["yc"] + 1)
+            ])
+            _bulk_create(store, "fes_yx_define", [
+                {"rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}"}
+                for point_no in range(1, POINT_COUNTS["yx"] + 1)
+            ])
             updates = [
                 *legacy_payloads,
             ]
@@ -173,16 +200,17 @@ def main() -> None:
             persistent_connection.close()
     with tempfile.TemporaryDirectory() as command_dir:
         command_store = ScadaStore(Path(command_dir) / "scada.sqlite3")
-        command_store.create_row("fes_rtu_define", {
+        _bulk_create(command_store, "fes_rtu_define", [{
             "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
-        })
-        for point_no in range(1, 21):
-            command_store.create_row("fes_yk_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}",
-            })
-            command_store.create_row("fes_yt_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}",
-            })
+        }])
+        _bulk_create(command_store, "fes_yk_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}"}
+            for point_no in range(1, POINT_COUNTS["yk"] + 1)
+        ])
+        _bulk_create(command_store, "fes_yt_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}"}
+            for point_no in range(1, POINT_COUNTS["yt"] + 1)
+        ])
         legacy_command_worker = LegacyWorker(
             command_store, ChannelSpec(1, 1, "custom", None, None), log_dir=command_dir,
         )
@@ -201,25 +229,27 @@ def main() -> None:
         command_worker._close_command_connection()
     with tempfile.TemporaryDirectory() as definition_dir:
         definition_store = ScadaStore(Path(definition_dir) / "scada.sqlite3")
-        definition_store.create_row("fes_rtu_define", {
+        _bulk_create(definition_store, "fes_rtu_define", [{
             "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
-        })
-        for point_no in range(1, 101):
-            definition_store.create_row("fes_yc_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}", "value": 0.0,
-            })
-            definition_store.create_row("fes_yx_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}", "value": 0,
-            })
-        for point_no in range(1, 21):
-            definition_store.create_row("fes_yk_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}",
-                "value": 0, "cmd_time": 0,
-            })
-            definition_store.create_row("fes_yt_define", {
-                "rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}",
-                "value": 0.0, "cmd_time": 0,
-            })
+        }])
+        _bulk_create(definition_store, "fes_yc_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}", "value": 0.0}
+            for point_no in range(1, POINT_COUNTS["yc"] + 1)
+        ])
+        _bulk_create(definition_store, "fes_yx_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}", "value": 0}
+            for point_no in range(1, POINT_COUNTS["yx"] + 1)
+        ])
+        _bulk_create(definition_store, "fes_yk_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}",
+             "value": 0, "cmd_time": 0}
+            for point_no in range(1, POINT_COUNTS["yk"] + 1)
+        ])
+        _bulk_create(definition_store, "fes_yt_define", [
+            {"rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}",
+             "value": 0.0, "cmd_time": 0}
+            for point_no in range(1, POINT_COUNTS["yt"] + 1)
+        ])
         started = time.perf_counter()
         for _ in range(args.definition_cycles):
             definition_signature(definition_store, 1)
@@ -232,6 +262,7 @@ def main() -> None:
         read_connection.close()
     print(f"cycles={args.cycles}")
     print(f"points_per_cycle={len(values)}")
+    print(f"points_per_rtu={POINT_COUNTS}")
     print(f"legacy_queue_puts={legacy_queue.puts}")
     print(f"legacy_elapsed_ms={legacy_elapsed * 1000:.3f}")
     print(f"legacy_pickle_ms={legacy_pickle_elapsed * 1000:.3f}")

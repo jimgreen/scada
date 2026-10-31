@@ -1,8 +1,15 @@
 {
   "database": "D:\\codex\\scada\\db\\scada.sqlite3",
-  "verified_at": "2026-10-29T07:37:59+08:00",
-  "backup": "D:\\codex\\scada\\db\\backups\\scada.sqlite3.before_protocol_test_data.20261029_073759_960702.b7b54d9f.bak",
-  "protocols": ["iec104", "modbus-tcp", "modbus-rtu", "can", "bacnet", "opc"],
+  "verified_at": "2026-11-01T07:18:09+08:00",
+  "backup": "D:\\codex\\scada\\db\\backups\\scada.sqlite3.before_protocol_test_data.20261101_071809_218843.6062a100.bak",
+  "protocols": [
+    "iec104",
+    "modbus-tcp",
+    "modbus-rtu",
+    "can",
+    "bacnet",
+    "opc"
+  ],
   "test_rtu_ids": {
     "iec104": 2,
     "modbus-tcp": 3,
@@ -11,13 +18,18 @@
     "bacnet": 6,
     "opc": 7
   },
-  "points_per_rtu": {"yc": 100, "yx": 100, "yk": 20, "yt": 20},
+  "points_per_rtu": {
+    "yc": 1000,
+    "yx": 1000,
+    "yk": 200,
+    "yt": 200
+  },
   "totals": {
     "fes_rtu_define": 7,
-    "fes_yc_define": 600,
-    "fes_yx_define": 600,
-    "fes_yk_define": 120,
-    "fes_yt_define": 120,
+    "fes_yc_define": 6000,
+    "fes_yx_define": 6000,
+    "fes_yk_define": 1200,
+    "fes_yt_define": 1200,
     "fes_channel_iec104_define": 1,
     "fes_channel_modbus_tcp_define": 1,
     "fes_channel_modbus_rtu_define": 1,
@@ -26,8 +38,8 @@
     "fes_channel_opc_define": 1,
     "fes_channel_modbus_define": 2,
     "fes_channel_modbus_define_call": 4,
-    "fes_channel_modbus_define_data": 400,
-    "fes_channel_modbus_define_ytyk": 80
+    "fes_channel_modbus_define_data": 4000,
+    "fes_channel_modbus_define_ytyk": 800
   },
   "integrity_check": "ok",
   "foreign_key_violations": 0,

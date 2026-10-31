@@ -11,7 +11,7 @@ Set-Location D:\codex\scada
 
 ## 最终数据规模
 
-每个协议测试站均配置 **100 个遥测（YC）、100 个遥信（YX）、20 个遥控（YK）和 20 个遥调（YT）**：
+每个协议测试站均配置 **1000 个遥测（YC）、1000 个遥信（YX）、200 个遥控（YK）和 200 个遥调（YT）**，为原规模的 10 倍：
 
 | 通信规约 | 测试站标识 | RTU | 通道/参数表 |
 | --- | --- | ---: | --- |
@@ -22,14 +22,14 @@ Set-Location D:\codex\scada
 | BACnet/IP | `TEST_PROTO_BACNET_RTU` | 6 | `fes_channel_bacnet_define` |
 | OPC UA | `TEST_PROTO_OPC_RTU` | 7 | `fes_channel_opc_define` |
 
-RTU 1“浏览器站”保留为原有业务数据，不作为协议测试站。最终数据库中共有 7 个 RTU、600 个 YC、600 个 YX、120 个 YK 和 120 个 YT。每个协议测试站的四遥点使用该 RTU 的联合主键 `(rtu_id, pnt_no)`；前 20 个遥信具备对应遥控关联，前 20 个遥测具备对应遥调关联，其余点用于批量采集、分页和边界测试。
+RTU 1“浏览器站”保留为原有业务数据，不作为协议测试站。六个协议测试站合计新增 6000 个 YC、6000 个 YX、1200 个 YK 和 1200 个 YT；连同 RTU 1 的原有数据，实际总数以数据库查询为准。每个协议测试站的四遥点使用该 RTU 的联合主键 `(rtu_id, pnt_no)`；前 200 个遥信具备对应遥控关联，前 200 个遥测具备对应遥调关联，其余点用于批量采集、分页和边界测试。
 
 RTU 表中的通信线程控制字段已同步迁移：现有站点默认 `process_enable=1`、`process_restart=0`，运行状态字段初始为停止状态。通过 [scdfe_c.py](../scdfe_c.py) 可按 RTU 表中的启停/重启标志控制每个 RTU-通道通信线程，并回写宿主 PID、状态、启动/停止/重启时间、心跳、退出结果、重启次数和错误信息。
 
 ## 通道和协议数据
 
-- IEC104 参数行包含公共地址及 YC/YX/YK/YT 起始 IOA，覆盖 240 个四遥点。
-- Modbus TCP 和 Modbus RTU 各生成 2 个召唤定义、200 个数据解析点和 40 个遥控/遥调命令定义。
+- IEC104 参数行包含公共地址及 YC/YX/YK/YT 起始 IOA，覆盖 2400 个四遥点。
+- Modbus TCP 和 Modbus RTU 各生成 2 个召唤定义、2000 个数据解析点和 400 个遥控/遥调命令定义。
 - CAN 测试站保存虚拟接口、仲裁波特率、CAN-FD 和过滤相关参数，四遥数据用于站点和点表联调；原始 CAN 帧的 ID、字节布局和信号缩放由应用协议显式定义。
 - BACnet/IP 保存本地绑定地址、端口和设备号；BACnet 对象类型和实例号通过 `BacnetMaster.from_store(..., point_map=...)` 显式映射。
 - OPC UA 保存 `opc.tcp://127.0.0.1:4840`、刷新周期和登录字段；NodeId 通过 `OpcUaMaster.from_store(..., point_map=...)` 显式映射。
