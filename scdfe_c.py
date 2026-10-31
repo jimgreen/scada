@@ -499,15 +499,21 @@ def _batch_writer_entry(
         logger.process("批量数据库写入进程停止")
 
 
-def _tables_for_signature(store: ScadaStore, rtu_id: int) -> list[tuple[str, list[dict[str, Any]]]]:
+def _tables_for_signature(
+    store: ScadaStore,
+    rtu_id: int,
+    connection: sqlite3.Connection | None = None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
     """在一个只读事务中加载通道和四遥定义。"""
     names = ["fes_rtu_define", *CHANNEL_PARAMETER_TABLES.values(),
              "fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define",
              "fes_channel_modbus_define", "fes_channel_modbus_define_call",
              "fes_channel_modbus_define_data", "fes_channel_modbus_define_ytyk"]
     result: list[tuple[str, list[dict[str, Any]]]] = []
-    with store.connection() as connection:
-        connection.execute("BEGIN")
+    owned = connection is None
+    active = connection or store.open_connection()
+    try:
+        active.execute("BEGIN")
         for table in dict.fromkeys(names):
             # Runtime values change on every poll.  Selecting only static
             # definition columns avoids copying hundreds of live/status fields
@@ -515,13 +521,25 @@ def _tables_for_signature(store: ScadaStore, rtu_id: int) -> list[tuple[str, lis
             columns = [column["eng_name"] for column in store.schema(table)["columns"]
                        if column["eng_name"] not in RUNTIME_FIELDS]
             projection = ", ".join(quote_identifier(column) for column in columns)
-            rows = [dict(row) for row in connection.execute(
+            rows = [dict(row) for row in active.execute(
                 f"SELECT {projection} FROM {quote_identifier(table)} WHERE rtu_id=?", (rtu_id,))]
             result.append((table, rows))
-    return result
+        active.commit()
+        return result
+    except Exception:
+        if active.in_transaction:
+            active.rollback()
+        raise
+    finally:
+        if owned:
+            active.close()
 
 
-def definition_signature(store: ScadaStore, rtu_id: int) -> str:
+def definition_signature(
+    store: ScadaStore,
+    rtu_id: int,
+    connection: sqlite3.Connection | None = None,
+) -> str:
     """返回 RTU 通道及四遥静态定义的稳定指纹。
 
     实时值、质量、时间和命令处理字段被排除，因此采集进程写回数据库不会
@@ -529,7 +547,7 @@ def definition_signature(store: ScadaStore, rtu_id: int) -> str:
     指纹并被父进程自动响应。
     """
     payload: list[dict[str, Any]] = []
-    for table, rows in _tables_for_signature(store, rtu_id):
+    for table, rows in _tables_for_signature(store, rtu_id, connection):
         for row in rows:
             filtered = {key: _jsonable(value) for key, value in row.items()}
             payload.append({"table": table, "row": filtered})
@@ -646,10 +664,27 @@ class ChannelWorker:
         self.logger = ScdfeLogger(log_dir, process_name=f"scdfe_c-rtu-{spec.rtu_id}-ch-{spec.channel_id}", rtu_id=spec.rtu_id, channel_id=spec.channel_id)
         self.stats = WorkerStats()
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
+        self._command_version: int | None = None
         self._last_signature: str | None = None
         self._next_definition_check = 0.0
         self._next_cycle_log = 0.0
         self._master: Any | None = None
+        self._command_connection: sqlite3.Connection | None = None
+
+    def _close_command_connection(self) -> None:
+        connection = self._command_connection
+        self._command_connection = None
+        if connection is None:
+            return
+        try:
+            connection.close()
+        except (OSError, sqlite3.Error):
+            pass
+
+    def _read_connection(self) -> sqlite3.Connection:
+        if self._command_connection is None:
+            self._command_connection = self.store.open_connection()
+        return self._command_connection
 
     def _write_rows(self, rows: list[tuple[str, int, int, Mapping[str, Any]]]) -> list[bool]:
         rows = [(table, rtu_id, point_no, updates) for table, rtu_id, point_no, updates in rows
@@ -786,10 +821,21 @@ class ChannelWorker:
                         yx += 1
         return yc, yx
 
-    def _command_rows(self) -> list[tuple[str, dict[str, Any]]]:
+    def _command_rows(self) -> list[tuple[str, dict[str, Any]]] | None:
         result: list[tuple[str, dict[str, Any]]] = []
-        with self.store.connection() as connection:
+        connection = self._read_connection()
+        try:
             connection.execute("BEGIN")
+            version = int(connection.execute(
+                "SELECT COALESCE(SUM(_version), 0) FROM ("
+                "SELECT _version FROM fes_yk_define WHERE rtu_id=? "
+                "UNION ALL "
+                "SELECT _version FROM fes_yt_define WHERE rtu_id=?"
+                ")", (self.spec.rtu_id, self.spec.rtu_id),
+            ).fetchone()[0] or 0)
+            if self._command_seen is not None and self._command_version == version:
+                connection.commit()
+                return None
             for table, kind in (("fes_yk_define", "yk"), ("fes_yt_define", "yt")):
                 rows = connection.execute(
                     f"SELECT pnt_no, value, cmd_time, cmd_handle_time "
@@ -797,7 +843,14 @@ class ChannelWorker:
                     (self.spec.rtu_id,),
                 ).fetchall()
                 result.extend((kind, dict(row)) for row in rows)
-        return result
+            connection.commit()
+            self._command_version = version
+            return result
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            self._close_command_connection()
+            raise
 
     def _send_command(self, kind: str, row: Mapping[str, Any]) -> Any:
         if self._master is None:
@@ -817,6 +870,8 @@ class ChannelWorker:
 
     def _sync_commands(self) -> tuple[int, int]:
         rows = self._command_rows()
+        if rows is None:
+            return 0, 0
         state = {(kind, int(row["pnt_no"])): (row.get("cmd_time"), row.get("value"))
                  for kind, row in rows}
         first_sync = self._command_seen is None
@@ -892,7 +947,9 @@ class ChannelWorker:
         try:
             while not self.stop_event.is_set():
                 try:
-                    self._last_signature = definition_signature(self.store, self.spec.rtu_id)
+                    self._last_signature = definition_signature(
+                        self.store, self.spec.rtu_id, self._read_connection(),
+                    )
                     self._master = self.master_factory(self.store, self.spec)
                     self._master.connect()
                     self._write_rtu_status(1)
@@ -909,7 +966,9 @@ class ChannelWorker:
                         # 单线程调用方式同样能自动退出并由上层重载。
                         monotonic_now = time.monotonic()
                         if monotonic_now >= self._next_definition_check:
-                            current_signature = definition_signature(self.store, self.spec.rtu_id)
+                            current_signature = definition_signature(
+                                self.store, self.spec.rtu_id, self._read_connection(),
+                            )
                             self._next_definition_check = monotonic_now + max(
                                 WORKER_DEFINITION_CHECK_INTERVAL, self.poll_interval,
                             )
@@ -972,6 +1031,7 @@ class ChannelWorker:
             except Exception as exc:  # noqa: BLE001
                 self.logger.error(f"写入通信线程停止状态失败: {exc}")
             self._close_master()
+            self._close_command_connection()
             self.logger.process(
                 f"通信线程停止 cycles={self.stats.cycles} yc={self.stats.updated_yc} "
                 f"yx={self.stats.updated_yx} yk={self.stats.sent_yk} yt={self.stats.sent_yt}"

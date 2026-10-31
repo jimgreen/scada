@@ -11,7 +11,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scdfe_c import ChannelSpec, ChannelWorker, _apply_batch_updates
+from scdfe_c import ChannelSpec, ChannelWorker, _apply_batch_updates, definition_signature
 from web.service import ScadaStore, quote_identifier
 
 
@@ -52,14 +52,30 @@ class LegacyWorker(ChannelWorker):
             })
         return [True] * len(rows)
 
+    def _command_rows(self):  # type: ignore[no-untyped-def]
+        result = []
+        with self.store.connection() as connection:
+            connection.execute("BEGIN")
+            for table, kind in (("fes_yk_define", "yk"), ("fes_yt_define", "yt")):
+                rows = connection.execute(
+                    f"SELECT pnt_no, value, cmd_time, cmd_handle_time "
+                    f"FROM {quote_identifier(table)} WHERE rtu_id=? ORDER BY pnt_no",
+                    (self.spec.rtu_id,),
+                ).fetchall()
+                result.extend((kind, dict(row)) for row in rows)
+        return result
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cycles", type=int, default=1000)
     parser.add_argument("--db-cycles", type=int, default=20)
+    parser.add_argument("--command-cycles", type=int, default=1000)
+    parser.add_argument("--definition-cycles", type=int, default=50)
     args = parser.parse_args()
-    if args.cycles < 1 or args.db_cycles < 0:
-        raise SystemExit("--cycles must be positive and --db-cycles cannot be negative")
+    if (args.cycles < 1 or args.db_cycles < 0 or args.command_cycles < 1
+            or args.definition_cycles < 1):
+        raise SystemExit("cycle counts must be positive and --db-cycles cannot be negative")
     values = [
         *(Value("yc", point_no, float(point_no)) for point_no in range(1, 101)),
         *(Value("yx", point_no, point_no % 2) for point_no in range(1, 101)),
@@ -149,6 +165,65 @@ def main() -> None:
                     _apply_batch_updates(connection, updates)
                     connection.commit()
             db_elapsed = time.perf_counter() - started
+    with tempfile.TemporaryDirectory() as command_dir:
+        command_store = ScadaStore(Path(command_dir) / "scada.sqlite3")
+        command_store.create_row("fes_rtu_define", {
+            "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
+        })
+        for point_no in range(1, 21):
+            command_store.create_row("fes_yk_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}",
+            })
+            command_store.create_row("fes_yt_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}",
+            })
+        legacy_command_worker = LegacyWorker(
+            command_store, ChannelSpec(1, 1, "custom", None, None), log_dir=command_dir,
+        )
+        command_worker = ChannelWorker(
+            command_store, ChannelSpec(1, 1, "custom", None, None), log_dir=command_dir,
+        )
+        legacy_started = time.perf_counter()
+        for _ in range(args.command_cycles):
+            legacy_command_worker._command_rows()
+        legacy_command_elapsed = time.perf_counter() - legacy_started
+        command_worker._sync_commands()
+        started = time.perf_counter()
+        for _ in range(args.command_cycles):
+            command_worker._command_rows()
+        command_elapsed = time.perf_counter() - started
+        command_worker._close_command_connection()
+    with tempfile.TemporaryDirectory() as definition_dir:
+        definition_store = ScadaStore(Path(definition_dir) / "scada.sqlite3")
+        definition_store.create_row("fes_rtu_define", {
+            "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
+        })
+        for point_no in range(1, 101):
+            definition_store.create_row("fes_yc_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}", "value": 0.0,
+            })
+            definition_store.create_row("fes_yx_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YX{point_no}", "value": 0,
+            })
+        for point_no in range(1, 21):
+            definition_store.create_row("fes_yk_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YK{point_no}",
+                "value": 0, "cmd_time": 0,
+            })
+            definition_store.create_row("fes_yt_define", {
+                "rtu_id": 1, "pnt_no": point_no, "name": f"YT{point_no}",
+                "value": 0.0, "cmd_time": 0,
+            })
+        started = time.perf_counter()
+        for _ in range(args.definition_cycles):
+            definition_signature(definition_store, 1)
+        legacy_definition_elapsed = time.perf_counter() - started
+        read_connection = definition_store.open_connection()
+        started = time.perf_counter()
+        for _ in range(args.definition_cycles):
+            definition_signature(definition_store, 1, read_connection)
+        definition_elapsed = time.perf_counter() - started
+        read_connection.close()
     print(f"cycles={args.cycles}")
     print(f"points_per_cycle={len(values)}")
     print(f"legacy_queue_puts={legacy_queue.puts}")
@@ -164,6 +239,12 @@ def main() -> None:
         print(f"legacy_db_ms={legacy_db_elapsed * 1000:.3f}")
         print(f"db_ms={db_elapsed * 1000:.3f}")
         print(f"db_time_reduction_pct={(1 - db_elapsed / legacy_db_elapsed) * 100:.2f}")
+    print(f"legacy_command_ms={legacy_command_elapsed * 1000:.3f}")
+    print(f"command_ms={command_elapsed * 1000:.3f}")
+    print(f"command_time_reduction_pct={(1 - command_elapsed / legacy_command_elapsed) * 100:.2f}")
+    print(f"legacy_definition_ms={legacy_definition_elapsed * 1000:.3f}")
+    print(f"definition_ms={definition_elapsed * 1000:.3f}")
+    print(f"definition_time_reduction_pct={(1 - definition_elapsed / legacy_definition_elapsed) * 100:.2f}")
 
 
 if __name__ == "__main__":

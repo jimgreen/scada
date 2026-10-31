@@ -155,17 +155,28 @@ class ScadaStore:
         self.catalog = SchemaCatalog(schema_dir)
         self._initialise()
 
-    @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
+    def open_connection(self) -> sqlite3.Connection:
+        """Open a configured SQLite connection owned by the caller.
+
+        Most web operations still use :meth:`connection` for short-lived
+        transactions. Long-running communication threads may keep one read
+        connection and close it when their thread exits, avoiding repeated
+        PRAGMA and connection setup work on every command poll.
+        """
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA mmap_size=1073741824")
+        connection.execute("PRAGMA temp_store=MEMORY")
+        return connection
+
+    @contextmanager
+    def connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self.open_connection()
         try:
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=NORMAL")
-            connection.execute("PRAGMA busy_timeout=30000")
-            connection.execute("PRAGMA mmap_size=1073741824")
-            connection.execute("PRAGMA temp_store=MEMORY")
             yield connection
         finally:
             connection.close()

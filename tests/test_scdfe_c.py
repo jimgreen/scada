@@ -153,6 +153,7 @@ class ScdfeCTest(unittest.TestCase):
             master_factory=lambda _store, _spec: master,
             poll_interval=0,
         )
+        self.addCleanup(worker._close_command_connection)
         stats = worker.run(max_cycles=1)
         self.assertEqual((stats.cycles, stats.updated_yc, stats.updated_yx), (1, 1, 1))
         self.assertTrue(master.closed)
@@ -178,6 +179,7 @@ class ScdfeCTest(unittest.TestCase):
             self.store, spec, log_dir=self.root / "logs",
             master_factory=lambda _store, _spec: pending_master,
         )
+        self.addCleanup(pending_worker._close_command_connection)
         pending_worker._master = pending_master
         self.store.update_row("fes_yk_define", [7, 1], {
             "value": 0, "cmd_time": 200, "cmd_handle_time": 100,
@@ -203,6 +205,21 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(len(queue.messages), 1)
         self.assertEqual(queue.messages[0]["op"], "batch")
         self.assertEqual(len(queue.messages[0]["updates"]), 2)
+
+    def test_command_poll_skips_rows_when_command_versions_are_unchanged(self):
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            log_dir=self.root / "logs",
+        )
+        self.addCleanup(worker._close_command_connection)
+        first = worker._command_rows()
+        self.assertIsNotNone(first)
+        worker._sync_commands()
+        self.assertIsNone(worker._command_rows())
+        self.store.update_row("fes_yk_define", [7, 1], {"value": 1, "cmd_time": 123})
+        changed = worker._command_rows()
+        self.assertIsNotNone(changed)
+        self.assertEqual(changed[0][1]["value"], 1)
 
     def test_worker_entry_catches_unexpected_thread_exception(self):
         # A bad schema path fails during thread-local store construction.  The

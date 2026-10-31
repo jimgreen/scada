@@ -113,7 +113,8 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 `fes_yc_define`、`fes_yx_define`，同时更新 `raw_*`、`value*`、`status*` 和刷新时间字段。
 它读取 `fes_yk_define`、`fes_yt_define` 的命令时间和值；首次启动只下发满足
 `cmd_time > cmd_handle_time` 的明确未处理命令，运行期间仅下发命令时间或值发生变化的命令。
-成功后写入 `cmd_handle_time` 和状态，失败写入错误状态并记录错误日志。
+通信线程复用自己的只读 SQLite 连接，通过命令点表 `_version` 汇总值判断是否有变化；
+版本未变化时不再读取全部遥控、遥调行。成功后写入 `cmd_handle_time` 和状态，失败写入错误状态并记录错误日志。
 
 实时值、质量、时间、命令处理时间和 `_version` 不参与定义指纹，因此正常采集不会导致
 通道重启。点表增删、点号、协议地址、缩放、IEC104 地址、Modbus 解析定义、BACnet/OPC
@@ -173,4 +174,4 @@ ruff check api web tests scdfe_c.py
 ```
 
 输出同时给出旧的“每点一条队列消息”和当前批消息的队列条数、Python 序列化耗时，
-以及 SQLite 更新基准；实际结果会受操作系统、磁盘和 SQLite 缓存影响。
+命令轮询、定义指纹检查以及 SQLite 更新基准；实际结果会受操作系统、磁盘和 SQLite 缓存影响。
