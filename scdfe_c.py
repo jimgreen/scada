@@ -56,9 +56,6 @@ SUPPORTED_CHANNEL_TYPES = frozenset(CHANNEL_PARAMETER_TABLES)
 LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_INTERVAL = 0.2
-# Keep one 2,000-point measurement message per transaction in the scale
-# fixture.  This avoids making SQLite retain a much larger dirty page set;
-# the local benchmark showed larger transactions were slower on this host.
 BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
@@ -309,11 +306,6 @@ class ScdfeLogger:
             item.update(rtu_id=int(process_match.group("rtu_id")),
                         channel_id=int(process_match.group("channel_id")))
         return item
-
-
-def _apply_batch_update(connection: sqlite3.Connection, message: Mapping[str, Any]) -> None:
-    """Apply one queued update. The writer owns the surrounding transaction."""
-    _apply_batch_updates(connection, [message])
 
 
 @lru_cache(maxsize=256)

@@ -272,5 +272,8 @@
       "integrity_check": "ok",
       "foreign_key_violations": 0
     }
-  ]
+  ],
+  "valid_for_performance_comparison": false,
+  "superseded_by": "writer_optimization_20261101_verified.json",
+  "audit_note": "Exploratory measurements lacked frozen source snapshots and exclusive benchmark execution. A source edit during the baseline run and overlapping candidate runs invalidated the comparison. Retained for audit only; use the verified sequential snapshot comparison."
 }
