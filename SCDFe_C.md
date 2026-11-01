@@ -94,7 +94,9 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 主进程启用后还会启动一个独立的 `scdfe_c-db-writer` 批量写库进程。通信线程不直接
 写 SQLite，而是把遥测、遥信、遥控/遥调状态和 RTU/线程状态更新投递到有界队列；同一采集周期的
 遥测、遥信更新合并为一条批消息，写库进程每 200 ms 或累计 500 个点更新统一提交一次事务，
-并按相同 SQL 更新形状使用 `executemany`。写库进程独占并复用一个 SQLite 写连接，批次之间只提交
+并按相同 SQL 更新形状使用 `executemany`。批消息按表和字段分组，公共字段名仅传一次，各点为参数元组；
+写库进程在开启事务前完成校验、合并和参数准备，锁重试复用准备结果。旧的 `batch/updates` 队列格式已删除，
+升级时整体重启 `scdfe_c`，确保通信线程和写库进程使用同一版本。写库进程独占并复用一个 SQLite 写连接，批次之间只提交
 和重新开启事务。通信线程按 `worker_start_delay_ms`（默认 250 ms）
 顺序拉起，避免多个协议栈同时初始化。主进程停止、重载或修改日志目录/运行参数时，
 会先通知通信线程退出、等待队列完成，再停止写库进程。修改 `poll_interval_ms`、`retry_interval_ms`
@@ -191,7 +193,13 @@ ruff check api web tests scdfe_c.py
 写库路径的聚焦对比可用下面的命令复测；工具会冻结优化前后的 `scdfe_c.py` 快照、校验父子进程哈希、串行执行并交替测试顺序。`--pipeline-only` 只计真实通信线程、跨进程队列、SQLite 提交和写库进程排空，`--repeat 3` 取三次中位数：
 
 ```powershell
-.\.venv\Scripts\python.exe tools/benchmark_rtu_scale.py --pipeline-only --baseline-ref 51bbd07 --replicas 1 10 --db-cycles 20 --repeat 3 --output reports/writer_optimization_20261101_verified.json
+.\.venv\Scripts\python.exe tools/benchmark_rtu_scale.py --pipeline-only --baseline-ref 19bcdc6 --replicas 1 10 --db-cycles 20 --repeat 3 --output reports/writer_packed_20261101.json
 ```
 
-2026-11-01 在同一 Windows 主机上，批次合并单遍处理和 SQL 形状缓存使 6 站完整排空中位数从 7.462 秒降到 5.569 秒，60 站从 81.888 秒降到 46.629 秒；吞吐分别从 3.216 万升到 4.310 万、从 2.931 万升到 5.147 万点更新/秒。三次测试逐行核验最终值、版本号、SQLite 完整性和外键，详细原始数据与边界见 [批量写库优化报告](reports/writer_optimization_20261101.md)。该结果是本机临时 SQLite/IPC 基准，不包含现场设备通信时延。
+2026-11-01 第 2 轮优化采用分组参数消息和事务前准备，对照上一版 `19bcdc6` 当场复测：
+6 站完整写回中位数从 1.936 秒降至 1.178 秒，60 站从 22.913 秒降至 14.779 秒，
+吞吐分别提高 64.4% 和 55.0%。每条 2000 点消息从 171703 字节降至 96790 字节。
+这是一组新的同条件对照，不与上一轮其他时段的绝对吞吐直接计算加速比。
+逐点校验和完整计时口径见 [第 2 轮效率报告](reports/writer_packed_20261101.md)；
+[上一轮报告](reports/writer_optimization_20261101.md)保留作历史记录。
+本机 SQLite/IPC 压测未包含设备通信时延，Linux 尚未实机复测。

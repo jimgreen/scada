@@ -14,6 +14,16 @@ from core.scdfe_control import CONTROL_TABLE, InstanceLock, ensure_control_row, 
 from web.service import ScadaStore
 
 
+def point_batch(*updates):
+    """Build grouped point messages without hiding key/field ordering."""
+    return {"op": "batch", "groups": [
+        {"table": item["table"], "key_names": tuple(item["key"]),
+         "value_names": tuple(item["values"]),
+         "rows": [(*item["values"].values(), *item["key"].values())]}
+        for item in updates
+    ]}
+
+
 class ScdfeControlTests(unittest.TestCase):
     def test_singleton_control_row_and_validation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -155,13 +165,11 @@ class ScdfeControlTests(unittest.TestCase):
                 args=(str(store.db_path), str(store.catalog.directory), str(root / "logs"), queue, 0.05, 10),
             )
             process.start()
-            queue.put({
-                "op": "batch", "updates": [{
+            queue.put(point_batch({
                     "table": "fes_yc_define",
                     "key": {"rtu_id": 7, "pnt_no": 1},
                     "values": {"value": 221.5, "refresh_time": 123},
-                }],
-            })
+                }))
             queue.join()
             self.assertEqual(store.get_row("fes_yc_define", [7, 1])["value"], 221.5)
             queue.put(BATCH_WRITER_STOP)
@@ -195,14 +203,14 @@ class ScdfeControlTests(unittest.TestCase):
             logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
             connection = store.open_connection()
             messages = [
-                {"op": "batch", "updates": [
+                point_batch(
                     {"op": "update", "table": "fes_yc_define",
                      "key": {"rtu_id": 7, "pnt_no": 1},
                      "values": {"value": 221.5, "refresh_time": 123}},
                     {"op": "update", "table": "fes_yc_define",
                      "key": {"rtu_id": 7, "pnt_no": 1},
                      "values": {"value": 222.5, "refresh_time": 124}},
-                ]},
+                ),
             ]
             self.assertTrue(_flush_batch(store, logger, messages, queue, connection))
             row = store.get_row("fes_yc_define", [7, 1])
@@ -273,11 +281,11 @@ class BatchWriterTransactionTests(unittest.TestCase):
         reordered["key"] = {"pnt_no": 1, "rtu_id": 7}
         messages = [
             self.update(value=10.0, refresh_time=123),
-            {"op": "batch", "updates": [
+            point_batch(
                 self.update(rtu_id=8, status=4, value=80.0),
                 reordered,
                 self.update("fes_yx_define", value=1, status=2),
-            ]},
+            ),
             self.update(refresh_time=124),
         ]
         original = deepcopy(messages)
@@ -358,6 +366,46 @@ class BatchWriterTransactionTests(unittest.TestCase):
             self.assertFalse(_flush_batch(self.store, self.logger, [self.update(value=25)], self))
         self.assertEqual(self.acknowledged, 1)
         self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["_version"], 1)
+
+    def test_group_rows_merge_with_single_updates_and_different_key_orders(self):
+        first = {"table": "fes_yc_define", "key_names": ("rtu_id", "pnt_no"),
+                 "value_names": ("value", "status"), "rows": [(10.0, 2, 7, 1), (80.0, 3, 8, 1)]}
+        last = {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                "value_names": ("value",), "rows": [(12.0, 1, 7), (13.0, 1, 7)]}
+        messages = [{"op": "batch", "groups": [first]}, self.update(refresh_time=123),
+                    {"op": "batch", "groups": [last]}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        self.assertEqual(messages, original)
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["status"], row["refresh_time"], row["_version"]),
+                         (13.0, 2, 123, 2))
+        self.assertEqual(self.store.get_row("fes_yc_define", [8, 1])["value"], 80.0)
+        self.assertEqual(self.acknowledged, 3)
+
+    def test_invalid_group_rejects_whole_batch_before_writing(self):
+        valid = point_batch(self.update(value=20))["groups"][0]
+        invalid = [
+            None,
+            {**valid, "rows": [(20, 7)]},
+            {**valid, "rows": [(20, [], 1)]},
+            {**valid, "rows": []},
+            {**valid, "rows": [42]},
+            {**valid, "key_names": ()},
+            {**valid, "key_names": ("rtu_id", "rtu_id")},
+            {**valid, "value_names": ("value", "value")},
+            {**valid, "value_names": ("value; DROP TABLE fes_yc_define",)},
+            {**valid, "table": "fes_yc_define;--"},
+        ]
+        for bad in invalid:
+            with self.subTest(group=bad):
+                self.acknowledged = 0
+                self.assertFalse(_flush_batch(self.store, self.logger,
+                                              [{"op": "batch", "groups": [valid, bad]}],
+                                              self, self.connection))
+                self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["_version"], 1)
+                self.assertFalse(self.connection.in_transaction)
+                self.assertEqual(self.acknowledged, 1)
 
 
 if __name__ == "__main__":

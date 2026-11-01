@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import pickle
 from pathlib import Path
 import tempfile
 import threading
@@ -204,7 +205,7 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(worker._sync_measurements(values), (1, 1))
         self.assertEqual(len(queue.messages), 1)
         self.assertEqual(queue.messages[0]["op"], "batch")
-        self.assertEqual(len(queue.messages[0]["updates"]), 2)
+        self.assertEqual(sum(len(g["rows"]) for g in queue.messages[0]["groups"]), 2)
 
     def test_worker_skips_stable_measurements_until_heartbeat(self):
         class Queue:
@@ -230,8 +231,9 @@ class ScdfeCTest(unittest.TestCase):
         worker._measurement_cache[("yc", 1)] = (222.5, 0, time.monotonic() - 61)
         worker._measurement_cache[("yx", 1)] = (1, 0, time.monotonic() - 61)
         self.assertEqual(worker._sync_measurements(changed), (1, 1))
-        heartbeat_updates = queue.messages[2]["updates"]
-        self.assertEqual(set(heartbeat_updates[0]["values"]), {"refresh_time", "refresh_time_dev", "raw_time"})
+        heartbeat_groups = queue.messages[2]["groups"]
+        self.assertEqual(set(heartbeat_groups[0]["value_names"]),
+                         {"refresh_time", "refresh_time_dev", "raw_time"})
 
         # A zero interval keeps an explicit full-write mode for installations
         # that require every poll to refresh all fields.
@@ -244,6 +246,37 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(every_poll_worker._sync_measurements(values), (1, 1))
         self.assertEqual(every_poll_worker._sync_measurements(values), (1, 1))
         self.assertEqual(len(every_poll_queue.messages), 2)
+
+    def test_packed_rows_preserve_partial_updates_and_are_detached_from_inputs(self):
+        class Queue:
+            def __init__(self):
+                self.messages = []
+                self.acknowledged = 0
+
+            def put(self, message, **_kwargs):
+                self.messages.append(message)
+
+            def task_done(self):
+                self.acknowledged += 1
+
+        queue = Queue()
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                               log_dir=self.root / "logs", writer_queue=queue)
+        first = {"value": 10.0, "status": 3, "refresh_time": 123}
+        rows = [("fes_yc_define", 7, 1, first), ("fes_yx_define", 7, 1, {"value": 1}),
+                ("fes_yc_define", 7, 1, {"value": 12.0})]
+        self.assertEqual(worker._write_rows(rows), [True, True, True])
+        first.update(value=999.0, status=99, refresh_time=999)
+        # Exercise the transport round trip; no live input dictionaries should
+        # remain referenced by the queued payload waiting for its feeder.
+        messages = pickle.loads(pickle.dumps(queue.messages))
+        self.assertEqual(runtime._batch_message_size(messages[0]), 2)
+        self.assertTrue(runtime._flush_batch(self.store, worker.logger, messages, queue))
+        yc = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((yc["value"], yc["status"], yc["refresh_time"], yc["_version"]),
+                         (12.0, 3, 123, 2))
+        self.assertEqual(self.store.get_row("fes_yx_define", [7, 1])["value"], 1)
+        self.assertEqual(queue.acknowledged, 1)
 
     def test_worker_accepts_mapping_measurements(self):
         class Queue:

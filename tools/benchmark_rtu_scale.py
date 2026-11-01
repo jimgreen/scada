@@ -62,13 +62,14 @@ def measurements(cycle: int = 0, rtu_id: int = 0) -> list[Value]:
 class CountQueue:
     """Count accepted batches without retaining millions of Python objects."""
 
-    def __init__(self):
+    def __init__(self, message_size):
         self.messages = 0
         self.points = 0
+        self.message_size = message_size
 
     def put(self, message, **kwargs):
         self.messages += 1
-        self.points += len(message["updates"])
+        self.points += self.message_size(message)
 
 
 class ReadyQueue:
@@ -94,6 +95,19 @@ def writer_entry(db, schema, log_dir, queue, ready, runtime_path, runtime_hash, 
             profiler.runcall(runtime._batch_writer_entry, *args)
         finally:
             profiler.dump_stats(profile_path)
+
+
+def payload_metrics(store, spec, root, runtime):
+    """Inspect one full-change message outside the pipeline timing."""
+    class SampleQueue:
+        def put(self, message, **_kwargs):
+            self.message = message
+
+    queue = SampleQueue()
+    worker = runtime.ChannelWorker(store, spec, log_dir=root / "payload-logs", writer_queue=queue)
+    worker._sync_measurements(measurements(rtu_id=spec.rtu_id))
+    return {"point_updates": runtime._batch_message_size(queue.message),
+            "serialized_bytes": len(mp.reduction.ForkingPickler.dumps(queue.message))}
 
 
 def pipeline(store, specs, root, cycles, runtime_path, runtime_hash, profile_path=None):
@@ -186,6 +200,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
         result = {"rtus": len(specs), "repeat": repeat, "variant": variant,
                   "runtime_sha256": runtime_hash,
                   "points_per_rtu": dict(COUNTS), "table_counts": seeded["totals"]}
+        result["sample_payload"] = payload_metrics(store, specs[0], root, runtime)
         print(f"{variant} repeat={repeat} RTUs={len(specs)} setup complete", flush=True)
 
         started = time.perf_counter()
@@ -195,7 +210,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
         result["discovery_ms"] = (time.perf_counter() - started) * 1000
 
         stable_ms = command_ms = definition_ms = 0.0
-        queue = CountQueue()
+        queue = CountQueue(runtime._batch_message_size)
         for index, spec in enumerate([] if args.pipeline_only else specs, 1):
             worker = runtime.ChannelWorker(store, spec, log_dir=root / "stage-logs", writer_queue=queue)
             try:

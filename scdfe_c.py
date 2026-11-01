@@ -325,25 +325,91 @@ def _batch_update_sql(table: str, value_names: tuple[str, ...],
     )
 
 
+def _message_groups(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Decode current point batches or a single RTU/status update."""
+    if not isinstance(message, Mapping):
+        raise ValueError("批量写数据库消息不是对象")
+    if message.get("op") == "batch":
+        groups = message.get("groups")
+        if not isinstance(groups, list) or not groups:
+            raise ValueError("batch 缺少 groups")
+        return groups
+    if message.get("op") != "update":
+        raise ValueError(f"未知批量写入消息: {message.get('op')!r}")
+    key, values = message.get("key"), message.get("values")
+    if not isinstance(key, Mapping) or not key or not isinstance(values, Mapping) or not values:
+        raise ValueError("批量写入消息缺少 key/values")
+    key_names = tuple(sorted(key))
+    return [{"table": message.get("table"), "key_names": key_names,
+             "value_names": tuple(values),
+             "rows": [(*values.values(), *(key[name] for name in key_names))]}]
+
+
+def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[tuple[Any, ...]]]:
+    """Validate and merge once, before taking the SQLite write lock.
+
+    Row parameters are already packed by the producer. Keep those tuples for
+    unique rows and equal shapes; only overlapping partial updates need field
+    dictionaries. Queue order determines the last value of each field.
+    """
+    coalesced: dict[tuple, tuple[tuple, tuple[Any, ...]]] = {}
+    for message in messages:
+        for group in _message_groups(message):
+            if not isinstance(group, Mapping):
+                raise ValueError("批量写入分组不是对象")
+            table = group.get("table")
+            key_names, value_names = group.get("key_names"), group.get("value_names")
+            rows = group.get("rows")
+            if not isinstance(table, str) or not table:
+                raise ValueError("批量写入分组缺少 table")
+            if (not isinstance(key_names, (tuple, list)) or not key_names
+                    or not isinstance(value_names, (tuple, list)) or not value_names):
+                raise ValueError("批量写入分组缺少 key_names/value_names")
+            key_names, value_names = tuple(key_names), tuple(value_names)
+            if len(set(key_names)) != len(key_names) or len(set(value_names)) != len(value_names):
+                raise ValueError("批量写入分组包含重复字段")
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("批量写入分组缺少 rows")
+            # Validate identifiers once per group, not once per point. Key
+            # order must be canonical so differently ordered keys still merge.
+            canonical_keys = tuple(sorted(key_names))
+            _batch_update_sql(table, value_names, canonical_keys)
+            key_order = tuple(key_names.index(name) for name in canonical_keys)
+            shape = (table, value_names, canonical_keys)
+            value_count = len(value_names)
+            param_count = value_count + len(key_names)
+            for row in rows:
+                if not isinstance(row, (tuple, list)) or len(row) != param_count:
+                    raise ValueError("批量写入行参数数量不匹配")
+                params = tuple(row)
+                keys = params[value_count:]
+                if key_names != canonical_keys:
+                    keys = tuple(keys[index] for index in key_order)
+                    params = params[:value_count] + keys
+                token = (table, canonical_keys, keys)
+                previous = coalesced.get(token)  # also rejects unhashable keys
+                if previous is None or previous[0] == shape:
+                    coalesced[token] = (shape, params)
+                else:
+                    previous_shape, previous_params = previous
+                    fields = dict(zip(previous_shape[1], previous_params))
+                    fields.update(zip(value_names, params))
+                    merged_shape = (table, tuple(fields), canonical_keys)
+                    coalesced[token] = (merged_shape, (*fields.values(), *keys))
+    grouped: dict[tuple, list[tuple[Any, ...]]] = {}
+    for shape, params in coalesced.values():
+        group_rows = grouped.get(shape)
+        if group_rows is None:
+            grouped[shape] = [params]
+        else:
+            group_rows.append(params)
+    return {_batch_update_sql(*shape): rows for shape, rows in grouped.items()}
+
+
 def _apply_batch_updates(connection: sqlite3.Connection,
                          messages: list[Mapping[str, Any]]) -> None:
-    """Apply updates grouped by identical SQL shape in one transaction."""
-    groups: dict[str, list[list[Any]]] = {}
-    for message in messages:
-        if message.get("op") != "update":
-            raise ValueError(f"未知批量写入消息: {message.get('op')!r}")
-        table = str(message["table"])
-        key = message.get("key")
-        values = message.get("values")
-        if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
-            raise ValueError("批量写入消息缺少 key/values")
-        value_names = tuple(sorted(values))
-        key_names = tuple(sorted(key))
-        sql = _batch_update_sql(table, value_names, key_names)
-        groups.setdefault(sql, []).append(
-            [values[name] for name in value_names] + [key[name] for name in key_names]
-        )
-    for sql, params in groups.items():
+    """Apply a prepared batch in the caller's transaction."""
+    for sql, params in _prepare_batch_updates(messages).items():
         connection.executemany(sql, params)
 
 
@@ -356,112 +422,46 @@ def _flush_batch(
 ) -> bool:
     if not messages:
         return True
-    # Keep the latest field value for each row across the queued messages and
-    # acknowledge every original queue message below.  This bounds SQLite
-    # work during fast polling while retaining the last value in each batch.
-    coalesced: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, Any]] = {}
-    for message in messages:
-        if not isinstance(message, Mapping):
-            logger.error("批量写数据库消息无法合并，消息不是对象")
-            for _ in messages:
-                queue.task_done()
-            return False
-        op = message.get("op")
-        if op == "update":
-            candidates: Any = (message,)
-        elif op == "batch":
-            candidates = message.get("updates")
-            if not isinstance(candidates, list) or not candidates:
-                logger.error("批量写数据库消息无法合并，batch 缺少 updates")
-                for _ in messages:
-                    queue.task_done()
-                return False
-        else:
-            logger.error(f"批量写数据库消息无法合并，op={op!r}")
-            for _ in messages:
-                queue.task_done()
-            return False
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
-                logger.error("批量写数据库消息无法合并，update 不是对象")
-                for _ in messages:
-                    queue.task_done()
-                return False
-            raw_table = candidate.get("table")
-            if not isinstance(raw_table, str) or not raw_table:
-                logger.error("批量写数据库消息无法合并，缺少有效 table")
-                for _ in messages:
-                    queue.task_done()
-                return False
-            key = candidate.get("key")
-            values = candidate.get("values")
-            if not isinstance(key, Mapping) or not isinstance(values, Mapping) or not values:
-                logger.error("批量写数据库消息无法合并，缺少 key/values")
-                for _ in messages:
-                    queue.task_done()
-                return False
-            table = str(raw_table)
-            try:
-                key_items = tuple(sorted((str(name), value) for name, value in key.items()))
-                hash(key_items)
-            except (TypeError, ValueError):
-                logger.error("批量写数据库消息无法合并，key 包含不可哈希值")
-                for _ in messages:
-                    queue.task_done()
-                return False
-            token = (table, key_items)
-            existing = coalesced.get(token)
-            if existing is None:
-                coalesced[token] = {
-                    "op": "update", "table": table,
-                    "key": dict(key), "values": dict(values),
-                }
-            else:
-                existing["values"].update(values)
-    pending_messages = list(coalesced.values())
-    error: Exception | None = None
     owned_connection = connection is None
+    active_connection = connection
     try:
-        active_connection = connection or store.open_connection()
-    except Exception as exc:  # noqa: BLE001 - writer must acknowledge and restart
-        logger.error(f"批量写数据库连接打开失败（原始消息 {len(messages)}）: {exc}")
+        prepared = _prepare_batch_updates(messages)
+        if active_connection is None:
+            active_connection = store.open_connection()
+        for attempt in range(4):
+            try:
+                active_connection.execute("BEGIN IMMEDIATE")
+                for sql, params in prepared.items():
+                    active_connection.executemany(sql, params)
+                active_connection.commit()
+                return True
+            except sqlite3.OperationalError as exc:
+                if active_connection.in_transaction:
+                    active_connection.rollback()
+                if attempt == 3 or ("locked" not in str(exc).lower() and "busy" not in str(exc).lower()):
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+            except Exception:
+                if active_connection.in_transaction:
+                    active_connection.rollback()
+                raise
+    except Exception as exc:  # noqa: BLE001 - malformed batch or database failure
+        logger.error(f"批量写数据库失败（原始消息 {len(messages)}）: {exc}")
+        return False
+    finally:
         for _ in messages:
             queue.task_done()
-        return False
-    for attempt in range(4):
-        try:
-            active_connection.execute("BEGIN IMMEDIATE")
-            _apply_batch_updates(active_connection, pending_messages)
-            active_connection.commit()
-            error = None
-            break
-        except sqlite3.OperationalError as exc:
-            error = exc
-            if active_connection.in_transaction:
-                active_connection.rollback()
-            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
-                break
-            time.sleep(0.05 * (attempt + 1))
-        except Exception as exc:  # noqa: BLE001 - malformed internal message
-            error = exc
-            if active_connection.in_transaction:
-                active_connection.rollback()
-            break
-    if error is not None:
-        logger.error(f"批量写数据库失败，数量={len(pending_messages)}（原始消息 {len(messages)}）: {error}")
-    for _ in messages:
-        queue.task_done()
-    if owned_connection:
-        active_connection.close()
-    return error is None
+        if owned_connection and active_connection is not None:
+            active_connection.close()
 
 
 def _batch_message_size(message: Any) -> int:
     """Return the number of point updates represented by one queue message."""
     if isinstance(message, Mapping) and message.get("op") == "batch":
-        updates = message.get("updates")
-        if isinstance(updates, list):
-            return max(1, len(updates))
+        groups = message.get("groups")
+        if isinstance(groups, list):
+            return max(1, sum(len(group["rows"]) for group in groups
+                              if isinstance(group, Mapping) and isinstance(group.get("rows"), list)))
     return 1
 
 
@@ -788,16 +788,18 @@ class ChannelWorker:
             coalesced: dict[tuple[str, int, int], dict[str, Any]] = {}
             for table, rtu_id, point_no, updates in rows:
                 coalesced.setdefault((table, rtu_id, point_no), {}).update(updates)
-            updates = [
-                {
-                    "table": table,
-                    "key": {"rtu_id": rtu_id, "pnt_no": point_no},
-                    "values": point_updates,
-                }
-                for (table, rtu_id, point_no), point_updates in coalesced.items()
-            ]
+            groups: dict[tuple, dict[str, Any]] = {}
+            for (table, rtu_id, point_no), point_updates in coalesced.items():
+                value_names = tuple(point_updates)
+                shape = (table, value_names)
+                group = groups.get(shape)
+                if group is None:
+                    group = {"table": table, "key_names": ("pnt_no", "rtu_id"),
+                             "value_names": value_names, "rows": []}
+                    groups[shape] = group
+                group["rows"].append((*point_updates.values(), point_no, rtu_id))
             self.writer_queue.put(
-                {"op": "batch", "updates": updates},
+                {"op": "batch", "groups": list(groups.values())},
                 timeout=max(1.0, self.retry_interval),
             )
             # The writer owns the connection, so existence is confirmed when
