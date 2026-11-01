@@ -383,6 +383,62 @@ class BatchWriterTransactionTests(unittest.TestCase):
         self.assertEqual(self.store.get_row("fes_yc_define", [8, 1])["value"], 80.0)
         self.assertEqual(self.acknowledged, 3)
 
+    def test_single_message_duplicates_merge_across_rows_and_partial_groups(self):
+        groups = [
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("value", "status"),
+             "rows": [(10.0, 2, 1, 7), [12.0, 3, 1, 7], (80.0, 4, 1, 8)]},
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("refresh_time",), "rows": [[123, 1, 7]]},
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("value",), "rows": [(13.0, 1, 7)]},
+        ]
+        messages = [{"op": "batch", "groups": groups}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        self.assertEqual(messages, original)
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["status"], row["refresh_time"], row["_version"]),
+                         (13.0, 3, 123, 2))
+        row = self.store.get_row("fes_yc_define", [8, 1])
+        self.assertEqual((row["value"], row["status"], row["_version"]), (80.0, 4, 2))
+        self.assertEqual(self.acknowledged, 1)
+
+    def test_single_message_duplicate_across_groups_retains_previous_fields(self):
+        groups = [
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("value", "status"), "rows": [(7.5, 2, 1, 7)]},
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("status", "refresh_time"), "rows": [(3, 123, 1, 7)]},
+        ]
+        self.assertTrue(_flush_batch(self.store, self.logger, [{"op": "batch", "groups": groups}],
+                                     self, self.connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["status"], row["refresh_time"], row["_version"]),
+                         (7.5, 3, 123, 2))
+        self.assertEqual(self.acknowledged, 1)
+
+    def test_single_unique_message_combines_shapes_without_mixing_tables_or_stations(self):
+        groups = [
+            {"table": "fes_yc_define", "key_names": ["pnt_no", "rtu_id"],
+             "value_names": ["value", "status"], "rows": [[7.5, 2, 1, 7]]},
+            {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("value", "status"), "rows": [(8.5, 3, 1, 8)]},
+            {"table": "fes_yx_define", "key_names": ("pnt_no", "rtu_id"),
+             "value_names": ("value",), "rows": [(1, 1, 7)]},
+        ]
+        messages = [{"op": "batch", "groups": groups}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        self.assertEqual(messages, original)
+        for rtu_id, value, status in ((7, 7.5, 2), (8, 8.5, 3)):
+            row = self.store.get_row("fes_yc_define", [rtu_id, 1])
+            self.assertEqual((row["value"], row["status"], row["_version"]), (value, status, 2))
+        row = self.store.get_row("fes_yx_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (1, 2))
+        self.assertEqual(self.store.get_row("fes_yx_define", [8, 1])["_version"], 1)
+        self.assertEqual(self.acknowledged, 1)
+
     def test_invalid_group_rejects_whole_batch_before_writing(self):
         valid = point_batch(self.update(value=20))["groups"][0]
         invalid = [

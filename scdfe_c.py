@@ -356,6 +356,26 @@ def _message_groups(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
              "rows": [(*values.values(), *(key[name] for name in key_names))]}]
 
 
+def _validated_batch_group(group: Any) -> tuple[str, tuple, tuple, list]:
+    """Validate common group metadata once, outside the per-point loops."""
+    if not isinstance(group, Mapping):
+        raise ValueError("批量写入分组不是对象")
+    table = group.get("table")
+    key_names, value_names = group.get("key_names"), group.get("value_names")
+    rows = group.get("rows")
+    if not isinstance(table, str) or not table:
+        raise ValueError("批量写入分组缺少 table")
+    if (not isinstance(key_names, (tuple, list)) or not key_names
+            or not isinstance(value_names, (tuple, list)) or not value_names):
+        raise ValueError("批量写入分组缺少 key_names/value_names")
+    key_names, value_names = tuple(key_names), tuple(value_names)
+    if len(set(key_names)) != len(key_names) or len(set(value_names)) != len(value_names):
+        raise ValueError("批量写入分组包含重复字段")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("批量写入分组缺少 rows")
+    return table, key_names, value_names, rows
+
+
 def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[tuple[Any, ...]]]:
     """Validate and merge once, before taking the SQLite write lock.
 
@@ -363,24 +383,46 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
     unique rows and equal shapes; only overlapping partial updates need field
     dictionaries. Queue order determines the last value of each field.
     """
+    # Communication cycles normally arrive as one grouped message.  In that
+    # case all rows have complete, canonical keys and unique points, so they
+    # can go straight to ``executemany`` without building the per-row merge
+    # dictionary used for mixed/partial updates.  The duplicate-key check
+    # keeps the existing last-value semantics; unusual messages fall through
+    # to the general coalescing path below.
+    if len(messages) == 1:
+        fast_grouped: dict[str, list[tuple[Any, ...]]] = {}
+        fast_seen: set[tuple[str, tuple[str, ...], tuple[Any, ...]]] = set()
+        fast_path = True
+        for group in _message_groups(messages[0]):
+            table, key_names, value_names, rows = _validated_batch_group(group)
+            canonical_keys = tuple(sorted(key_names))
+            if key_names != canonical_keys:
+                fast_path = False
+                break
+            value_count = len(value_names)
+            param_count = value_count + len(key_names)
+            sql = _batch_update_sql(table, value_names, canonical_keys)
+            prepared_rows = fast_grouped.setdefault(sql, [])
+            for row in rows:
+                if not isinstance(row, (tuple, list)) or len(row) != param_count:
+                    raise ValueError("批量写入行参数数量不匹配")
+                params = tuple(row)
+                keys = params[value_count:]
+                token = (table, canonical_keys, keys)
+                if token in fast_seen:  # also rejects unhashable keys
+                    fast_path = False
+                    break
+                fast_seen.add(token)
+                prepared_rows.append(params)
+            if not fast_path:
+                break
+        if fast_path:
+            return fast_grouped
+
     coalesced: dict[tuple, tuple[tuple, tuple[Any, ...]]] = {}
     for message in messages:
         for group in _message_groups(message):
-            if not isinstance(group, Mapping):
-                raise ValueError("批量写入分组不是对象")
-            table = group.get("table")
-            key_names, value_names = group.get("key_names"), group.get("value_names")
-            rows = group.get("rows")
-            if not isinstance(table, str) or not table:
-                raise ValueError("批量写入分组缺少 table")
-            if (not isinstance(key_names, (tuple, list)) or not key_names
-                    or not isinstance(value_names, (tuple, list)) or not value_names):
-                raise ValueError("批量写入分组缺少 key_names/value_names")
-            key_names, value_names = tuple(key_names), tuple(value_names)
-            if len(set(key_names)) != len(key_names) or len(set(value_names)) != len(value_names):
-                raise ValueError("批量写入分组包含重复字段")
-            if not isinstance(rows, list) or not rows:
-                raise ValueError("批量写入分组缺少 rows")
+            table, key_names, value_names, rows = _validated_batch_group(group)
             # Validate identifiers once per group, not once per point. Key
             # order must be canonical so differently ordered keys still merge.
             canonical_keys = tuple(sorted(key_names))
