@@ -1,10 +1,12 @@
 from pathlib import Path
+from copy import deepcopy
 import multiprocessing as mp
 import sqlite3
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from scdfe_c import BATCH_WRITER_STOP, ScdfeLogger, _batch_writer_entry, _flush_batch
 from scdfe_c import ScdfeSupervisor
@@ -238,6 +240,124 @@ class ScdfeControlTests(unittest.TestCase):
             queue.close()
             queue.join_thread()
             self.assertNotEqual(process.exitcode, 0)
+
+
+class BatchWriterTransactionTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        self.store = ScadaStore(root / "scada.sqlite3")
+        self.logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
+        for rtu_id in (7, 8):
+            self.store.create_row("fes_rtu_define", {
+                "rtu_id": rtu_id, "channel_id": rtu_id * 10,
+                "channel_type": "custom",
+            })
+            for table in ("fes_yc_define", "fes_yx_define"):
+                self.store.create_row(table, {"rtu_id": rtu_id, "pnt_no": 1, "value": 0})
+        self.connection = self.store.open_connection()
+        self.addCleanup(self.connection.close)
+        self.acknowledged = 0
+
+    def task_done(self):
+        self.acknowledged += 1
+
+    @staticmethod
+    def update(table="fes_yc_define", rtu_id=7, **values):
+        return {"op": "update", "table": table,
+                "key": {"rtu_id": rtu_id, "pnt_no": 1}, "values": values}
+
+    def test_mixed_tables_stations_and_partial_updates_preserve_latest_fields(self):
+        reordered = self.update(value=12.5, status=3)
+        reordered["key"] = {"pnt_no": 1, "rtu_id": 7}
+        messages = [
+            self.update(value=10.0, refresh_time=123),
+            {"op": "batch", "updates": [
+                self.update(rtu_id=8, status=4, value=80.0),
+                reordered,
+                self.update("fes_yx_define", value=1, status=2),
+            ]},
+            self.update(refresh_time=124),
+        ]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        self.assertEqual(messages, original)
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["status"], row["refresh_time"], row["_version"]),
+                         (12.5, 3, 124, 2))
+        row = self.store.get_row("fes_yc_define", [8, 1])
+        self.assertEqual((row["value"], row["status"], row["_version"]), (80.0, 4, 2))
+        row = self.store.get_row("fes_yx_define", [7, 1])
+        self.assertEqual((row["value"], row["status"], row["_version"]), (1, 2, 2))
+        self.assertEqual(self.store.get_row("fes_yx_define", [8, 1])["_version"], 1)
+        self.assertEqual(self.acknowledged, len(messages))
+
+    def test_same_shape_with_different_field_order_binds_values_correctly(self):
+        messages = [self.update(value=7.5, status=3), self.update(rtu_id=8, status=4, value=8.5)]
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        for rtu_id, value, status in ((7, 7.5, 3), (8, 8.5, 4)):
+            row = self.store.get_row("fes_yc_define", [rtu_id, 1])
+            self.assertEqual((row["value"], row["status"], row["_version"]), (value, status, 2))
+
+    def test_invalid_message_rejects_entire_batch_and_acknowledges_queue(self):
+        bad_messages = [
+            None, {"op": "unknown"}, {"op": "batch", "updates": []},
+            {"op": "batch", "updates": [42]},
+            {"op": "update", "table": "", "key": {"rtu_id": 7}, "values": {"value": 1}},
+            {"op": "update", "table": "fes_yc_define", "key": {}, "values": {"value": 1}},
+            {"op": "update", "table": "fes_yc_define", "key": {"rtu_id": []}, "values": {"value": 1}},
+            self.update(),
+        ]
+        for bad in bad_messages:
+            with self.subTest(message=bad):
+                self.acknowledged = 0
+                self.assertFalse(_flush_batch(self.store, self.logger,
+                                              [self.update(value=20), bad], self, self.connection))
+                row = self.store.get_row("fes_yc_define", [7, 1])
+                self.assertEqual((row["value"], row["_version"]), (0, 1))
+                self.assertFalse(self.connection.in_transaction)
+                self.assertEqual(self.acknowledged, 2)
+
+    def test_later_sql_failure_rolls_back_prior_groups(self):
+        messages = [self.update(value=20), self.update("fes_yx_define", missing_column=1)]
+        self.assertFalse(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (0, 1))
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(self.acknowledged, 2)
+        self.assertTrue(_flush_batch(self.store, self.logger, [self.update(value=30)],
+                                    self, self.connection))
+        self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["value"], 30)
+
+    def test_busy_commit_rolls_back_and_retries_without_double_version_increment(self):
+        real_connection = self.connection
+
+        class BusyOnce:
+            commits = 0
+
+            def __getattr__(self, name):
+                return getattr(real_connection, name)
+
+            def commit(self):
+                self.commits += 1
+                if self.commits == 1:
+                    raise sqlite3.OperationalError("database is locked")
+                return real_connection.commit()
+
+        connection = BusyOnce()
+        with patch("scdfe_c.time.sleep"):
+            self.assertTrue(_flush_batch(self.store, self.logger, [self.update(value=25)], self, connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (25, 2))
+        self.assertEqual(connection.commits, 2)
+        self.assertEqual(self.acknowledged, 1)
+
+    def test_connection_open_failure_acknowledges_batch(self):
+        with patch.object(self.store, "open_connection", side_effect=sqlite3.OperationalError("cannot open")):
+            self.assertFalse(_flush_batch(self.store, self.logger, [self.update(value=25)], self))
+        self.assertEqual(self.acknowledged, 1)
+        self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["_version"], 1)
 
 
 if __name__ == "__main__":

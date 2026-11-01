@@ -20,6 +20,7 @@ import argparse
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import json
 import multiprocessing as mp
@@ -55,6 +56,9 @@ SUPPORTED_CHANNEL_TYPES = frozenset(CHANNEL_PARAMETER_TABLES)
 LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_INTERVAL = 0.2
+# Keep one 2,000-point measurement message per transaction in the scale
+# fixture.  This avoids making SQLite retain a much larger dirty page set;
+# the local benchmark showed larger transactions were slower on this host.
 BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
@@ -312,6 +316,23 @@ def _apply_batch_update(connection: sqlite3.Connection, message: Mapping[str, An
     _apply_batch_updates(connection, [message])
 
 
+@lru_cache(maxsize=256)
+def _batch_update_sql(table: str, value_names: tuple[str, ...],
+                      key_names: tuple[str, ...]) -> str:
+    """Build and cache the SQL for one table/key/value shape.
+
+    Communication cycles repeatedly update the same YC/YX columns. Caching
+    the quoted statement removes string construction from the hot path while
+    keeping identifiers validated by :func:`quote_identifier`.
+    """
+    assignments = ", ".join(f"{quote_identifier(name)}=?" for name in value_names)
+    predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in key_names)
+    return (
+        f"UPDATE {quote_identifier(table)} SET {assignments}, _version=_version+1 "
+        f"WHERE {predicate}"
+    )
+
+
 def _apply_batch_updates(connection: sqlite3.Connection,
                          messages: list[Mapping[str, Any]]) -> None:
     """Apply updates grouped by identical SQL shape in one transaction."""
@@ -326,12 +347,7 @@ def _apply_batch_updates(connection: sqlite3.Connection,
             raise ValueError("批量写入消息缺少 key/values")
         value_names = tuple(sorted(values))
         key_names = tuple(sorted(key))
-        assignments = ", ".join(f"{quote_identifier(name)}=?" for name in value_names)
-        predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in key_names)
-        sql = (
-            f"UPDATE {quote_identifier(table)} SET {assignments}, _version=_version+1 "
-            f"WHERE {predicate}"
-        )
+        sql = _batch_update_sql(table, value_names, key_names)
         groups.setdefault(sql, []).append(
             [values[name] for name in value_names] + [key[name] for name in key_names]
         )
@@ -348,14 +364,10 @@ def _flush_batch(
 ) -> bool:
     if not messages:
         return True
-    # Several communication threads can enqueue successive values for the
-    # same row before the writer commits.  Keep the latest field value for
-    # each (table, primary-key) pair and execute one UPDATE per row.  The
-    # original message count is still acknowledged below, so JoinableQueue
-    # accounting remains exact while SQLite work and _version churn drop
-    # substantially during fast polling.
+    # Keep the latest field value for each row across the queued messages and
+    # acknowledge every original queue message below.  This bounds SQLite
+    # work during fast polling while retaining the last value in each batch.
     coalesced: dict[tuple[str, tuple[tuple[str, Any], ...]], dict[str, Any]] = {}
-    expanded: list[Mapping[str, Any]] = []
     for message in messages:
         if not isinstance(message, Mapping):
             logger.error("批量写数据库消息无法合并，消息不是对象")
@@ -396,33 +408,34 @@ def _flush_batch(
                 for _ in messages:
                     queue.task_done()
                 return False
-            expanded.append(candidate)
-
-    for candidate in expanded:
-        table = str(candidate["table"])
-        key = candidate["key"]
-        values = candidate["values"]
-        try:
-            key_items = tuple(sorted((str(name), value) for name, value in key.items()))
-            hash(key_items)
-        except (TypeError, ValueError):
-            logger.error("批量写数据库消息无法合并，key 包含不可哈希值")
-            for _ in messages:
-                queue.task_done()
-            return False
-        token = (table, key_items)
-        existing = coalesced.get(token)
-        if existing is None:
-            coalesced[token] = {
-                "op": "update", "table": table,
-                "key": dict(key), "values": dict(values),
-            }
-        else:
-            existing["values"].update(values)
+            table = str(raw_table)
+            try:
+                key_items = tuple(sorted((str(name), value) for name, value in key.items()))
+                hash(key_items)
+            except (TypeError, ValueError):
+                logger.error("批量写数据库消息无法合并，key 包含不可哈希值")
+                for _ in messages:
+                    queue.task_done()
+                return False
+            token = (table, key_items)
+            existing = coalesced.get(token)
+            if existing is None:
+                coalesced[token] = {
+                    "op": "update", "table": table,
+                    "key": dict(key), "values": dict(values),
+                }
+            else:
+                existing["values"].update(values)
     pending_messages = list(coalesced.values())
     error: Exception | None = None
     owned_connection = connection is None
-    active_connection = connection or store.open_connection()
+    try:
+        active_connection = connection or store.open_connection()
+    except Exception as exc:  # noqa: BLE001 - writer must acknowledge and restart
+        logger.error(f"批量写数据库连接打开失败（原始消息 {len(messages)}）: {exc}")
+        for _ in messages:
+            queue.task_done()
+        return False
     for attempt in range(4):
         try:
             active_connection.execute("BEGIN IMMEDIATE")

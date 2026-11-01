@@ -187,3 +187,11 @@ ruff check api web tests scdfe_c.py
 ```
 
 该工具独立生成 6/60 个 RTU，每站 YC1000/YX1000/YK200/YT200，分别记录串行阶段计时；随后用 6/60 个通信线程和真实独立写库进程测试变化值完整写回。排空并提交后才停止计时，逐点验证最终值和版本号。不连接现场设备，不改动正式数据库。默认定义扫描每站测 10 次，其余循环数见命令。
+
+写库路径的聚焦对比可用下面的命令复测；`--pipeline-only` 只计真实通信线程、跨进程队列、SQLite 提交和写库进程排空，`--repeat 3` 取三次中位数：
+
+```powershell
+.\.venv\Scripts\python.exe tools/benchmark_rtu_scale.py --pipeline-only --replicas 1 10 --db-cycles 20 --repeat 3 --output reports/writer_optimization_20261101_final.json
+```
+
+2026-11-01 在同一 Windows 主机上，批次合并单遍处理和 SQL 形状缓存使完整排空中位数从 6 站 7.060 秒降到 3.789 秒、60 站 71.323 秒降到 46.784 秒；吞吐分别从 3.399 万升到 6.335 万、从 3.365 万升到 5.130 万点更新/秒。三次测试逐行核验最终值、版本号、SQLite 完整性和外键，详细原始数据与边界见 [批量写库优化报告](reports/writer_optimization_20261101.md)。该结果是本机临时 SQLite/IPC 基准，不包含现场设备通信时延。

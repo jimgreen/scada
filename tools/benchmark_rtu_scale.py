@@ -7,10 +7,12 @@ in a separate spawn process. Database setup is excluded from measured work.
 from __future__ import annotations
 
 import argparse
+import cProfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import hashlib
 import multiprocessing as mp
 from pathlib import Path
 import platform
@@ -67,17 +69,26 @@ class ReadyQueue:
         self.queue.task_done()
 
 
-def writer_entry(db, schema, log_dir, queue, ready):
-    _batch_writer_entry(db, schema, log_dir, ReadyQueue(queue, ready))
+def writer_entry(db, schema, log_dir, queue, ready, profile_path=None):
+    args = (db, schema, log_dir, ReadyQueue(queue, ready))
+    if profile_path is None:
+        _batch_writer_entry(*args)
+    else:
+        profiler = cProfile.Profile()
+        try:
+            profiler.runcall(_batch_writer_entry, *args)
+        finally:
+            profiler.dump_stats(profile_path)
 
 
-def pipeline(store, specs, root, cycles):
+def pipeline(store, specs, root, cycles, profile_path=None):
     context = mp.get_context("spawn")
     queue = context.JoinableQueue(maxsize=64)
     ready = context.Event()
     writer = context.Process(
         target=writer_entry,
-        args=(str(store.db_path), str(store.catalog.directory), str(root / "writer-logs"), queue, ready),
+        args=(str(store.db_path), str(store.catalog.directory), str(root / "writer-logs"),
+              queue, ready, profile_path),
     )
     writer.start()
     success = False
@@ -114,8 +125,8 @@ def pipeline(store, specs, root, cycles):
         expected_points = len(specs) * (COUNTS["yc"] + COUNTS["yx"])
         if accepted != expected_points * cycles:
             raise AssertionError((accepted, expected_points * cycles))
-        # Each message has 2000 points, exceeding max_batch=500, so it commits
-        # separately. Check every row's version and final value, not a sample.
+        # Each message has 2000 points and triggers its own transaction with
+        # max_batch=500. Check every row's version and final value, not a sample.
         with store.connection() as connection:
             for kind in ("yc", "yx"):
                 rows = connection.execute(
@@ -147,7 +158,7 @@ def pipeline(store, specs, root, cycles):
         writer.close()
 
 
-def run_scale(replicas, args):
+def run_scale(replicas, args, repeat):
     with tempfile.TemporaryDirectory(prefix="scada-rtu-scale-") as temp:
         root = Path(temp)
         store = ScadaStore(root / "scada.sqlite3")
@@ -155,18 +166,19 @@ def run_scale(replicas, args):
         specs = discover_channels(store)
         if len(specs) != 6 * replicas:
             raise AssertionError("RTU count mismatch")
-        result = {"rtus": len(specs), "points_per_rtu": dict(COUNTS), "table_counts": seeded["totals"]}
+        result = {"rtus": len(specs), "repeat": repeat,
+                  "points_per_rtu": dict(COUNTS), "table_counts": seeded["totals"]}
         print(f"RTUs={len(specs)} setup complete", flush=True)
 
         started = time.perf_counter()
-        for _ in range(args.scan_cycles):
+        for _ in range(0 if args.pipeline_only else args.scan_cycles):
             if len(discover_channels(store)) != len(specs):
                 raise AssertionError("discovery lost a station")
         result["discovery_ms"] = (time.perf_counter() - started) * 1000
 
         stable_ms = command_ms = definition_ms = 0.0
         queue = CountQueue()
-        for index, spec in enumerate(specs, 1):
+        for index, spec in enumerate([] if args.pipeline_only else specs, 1):
             worker = ChannelWorker(store, spec, log_dir=root / "stage-logs", writer_queue=queue)
             try:
                 values = measurements(rtu_id=spec.rtu_id)
@@ -190,11 +202,18 @@ def run_scale(replicas, args):
                 worker._close_command_connection()
             if index % 6 == 0:
                 print(f"RTUs={len(specs)} stage progress {index}/{len(specs)}", flush=True)
-        result.update(stable_sync_ms=stable_ms, stable_messages=queue.messages,
-                      stable_point_updates=queue.points, command_poll_ms=command_ms,
-                      definition_ms=definition_ms)
+        if args.pipeline_only:
+            del result["discovery_ms"]
+        else:
+            result.update(stable_sync_ms=stable_ms, stable_messages=queue.messages,
+                          stable_point_updates=queue.points, command_poll_ms=command_ms,
+                          definition_ms=definition_ms)
         print(f"RTUs={len(specs)} concurrent pipeline starting", flush=True)
-        result["pipeline"] = pipeline(store, specs, root, args.db_cycles)
+        profile_path = (str(args.output.resolve().with_suffix(f".{len(specs)}rtus.{repeat}.prof"))
+                        if args.profile_writer else None)
+        result["pipeline"] = pipeline(store, specs, root, args.db_cycles, profile_path)
+        if profile_path is not None:
+            result["writer_profile"] = profile_path
         with store.connection() as connection:
             result["integrity_check"] = connection.execute("PRAGMA integrity_check").fetchone()[0]
             result["foreign_key_violations"] = len(connection.execute("PRAGMA foreign_key_check").fetchall())
@@ -212,9 +231,16 @@ def main():
     parser.add_argument("--command-cycles", type=int, default=1000)
     parser.add_argument("--definition-cycles", type=int, default=10)
     parser.add_argument("--scan-cycles", type=int, default=1000)
+    parser.add_argument("--pipeline-only", action="store_true",
+                        help="skip serial microbenchmarks; measure real IPC and database commits")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="independent runs, each using a fresh temporary database")
+    parser.add_argument("--profile-writer", action="store_true",
+                        help="save writer cProfile data (adds overhead; do not compare timings)")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if min(args.cycles, args.db_cycles, args.command_cycles, args.definition_cycles, args.scan_cycles) < 1:
+    if min(args.cycles, args.db_cycles, args.command_cycles, args.definition_cycles,
+           args.scan_cycles, args.repeat) < 1:
         parser.error("cycle counts must be positive")
     if any(n < 1 or n > 10 for n in args.replicas):
         parser.error("replicas must be 1..10")
@@ -222,16 +248,20 @@ def main():
         "created_at": datetime.now(timezone.utc).isoformat(),
         "platform": platform.platform(), "python": sys.version,
         "sqlite": sqlite3.sqlite_version,
+        "runtime_sha256": hashlib.sha256(
+            (Path(__file__).resolve().parents[1] / "scdfe_c.py").read_bytes()).hexdigest(),
         "config": {**vars(args), "output": str(args.output)},
         "writer": {"interval_seconds": BATCH_WRITER_INTERVAL, "max_batch": BATCH_WRITER_MAX_BATCH},
         "measurement_heartbeat_seconds": 5,
-        "scope": "serial stage microbenchmarks plus concurrent threads/spawn writer; no device I/O",
+        "scope": ("concurrent threads/spawn writer; no device I/O" if args.pipeline_only else
+                  "serial stage microbenchmarks plus concurrent threads/spawn writer; no device I/O"),
         "results": [],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    for replicas in args.replicas:
-        report["results"].append(run_scale(replicas, args))
-        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for repeat in range(1, args.repeat + 1):
+        for replicas in args.replicas:
+            report["results"].append(run_scale(replicas, args, repeat))
+            args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
