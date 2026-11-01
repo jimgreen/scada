@@ -58,6 +58,7 @@ LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_INTERVAL = 0.1
 BATCH_WRITER_MAX_BATCH = 500
+BATCH_WRITER_WAL_AUTOCHECKPOINT = 10000
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
@@ -567,6 +568,10 @@ def _batch_writer_entry(
     try:
         store = ScadaStore(db_path, schema_dir)
         connection = store.open_connection()
+        # The writer is the only process that commits measurement batches.
+        # Keep WAL checkpoints out of the hot commit cadence; the normal
+        # SQLite checkpoint policy remains unchanged for other connections.
+        connection.execute(f"PRAGMA wal_autocheckpoint={BATCH_WRITER_WAL_AUTOCHECKPOINT}")
         logger.process("批量数据库写入进程启动")
         while True:
             try:

@@ -1,0 +1,135 @@
+{
+  "6": {
+    "before_ms": [
+      1033.8431000000128,
+      962.7755000001343,
+      972.1349999999802
+    ],
+    "after_ms": [
+      973.762199999328,
+      946.3059999998222,
+      954.0714999993725
+    ],
+    "before_median_ms": 972.1349999999802,
+    "after_median_ms": 954.0714999993725,
+    "time_reduction_pct": 1.8581267005722601,
+    "throughput_gain_pct": 1.8933067386060376
+  },
+  "60": {
+    "before_ms": [
+      9514.581500000531,
+      9418.629300000248,
+      9318.855600000461
+    ],
+    "after_ms": [
+      8665.948699999717,
+      8519.489899999826,
+      8612.509099999443
+    ],
+    "before_median_ms": 9418.629300000248,
+    "after_median_ms": 8612.509099999443,
+    "time_reduction_pct": 8.558784663080266,
+    "throughput_gain_pct": 9.359876322230608
+  },
+  "profile": {
+    "before": {
+      "total_seconds": 9.467736399999998,
+      "functions": {
+        "_prepare_batch_updates": {
+          "calls": 1200,
+          "own_seconds": 0.6234923,
+          "cumulative_seconds": 0.8458742
+        },
+        "get": {
+          "calls": 1210,
+          "own_seconds": 0.0063688,
+          "cumulative_seconds": 2.4238282
+        },
+        "_batch_writer_entry": {
+          "calls": 1,
+          "own_seconds": 0.0420251,
+          "cumulative_seconds": 9.467736200000001
+        },
+        "_flush_batch": {
+          "calls": 1210,
+          "own_seconds": 0.0100389,
+          "cumulative_seconds": 6.9331893
+        },
+        "<method 'close' of 'sqlite3.Connection' objects>": {
+          "calls": 2,
+          "own_seconds": 0.021574000000000003,
+          "cumulative_seconds": 0.021574000000000003
+        },
+        "<method 'commit' of 'sqlite3.Connection' objects>": {
+          "calls": 1201,
+          "own_seconds": 2.3753957000000003,
+          "cumulative_seconds": 2.3753957000000003
+        },
+        "<method 'executemany' of 'sqlite3.Connection' objects>": {
+          "calls": 2400,
+          "own_seconds": 3.6783628000000004,
+          "cumulative_seconds": 3.6783628000000004
+        },
+        "<method 'execute' of 'sqlite3.Connection' objects>": {
+          "calls": 1277,
+          "own_seconds": 0.0180673,
+          "cumulative_seconds": 0.0180673
+        }
+      },
+      "profile_sha256": "85646091c428ca00e726826ecb8d9a75fa8e139a5964274ef50c70585937cf81"
+    },
+    "after": {
+      "total_seconds": 10.838978500000005,
+      "functions": {
+        "_prepare_batch_updates": {
+          "calls": 1200,
+          "own_seconds": 0.7252413000000001,
+          "cumulative_seconds": 0.9907388
+        },
+        "get": {
+          "calls": 18,
+          "own_seconds": 3.6000000000000003e-06,
+          "cumulative_seconds": 3.6000000000000003e-06
+        },
+        "_flush_batch": {
+          "calls": 1211,
+          "own_seconds": 0.0122375,
+          "cumulative_seconds": 7.0236407000000005
+        },
+        "_batch_writer_entry": {
+          "calls": 1,
+          "own_seconds": 0.0533162,
+          "cumulative_seconds": 10.838978000000001
+        },
+        "<method 'close' of 'sqlite3.Connection' objects>": {
+          "calls": 2,
+          "own_seconds": 0.014539100000000001,
+          "cumulative_seconds": 0.014539100000000001
+        },
+        "<method 'commit' of 'sqlite3.Connection' objects>": {
+          "calls": 1201,
+          "own_seconds": 1.5431771,
+          "cumulative_seconds": 1.5431771
+        },
+        "<method 'executemany' of 'sqlite3.Connection' objects>": {
+          "calls": 2400,
+          "own_seconds": 4.4461116,
+          "cumulative_seconds": 4.4461116
+        },
+        "<method 'execute' of 'sqlite3.Connection' objects>": {
+          "calls": 1278,
+          "own_seconds": 0.0236984,
+          "cumulative_seconds": 0.0236984
+        }
+      },
+      "profile_sha256": "7fad4471e70a341daf9a179c40c67d97eb9025e6224d5ed72974b0f3e308c57f"
+    }
+  },
+  "commit_cumulative_reduction_pct": 35.034945967107724,
+  "accepted_runtime_sha256": "f1a972d279f956591208287970d250a2866e643cc55e1275dc2e97e125080951",
+  "baseline_runtime_sha256": "bc690dab80092583aa7463ee4ad917afc745a41f59f82a86e572e58084bef59f",
+  "workload": "6/60 RTUs, YC1000/YX1000/YK200/YT200 per RTU, 20 cycles, 240000/2400000 YC+YX updates",
+  "all_pipeline_runs_valid": true,
+  "final_source_sha256": "9e1cfc72296b1dc43bfcfa5887f3ecd09cad3cc7b2eac71543cb0762319f2cdd",
+  "final_source_note": "Final source only replaces the benchmark literal 10000 with the named BATCH_WRITER_WAL_AUTOCHECKPOINT constant; runtime behavior is identical."
+}

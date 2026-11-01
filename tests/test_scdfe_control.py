@@ -8,7 +8,14 @@ import time
 import unittest
 from unittest.mock import patch
 
-from scdfe_c import BATCH_WRITER_INTERVAL, BATCH_WRITER_STOP, ScdfeLogger, _batch_writer_entry, _flush_batch
+from scdfe_c import (
+    BATCH_WRITER_INTERVAL,
+    BATCH_WRITER_STOP,
+    BATCH_WRITER_WAL_AUTOCHECKPOINT,
+    ScdfeLogger,
+    _batch_writer_entry,
+    _flush_batch,
+)
 from scdfe_c import ScdfeSupervisor
 from core.scdfe_control import CONTROL_TABLE, InstanceLock, ensure_control_row, validate_control
 from web.service import ScadaStore
@@ -27,6 +34,7 @@ def point_batch(*updates):
 class ScdfeControlTests(unittest.TestCase):
     def test_singleton_control_row_and_validation(self):
         self.assertEqual(BATCH_WRITER_INTERVAL, 0.1)
+        self.assertEqual(BATCH_WRITER_WAL_AUTOCHECKPOINT, 10000)
         with tempfile.TemporaryDirectory() as directory:
             store = ScadaStore(Path(directory) / "scada.sqlite3")
             row = ensure_control_row(store)

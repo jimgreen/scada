@@ -1,0 +1,172 @@
+{
+  "created_at": "2026-11-01T04:26:07.145289+00:00",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "sqlite": "3.53.1",
+  "config": {
+    "seed": 20261101,
+    "replicas": [
+      10
+    ],
+    "cycles": 1000,
+    "db_cycles": 20,
+    "command_cycles": 1000,
+    "definition_cycles": 10,
+    "scan_cycles": 1000,
+    "pipeline_only": true,
+    "repeat": 1,
+    "profile_writer": true,
+    "baseline_ref": "12db87a",
+    "compare_bindings": false,
+    "output": "reports\\writer_wal_checkpoint_profile_20261101.json"
+  },
+  "runtimes": {
+    "before": {
+      "sha256": "bc690dab80092583aa7463ee4ad917afc745a41f59f82a86e572e58084bef59f",
+      "interval_seconds": 0.1,
+      "max_batch": 500
+    },
+    "after": {
+      "sha256": "f1a972d279f956591208287970d250a2866e643cc55e1275dc2e97e125080951",
+      "interval_seconds": 0.1,
+      "max_batch": 500
+    }
+  },
+  "workload_sha256": "07fa6fc1716b6f1df16036603f6e5f3579cce0d9e9879090ba4d9af0ed4c429b",
+  "benchmark_sha256": "5bc4230237722234d7160569d665ee7fcd433eb32fbd6ab8a801d96cec139fec",
+  "isolation": "frozen runtime sources; parent/child SHA-256 verification; exclusive benchmark lock; serial runs, variant order reversed on even repeats",
+  "measurement_heartbeat_seconds": 5,
+  "data_generation": "independent per-RTU Random streams; unique YC values in [-10000,10000]; each point randomly chooses quality 0..3 excluding its previous quality; YX random 0/1 may repeat, YC changes every cycle; YC raw_value=input, value=raw_base+raw_scale*input; fixture base=2, scale=1.1",
+  "baseline_method": "git revision",
+  "scope": "concurrent threads/spawn writer; no device I/O",
+  "results": [
+    {
+      "rtus": 60,
+      "repeat": 1,
+      "variant": "before",
+      "runtime_sha256": "bc690dab80092583aa7463ee4ad917afc745a41f59f82a86e572e58084bef59f",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 55790,
+        "yc_unique_values": 1000,
+        "yc_unique_engineering_values": 1000,
+        "quality_counts": {
+          "yc": {
+            "0": 248,
+            "1": 255,
+            "2": 224,
+            "3": 273
+          },
+          "yx": {
+            "0": 271,
+            "1": 230,
+            "2": 247,
+            "3": 252
+          }
+        }
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 9027.249399999164,
+        "drained_ms": 9436.52369999927,
+        "updates_per_second": 254330.9460453308,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "writer_profile": "D:\\codex\\scada\\reports\\writer_wal_checkpoint_profile_20261101.before.60rtus.1.prof",
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 1,
+      "variant": "after",
+      "runtime_sha256": "f1a972d279f956591208287970d250a2866e643cc55e1275dc2e97e125080951",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 55790,
+        "yc_unique_values": 1000,
+        "yc_unique_engineering_values": 1000,
+        "quality_counts": {
+          "yc": {
+            "0": 248,
+            "1": 255,
+            "2": 224,
+            "3": 273
+          },
+          "yx": {
+            "0": 271,
+            "1": 230,
+            "2": 247,
+            "3": 252
+          }
+        }
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 10329.526000000442,
+        "drained_ms": 10809.496500000023,
+        "updates_per_second": 222026.9926540977,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "writer_profile": "D:\\codex\\scada\\reports\\writer_wal_checkpoint_profile_20261101.after.60rtus.1.prof",
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    }
+  ]
+}
