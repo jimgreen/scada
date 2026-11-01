@@ -2,16 +2,12 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
-from ctypes import wintypes
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -22,66 +18,14 @@ if __package__ in (None, ""):
 else:
     from .service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
 
+from core.process_registry import PROCESS_TABLE, process_is_alive
+from web.process_control import ProcessController
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+def public_control_row(row):
+    return dict(row)
 
 
-def _scdfe_popen_kwargs() -> dict[str, object]:
-    """Return process-isolation options for the current operating system.
-
-    Windows uses a new process group so a console/service stop can address the
-    supervisor independently.  POSIX uses a new session so the supervisor and
-    its multiprocessing children do not remain attached to the Web server's
-    process group.  Keeping the keyword sets separate avoids passing the
-    Windows-only ``creationflags`` argument on Linux and other POSIX systems.
-    """
-    if os.name == "nt":
-        return {
-            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-            "close_fds": True,
-        }
-    return {
-        "start_new_session": True,
-        "close_fds": True,
-    }
-
-
-def _process_is_alive(pid: int) -> bool:
-    """Probe a process without sending a termination signal on Windows."""
-    if pid <= 0:
-        return False
-    if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-        except (OSError, ProcessLookupError):
-            return False
-        return True
-    # ``os.kill(pid, 0)`` is not a harmless existence probe on Windows on all
-    # supported Python builds.  Use a query-only handle and inspect the exit
-    # code instead; STILL_ACTIVE (259) means the process is running.
-    try:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            # Access denied generally means the PID exists but belongs to a
-            # process with a stronger token.  Treat it as active to avoid
-            # launching a duplicate supervisor; an invalid PID remains false.
-            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
-        try:
-            exit_code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return False
-            return exit_code.value == 259
-        finally:
-            kernel32.CloseHandle(handle)
-    except (OSError, AttributeError):
-        return False
-ROOT_DIR = Path(__file__).resolve().parents[1]
 LOG = logging.getLogger("scada.web")
 
 
@@ -247,21 +191,31 @@ class ScadaHandler(BaseHTTPRequestHandler):
         if parts[:3] == ["api", "scdfe_c", "status"]:
             if len(parts) != 3:
                 raise ApiError(404, "路径不存在", code="not_found")
-            if method != "GET" or query:
-                raise ApiError(405 if method != "GET" else 400, "状态接口只支持无参数 GET")
+            if method != "GET":
+                raise ApiError(405, "状态接口只支持 GET")
+            if set(query) - {"limit", "offset", "q", "process_status", "process_enable"}:
+                raise ApiError(400, "未知状态查询参数")
             control = self.store.get_row(CONTROL_TABLE, [1])
             # A Windows console/service stop can terminate the interpreter
             # before its finally block gets a chance to persist state. Repair
             # that small stale window when the Web UI reads status.
             pid = int(control.get("process_pid") or 0)
             if pid and control.get("process_status") in {1, 2, 3, 4}:
-                if not _process_is_alive(pid):
+                if not process_is_alive(pid):
                     control = self.store.update_row(CONTROL_TABLE, [1], {
                         "process_status": 0, "process_pid": 0,
                         "process_stop_time": int(time.time() * 1000),
                         "process_heartbeat_time": int(time.time() * 1000),
                     })
-            rows = self.store.list_rows("fes_rtu_define", limit=500, sort="rtu_id")["items"]
+            result = self._list("fes_rtu_define", {"limit": "50", "sort": "rtu_id", **query}, None)
+            rows = result["items"]
+            with self.store.connection() as connection:
+                counts = dict(connection.execute(
+                    "SELECT COUNT(*) AS total, "
+                    "COALESCE(SUM(process_status=2),0) AS running, "
+                    "COALESCE(SUM(process_status=5),0) AS errors, "
+                    "COALESCE(SUM(process_enable=1),0) AS automatic FROM fes_rtu_define"
+                ).fetchone())
             # ``process_pid`` is the RTU table's storage column for the native
             # communication-thread ID.  The main-process control row keeps its
             # own ``process_pid`` as the supervisor PID, so expose a distinct
@@ -269,6 +223,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
             # process identifier.
             rtus = [{
                 "rtu_id": row.get("rtu_id"),
+                "name": row.get("name"),
+                "_version": row.get("_version"),
                 "channel_id": row.get("channel_id"),
                 "channel_type": row.get("channel_type"),
                 "process_enable": row.get("process_enable"),
@@ -278,7 +234,9 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 "process_heartbeat_time": row.get("process_heartbeat_time"),
                 "process_error": row.get("process_error"),
             } for row in rows]
-            return self._json(200, {"item": control, "rtus": rtus})
+            return self._json(200, {"item": control, "rtus": rtus, "counts": counts,
+                                    "total": result["total"], "limit": result["limit"],
+                                    "offset": result["offset"]})
         if parts[:3] == ["api", "scdfe_c", "control"]:
             if len(parts) != 3:
                 raise ApiError(404, "路径不存在", code="not_found")
@@ -289,42 +247,37 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 validate_control(body)
             except ValueError as exc:
                 raise ApiError(400, str(exc)) from exc
-            before = self.store.get_row(CONTROL_TABLE, [1])
-            updated = self.store.update_row(CONTROL_TABLE, [1], body)
-            pid_before = int(before.get("process_pid") or 0)
-            pid_active = False
-            if pid_before and before.get("process_status") in {1, 2, 3, 4}:
-                pid_active = _process_is_alive(pid_before)
-            if int(body.get("process_enable", before.get("process_enable", 0))) == 0:
-                # The supervisor consumes process_enable=0, joins all channel
-                # workers, flushes logs and persists its final state. Do not
-                # SIGTERM a Python process here: Windows can terminate it
-                # before those finally blocks run.
-                if pid_before and pid_active:
-                    LOG.info("scdfe_c stop requested pid=%s; waiting for cooperative shutdown", pid_before)
-            elif (body.get("process_enable") == 1 or body.get("process_restart") == 1) and not pid_active:
-                command = [sys.executable, "-m", "scdfe_c", "--db", str(self.store.db_path),
-                           "--schema-dir", str(self.store.catalog.directory)]
-                try:
-                    subprocess.Popen(command, cwd=str(ROOT_DIR), stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     **_scdfe_popen_kwargs())
-                except OSError as exc:
-                    raise ApiError(503, f"无法启动 scdfe_c: {exc}", code="process_start_failed") from exc
-            return self._json(200, {"item": updated})
+            if "process_enable" in body:
+                if set(body) - {"process_enable"}:
+                    raise ApiError(400, "启停请单独提交；运行参数和通信重载使用独立请求")
+                operation = self.server.process_controller.submit({
+                    "target": "main", "action": "start" if body["process_enable"] else "stop",
+                })
+                return self._json(202, {"operation": operation,
+                                        "item": public_control_row(self.store.get_row(CONTROL_TABLE, [1]))})
+            updated = self.server.process_controller.configure_main(body)
+            return self._json(200, {"item": public_control_row(updated)})
         if parts[:3] == ["api", "scdfe_c", "logs"]:
             from scdfe_c import ScdfeLogger
             directory = log_directory(self.store)
+            if parts == ["api", "scdfe_c", "logs", "search"]:
+                if method != "GET":
+                    raise ApiError(405, "日志检索接口只支持 GET")
+                from web.log_query import search_logs
+                try:
+                    return self._json(200, search_logs(directory, query))
+                except ValueError as exc:
+                    raise ApiError(400, str(exc)) from exc
             if len(parts) == 3:
                 if method != "GET":
                     raise ApiError(405, "日志接口只支持 GET")
-                allowed = {"process", "rtu_id", "channel_id"}
+                allowed = {"process", "rtu_id"}
                 if set(query) - allowed:
                     raise ApiError(400, "未知日志查询参数")
                 items = ScdfeLogger.list_files(directory)
                 for key in allowed:
                     if key in query:
-                        if key in {"rtu_id", "channel_id"}:
+                        if key == "rtu_id":
                             try:
                                 expected = int(query[key])
                             except ValueError as exc:
@@ -370,6 +323,15 @@ class ScadaHandler(BaseHTTPRequestHandler):
         self._request_guard()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if parts[:2] == ["api", "processes"]:
+            if query:
+                raise ApiError(400, "进程接口不接受查询参数")
+            if len(parts) == 2 and method == "GET":
+                return self._json(200, self.server.process_controller.snapshot())
+            if parts == ["api", "processes", "control"] and method == "POST":
+                operation = self.server.process_controller.submit(self._body())
+                return self._json(202, {"operation": operation})
+            raise ApiError(405, "进程接口支持 GET /api/processes 和 POST /api/processes/control")
         if self._scdfe_control(parts, query, method):
             return
         if method == "GET":
@@ -426,19 +388,23 @@ class ScadaHandler(BaseHTTPRequestHandler):
             info = None
             if section not in (None, "parameters"):
                 raise ApiError(404, "通道子资源不存在", code="not_found")
-            info = self.store.channel_for_rtu(rtu_id)
             if section is None:
-                raise ApiError(405, "通道字段已合并到 RTU 记录，请使用 /api/rtus/{rtu_id}", code="method_not_allowed")
+                if method == "POST":
+                    return self._json(201, {"item": self.store.create_channel(rtu_id, self._body())})
+                if method == "PATCH":
+                    return self._json(200, {"item": self.store.update_channel(
+                        rtu_id, self._body(), self._if_match()
+                    )})
+                raise ApiError(405, "通道接口只支持 POST 或 PATCH", code="method_not_allowed")
+            info = self.store.channel_for_rtu(rtu_id)
             if section == "parameters":
                 parameter_table = info["parameter_table"]
                 if not parameter_table:
                     raise ApiError(409, "该通道类型没有参数定义表", code="unsupported_channel_type")
                 if method == "POST":
-                    body = self._body()
-                    body["rtu_id"] = rtu_id
-                    if info["parameter"] is not None:
-                        raise ApiError(409, "该 RTU 已存在此通道类型的参数定义", code="conflict")
-                    return self._json(201, {"item": self.store.create_row(parameter_table, body)})
+                    return self._json(201, {"item": self.store.create_channel_parameter(
+                        rtu_id, self._body()
+                    )})
                 if info["parameter"] is None:
                     raise ApiError(404, "该通道尚未配置参数定义", code="not_found")
                 parameter_key = [info["parameter"][key] for key in self.store.catalog.public(parameter_table)["primary_keys"]]
@@ -448,6 +414,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                     self.store.delete_row(parameter_table, parameter_key, self._if_match())
                     return self._json(200, {"deleted": True})
             raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
+        if table in {PROCESS_TABLE, "fes_scdfe_c_define"}:
+            raise ApiError(405, "运行控制表仅允许通过专用控制接口修改")
         if method == "POST" and key is None:
             body = self._body()
             if scope is not None:
@@ -457,7 +425,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 body["rtu_id"] = scope
             return self._json(201, {"item": self.store.create_row(table, body)})
         if method == "PATCH" and key is not None:
-            return self._json(200, {"item": self.store.update_row(table, key, self._body(), self._if_match())})
+            body = self._body()
+            return self._json(200, {"item": self.store.update_row(table, key, body, self._if_match())})
         if method == "DELETE" and key is not None:
             self.store.delete_row(table, key, self._if_match())
             return self._json(200, {"deleted": True})
@@ -501,6 +470,7 @@ class ScadaHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
         self.store = ScadaStore(db_path, schema_dir)
+        self.process_controller = ProcessController(self.store)
         super().__init__(address, ScadaHandler)
 
 

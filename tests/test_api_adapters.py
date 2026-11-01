@@ -82,7 +82,7 @@ class ModbusAdapterTests(unittest.TestCase):
              'trans_type': 2},
         ]
         master = ModbusTcpMaster.from_channel(
-            {'rtu_id': 7, 'chan_addr': '127.0.0.1', 'chan_port': 502,
+            {'rtu_id': 7, 'remote_host': '127.0.0.1', 'remote_port': 502,
              'irtuaddr': 9},
         )
         self.assertEqual(master.unit_id, 9)
@@ -195,8 +195,9 @@ class IEC104AdapterTests(unittest.TestCase):
         self.assertAlmostEqual(float(yt.value), 3.5)
 
     def test_schema_constructor(self):
-        c = IEC104Master.from_channel({'rtu_id': 3, 'chan_addr': '127.0.0.1', 'chan_port': 2404},
-                                      {'rtu_addr': 7, 'ycbegin_addr': 100})
+        c = IEC104Master.from_channel({'rtu_id': 3},
+                                      {'rtu_addr': 7, 'ycbegin_addr': 100,
+                                       'remote_host': '127.0.0.1', 'remote_port': 2404})
         try:
             self.assertEqual(c.common_address, 7)
             self.assertEqual(c.point_address('yc', 1), 100)

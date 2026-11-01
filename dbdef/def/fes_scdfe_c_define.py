@@ -15,8 +15,6 @@ class fes_scdfe_c_define:
 
     process_enable: Optional[int] = field(default=1, metadata={'chn_name': '主进程启用', 'eng_name': 'process_enable', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 1})
 
-    process_restart: Optional[int] = field(default=0, metadata={'chn_name': '主进程重启请求', 'eng_name': 'process_restart', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0})
-
     process_status: Optional[int] = field(default=0, metadata={'chn_name': '主进程状态', 'eng_name': 'process_status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
     process_pid: Optional[int] = field(default=0, metadata={'chn_name': '主进程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': '', 'default': 0})
@@ -25,13 +23,10 @@ class fes_scdfe_c_define:
 
     process_stop_time: Optional[int] = field(default=0, metadata={'chn_name': '主进程停止时间', 'eng_name': 'process_stop_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
 
-    process_restart_time: Optional[int] = field(default=0, metadata={'chn_name': '主进程重启时间', 'eng_name': 'process_restart_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
-
     process_heartbeat_time: Optional[int] = field(default=0, metadata={'chn_name': '主进程心跳时间', 'eng_name': 'process_heartbeat_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
 
     process_exit_code: Optional[int] = field(default=0, metadata={'chn_name': '主进程退出码', 'eng_name': 'process_exit_code', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
-    process_restart_count: Optional[int] = field(default=0, metadata={'chn_name': '主进程重启次数', 'eng_name': 'process_restart_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
     process_error: Optional[str] = field(default='', metadata={'chn_name': '主进程错误信息', 'eng_name': 'process_error', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': '', 'default': ''})
 

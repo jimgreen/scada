@@ -359,7 +359,7 @@ class ScadaStore:
                 raise ApiError(400, 'rtu_id 必须是正整数')
             if name in {'id', 'pnt_no'} and number < 0:
                 raise ApiError(400, f'{name} 不能为负数')
-            if name in {'process_enable', 'process_restart'} and number not in {0, 1}:
+            if name == 'process_enable' and number not in {0, 1}:
                 raise ApiError(400, f'{name} 必须是 0 或 1')
             if name == 'log_retention_hours' and not 1 <= number <= 87600:
                 raise ApiError(400, f'{name} 必须在 1 到 87600 之间')
@@ -367,7 +367,7 @@ class ScadaStore:
                 raise ApiError(400, f'{name} 必须在 0 到 60000 之间')
             if name in {'scan_interval_ms', 'poll_interval_ms', 'retry_interval_ms'} and not 50 <= number <= 60000:
                 raise ApiError(400, f'{name} 必须在 50 到 60000 之间')
-            if name in {'chan_port', 'bind_port'} and not 0 <= number <= 65535:
+            if name in {'remote_port', 'bind_port'} and not 0 <= number <= 65535:
                 raise ApiError(400, f'{name} 必须在 0 到 65535 之间')
             return number
         if kind == "float":
@@ -582,6 +582,94 @@ class ScadaStore:
 
     def channel_parameter_table(self, channel_type):
         return CHANNEL_PARAMETER_TABLES.get(channel_type)
+
+    @staticmethod
+    def _channel_fields() -> set[str]:
+        return {"channel_id", "channel_type"}
+
+    def create_channel(self, rtu_id, values: dict[str, Any]) -> dict[str, Any]:
+        """Create the single channel attached to an existing RTU.
+
+        Channel identity is stored on ``fes_rtu_define``.  The schema currently
+        requires those columns for every RTU, so this endpoint is mainly useful
+        for rows created by an older/import workflow where the fields are NULL.
+        It deliberately refuses to replace an existing channel.
+        """
+        row = self.get_row("fes_rtu_define", [rtu_id])
+        if row.get("channel_id") is not None or row.get("channel_type") is not None:
+            raise ApiError(409, "该 RTU 已经配置通道，请使用通道维护", code="channel_exists")
+        unknown = sorted(set(values) - self._channel_fields())
+        if unknown:
+            raise ApiError(400, "通道请求包含未知字段", details={"unknown_fields": unknown})
+        if "channel_id" not in values or "channel_type" not in values:
+            raise ApiError(400, "新建通道必须提供 channel_id 和 channel_type")
+        if values.get("channel_id") is None or values.get("channel_type") is None:
+            raise ApiError(400, "channel_id 和 channel_type 不能为空")
+        return self.update_row("fes_rtu_define", [rtu_id], values)
+
+    def update_channel(self, rtu_id, values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
+        """Update channel columns while preserving the one-channel relation."""
+        row = self.get_row("fes_rtu_define", [rtu_id])
+        unknown = sorted(set(values) - self._channel_fields())
+        if unknown:
+            raise ApiError(400, "通道请求包含未知字段", details={"unknown_fields": unknown})
+        if not values:
+            raise ApiError(400, "至少需要修改一个通道字段")
+        if "channel_type" in values and values["channel_type"] != row.get("channel_type"):
+            old_table = self.channel_parameter_table(row.get("channel_type"))
+            if old_table:
+                existing = self.list_rows(old_table, where={"rtu_id": rtu_id}, limit=2)["items"]
+                if existing:
+                    raise ApiError(
+                        409,
+                        "当前通道已有协议参数，请先删除旧协议参数再切换规约",
+                        code="channel_parameter_exists",
+                    )
+        return self.update_row("fes_rtu_define", [rtu_id], values, if_match)
+
+    def create_channel_parameter(self, rtu_id, values: dict[str, Any]) -> dict[str, Any]:
+        """Create a protocol parameter row and allocate id-style keys safely."""
+        info = self.channel_for_rtu(rtu_id)
+        table = info["parameter_table"]
+        if not table:
+            raise ApiError(409, "该通道类型没有参数定义表", code="unsupported_channel_type")
+        if info["parameter"] is not None:
+            raise ApiError(409, "该 RTU 已存在此通道类型的参数定义", code="conflict")
+        body = dict(values)
+        body["rtu_id"] = rtu_id
+        primary_keys = self.catalog.public(table)["primary_keys"]
+        # Three protocol tables use a synthetic id primary key.  Generate it
+        # in the same IMMEDIATE transaction as the insert to avoid duplicate
+        # ids when two operators submit at once.
+        if primary_keys == ["id"] and "id" in body:
+            raise ApiError(400, "协议参数的 id 由服务端自动分配，不能提交", code="immutable_primary_key")
+        if primary_keys == ["id"]:
+            canonical, columns, _ = self._table_parts(table)
+            # Validate all supplied values while intentionally omitting the
+            # synthetic primary key that this method allocates below.
+            normalised = self._normalise(table, body, partial=True)
+            names = [c["eng_name"] for c in columns if c["eng_name"] in normalised]
+            try:
+                with self.connection() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    current = connection.execute(
+                        f"SELECT COALESCE(MAX(id), 0) + 1 FROM {quote_identifier(canonical)}"
+                    ).fetchone()[0]
+                    normalised["id"] = int(current)
+                    names = [c["eng_name"] for c in columns if c["eng_name"] in normalised]
+                    placeholders = ", ".join("?" for _ in names)
+                    connection.execute(
+                        f"INSERT INTO {quote_identifier(canonical)} "
+                        f"({', '.join(quote_identifier(n) for n in names)}) "
+                        f"VALUES ({placeholders})",
+                        [normalised[n] for n in names],
+                    )
+                    row = self._read(connection, table, [normalised[key] for key in primary_keys])
+                    connection.commit()
+                    return row
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "协议参数已存在或数据违反约束", code="conflict") from exc
+        return self.create_row(table, body)
 
     def channel_for_rtu(self, rtu_id):
         row = self.get_row('fes_rtu_define', [rtu_id])

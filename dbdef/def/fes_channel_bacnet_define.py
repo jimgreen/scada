@@ -60,4 +60,14 @@ class fes_channel_bacnet_define:
         metadata={'chn_name': '对端设备ID', 'eng_name': 'dev_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
+    remote_host: Optional[str] = field(
+        default='127.0.0.1',
+        metadata={'chn_name': '远端主机', 'eng_name': 'remote_host', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    remote_port: Optional[int] = field(
+        default=47808,
+        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+    )
+
 __all__ = ['fes_channel_bacnet_define']

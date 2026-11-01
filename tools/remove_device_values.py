@@ -18,7 +18,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.scdfe_control import InstanceLock
+from core.scdfe_control import ServerInstanceLock
 from web.seed_protocol_test_data import _base_rtu_code, _point_values, expanded_protocols
 from web.service import SCHEMA_DIR, ScadaStore, SchemaCatalog, quote_identifier
 
@@ -73,7 +73,7 @@ def refresh_fixtures(connection):
 def migrate(db_path, *, refresh_test_values=False, schema_dir=SCHEMA_DIR):
     db = Path(db_path).resolve(strict=True)
     catalog = SchemaCatalog(schema_dir)
-    lock = InstanceLock(db, 'main')
+    lock = ServerInstanceLock()
     if not lock.acquire():
         raise RuntimeError('请先停止 scdfe_c 再迁移数据库')
     report = {'database': str(db), 'backup': None, 'removed': {}, 'retained': {}, 'test_rows_updated': {}}

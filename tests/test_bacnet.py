@@ -171,7 +171,7 @@ class BacnetTests(unittest.TestCase):
             store = ScadaStore(Path(directory) / "scada.sqlite3")
             store.create_row("fes_rtu_define", {
                 "rtu_id": 7, "channel_type": "bacnet",
-                "channel_id": 1, "chan_addr": "127.0.0.1", "chan_port": 47808,
+                "channel_id": 1,
             })
             store.create_row("fes_channel_bacnet_define", {
                 "id": 1, "rtu_id": 7, "bind_ip": "127.0.0.1",

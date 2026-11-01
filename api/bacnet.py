@@ -185,8 +185,9 @@ class _BacnetProtocol:
         kwargs.setdefault("local_ip", _field(definition, "bind_ip", "0.0.0.0"))
         kwargs.setdefault("local_port", _field(definition, "bind_port", 47808))
         kwargs.setdefault("device_id", _field(definition, "dev_id", 0))
-        remote = kwargs.pop("remote_host", None) or _field(channel, "chan_addr") or "127.0.0.1"
-        return cls(remote, remote_port=_field(channel, "chan_port", 47808), **kwargs)
+        remote = kwargs.pop("remote_host", None) or _field(definition, "remote_host") or "127.0.0.1"
+        remote_port = kwargs.pop("remote_port", None) or _field(definition, "remote_port", 47808)
+        return cls(remote, remote_port=remote_port, **kwargs)
 
     @classmethod
     def from_store(cls, store, rtu_id: int, *, point_map=None, **kwargs):

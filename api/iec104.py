@@ -119,7 +119,11 @@ class IEC104Master:
             if name not in kwargs:
                 kwargs[name] = field(definition, name, None)
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        return cls(field(channel, 'chan_addr'), field(channel, 'chan_port', 2404), **kwargs)
+        host = kwargs.pop('remote_host', None) or field(definition, 'remote_host')
+        port = kwargs.pop('remote_port', None) or field(definition, 'remote_port', 2404)
+        if not host:
+            raise ValueError('IEC104 参数需要 remote_host')
+        return cls(host, port, **kwargs)
 
     @classmethod
     def from_store(cls, store, rtu_id, *, point_map=None, **kwargs):

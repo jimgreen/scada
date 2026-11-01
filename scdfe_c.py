@@ -35,7 +35,15 @@ import time
 from typing import Any
 from queue import Empty, Full
 
-from core.scdfe_control import CONTROL_TABLE, InstanceLock, LOG_PATTERN as LOG_FILE_RE, ensure_control_row, log_directory
+from core.scdfe_control import (
+    CONTROL_TABLE,
+    ServerInstanceLock,
+    LOG_PATTERN as LOG_FILE_RE,
+    compact_log_line,
+    ensure_control_row,
+    log_directory,
+)
+from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
 from web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
 
 __all__ = [
@@ -47,18 +55,30 @@ __all__ = [
     "build_master",
     "definition_signature",
     "discover_channels",
+    "run_channel_debug",
+    "RTU_AUTO_COMMUNICATION_FIELD", "RTU_AUTO_COMMUNICATION_ON",
+    "RTU_AUTO_COMMUNICATION_OFF",
     "main",
     "PROCESS_STOPPED", "PROCESS_STARTING", "PROCESS_RUNNING",
-    "PROCESS_STOPPING", "PROCESS_RESTARTING", "PROCESS_ERROR",
+    "PROCESS_STOPPING", "PROCESS_RECOVERING", "PROCESS_ERROR",
 ]
 
 
 SUPPORTED_CHANNEL_TYPES = frozenset(CHANNEL_PARAMETER_TABLES)
+# ``fes_rtu_define.process_enable`` is the RTU-level automatic communication
+# flag.  It is deliberately reused instead of adding a second enable column:
+# 1 = scdfe_c owns and guards this RTU, 0 = scdfe_c leaves it alone and an
+# operator may run ``--rtu-id`` debug mode.
+RTU_AUTO_COMMUNICATION_FIELD = "process_enable"
+RTU_AUTO_COMMUNICATION_ON = 1
+RTU_AUTO_COMMUNICATION_OFF = 0
 LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_INTERVAL = 0.1
 BATCH_WRITER_MAX_BATCH = 500
 BATCH_WRITER_WAL_AUTOCHECKPOINT = 10000
+PROCESS_LOG_INTERVAL = 30.0
+LOG_CLEANUP_INTERVAL = 60.0
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
@@ -81,13 +101,11 @@ PROCESS_STOPPED = 0
 PROCESS_STARTING = 1
 PROCESS_RUNNING = 2
 PROCESS_STOPPING = 3
-PROCESS_RESTARTING = 4
+PROCESS_RECOVERING = 4
 PROCESS_ERROR = 5
 PROCESS_CONTROL_FIELDS = {
-    "process_enable", "process_restart", "process_status", "process_pid",
-    "process_start_time", "process_stop_time", "process_restart_time",
-    "process_heartbeat_time", "process_exit_code", "process_restart_count",
-    "process_error",
+    "process_enable", "process_status", "process_pid", "process_start_time",
+    "process_stop_time", "process_heartbeat_time", "process_exit_code", "process_error",
 }
 
 
@@ -153,11 +171,8 @@ class ChannelSpec:
     rtu_id: int
     channel_id: int
     channel_type: str
-    address: str | None
-    port: int | None
     name: str | None = None
     process_enable: bool = True
-    process_restart: bool = False
 
     @property
     def key(self) -> ChannelKey:
@@ -173,18 +188,14 @@ class ChannelSpec:
         if not channel_type:
             raise ValueError(f"RTU {rtu_id} 缺少 channel_type")
         process_enable = int(_field(row, "process_enable", 1))
-        process_restart = int(_field(row, "process_restart", 0))
-        if process_enable not in (0, 1) or process_restart not in (0, 1):
-            raise ValueError(f"RTU {rtu_id} 的 process_enable/process_restart 必须是 0 或 1")
+        if process_enable not in (0, 1):
+            raise ValueError(f"RTU {rtu_id} 的 process_enable 必须是 0 或 1")
         return cls(
             rtu_id=rtu_id,
             channel_id=channel_id,
             channel_type=channel_type,
-            address=_field(row, "chan_addr"),
-            port=_field(row, "chan_port"),
             name=_field(row, "name"),
             process_enable=bool(process_enable),
-            process_restart=bool(process_restart),
         )
 
 
@@ -203,17 +214,22 @@ class ScdfeLogger:
     """多线程/多进程安全的轻量日志写入器。
 
     每个逻辑进程独立使用一个按小时轮转的文件，例如
-    ``scdfe_c-main-20261029-18.log``。日志级别保留在每行内容中，但不再
-    按 normal/alarm/error/process 拆分文件。每条记录打开、追加并关闭文件，
+    ``scdfe_c-main-20261029-18.log``。通信线程日志文件只使用 RTU 编号，
+    例如 ``scdfe_c-rtu-7-20261029-18.log``；通道编号保留在日志内容中。
+    日志级别保留在每行内容中，但不再
+    按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
+    日期和小时由文件名提供。每条记录打开、追加并关闭文件，
     避免在线程和写库进程间共享 logging handler；主调度线程按小时数定期清理旧文件。
     """
 
     def __init__(self, directory: Path | str, *, process_name: str | None = None,
-                 rtu_id: int | None = None, channel_id: int | None = None):
+                 rtu_id: int | None = None, channel_id: int | None = None,
+                 console: bool = False):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.rtu_id = rtu_id
         self.channel_id = channel_id
+        self.console = console
         # Runtime callers provide an explicit process name.  The stable
         # fallback keeps library callers within the same hourly-file contract.
         self.process_name = process_name or "scdfe_c-unknown"
@@ -221,16 +237,22 @@ class ScdfeLogger:
     def emit(self, category: str, message: str, *, level: str = "INFO") -> None:
         if category not in LOG_CATEGORIES:
             raise ValueError(f"未知日志类别: {category}")
-        stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+        now = datetime.now(timezone.utc).astimezone()
+        # The hour and date are already present in the filename. Keep each
+        # line compact and readable; log search reconstructs the full local
+        # timestamp from the filename hour plus this clock time.
+        stamp = now.strftime("%H:%M:%S")
         identity = ""
         if self.rtu_id is not None:
             identity = f" rtu={self.rtu_id} channel={self.channel_id}"
         line = f"{stamp} [{level}] pid={os.getpid()}{identity} {message}\n"
-        hour = datetime.now().strftime("%Y%m%d-%H")
+        hour = now.strftime("%Y%m%d-%H")
         path = self.directory / f"{self.process_name}-{hour}.log"
         with path.open("a", encoding="utf-8", newline="") as stream:
             stream.write(line)
             stream.flush()
+        if self.console:
+            print(line, end="", flush=True)
 
     def normal(self, message: str) -> None:
         self.emit("normal", message)
@@ -246,7 +268,7 @@ class ScdfeLogger:
 
     @classmethod
     def cleanup(cls, directory: Path | str, *, retention_hours: int = 720,
-                now: float | None = None) -> list[Path]:
+                now: float | None = None, process_name: str | None = None) -> list[Path]:
         """清理超过保留小时数的按进程小时日志文件。"""
         if isinstance(retention_hours, bool) or retention_hours < 1:
             raise ValueError("retention_hours 必须是正整数")
@@ -256,7 +278,8 @@ class ScdfeLogger:
         cutoff = (time.time() if now is None else now) - retention_hours * 3600
         removed: list[Path] = []
         for path in root.glob("*.log"):
-            if not LOG_FILE_RE.fullmatch(path.name):
+            match = LOG_FILE_RE.fullmatch(path.name)
+            if not match or (process_name is not None and match.group("process") != process_name):
                 continue
             try:
                 if path.is_file() and path.stat().st_mtime < cutoff:
@@ -275,19 +298,21 @@ class ScdfeLogger:
             return items
         for path in root.glob("scdfe_c-*.log"):
             match = LOG_FILE_RE.match(path.name)
-            if not match or not path.is_file():
+            if not match or path.is_symlink() or not path.is_file():
                 continue
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue  # A concurrent retention cleanup may remove this file.
             item = {"name": path.name, "process": match.group("process"),
                     "hour": match.group("hour"), "size": stat.st_size,
                     "modified_at": int(stat.st_mtime * 1000)}
             process_match = re.fullmatch(
-                r"scdfe_c-rtu-(?P<rtu_id>\d+)-ch-(?P<channel_id>\d+)",
+                r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)",
                 match.group("process"),
             )
             if process_match is not None:
-                item.update(rtu_id=int(process_match.group("rtu_id")),
-                            channel_id=int(process_match.group("channel_id")))
+                item["rtu_id"] = int(process_match.group("rtu_id"))
             items.append(item)
         return sorted(items, key=lambda item: (item["modified_at"], item["name"]), reverse=True)
 
@@ -304,20 +329,34 @@ class ScdfeLogger:
         match = LOG_FILE_RE.match(path.name)
         if not match:
             raise ValueError("日志文件名无效")
-        data = path.read_bytes()
-        text = data[-2_000_000:].decode("utf-8", "replace")
-        lines = text.splitlines()[-tail:]
+        # Read only the bounded tail; refreshing a large hourly file must not
+        # allocate/read its entire contents on each Web request.
+        with path.open("rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            start = max(0, size - 2_000_000)
+            stream.seek(start)
+            data = stream.read(2_000_000)
+        if start:
+            # The first chunk can start inside a UTF-8 code point/log line.
+            data = data.partition(b"\n")[2]
+        text = data.decode("utf-8", "replace")
+        lines = [compact_log_line(line) for line in text.splitlines()[-tail:]]
         item = {"name": path.name, "process": match.group("process"),
                 "hour": match.group("hour"), "size": path.stat().st_size,
-                "modified_at": int(path.stat().st_mtime * 1000), "content": "\n".join(lines)}
+                "modified_at": int(path.stat().st_mtime * 1000), "content": "\n".join(lines),
+                "line_count": len(lines), "truncated": bool(start or len(text.splitlines()) > tail)}
         process_match = re.fullmatch(
-            r"scdfe_c-rtu-(?P<rtu_id>\d+)-ch-(?P<channel_id>\d+)",
+            r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)",
             match.group("process"),
         )
         if process_match is not None:
-            item.update(rtu_id=int(process_match.group("rtu_id")),
-                        channel_id=int(process_match.group("channel_id")))
+            item["rtu_id"] = int(process_match.group("rtu_id"))
         return item
+
+
+def _worker_process_name(rtu_id: int, *, debug: bool = False) -> str:
+    """Return the stable log process name; channel_id stays in log content."""
+    return f"scdfe_c-{'debug-' if debug else ''}rtu-{rtu_id}"
 
 
 @lru_cache(maxsize=256)
@@ -571,12 +610,39 @@ def _batch_writer_entry(
     queue: Any,
     batch_interval: float = BATCH_WRITER_INTERVAL,
     max_batch: int = BATCH_WRITER_MAX_BATCH,
+    ready: Any | None = None,
 ) -> None:
     """Dedicated SQLite writer process for all communication-worker updates."""
     logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer")
     pending: list[Mapping[str, Any]] = []
     pending_updates = 0
     connection: sqlite3.Connection | None = None
+    lease = None
+    failure = ""
+    completed_batches = completed_messages = completed_updates = 0
+    next_summary = 0.0
+
+    def flush_pending() -> bool:
+        nonlocal pending, pending_updates
+        nonlocal completed_batches, completed_messages, completed_updates
+        batch, pending = pending, []
+        updates, pending_updates = pending_updates, 0
+        if not batch:
+            return True
+        if not _flush_batch(store, logger, batch, queue, connection):
+            return False
+        completed_batches += 1
+        completed_messages += len(batch)
+        completed_updates += updates
+        return True
+
+    def summary() -> str:
+        # Count successfully handled input updates, including coalesced rows;
+        # this is not a count of distinct points or SQLite affected rows.
+        return (f"累计成功批次={completed_batches} 消息数={completed_messages} "
+                f"输入更新数={completed_updates} 待写消息={len(pending)} "
+                f"待写更新={pending_updates}")
+
     try:
         store = ScadaStore(db_path, schema_dir)
         connection = store.open_connection()
@@ -584,21 +650,26 @@ def _batch_writer_entry(
         # Keep WAL checkpoints out of the hot commit cadence; the normal
         # SQLite checkpoint policy remains unchanged for other connections.
         connection.execute(f"PRAGMA wal_autocheckpoint={BATCH_WRITER_WAL_AUTOCHECKPOINT}")
+        lease = ProcessLease(store, "writer")
+        lease.heartbeat(force=True)
+        if ready is not None:
+            ready.set()
         logger.process("批量数据库写入进程启动")
         while True:
+            lease.heartbeat()
+            now = time.monotonic()
+            if now >= next_summary:
+                logger.normal(f"写库进程运行摘要: {summary()}")
+                next_summary = now + PROCESS_LOG_INTERVAL
             try:
                 message = queue.get(timeout=batch_interval)
             except Empty:
-                batch, pending = pending, []
-                pending_updates = 0
-                if not _flush_batch(store, logger, batch, queue, connection):
+                if not flush_pending():
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 continue
             if message == BATCH_WRITER_STOP:
-                batch, pending = pending, []
-                pending_updates = 0
                 try:
-                    flush_ok = _flush_batch(store, logger, batch, queue, connection)
+                    flush_ok = flush_pending()
                 finally:
                     queue.task_done()
                 if not flush_ok:
@@ -607,11 +678,10 @@ def _batch_writer_entry(
             pending.append(message)
             pending_updates += _batch_message_size(message)
             if pending_updates >= max_batch:
-                batch, pending = pending, []
-                pending_updates = 0
-                if not _flush_batch(store, logger, batch, queue, connection):
+                if not flush_pending():
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
     except Exception as exc:  # noqa: BLE001 - parent reports/restarts the writer
+        failure = str(exc)
         logger.error(f"批量数据库写入进程异常退出: {exc}")
         raise
     finally:
@@ -625,7 +695,9 @@ def _batch_writer_entry(
                 connection.close()
             except (OSError, sqlite3.Error):
                 pass
-        logger.process("批量数据库写入进程停止")
+        logger.process(f"批量数据库写入进程停止: {summary()}")
+        if lease is not None:
+            lease.finish(failure)
 
 
 def _signature_tables(store: ScadaStore) -> tuple[str, ...]:
@@ -719,8 +791,8 @@ def discover_channels(store: ScadaStore) -> list[ChannelSpec]:
     with store.connection() as connection:
         connection.execute("BEGIN")
         rows = connection.execute(
-            "SELECT rtu_id, channel_id, channel_type, chan_addr, chan_port, name, "
-            "process_enable, process_restart "
+            "SELECT rtu_id, channel_id, channel_type, name, "
+            "process_enable "
             "FROM fes_rtu_define WHERE channel_id IS NOT NULL AND channel_type IS NOT NULL "
             "ORDER BY rtu_id, channel_id"
         ).fetchall()
@@ -858,7 +930,7 @@ class ChannelWorker:
         self.master_factory = master_factory or build_master
         self.stop_event = stop_event or threading.Event()
         self.writer_queue = writer_queue
-        self.logger = ScdfeLogger(log_dir, process_name=f"scdfe_c-rtu-{spec.rtu_id}-ch-{spec.channel_id}", rtu_id=spec.rtu_id, channel_id=spec.channel_id)
+        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id), rtu_id=spec.rtu_id, channel_id=spec.channel_id)
         self.stats = WorkerStats()
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
@@ -963,7 +1035,7 @@ class ChannelWorker:
 
     def _write_process_state(self, **updates: Any) -> None:
         """原子更新当前 RTU 的通信线程状态。"""
-        allowed = PROCESS_CONTROL_FIELDS - {"process_enable", "process_restart"}
+        allowed = PROCESS_CONTROL_FIELDS - {"process_enable"}
         unknown = set(updates) - allowed
         if unknown:
             raise ValueError(f"不允许写入通信线程字段: {sorted(unknown)}")
@@ -1238,6 +1310,9 @@ class ChannelWorker:
             finally:
                 self._master = None
 
+    def _stop_requested(self) -> bool:
+        return self.stop_event.is_set()
+
     def run(self, *, max_cycles: int | None = None) -> WorkerStats:
         """运行采集循环；连接失败会告警并按 retry_interval 重试。
 
@@ -1259,7 +1334,7 @@ class ChannelWorker:
         except Exception as exc:  # noqa: BLE001 - 状态记录失败不应阻断现场通讯
             self.logger.error(f"写入通信线程启动状态失败: {exc}")
         try:
-            while not self.stop_event.is_set():
+            while not self._stop_requested():
                 try:
                     self._last_signature = definition_signature(
                         self.store, self.spec.rtu_id, self._read_connection(),
@@ -1277,7 +1352,7 @@ class ChannelWorker:
                     next_heartbeat = time.monotonic() + WORKER_HEARTBEAT_INTERVAL
                     self.logger.process("通道连接成功，开始实时采集")
                     self.logger.normal("通道进入正常运行状态")
-                    while not self.stop_event.is_set():
+                    while not self._stop_requested():
                         # 通信线程也做一次定义检查；即使主调度扫描周期较长，
                         # 单线程调用方式同样能自动退出并由上层重载。
                         monotonic_now = time.monotonic()
@@ -1355,6 +1430,159 @@ class ChannelWorker:
         return self.stats
 
 
+def _rtu_lock(rtu_id: int) -> ServerInstanceLock:
+    # One RTU owns one channel in the current schema. Lock the RTU, so editing
+    # channel_id cannot let a second owner overwrite the same runtime state.
+    return ServerInstanceLock(rtu_id)
+
+
+def _debug_spec(store: ScadaStore, rtu_id: int, channel_id: int) -> ChannelSpec:
+    with store.connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"RTU {rtu_id} 不存在")
+    if row["channel_id"] != channel_id:
+        raise ValueError(f"RTU {rtu_id} 的通道已从 {channel_id} 变为 {row['channel_id']}，请重新启动调试")
+    spec = ChannelSpec.from_row(row)
+    if spec.channel_type not in SUPPORTED_CHANNEL_TYPES:
+        raise ValueError(f"不支持调试规约: {spec.channel_type}")
+    if spec.process_enable:
+        raise ValueError(f"请先将 RTU {rtu_id} 的 process_enable 设为 0，停止自动通信后再调试")
+    return spec
+
+
+class _DebugChannelWorker(ChannelWorker):
+    """A foreground channel with its own logs and no supervisor/writer process."""
+
+    def __init__(self, *args, send_commands: bool, scan_interval: float,
+                 retention_hours: int, process_lease=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.send_commands = send_commands
+        self.scan_interval = scan_interval
+        self.retention_hours = retention_hours
+        self.process_lease = process_lease
+        self._next_control_check = 0.0
+        self._next_log_cleanup = 0.0
+
+    def _sync_commands(self) -> tuple[int, int]:
+        return super()._sync_commands() if self.send_commands else (0, 0)
+
+    def _stop_requested(self) -> bool:
+        if self.stop_event.is_set():
+            return True
+        self._next_cycle_log = 0.0  # Debug console gets a summary every cycle.
+        now = time.monotonic()
+        if now >= self._next_control_check:
+            if self.process_lease is not None:
+                self.process_lease.heartbeat()
+                if not self.process_lease.enabled():
+                    self.logger.process("收到进程监控停止请求，结束独立调试")
+                    self.stop_event.set()
+                    return True
+            row = self._read_connection().execute(
+                "SELECT channel_id, process_enable FROM fes_rtu_define WHERE rtu_id=?",
+                (self.spec.rtu_id,),
+            ).fetchone()
+            self._next_control_check = now + self.scan_interval
+            if row is None or row["channel_id"] != self.spec.channel_id or row["process_enable"]:
+                self.logger.process("RTU 已删除、通道已更换或自动运行已启用，结束独立调试")
+                self.stop_event.set()
+                return True
+        if now >= self._next_log_cleanup:
+            ScdfeLogger.cleanup(self.logger.directory, retention_hours=self.retention_hours,
+                                process_name=self.logger.process_name)
+            self._next_log_cleanup = now + 60.0
+        return False
+
+
+def run_channel_debug(
+    store: ScadaStore, rtu_id: int, *,
+    log_dir: Path | str | None = None, poll_interval: float = 1.0,
+    retry_interval: float = 5.0, scan_interval: float = 2.0,
+    retention_hours: int = 720, max_cycles: int | None = None,
+    send_commands: bool = False, stop_event: threading.Event | None = None,
+    master_factory: Callable[[ScadaStore, ChannelSpec], Any] | None = None,
+    launch_token: str | None = None,
+) -> WorkerStats:
+    """Debug exactly one disabled RTU/channel in the calling process.
+
+    The per-RTU lock also covers supervisor status writes and queue drain.
+    Keep it across definition reloads and release only after protocol/SQLite
+    cleanup. The main control row and other RTUs are never changed here.
+    """
+    if type(rtu_id) is not int or rtu_id <= 0:
+        raise ValueError("rtu_id 必须为正整数")
+    if (not math.isfinite(poll_interval) or poll_interval < 0
+            or not math.isfinite(retry_interval) or retry_interval <= 0
+            or not math.isfinite(scan_interval) or scan_interval <= 0):
+        raise ValueError("采集周期必须为有限非负数，重试/扫描周期必须为有限正数")
+    if type(retention_hours) is not int or not 1 <= retention_hours <= 87600:
+        raise ValueError("retention_hours 必须为 1..87600 的整数")
+    if max_cycles is not None and (type(max_cycles) is not int or max_cycles <= 0):
+        raise ValueError("max_cycles 必须为正整数")
+    lock = _rtu_lock(rtu_id)
+    if not lock.acquire():
+        raise ValueError(f"本服务器 RTU {rtu_id} 正由自动通信或另一个调试进程使用，请等待该通道停止后重试")
+    lease = None
+    failure = ""
+    try:
+        with store.connection() as connection:
+            row = connection.execute(
+                "SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,),
+            ).fetchone()
+        if row is None or row["channel_id"] is None:
+            raise ValueError(f"RTU {rtu_id} 不存在或尚未配置通道")
+        channel_id = row["channel_id"]
+        spec = _debug_spec(store, rtu_id, channel_id)
+        lease = ProcessLease(store, f"debug:{rtu_id}", launch_token)
+        store.update_row(PROCESS_TABLE, [lease.key], {"process_enable": 1})
+        lease.heartbeat(force=True)
+        if log_dir is None:
+            with store.connection() as connection:
+                control = connection.execute(f"SELECT * FROM {CONTROL_TABLE} WHERE id=1").fetchone()
+            log_dir = log_directory(store, control) if control is not None else store.db_path.parent / "logs"
+        logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True),
+                             rtu_id=rtu_id, channel_id=channel_id, console=True)
+        stop_event = stop_event or threading.Event()
+        stats = WorkerStats()
+        logger.process(f"独立调试启动 pid={os.getpid()} 规约={spec.channel_type} "
+                       f"命令下发={'启用' if send_commands else '关闭'}")
+        try:
+            while not stop_event.is_set():
+                worker = _DebugChannelWorker(
+                    store, spec, log_dir=log_dir, poll_interval=poll_interval,
+                    retry_interval=retry_interval, stop_event=stop_event,
+                    master_factory=master_factory, send_commands=send_commands,
+                    scan_interval=scan_interval, retention_hours=retention_hours,
+                    process_lease=lease,
+                )
+                worker.logger = logger
+                worker.stats = stats
+                remaining = None if max_cycles is None else max_cycles - stats.cycles
+                worker.run(max_cycles=remaining)
+                if stop_event.is_set() or (max_cycles is not None and stats.cycles >= max_cycles):
+                    break
+                # run() returned early for a definition change. Resolve only
+                # the selected RTU again, using fresh protocol/scaling data.
+                spec = _debug_spec(store, rtu_id, channel_id)
+                logger.process("重新加载指定 RTU 通道及四遥定义")
+            return stats
+        except Exception as exc:
+            logger.error(f"独立调试异常结束: {exc}")
+            raise
+        finally:
+            logger.process(f"独立调试结束 cycles={stats.cycles} errors={stats.errors}")
+    except Exception as exc:
+        failure = str(exc)
+        raise
+    finally:
+        if lease is not None:
+            lease.finish(failure)
+        lock.release()
+
+
 def _worker_thread_entry(db_path: str, schema_dir: str, spec_data: dict[str, Any], log_dir: str,
                          poll_interval: float, retry_interval: float, stop_event: threading.Event,
                          writer_queue: Any | None = None) -> None:
@@ -1366,7 +1594,7 @@ def _worker_thread_entry(db_path: str, schema_dir: str, spec_data: dict[str, Any
                       retry_interval=retry_interval, stop_event=stop_event,
                       writer_queue=writer_queue).run()
     except Exception as exc:  # noqa: BLE001 - 主调度线程负责拉起并记录异常
-        ScdfeLogger(log_dir, process_name=f"scdfe_c-rtu-{spec.rtu_id}-ch-{spec.channel_id}", rtu_id=spec.rtu_id, channel_id=spec.channel_id).error(
+        ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id), rtu_id=spec.rtu_id, channel_id=spec.channel_id).error(
             f"通信线程异常退出: {exc}"
         )
         # Thread exceptions must not escape into the main scheduler.  The
@@ -1380,6 +1608,7 @@ class _ManagedWorker:
     spec: ChannelSpec
     thread: threading.Thread
     stop_event: threading.Event
+    channel_lock: ServerInstanceLock
     started_at: float = field(default_factory=time.time)
 
 
@@ -1393,6 +1622,7 @@ class ScdfeSupervisor:
                  writer_batch_interval: float = BATCH_WRITER_INTERVAL,
                  writer_max_batch: int = BATCH_WRITER_MAX_BATCH,
                  worker_start_delay: float = 0.25,
+                 launch_token: str | None = None,
                  thread_factory: Callable[..., threading.Thread] | None = None):
         if poll_interval < 0 or scan_interval <= 0 or retry_interval <= 0:
             raise ValueError("poll_interval 必须非负，scan_interval/retry_interval 必须为正")
@@ -1416,24 +1646,53 @@ class ScdfeSupervisor:
         self.context = context or mp.get_context("spawn")
         self.store = ScadaStore(self.db_path, self.schema_dir)
         ensure_control_row(self.store)
+        ensure_process(self.store, "writer")
+        self._process_lease = None
+        self.launch_token = launch_token
         self.stop_event = threading.Event()
         self._workers: dict[ChannelKey, _ManagedWorker] = {}
         self._writer_queue: Any | None = None
         self._writer_process: mp.Process | None = None
+        self._writer_stop_sent = False
+        self._reload_pending = False
         self._last_worker_start = 0.0
         self._scan_count = 0
+        self._next_log_summary = 0.0
+        self._next_log_cleanup = 0.0
         self.thread_factory = thread_factory or threading.Thread
         self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main")
+
+    def _maintain_logs(self) -> None:
+        """Keep hourly logs active even while communication/writing is idle."""
+        now = time.monotonic()
+        if now >= self._next_log_summary:
+            alive = sum(managed.thread.is_alive() for managed in self._workers.values())
+            writer = self._writer_process
+            writer_alive = writer is not None and writer.is_alive()
+            self.logger.normal(
+                f"主进程运行摘要: 扫描次数={self._scan_count} "
+                f"通信线程={alive}/{len(self._workers)} "
+                f"写库进程={'运行' if writer_alive else '停止'} "
+                f"写库pid={writer.pid if writer_alive else 0}",
+            )
+            self._next_log_summary = now + PROCESS_LOG_INTERVAL
+        if now >= self._next_log_cleanup:
+            removed = ScdfeLogger.cleanup(self.log_dir, retention_hours=self.retention_hours)
+            self._next_log_cleanup = now + LOG_CLEANUP_INTERVAL
+            if removed:
+                self.logger.process(f"日志清理完成，删除 {len(removed)} 个过期文件")
 
     def _start_writer(self) -> None:
         if self._writer_process is not None and self._writer_process.is_alive():
             return
         queue = self.context.JoinableQueue(maxsize=10000)
+        ready = self.context.Event()
         self._writer_queue = queue
+        self._writer_stop_sent = False
         process = self.context.Process(
             target=_batch_writer_entry,
             args=(str(self.db_path), str(self.schema_dir), str(self.log_dir),
-                  queue, self.writer_batch_interval, self.writer_max_batch),
+                  queue, self.writer_batch_interval, self.writer_max_batch, ready),
             name="scdfe-c-db-writer",
         )
         process.daemon = True
@@ -1453,11 +1712,15 @@ class ScdfeSupervisor:
             raise
         self._writer_process = process
         self.logger.process(f"启动批量数据库写入进程 pid={process.pid}")
+        deadline = time.monotonic() + 15.0
+        while not ready.wait(0.05):
+            if not process.is_alive() or time.monotonic() >= deadline:
+                raise RuntimeError("写库进程未能就绪，暂停启动通信线程")
 
-    def _recover_writer_failure(self) -> None:
+    def _recover_writer_failure(self) -> bool:
         process = self._writer_process
         if process is None or process.is_alive():
-            return
+            return True
         self.logger.error(f"批量数据库写入进程已退出 exitcode={process.exitcode}，重建通信线程")
         # A dead writer cannot acknowledge or drain the old queue. Stop
         # workers that still reference it, then recreate both sides together;
@@ -1471,16 +1734,11 @@ class ScdfeSupervisor:
                     f"通信线程未能在超时内退出 rtu={key.rtu_id} channel={key.channel_id}；"
                     "暂不启动重复线程",
                 )
-            try:
-                if stopped:
-                    self._update_process_state(
-                        key.rtu_id, process_status=PROCESS_ERROR, process_pid=0,
-                        process_stop_time=_now_ms(), process_heartbeat_time=_now_ms(),
-                        process_exit_code=-1, process_error="批量数据库写入进程异常退出，通道正在重启",
-                    )
-            except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"写入写库进程故障后的通道状态失败: {exc}")
-        self._stop_writer()
+            # _stop_worker records the final error while it still owns the
+            # RTU lock. Do not overwrite another owner's state afterwards.
+        if self._workers:
+            return False
+        return self._stop_writer()
 
     def _drain_writer(self, timeout: float | None = None) -> bool:
         queue = self._writer_queue
@@ -1519,38 +1777,57 @@ class ScdfeSupervisor:
                 return False
         return True
 
-    def _stop_writer(self) -> None:
+    def _stop_writer(self) -> bool:
         process, queue = self._writer_process, self._writer_queue
-        self._writer_process = None
-        self._writer_queue = None
         if process is None or queue is None:
-            return
+            return True
         try:
             if process.is_alive():
-                queue.put(BATCH_WRITER_STOP, timeout=max(1.0, self.retry_interval))
+                if not self._writer_stop_sent:
+                    queue.put(BATCH_WRITER_STOP, timeout=max(1.0, self.retry_interval))
+                    self._writer_stop_sent = True
                 process.join(timeout=max(2.0, self.retry_interval * 2))
         except (Full, OSError) as exc:
             self.logger.error(f"停止批量数据库写入进程失败: {exc}")
         if process.is_alive():
-            process.terminate()
-            process.join(timeout=2.0)
+            self.logger.error("写库进程尚未退出，保留进程和队列，等待下次检查")
+            return False
+        process.join(timeout=0)
+        self._writer_process = None
+        self._writer_queue = None
         try:
+            if process.exitcode:
+                queue.cancel_join_thread()
             queue.close()
-            queue.join_thread()
+            if not process.exitcode:
+                queue.join_thread()
         except (AttributeError, OSError):
             pass
         try:
             process.close()
         except (ValueError, OSError):
             pass
+        return True
+
+    def _pause_communication(self, reason: str) -> bool:
+        # Signal all producers before waiting for any one of them/its queue.
+        for managed in self._workers.values():
+            managed.stop_event.set()
+        for key in list(self._workers):
+            self._stop_worker(key, reason=reason)
+        if self._workers:
+            return False
+        process = self._writer_process
+        if process is not None and process.is_alive() and not self._drain_writer():
+            return False
+        return self._stop_writer()
 
     def _control(self) -> dict[str, Any]:
         return self.store.get_row(CONTROL_TABLE, [1])
 
     def _update_control_state(self, **updates: Any) -> None:
         allowed = {"process_status", "process_pid", "process_start_time", "process_stop_time",
-                   "process_restart_time", "process_heartbeat_time", "process_exit_code",
-                   "process_restart_count", "process_error", "process_restart"}
+                   "process_heartbeat_time", "process_exit_code", "process_error"}
         unknown = set(updates) - allowed
         if unknown:
             raise ValueError(f"不允许写入 scdfe_c 状态字段: {sorted(unknown)}")
@@ -1561,15 +1838,6 @@ class ScdfeSupervisor:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(f"UPDATE {quote_identifier(CONTROL_TABLE)} SET {assignments}, _version=_version+1 WHERE id=1", [*updates.values()])
             connection.commit()
-
-    def _consume_control_restart(self) -> bool:
-        with self.store.connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            changed = connection.execute(
-                f"UPDATE {quote_identifier(CONTROL_TABLE)} SET process_restart=0, _version=_version+1 WHERE id=1 AND process_restart<>0"
-            ).rowcount
-            connection.commit()
-        return bool(changed)
 
     def _apply_control_config(self, row: Mapping[str, Any]) -> bool:
         scan_interval = max(0.05, int(row.get("scan_interval_ms") or 2000) / 1000)
@@ -1592,11 +1860,15 @@ class ScdfeSupervisor:
         if worker_start_delay_ms is None:
             worker_start_delay_ms = 250
         self.worker_start_delay = max(0.0, int(worker_start_delay_ms) / 1000)
-        self.retention_hours = int(row.get("log_retention_hours") or self.retention_hours)
+        retention_hours = int(row.get("log_retention_hours") or self.retention_hours)
+        if retention_hours != self.retention_hours:
+            self.retention_hours = retention_hours
+            self._next_log_cleanup = 0.0
         configured = log_directory(self.store, row)
         if self._log_dir_from_control and configured != self.log_dir:
             self.log_dir = configured
             self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main")
+            self._next_log_summary = self._next_log_cleanup = 0.0
             worker_config_changed = True
         return worker_config_changed
 
@@ -1605,7 +1877,7 @@ class ScdfeSupervisor:
         return dict(self._workers)
 
     def _update_process_state(self, rtu_id: int, **updates: Any) -> None:
-        allowed = PROCESS_CONTROL_FIELDS - {"process_enable", "process_restart"}
+        allowed = PROCESS_CONTROL_FIELDS - {"process_enable"}
         unknown = set(updates) - allowed
         if unknown:
             raise ValueError(f"不允许写入通信线程字段: {sorted(unknown)}")
@@ -1619,17 +1891,6 @@ class ScdfeSupervisor:
                 [*updates.values(), rtu_id],
             )
             connection.commit()
-
-    def _consume_restart(self, rtu_id: int) -> bool:
-        """消费一次性重启标志，避免同一请求在扫描周期内重复执行。"""
-        with self.store.connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            changed = connection.execute(
-                "UPDATE fes_rtu_define SET process_restart=0, _version=_version+1 "
-                "WHERE rtu_id=? AND process_restart<>0", (rtu_id,),
-            ).rowcount
-            connection.commit()
-        return bool(changed)
 
     def _stop_worker(self, key: ChannelKey, *, reason: str,
                      unexpected: bool = False) -> bool:
@@ -1662,8 +1923,11 @@ class ScdfeSupervisor:
                 self.logger.error(f"写入通信线程超时状态失败: {exc}")
             return False
 
+        drained = self._drain_writer(timeout=max(1.0, self.retry_interval * 2))
+        if not drained and self._writer_process is not None and self._writer_process.is_alive():
+            self.logger.error(f"写库队列尚未排空，继续保留 RTU {key.rtu_id} 通道锁")
+            return False
         self._workers.pop(key, None)
-        self._drain_writer(timeout=max(1.0, self.retry_interval * 2))
         final_status = PROCESS_ERROR if unexpected else PROCESS_STOPPED
         try:
             self._update_process_state(
@@ -1674,40 +1938,35 @@ class ScdfeSupervisor:
             )
         except Exception as exc:  # noqa: BLE001
             self.logger.error(f"写入通信线程最终状态失败: {exc}")
+        finally:
+            managed.channel_lock.release()
         return True
 
-    def _start_worker(self, spec: ChannelSpec, *, restarted: bool = False) -> bool:
+    def _start_worker(self, spec: ChannelSpec, *, recovering: bool = False,
+                      channel_lock: ServerInstanceLock | None = None) -> bool:
+        if any(key.rtu_id == spec.rtu_id for key in self._workers):
+            return False
+        if channel_lock is None:
+            channel_lock = _rtu_lock(spec.rtu_id)
+            if not channel_lock.acquire():
+                return False
         start_time = _now_ms()
         if self._last_worker_start:
             remaining = self.worker_start_delay - (time.monotonic() - self._last_worker_start)
             if remaining > 0:
                 self.stop_event.wait(remaining)
                 if self.stop_event.is_set():
+                    channel_lock.release()
                     return False
         try:
             # 启动阶段先清空线程 ID，待新线程启动后写入其 native ID。
             updates: dict[str, Any] = {
-                "process_status": PROCESS_RESTARTING if restarted else PROCESS_STARTING,
+                "process_status": PROCESS_RECOVERING if recovering else PROCESS_STARTING,
                 "process_pid": 0, "process_start_time": start_time,
                 "process_heartbeat_time": start_time, "process_exit_code": 0,
                 "process_error": "",
             }
-            if restarted:
-                updates["process_restart_time"] = start_time
-                with self.store.connection() as connection:
-                    connection.execute("BEGIN IMMEDIATE")
-                    connection.execute(
-                        "UPDATE fes_rtu_define SET process_restart_count="
-                        "COALESCE(process_restart_count, 0)+1, "
-                        "process_status=?, process_pid=?, process_start_time=?, "
-                        "process_restart_time=?, process_heartbeat_time=?, "
-                        "process_exit_code=0, process_error='', _version=_version+1 "
-                        "WHERE rtu_id=?",
-                        (PROCESS_RESTARTING, 0, start_time, start_time, start_time, spec.rtu_id),
-                    )
-                    connection.commit()
-            else:
-                self._update_process_state(spec.rtu_id, **updates)
+            self._update_process_state(spec.rtu_id, **updates)
         except Exception as exc:  # noqa: BLE001
             self.logger.error(f"写入通信线程启动状态失败: {exc}")
         event = threading.Event()
@@ -1716,8 +1975,7 @@ class ScdfeSupervisor:
                 target=_worker_thread_entry,
                 args=(str(self.db_path), str(self.schema_dir), {
                     "rtu_id": spec.rtu_id, "channel_id": spec.channel_id,
-                    "channel_type": spec.channel_type, "address": spec.address,
-                    "port": spec.port, "name": spec.name,
+                    "channel_type": spec.channel_type, "name": spec.name,
                 }, str(self.log_dir), self.poll_interval, self.retry_interval, event,
                 self._writer_queue),
                 name=f"scdfe-c-rtu-{spec.rtu_id}-ch-{spec.channel_id}",
@@ -1735,8 +1993,9 @@ class ScdfeSupervisor:
             except Exception as state_exc:  # noqa: BLE001
                 self.logger.error(f"写入通信线程启动错误状态失败: {state_exc}")
             self.logger.error(f"启动通信线程失败 rtu={spec.rtu_id} channel={spec.channel_id}: {exc}")
+            channel_lock.release()
             return False
-        self._workers[spec.key] = _ManagedWorker(spec, thread, event)
+        self._workers[spec.key] = _ManagedWorker(spec, thread, event, channel_lock)
         thread_id = _thread_id(thread)
         if thread.is_alive():
             try:
@@ -1752,106 +2011,117 @@ class ScdfeSupervisor:
     def reconcile(self) -> dict[str, int]:
         """扫描 RTU 表并同步通信线程集合，返回本轮启动/重载/停止数量。"""
         started = reloaded = stopped = 0
-        self._recover_writer_failure()
+        if not self._recover_writer_failure():
+            self._maintain_logs()
+            return {"started": 0, "reloaded": 0, "stopped": 0, "running": len(self._workers)}
         control = self._control()
         config_changed = self._apply_control_config(control)
-        if config_changed:
-            for key in list(self._workers):
-                self._stop_worker(key, reason="scdfe_c 运行参数已更新")
-            self._stop_writer()
+        self._maintain_logs()
+        self._reload_pending = self._reload_pending or config_changed
+        if self._reload_pending:
+            if not self._pause_communication("scdfe_c 运行参数已更新"):
+                return {"started": 0, "reloaded": 0, "stopped": 0, "running": len(self._workers)}
+            self._reload_pending = False
             # The normal definition scan below starts them with the new path.
-        restart_all = bool(control.get("process_restart")) and self._consume_control_restart()
-        if restart_all:
-            for key in list(self._workers):
-                self._stop_worker(key, reason="scdfe_c process_restart=1，执行全量重启")
-                stopped += 1
-            now = _now_ms()
-            self._update_control_state(process_status=PROCESS_RESTARTING, process_pid=os.getpid(),
-                                       process_restart_time=now, process_heartbeat_time=now,
-                                       process_restart_count=int(control.get("process_restart_count") or 0) + 1,
-                                       process_error="")
         now = _now_ms()
         if not int(control.get("process_enable", 0)):
-            for key in list(self._workers):
-                self._stop_worker(key, reason="scdfe_c process_enable=0，停止通信线程")
-                stopped += 1
-            self._update_control_state(process_status=PROCESS_STOPPED, process_pid=os.getpid(),
+            stopped = len(self._workers)
+            self._update_control_state(process_status=PROCESS_STOPPING, process_pid=os.getpid(),
                                        process_heartbeat_time=now, process_error="")
+            if self._process_lease:
+                self._process_lease.heartbeat(PROCESS_STOPPING, force=True)
             # Exit cooperatively after children have been joined.  This keeps
             # SQLite/log cleanup intact on Windows and lets Web start a fresh
             # instance later.
-            self.stop_event.set()
-            self._stop_writer()
+            if self._pause_communication("主进程停止，先退出通信线程并排空写库队列"):
+                self.stop_event.set()
             self._scan_count += 1
             return {"started": 0, "reloaded": 0, "stopped": stopped, "running": 0}
         self._update_control_state(process_status=PROCESS_RUNNING, process_pid=os.getpid(),
                                    process_heartbeat_time=now, process_error="")
+        if self._process_lease:
+            self._process_lease.heartbeat()
+        if not self.store.get_row(PROCESS_TABLE, ["writer"])["process_enable"]:
+            stopped = len(self._workers)
+            if self._pause_communication("独立停止写库进程，暂停自动通信"):
+                writer = self.store.get_row(PROCESS_TABLE, ["writer"])
+                if writer["process_status"] != PROCESS_STOPPED or not writer["process_stop_time"]:
+                    self.store.update_row(PROCESS_TABLE, ["writer"], {
+                        "process_status": PROCESS_STOPPED, "process_pid": 0,
+                        "process_stop_time": _now_ms(),
+                    })
+            self._scan_count += 1
+            return {"started": 0, "reloaded": 0, "stopped": stopped, "running": len(self._workers)}
+        if self._writer_stop_sent and not self._stop_writer():
+            return {"started": 0, "reloaded": 0, "stopped": 0, "running": len(self._workers)}
         self._start_writer()
         specs = {spec.key: spec for spec in discover_channels(self.store)}
         for key in list(self._workers):
             if key not in specs:
                 self._stop_worker(key, reason="RTU-通道已删除或禁用")
                 stopped += 1
+        next_control_check = 0.0
         for key, spec in specs.items():
+            # Large RTU sets may take minutes to start. Observe stop requests
+            # between starts, not only after finishing the complete scan.
+            if self.stop_event.is_set():
+                break
+            if time.monotonic() >= next_control_check:
+                self._maintain_logs()
+                if (not self._control()["process_enable"] or
+                        not self.store.get_row(PROCESS_TABLE, ["writer"])["process_enable"]):
+                    break
+                next_control_check = time.monotonic() + 0.2
+            if self._process_lease:
+                self._process_lease.heartbeat()
             managed = self._workers.get(key)
-            restart_requested = spec.process_restart and self._consume_restart(spec.rtu_id)
+            # ``process_enable`` is an ownership boundary, not merely a stop
+            # request. Once disabled, the supervisor must not rewrite
+            # status/PID/error fields: a manual ``--rtu-id`` debugger owns
+            # those while it holds the RTU lock.
             if not spec.process_enable:
                 if managed is not None:
                     self._stop_worker(key, reason="RTU process_enable=0，停止通信线程")
                     stopped += 1
-                else:
-                    try:
-                        with self.store.connection() as connection:
-                            row = connection.execute(
-                                "SELECT process_status, process_pid, process_error "
-                                "FROM fes_rtu_define WHERE rtu_id=?", (spec.rtu_id,),
-                            ).fetchone()
-                        ignored_error = "process_enable=0，忽略重启请求" if restart_requested else ""
-                        if row is not None and (
-                                row["process_status"] != PROCESS_STOPPED
-                                or row["process_pid"] != 0
-                                or row["process_error"] != ignored_error):
-                            self._update_process_state(
-                                spec.rtu_id, process_status=PROCESS_STOPPED,
-                                process_pid=0, process_stop_time=_now_ms(),
-                                process_heartbeat_time=_now_ms(),
-                                process_error=ignored_error,
-                            )
-                    except Exception as exc:  # noqa: BLE001
-                        self.logger.error(f"写入禁用进程状态失败: {exc}")
                 continue
-            if restart_requested:
-                stopped_ok = True
-                if managed is not None:
-                    stopped_ok = self._stop_worker(key, reason="RTU process_restart=1，执行重启")
-                if stopped_ok and self._start_worker(spec, restarted=True):
-                    reloaded += 1
-                continue
+            lease = None
             if managed is None:
-                if self._start_worker(spec):
-                    started += 1
-                continue
-            if not managed.thread.is_alive():
-                stopped_ok = self._stop_worker(key, reason="通信线程已退出", unexpected=True)
-                if stopped_ok and self._start_worker(spec, restarted=True):
-                    started += 1
-                continue
+                lease = _rtu_lock(spec.rtu_id)
+                if not lease.acquire():
+                    # An independent debugger owns this RTU. Leave its
+                    # runtime fields untouched.
+                    continue
+            try:
+                if managed is None:
+                    if self._start_worker(spec, channel_lock=lease):
+                        lease = None  # Ownership transfers to the managed worker.
+                        started += 1
+                    continue
+                if not managed.thread.is_alive():
+                    stopped_ok = self._stop_worker(key, reason="通信线程已退出", unexpected=True)
+                    if stopped_ok and self._start_worker(spec, recovering=True):
+                        started += 1
+            finally:
+                if lease is not None:
+                    lease.release()
         self._scan_count += 1
-        removed = ScdfeLogger.cleanup(self.log_dir, retention_hours=self.retention_hours)
-        if removed:
-            self.logger.process(f"日志清理完成，删除 {len(removed)} 个过期文件")
         return {"started": started, "reloaded": reloaded, "stopped": stopped,
                 "running": len(self._workers)}
 
     def start(self) -> dict[str, int]:
         return self.reconcile()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         self.stop_event.set()
-        for key in list(self._workers):
-            self._stop_worker(key, reason="收到停止请求")
-        self._drain_writer(timeout=max(1.0, self.retry_interval * 2))
-        self._stop_writer()
+        if self._process_lease:
+            self._process_lease.heartbeat(PROCESS_STOPPING, force=True)
+        if not self._pause_communication("收到停止请求"):
+            return False
+        # A worker may have stopped while its queued status writes were still
+        # draining. With the writer stopped, finish cleanup and release leases.
+        for key, managed in list(self._workers.items()):
+            if not managed.thread.is_alive():
+                self._stop_worker(key, reason="写库进程已停止，完成通道清理")
         try:
             self._update_control_state(process_status=PROCESS_STOPPED, process_pid=0,
                                        process_stop_time=_now_ms(), process_heartbeat_time=_now_ms(),
@@ -1859,8 +2129,11 @@ class ScdfeSupervisor:
         except Exception as exc:  # noqa: BLE001
             self.logger.error(f"写入 scdfe_c 停止状态失败: {exc}")
         self.logger.process("scdfe_c 守护进程停止")
+        return True
 
     def run(self, *, max_scans: int | None = None) -> None:
+        self._process_lease = ProcessLease(self.store, "main", self.launch_token)
+        failure = ""
         try:
             self._update_control_state(process_status=PROCESS_STARTING, process_pid=os.getpid(),
                                        process_start_time=_now_ms(), process_heartbeat_time=_now_ms(),
@@ -1873,9 +2146,22 @@ class ScdfeSupervisor:
                 self.reconcile()
                 if max_scans is not None and self._scan_count >= max_scans:
                     break
-                self.stop_event.wait(self.scan_interval)
+                # A long configured scan interval must not leave whole hours
+                # without a main-process log. No extra thread is required.
+                deadline = time.monotonic() + self.scan_interval
+                while not self.stop_event.is_set():
+                    self._maintain_logs()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.stop_event.wait(min(remaining, PROCESS_LOG_INTERVAL))
+        except Exception as exc:
+            failure = str(exc)
+            raise
         finally:
-            self.stop()
+            while not self.stop():
+                time.sleep(0.2)
+            self._process_lease.finish(failure)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1890,32 +2176,79 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--worker-start-delay", type=float, default=0.25,
                         help="通信线程连续启动间隔（秒），数据库控制表优先")
     parser.add_argument("--max-scans", type=int, default=None, help="测试用：扫描指定次数后退出")
+    parser.add_argument("--rtu-id", type=int, help="独立进程调试该 RTU，自动查找其通道")
+    parser.add_argument("--max-cycles", type=int, help="独立调试：成功采集指定周期数后退出")
+    parser.add_argument("--send-commands", action="store_true",
+                        help="独立调试：允许下发待处理及变化的遥控/遥调（默认关闭）")
+    parser.add_argument("--launch-token", help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    lock = InstanceLock(args.db, "main")
-    if not lock.acquire():
-        print("scdfe_c 已有实例运行", flush=True)
-        return 2
-    supervisor = ScdfeSupervisor(
-        args.db, schema_dir=args.schema_dir, log_dir=args.log_dir,
-        poll_interval=args.poll_interval, scan_interval=args.scan_interval,
-        retry_interval=args.retry_interval, retention_hours=args.retention_hours,
-        worker_start_delay=args.worker_start_delay,
-    )
-    for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
-        if sig is not None:
-            # Signal handlers must only set a flag.  Doing SQLite writes and
-            # joining communication threads inside a handler can interrupt an
-            # in-progress reconcile and leave the control row half-updated.
-            signal.signal(sig, lambda *_: supervisor.stop_event.set())
+    parser = _parser()
+    args = parser.parse_args(argv)
+    debug = args.rtu_id is not None
+    if debug and args.max_scans is not None:
+        parser.error("独立调试请用 --max-cycles，不能使用 --max-scans")
+    if not debug and (args.max_cycles is not None or args.send_commands):
+        parser.error("--max-cycles/--send-commands 仅用于 --rtu-id 独立调试")
+    if debug and not args.db.is_file():
+        parser.error("独立调试需要已存在的数据库，请检查 --db 路径")
+    if args.rtu_id is not None and args.rtu_id <= 0:
+        parser.error("--rtu-id 必须为正整数")
+    for name in ("max_cycles", "max_scans"):
+        if getattr(args, name) is not None and getattr(args, name) <= 0:
+            parser.error(f"--{name.replace('_', '-')} 必须为正整数")
+    for name, zero_allowed in (("poll_interval", True), ("scan_interval", False),
+                               ("retry_interval", False), ("worker_start_delay", True)):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0 or (value == 0 and not zero_allowed):
+            parser.error(f"--{name.replace('_', '-')} 必须为有限{'非负' if zero_allowed else '正'}数")
+    if not 1 <= args.retention_hours <= 87600:
+        parser.error("--retention-hours 必须在 1..87600 之间")
+    lock = None
+    previous_handlers = {}
+    stop_event = threading.Event()
     try:
+        for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+            if sig is not None:
+                # Only set a flag; cleanup happens outside the signal handler.
+                previous_handlers[sig] = signal.signal(sig, lambda *_: stop_event.set())
+        if debug:
+            run_channel_debug(
+                ScadaStore(args.db, args.schema_dir), args.rtu_id,
+                log_dir=args.log_dir, poll_interval=args.poll_interval,
+                retry_interval=args.retry_interval, scan_interval=args.scan_interval,
+                retention_hours=args.retention_hours, max_cycles=args.max_cycles,
+                send_commands=args.send_commands, stop_event=stop_event,
+                launch_token=args.launch_token,
+            )
+            return 0
+        lock = ServerInstanceLock()
+        if not lock.acquire():
+            print("本服务器已有 scdfe_c 自动守护实例运行，不能重复启动（与数据库路径无关）", flush=True)
+            return 2
+        supervisor = ScdfeSupervisor(
+            args.db, schema_dir=args.schema_dir, log_dir=args.log_dir,
+            poll_interval=args.poll_interval, scan_interval=args.scan_interval,
+            retry_interval=args.retry_interval, retention_hours=args.retention_hours,
+            worker_start_delay=args.worker_start_delay,
+            launch_token=args.launch_token,
+        )
+        supervisor.stop_event = stop_event
         supervisor.run(max_scans=args.max_scans)
         return 0
+    except ValueError as exc:
+        print(f"scdfe_c: {exc}", flush=True)
+        return 2
+    except (OSError, sqlite3.Error) as exc:
+        print(f"scdfe_c 运行失败: {exc}", flush=True)
+        return 1
     finally:
-        lock.release()
+        if lock is not None:
+            lock.release()
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by CLI smoke tests

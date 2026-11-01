@@ -11,7 +11,7 @@ Windows：
 
 ```powershell
 Set-Location D:\codex\scada
-\.venv\Scripts\python.exe -m scdfe_c `
+.\.venv\Scripts\python.exe -m scdfe_c `
   --db D:\codex\scada\db\scada.sqlite3 `
   --log-dir D:\codex\scada\db\logs
 ```
@@ -38,6 +38,71 @@ cd /opt/scada
 正式运行时不应使用 `--max-scans`。主进程收到 Ctrl+C 或 SIGTERM 后会先通知
 所有通信线程停止、等待退出，再结束批量写库进程。
 
+## 指定 RTU 的独立调试进程
+
+只需传入 `--rtu-id`，程序自动从 RTU 表读取通道编号、规约及连接参数。
+不提供 `--channel-id` 参数，也不需要额外的调试开关。没有 `--rtu-id` 时仍运行全站守护程序。
+
+先在 Web 的 RTU 表中将目标 RTU 的 `process_enable` 设为 `0`，等待原通信线程停止。
+也可以通过现有接口停用，例如 RTU 7：
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8877/api/rtus/7' -Method Patch `
+  -ContentType 'application/json' -Body '{"process_enable":0}'
+```
+
+在另一个终端启动独立进程，Windows 示例：
+
+```powershell
+Set-Location D:\codex\scada
+.\.venv\Scripts\python.exe -m scdfe_c --db D:\codex\scada\db\scada.sqlite3 --rtu-id 7
+```
+
+Linux 示例：
+
+```sh
+.venv/bin/python -m scdfe_c --db /var/lib/scada/scada.sqlite3 --rtu-id 7
+```
+
+只运行十个成功采集周期后退出：
+
+```powershell
+.\.venv\Scripts\python.exe -m scdfe_c --rtu-id 7 --max-cycles 10 --poll-interval 0.5
+```
+
+- 调试进程只运行选中 RTU 的通信循环，直接在本进程内用事务写库，不启动全站守护器或额外写库子进程。
+- 默认采集并写回遥测/遥信，不下发遥控/遥调、不更新命令处理状态。需要调试命令时加 `--send-commands`，会处理该 RTU 当前待处理及后续变化的命令。
+- 复用 IEC104、Modbus TCP、Modbus RTU、CAN、BACnet/IP、OPC UA 的现有主站适配器；各规约能力边界与正常运行一致。
+- 控制台实时输出连接、错误、重载及每周期计数，文件为 `scdfe_c-debug-rtu-7-YYYYMMDD-HH.log`，各级别写入同一小时文件。默认使用主进程控制表配置的日志目录（无记录时为数据库旁的 `logs`），可用 `--log-dir` 覆盖。Web 现有日志列表和 RTU 过滤可查询这些文件。
+- `--retention-hours` 设置调试日志保留小时数（默认 720）。调试进程每 60 秒清理自己的过期日志；主程序运行时仍执行其日志目录的统一保留策略。
+- 连接失败按 `--retry-interval` 重试；四遥/协议静态定义变化会关闭连接、重新加载，并继续调试同一 RTU。通道编号变更或 RTU 删除会结束本次调试。
+- Ctrl+C/SIGTERM 请求正常退出。将目标 RTU 的 `process_enable` 改回 `1`，调试进程会在后续控制检查时退出并释放锁，主程序随后可恢复自动运行。`--scan-interval` 控制调试模式的控制检查间隔；实际停止还受采集/重试等待及协议调用超时约束。`--max-cycles` 只统计成功周期，持续连接失败时仍重试，需 Ctrl+C 退出。
+- RTU 的状态、心跳和开始/结束时间继续回写；`process_pid` 保持原有的通信执行线程 native ID 语义，独立调试的实际操作系统 PID 登记在 `fes_process_define`，同时显示在进程监控、控制台和日志中。全站主进程控制记录及其他 RTU 不受调试进程修改。
+
+同一服务器使用两层互斥，锁名不含数据库路径、工作目录、安装目录或用户名称：
+
+| 启动方式 | 并行规则 |
+| --- | --- |
+| 无 `--rtu-id`，自动守护多 RTU | 整台服务器只允许一个自动守护实例，即使指定不同 `--db` 也不能重复启动 |
+| 带 `--rtu-id`，人工调试单 RTU | 不同 RTU 可以同时调试，也可与自动守护实例并行 |
+| 同一个 RTU 编号 | 自动通信线程和人工调试进程共用一把 RTU 锁；同一时刻只允许一个通信所有者，即使数据库或通道编号不同也不能绕过 |
+
+只有 `process_enable=1` 的 RTU 由主程序获取并长期持有守护锁；`process_enable=0` 时主程序不获取该 RTU 的锁，所以人工调试可以直接接管。重复调试、原通信线程未退出或待写队列尚未排空时会拒绝接管；其他 RTU 正常运行。调试退出并释放锁后，已启用的 RTU 可由自动守护实例在后续扫描接管。
+
+Windows 使用 `Global` 命名内核对象，跨登录会话和用户互斥；Linux 使用抽象 UNIX 套接字名称，不占用 TCP/UDP 端口、不依赖临时目录或文件权限。进程正常退出或崩溃后由操作系统释放锁，无需删除锁文件。Linux 的互斥范围为同一网络命名空间；多个容器共用此服务时应使用宿主机网络命名空间。其他操作系统明确报错，不退回数据库路径锁。
+
+升级时需要先停止旧版本的自动守护和调试进程，再整体启动新版本，使所有实例使用同一套服务器级锁协议。
+
+退出码：`0` 正常结束；`2` 参数/RTU 配置无效、自动运行未停用、服务器自动守护已被占用或 RTU 已被占用；`1` I/O、数据库或其他未处理运行故障。运行中的可恢复通信错误记录日志并重试。重复启动在获取所有权前拒绝，不覆盖已有实例的 RTU/主程序运行状态。
+
+## 进程监控与一键启停
+
+Web 页面“进程监控”与“通信监控”并列，使用 `fes_process_define` 登记主进程、数据库写进程和 RTU 调试进程。页面展示真实 PID、父 PID、运行状态、启停时间、心跳、退出码、错误和对应日志，可对每个进程独立启动和停止。调试任务按 `debug:<rtu_id>` 登记，启动前必须将对应 RTU 的 `process_enable` 设为 `0`；同一 RTU 仍由服务器级锁保证只有一个通信所有者。
+
+一键启动的顺序为主进程 → 写库进程完成就绪登记 → 自动通信按 `worker_start_delay_ms` 顺序恢复，同时依次启动勾选参与的调试任务；一键停止的顺序为调试任务 → 自动通信线程 → 排空写库队列 → 写库进程 → 主进程。独立停止写库会暂停通信生产者，避免队列无消费者；控制操作返回异步任务并记录当前步骤，超时或子进程异常会保留失败阶段和错误信息。
+
+HTTP 接口：`GET /api/processes` 查询进程列表和操作进度，`POST /api/processes/control` 请求控制，参数为 `target=main|writer|debug:<rtu_id>|all`、`action=start|stop|configure`；调试任务可附 `include_in_all`。运行进程表不允许使用泛型表接口直接修改。
+
 ## RTU 表进程控制字段
 
 `fes_rtu_define` 增加了以下运行控制和状态字段。Web 页面或其他管理程序直接
@@ -45,16 +110,13 @@ cd /opt/scada
 
 | 字段 | 用法 |
 | --- | --- |
-| `process_enable` | `1` 启用并保持通信线程，`0` 停止并保持停用 |
-| `process_restart` | 写 `1` 请求一次重启；守护器消费后自动写回 `0` |
-| `process_status` | `0` 停止、`1` 启动中、`2` 运行、`3` 停止中、`4` 重启中、`5` 错误 |
+| `process_enable` | RTU 自动通信标志：`1` 才由 `scdfe_c` 自动启动并守护，`0` 不参与自动通信且不受 `scdfe_c` 守护；停用后可用 `--rtu-id` 人工调试 |
+| `process_status` | `0` 停止、`1` 启动中、`2` 运行、`3` 停止中、`4` 处理中、`5` 错误 |
 | `process_pid` | 该通信线程的 native ID；停止后为 `0` |
 | `process_start_time` | 最近一次启动时间，Unix 毫秒时间戳 |
 | `process_stop_time` | 最近一次停止时间，Unix 毫秒时间戳 |
-| `process_restart_time` | 最近一次重启请求/执行时间，Unix 毫秒时间戳 |
 | `process_heartbeat_time` | 通信线程最近一次成功循环时间，Unix 毫秒时间戳 |
 | `process_exit_code` | 最近一次通信线程退出结果，正常停止为 `0`，异常停止为 `-1` |
-| `process_restart_count` | 守护器执行的重启次数 |
 | `process_error` | 最近一次启动、连接、采集或下发错误文本 |
 
 例如，停止 RTU 3 的通信线程：
@@ -66,16 +128,15 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
   -Body '{"process_enable":0}'
 ```
 
-重新启用并请求重启：
+重新启用自动通信：
 
 ```powershell
 Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
   -ContentType 'application/json' `
-  -Body '{"process_enable":1,"process_restart":1}'
+  -Body '{"process_enable":1}'
 ```
 
-`process_restart` 是一次性命令位，不能用作持续启停开关；持续运行由
-`process_enable` 控制。主调度线程写入启动/停止/重启过渡状态，通信线程写入线程 ID、
+持续运行由 `process_enable` 控制。主调度线程写入启动/停止过渡状态，通信线程写入线程 ID、
 运行状态、心跳和连接错误。所有状态写入都使用短事务和 `_version` 递增，Web 的乐观
 并发检查仍然有效。
 
@@ -84,12 +145,11 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 父进程每个扫描周期：
 
 1. 遍历 `fes_rtu_define`，过滤出有 `channel_id`、`channel_type` 且规约已实现的通道；
-2. 按 `process_enable` 决定是否保持该通道通信线程；
-3. 消费 `process_restart=1`，为启用的通道停止旧进程并启动新进程；
-4. 为每个启用的 `(rtu_id, channel_id)` 启动一个命名为 `scdfe-c-rtu-<rtu>-ch-<channel>` 的守护线程；
-5. 通信线程异常退出时自动拉起，通道配置或四遥静态定义指纹变化时停止旧线程并重新加载；
-6. RTU 被删除或通道字段被删除时停止对应通信线程；
-7. 按配置的保留小时数定期清理各进程的过期小时日志。
+2. 只对 `process_enable=1` 的 RTU 获取守护锁并启动通信线程；`process_enable=0` 的 RTU 完全跳过；
+3. 为每个启用的 `(rtu_id, channel_id)` 启动一个命名为 `scdfe-c-rtu-<rtu>-ch-<channel>` 的守护线程；
+4. 通信线程异常退出时自动拉起，通道配置或四遥静态定义指纹变化时停止旧线程并重新加载；
+5. RTU 被删除或通道字段被删除时停止对应通信线程；
+6. 按配置的保留小时数定期清理各进程的过期小时日志。
 
 主进程启用后还会启动一个独立的 `scdfe_c-db-writer` 批量写库进程。通信线程不直接
 写 SQLite，而是把遥测、遥信、遥控/遥调状态和 RTU/线程状态更新投递到有界队列；同一采集周期的
@@ -97,7 +157,7 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 并按相同 SQL 更新形状使用 `executemany`。批消息按表和字段分组，公共字段名仅传一次，各点为参数元组；
 写库进程在开启事务前完成校验、合并和参数准备，锁重试复用准备结果。旧的 `batch/updates` 队列格式已删除，
 生产通信消息带内部版本保留标志；多个消息共用一个事务时仍按消息顺序执行，确保每个采集周期只递增一次点版本号。
-升级时整体重启 `scdfe_c`，确保通信线程和写库进程使用同一版本。写库进程独占并复用一个 SQLite 写连接，批次之间只提交
+升级时停止旧版并启动新版 `scdfe_c`，确保通信线程和写库进程使用同一版本。写库进程独占并复用一个 SQLite 写连接，批次之间只提交
 和重新开启事务。写库连接将 WAL 自动检查点设置为 10000 页，减少高频提交时的检查点开销；WAL 文件会在更大阈值后检查点，部署时应纳入磁盘空间监控。通信线程按 `worker_start_delay_ms`（默认 250 ms）
 顺序拉起，避免多个协议栈同时初始化。主进程停止、重载或修改日志目录/运行参数时，
 会先通知通信线程退出、等待队列完成，再停止写库进程。修改 `poll_interval_ms`、`retry_interval_ms`
@@ -106,12 +166,11 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 避免静默丢失状态更新。
 
 主进程控制记录位于 `fes_scdfe_c_define` 的 `id=1` 行。`process_enable` 控制主进程
-是否工作，`process_restart` 是一次性全量重启请求；Web 写入这些字段后，主进程轮询消费。
-该行还保存主进程 PID、状态、启动/停止/重启时间、心跳、退出码、重启次数、错误信息和运行参数。
+是否工作；Web 写入这些字段后，主进程轮询消费。该行还保存主进程 PID、状态、启动/停止时间、心跳、退出码、错误信息和运行参数。
 
-程序支持 Windows 和 POSIX 系统：Windows 使用原生进程查询句柄检查 `scdfe_c` 是否存活，
+程序支持 Windows 和 Linux 系统：Windows 使用原生进程查询句柄检查 `scdfe_c` 是否存活，
 不会用 `os.kill(pid, 0)` 误触发进程终止；POSIX 使用非破坏性的 `os.kill(pid, 0)` 探测。
-文件锁、守护线程、SQLite WAL 和写库进程的启动/停止流程均按当前平台选择实现。
+服务器级互斥、守护线程、SQLite WAL 和写库进程的启动/停止流程均按当前平台选择实现。
 
 通信线程连接成功后持续调用主站的 `collect_once()`，把 `yc`、`yx` 返回值和质量/状态写回
 `fes_yc_define`、`fes_yx_define`。遥测保留 `raw_value/raw_status/raw_time` 和
@@ -130,12 +189,12 @@ schema、数据类、Web 和物理 SQLite 同步删除，不提供旧字段兼�
 版本未变化时不再读取全部遥控、遥调行。成功后写入 `cmd_handle_time` 和状态，失败写入错误状态并记录错误日志。
 
 实时值、质量、时间、命令处理时间和 `_version` 不参与定义指纹，因此正常采集不会导致
-通道重启。点表增删、点号、协议地址、缩放、IEC104 地址、Modbus 解析定义、BACnet/OPC
+通道自动恢复。点表增删、点号、协议地址、缩放、IEC104 地址、Modbus 解析定义、BACnet/OPC
 通道参数等变化会改变指纹并自动热重载。
 
 通信线程的主循环具有独立异常边界：连接、采集、点表解析、命令下发和状态写回异常只会
 使当前线程进入错误状态并按重试周期重连；线程入口还会捕获未预期异常并记录独立日志，
-主调度线程在下一次扫描发现线程退出后才重启该通道，不会终止其他通道线程。线程停止
+主调度线程在下一次扫描发现线程退出后才自动拉起该通道，不会终止其他通道线程。线程停止
 超时不会强制杀死整个主进程，也不会立即启动同一通道的重复线程；该通道保持错误状态，
 待旧线程真正退出后再由后续扫描恢复。
 
@@ -145,15 +204,25 @@ schema、数据类、Web 和物理 SQLite 同步删除，不提供旧字段兼�
 
 ```text
 scdfe_c-main-YYYYMMDD-HH.log
-scdfe_c-rtu-2-ch-1-YYYYMMDD-HH.log
+scdfe_c-rtu-2-YYYYMMDD-HH.log
+scdfe_c-debug-rtu-2-YYYYMMDD-HH.log
 scdfe_c-db-writer-YYYYMMDD-HH.log
 ```
 
-正常、告警、错误和过程信息统一写入所属进程的当前小时文件，级别保留在每行内容中，不再按级别拆分文件。每行含本地时间、级别、进程号、RTU、通道和消息。正常采集日志按 30 秒输出周期摘要，连接、告警、错误、定义变化和进程生命周期事件即时记录；日志采用每次追加后关闭文件的方式，不在多个进程间共享 handler。父进程按 `log_retention_hours` 清除旧文件，默认保留 720 小时；单个文件清理失败不会中断采集。
+通信日志文件名只含 RTU 编号，不含通道号；同一 RTU 在同一小时更换通道后继续写入该小时文件，自动通信和人工调试仍分别保存。日志 API 元数据与筛选按 RTU、进程识别，不从当前数据库通道配置推断历史文件的通道号。
 
-Web 页面选择“scdfe_c 守护进程”可查看主进程和各 RTU 通道状态，执行启动、停止和全量重启，
-并按进程/小时列出和查看日志。对应接口为 `GET /api/scdfe_c/status`、
+正常、告警、错误和过程信息统一写入所属进程的当前小时文件，级别保留在每行内容中，不再按级别拆分文件。日志正文时间只显示本地 `HH:MM:SS`，日期和小时由文件名提供，不显示年月日、毫秒或时区；每行还包含级别、进程号和消息，通信日志包含 RTU、通道。文件名小时与行时间取自同一次时钟读取，整点及跨日切换时保持一致。日志检索按文件名小时还原完整本地时间，历史 ISO 时间格式仍可读取。日志每次追加后关闭文件，不在多个进程间共享 handler，兼容 Windows/Linux。
+
+主进程、数据库写进程均每 30 秒输出运行摘要，因此无 RTU、写库队列空闲时，持续运行的进程也会生成每小时日志。主进程记录扫描次数、通信线程存活数及写库进程状态/PID；写库进程记录累计成功批次、消息数、输入更新数及本地待写数量。输入更新数包含合并前的重复更新，不等同于不同测点数或数据库实际影响行数；待写数量不包含尚在跨进程队列中的消息。摘要在循环中节流输出，不按每批写入记录日志。正常采集同样按 30 秒输出周期摘要；连接、告警、错误、定义变化和进程生命周期事件即时记录。停止的进程不再产生新的小时日志。
+
+主进程每 60 秒按 `log_retention_hours` 清除旧文件，默认保留 720 小时；写库被独立暂停时仍执行清理，修改保留小时数或日志目录后在下一轮扫描采用。单个文件清理失败不会中断采集。独立调试进程也定期清理自身日志。
+
+Web 页面选择“通信监控”可查看主进程和各 RTU 通道状态，执行启动和停止；
+通信线程支持分页和状态筛选，点击行内“日志”直接进入该 RTU 的日志。
+“运行日志”页面按进程/小时列出文件，并在同一屏显示可搜索、筛选和自动刷新的日志正文。对应接口为 `GET /api/scdfe_c/status`、
 `PATCH /api/scdfe_c/control`、`GET /api/scdfe_c/logs` 和 `GET /api/scdfe_c/logs/{filename}`。
+Web 请求启动时，如果当前库没有活动主进程，但服务器级主锁已被占用，则返回 HTTP 409
+（`process_already_running`），不修改本库控制配置；实际子进程启动时仍再次原子获取同一把锁。
 
 ## 规约边界
 

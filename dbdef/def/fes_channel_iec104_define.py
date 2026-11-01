@@ -100,4 +100,14 @@ class fes_channel_iec104_define:
         metadata={'chn_name': '是否自动发送全数据', 'eng_name': 'if_autosend_alldata', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
     )
 
+    remote_host: Optional[str] = field(
+        default='127.0.0.1',
+        metadata={'chn_name': '远端主机', 'eng_name': 'remote_host', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    remote_port: Optional[int] = field(
+        default=2404,
+        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+    )
+
 __all__ = ['fes_channel_iec104_define']

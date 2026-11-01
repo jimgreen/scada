@@ -30,15 +30,6 @@
       "default": 1
     },
     {
-      "chn_name": "主进程重启请求",
-      "eng_name": "process_restart",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "单选菜单",
-      "disp_menu": "二值判断",
-      "default": 0
-    },
-    {
       "chn_name": "主进程状态",
       "eng_name": "process_status",
       "primary_key": false,
@@ -75,15 +66,6 @@
       "default": 0
     },
     {
-      "chn_name": "主进程重启时间",
-      "eng_name": "process_restart_time",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
-      "disp_menu": "",
-      "default": 0
-    },
-    {
       "chn_name": "主进程心跳时间",
       "eng_name": "process_heartbeat_time",
       "primary_key": false,
@@ -95,15 +77,6 @@
     {
       "chn_name": "主进程退出码",
       "eng_name": "process_exit_code",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": "",
-      "default": 0
-    },
-    {
-      "chn_name": "主进程重启次数",
-      "eng_name": "process_restart_count",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",

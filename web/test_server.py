@@ -11,8 +11,11 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import web.server as server_module
-from web.server import _process_is_alive, _scdfe_popen_kwargs, make_server
+import web.process_control as process_module
+import core.process_registry as registry_module
+from web.server import make_server
+from core.process_registry import process_is_alive
+from web.process_control import popen_options
 
 
 class WebTests(unittest.TestCase):
@@ -25,6 +28,8 @@ class WebTests(unittest.TestCase):
         self.url = f'http://127.0.0.1:{self.server.server_port}'
 
     def tearDown(self):
+        if self.server.process_controller._thread:
+            self.server.process_controller._thread.join(15)
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
@@ -51,30 +56,30 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 201, body)
 
     def test_process_probe_is_non_destructive(self):
-        self.assertTrue(_process_is_alive(os.getpid()))
-        self.assertFalse(_process_is_alive(2**31 - 1))
+        self.assertTrue(process_is_alive(os.getpid()))
+        self.assertFalse(process_is_alive(2**31 - 1))
 
     def test_process_launch_options_are_platform_specific(self):
-        with patch.object(server_module.os, "name", "posix"):
-            options = _scdfe_popen_kwargs()
+        with patch.object(registry_module.os, "name", "posix"):
+            options = popen_options()
         self.assertEqual(options, {"start_new_session": True, "close_fds": True})
 
-        with patch.object(server_module.os, "name", "nt"), \
-                patch.object(server_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200):
-            options = _scdfe_popen_kwargs()
+        with patch.object(registry_module.os, "name", "nt"), \
+                patch.object(process_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200):
+            options = popen_options()
         self.assertEqual(options, {"creationflags": 0x200, "close_fds": True})
 
     def test_process_probe_posix_branch_uses_kill_zero(self):
-        with patch.object(server_module.os, "name", "posix"), \
-                patch.object(server_module.os, "kill") as kill:
-            self.assertTrue(_process_is_alive(1234))
+        with patch.object(registry_module.os, "name", "posix"), \
+                patch.object(registry_module.os, "kill") as kill:
+            self.assertTrue(process_is_alive(1234))
             kill.assert_called_once_with(1234, 0)
 
     def test_catalog_and_empty_application(self):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
-        self.assertEqual(len(body['items']), 18)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 329)
+        self.assertEqual(len(body['items']), 19)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 335)
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')
         rtu_columns = {column['eng_name'] for column in rtu_schema['columns']}
         self.assertNotIn('proto_type', rtu_columns)
@@ -83,6 +88,8 @@ class WebTests(unittest.TestCase):
         self.assertNotIn('max_yt_num', rtu_columns)
         self.assertNotIn('max_yk_num', rtu_columns)
         self.assertNotIn('channel_status', rtu_columns)
+        for removed in ('rdfid', 'st_id', 'oper_area', 'rtu_104code', 'chan_addr', 'chan_port'):
+            self.assertNotIn(removed, rtu_columns)
         self.assertIn('status', rtu_columns)
         self.assertEqual(self.call('/')[0], 200)
         self.assertEqual(self.call('/api/health')[1]['status'], 'ok')
@@ -136,12 +143,12 @@ class WebTests(unittest.TestCase):
     def test_validation_scope_and_large_integer_round_trip(self):
         self.rtu()
         rtu = self.call('/api/rtus/1')[1]['item']
-        self.assertEqual((rtu['process_enable'], rtu['process_restart'],
-                          rtu['process_status'], rtu['process_pid']), (1, 0, 0, 0))
+        self.assertEqual((rtu['process_enable'], rtu['process_status'], rtu['process_pid']), (1, 0, 0))
         self.assertEqual(self.call('/api/rtus/1', 'PATCH', {'process_enable': 2})[0], 400)
-        self.assertEqual(self.call('/api/rtus/1', 'PATCH', {'process_restart': -1})[0], 400)
+        for field, value in (('process_restart', 1), ('process_restart_time', 123), ('process_restart_count', 1)):
+            self.assertEqual(self.call('/api/rtus/1', 'PATCH', {field: value})[0], 400)
         self.assertEqual(self.call('/api/rtus/1', 'PATCH', {
-            'process_enable': 0, 'process_restart': 1,
+            'process_enable': 0,
         })[0], 200)
         base = '/api/rtus/1/points/yc'
         for data in ({'pnt_no': True}, {'pnt_no': 1.5}, {'pnt_no': -1}, {'pnt_no': 1, 'value': 'NaN'},
@@ -170,7 +177,7 @@ class WebTests(unittest.TestCase):
         schemas = self.call('/api/schemas')[1]['items']
         for schema in schemas:
             name = schema['head']['eng_name']
-            if name == 'fes_rtu_define':
+            if name in {'fes_rtu_define', 'fes_process_define', 'fes_scdfe_c_define'}:
                 continue
             row = {c['eng_name']: 1 for c in schema['columns'] if c['primary_key']}
             if any(c['eng_name'] == 'rtu_id' for c in schema['columns']):
@@ -231,8 +238,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 400)
         status, body = self.call('/api/rtus', 'POST', {
             'rtu_id': 7, 'channel_id': 70, 'channel_type': 'modbus-tcp',
-            'chan_addr': '127.0.0.1', 'chan_port': 1502,
-        })
+                    })
         self.assertEqual(status, 201, body)
         self.assertEqual(body['item']['channel_type'], 'modbus-tcp')
         info = self.call('/api/rtus/7/channel')[1]
@@ -247,6 +253,57 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 409, body)
         self.assertEqual(self.call('/api/rtus/7', 'PATCH', {'channel_type': 'can'})[0], 200)
         self.assertEqual(self.call('/api/rtus/7/channel')[1]['parameter_table'], 'fes_channel_can_define')
+
+    def test_dedicated_channel_maintenance_and_id_allocation(self):
+        self.rtu(8)
+        current = self.call('/api/rtus/8')[1]['item']
+        status, body = self.call('/api/rtus/8/channel', 'PATCH', {
+            'channel_type': 'iec104',
+        }, {'If-Match': str(current['_version'])})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body['item']['channel_type'], 'iec104')
+        status, body = self.call('/api/rtus/8/channel/parameters', 'POST', {
+            'rtu_addr': 8,
+        })
+        self.assertEqual(status, 201, body)
+        self.assertGreater(body['item']['id'], 0)
+        self.assertEqual(body['item']['rtu_id'], 8)
+        self.assertEqual(self.call('/api/rtus/8/channel', 'PATCH', {
+            'channel_type': 'modbus-tcp',
+        })[0], 409)
+        status, body = self.call('/api/rtus/8/channel/parameters', 'PATCH', {
+            'call_alldata_time': 30,
+        }, {'If-Match': str(body['item']['_version'])})
+        self.assertEqual(status, 200, body)
+
+    def test_channel_route_rejects_duplicate_and_unknown_fields(self):
+        self.rtu(9)
+        self.assertEqual(self.call('/api/rtus/9/channel', 'POST', {
+            'channel_id': 90, 'channel_type': 'can',
+        })[0], 409)
+        self.assertEqual(self.call('/api/rtus/9/channel', 'PATCH', {
+            'not_a_channel_field': 1,
+        })[0], 400)
+
+    def test_id_protocol_parameter_tables_allocate_internal_id(self):
+        cases = [
+            (10, 'bacnet', {'bind_ip': '0.0.0.0', 'bind_port': 47808, 'dev_id': 10}),
+            (11, 'opc', {'opc_interval': 1000, 'opc_name': 'demo'}),
+        ]
+        for rtu_id, channel_type, values in cases:
+            status, body = self.call('/api/rtus', 'POST', {
+                'rtu_id': rtu_id, 'channel_id': rtu_id * 10,
+                'channel_type': channel_type,
+            })
+            self.assertEqual(status, 201, body)
+            status, body = self.call(f'/api/rtus/{rtu_id}/channel/parameters', 'POST', values)
+            self.assertEqual(status, 201, body)
+            self.assertIsInstance(body['item']['id'], int)
+            self.assertEqual(body['item']['rtu_id'], rtu_id)
+        self.call('/api/rtus', 'POST', {
+            'rtu_id': 12, 'channel_id': 120, 'channel_type': 'opc',
+        })
+        self.assertEqual(self.call('/api/rtus/12/channel/parameters', 'POST', {'id': 999})[0], 400)
 
     def test_bad_json_content_type_methods_and_unexpected_paths(self):
         for data in (b'{"rtu_id":1,"rtu_id":2}', b'{"rtu_id":NaN}', b'[1]', b'{', b''):
@@ -289,12 +346,16 @@ class WebTests(unittest.TestCase):
         self.assertEqual(body['rtus'][0]['thread_id'], 0)
         self.assertNotIn('process_pid', body['rtus'][0])
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_pid': 1})[0], 400)
+        self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_restart': 1})[0], 400)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'worker_start_delay_ms': 60001})[0], 400)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'log_retention_hours': 87601})[0], 400)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'log_retention_hours': 720})[0], 200)
         self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'worker_start_delay_ms': 500})[0], 200)
         self.assertEqual(self.call('/api/scdfe_c/status')[1]['item']['process_pid'], 0)
-        self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 0})[0], 200)
+        status_item = self.call('/api/scdfe_c/status')[1]['item']
+        for field in ('process_restart', 'process_restart_time', 'process_restart_count'):
+            self.assertNotIn(field, status_item)
+        self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 0})[0], 202)
         from scdfe_c import ScdfeLogger
         logger = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-main')
         logger.process('api test')
@@ -307,41 +368,137 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('api test', body['item']['content'])
         self.assertEqual(self.call('/api/scdfe_c/logs/..%2Fsecret.log')[0], 404)
+        debug = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-debug-rtu-7',
+                            rtu_id=7, channel_id=70)
+        debug.process('debug route test')
+        status, body = self.call('/api/scdfe_c/logs?rtu_id=7')
+        self.assertEqual((status, body['total']), (200, 1))
+        self.assertEqual(body['items'][0]['process'], 'scdfe_c-debug-rtu-7')
+        self.assertNotIn('channel_id', body['items'][0])
+        status, body = self.call('/api/scdfe_c/logs/' + body['items'][0]['name'])
+        self.assertEqual(status, 200)
+        self.assertEqual(body['item']['rtu_id'], 7)
+        self.assertIn('debug route test', body['item']['content'])
+        self.assertIn('rtu=7 channel=70', body['item']['content'])
+        self.assertNotIn('channel_id', body['item'])
+        self.assertEqual(self.call('/api/scdfe_c/logs?channel_id=70')[0], 400)
+
+    def test_main_and_writer_hourly_files_can_be_listed_and_searched(self):
+        from datetime import datetime
+        import scdfe_c as runtime
+
+        for role in ('main', 'db-writer'):
+            process = f'scdfe_c-{role}'
+            logger = runtime.ScdfeLogger(self.db.parent / 'logs', process_name=process)
+            with patch.object(runtime, 'datetime') as clock:
+                for hour in (9, 10):
+                    clock.now.return_value = datetime(2026, 11, 1, hour).astimezone()
+                    logger.normal(f'{role} hourly summary {hour}')
+            status, body = self.call('/api/scdfe_c/logs?process=' + process)
+            self.assertEqual((status, body['total']), (200, 2))
+            self.assertEqual({item['hour'] for item in body['items']}, {'20261101-09', '20261101-10'})
+            for item in body['items']:
+                status, result = self.call('/api/scdfe_c/logs/' + item['name'])
+                self.assertEqual(status, 200)
+                self.assertIn(f'{role} hourly summary', result['item']['content'])
+            status, result = self.call('/api/scdfe_c/logs/search?level=INFO&q=summary&process=' + process)
+            self.assertEqual(status, 200)
+            self.assertEqual(len(result['items']), 2)
+
+    def test_scdfe_status_pagination_and_filters_include_all_rtus(self):
+        with self.server.store.connection() as connection:
+            connection.executemany(
+                "INSERT INTO fes_rtu_define (rtu_id, channel_id, channel_type, name, "
+                "process_status, process_enable) VALUES (?, ?, 'iec104', ?, ?, ?)",
+                [(n, n, f'测试站 {n}', 5 if n % 2 else 2, n % 2) for n in range(1, 506)],
+            )
+            connection.commit()
+        status, body = self.call('/api/scdfe_c/status?limit=5&offset=500')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['total'], 505)
+        self.assertEqual([row['rtu_id'] for row in body['rtus']], list(range(501, 506)))
+        self.assertEqual(body['counts'], {'total': 505, 'running': 252, 'errors': 253, 'automatic': 253})
+        self.assertIn('_version', body['rtus'][0])
+        status, body = self.call('/api/scdfe_c/status?process_status=5&process_enable=1&q=505')
+        self.assertEqual((status, body['total'], body['rtus'][0]['rtu_id']), (200, 1, 505))
+        for query in ('limit=501', 'offset=-1', 'limit=no', 'process_status=bad', 'unknown=1'):
+            self.assertEqual(self.call('/api/scdfe_c/status?' + query)[0], 400)
+
+    def test_log_search_combines_keyword_time_type_and_cursor(self):
+        from scdfe_c import ScdfeLogger
+        logger = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-main')
+        logger.normal('电压正常 keyword-a')
+        logger.alarm('链路告警 keyword-a')
+        logger.error('连接错误 keyword-a')
+        logger.process('通信重载 keyword-a')
+        base = '/api/scdfe_c/logs/search?q=keyword-a&level=ERROR&process=scdfe_c-main&start=2020-01-01T00%3A00%3A00%2B08%3A00&end=2030-01-01T00%3A00%3A00%2B08%3A00&limit=1'
+        status, body = self.call(base)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(body['items']), 1)
+        self.assertEqual(body['items'][0]['level'], 'ERROR')
+        self.assertTrue(body['has_more'])
+        status, body = self.call(base + '&cursor=' + body['next_cursor'])
+        self.assertEqual((status, body['items'], body['has_more']), (200, [], False))
+        for query in ('level=BAD', 'start=2030-01-01T00%3A00%3A00%2B08%3A00&end=2020-01-01T00%3A00%3A00%2B08%3A00', 'q=' + 'x' * 300):
+            self.assertEqual(self.call('/api/scdfe_c/logs/search?' + query)[0], 400)
+
+    def test_scdfe_http_rejects_server_owner_without_changing_control(self):
+        from core.scdfe_control import ServerInstanceLock
+
+        before = self.call('/api/scdfe_c/status')[1]['item']
+        lock = ServerInstanceLock()
+        self.assertTrue(lock.acquire())
+        self.addCleanup(lock.release)
+        with patch.object(process_module.subprocess, 'Popen') as spawn:
+            status, body = self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 1})
+            self.assertEqual(status, 409, body)
+            self.assertEqual(body['error']['code'], 'process_already_running')
+            spawn.assert_not_called()
+        self.assertEqual(self.call('/api/scdfe_c/status')[1]['item'], before)
 
     def test_scdfe_http_start_and_cooperative_stop(self):
-        status, body = self.call('/api/scdfe_c/control', 'PATCH', {
-            'process_enable': 1, 'worker_start_delay_ms': 0,
-        })
-        self.assertEqual(status, 200, body)
-        deadline = time.monotonic() + 8
-        running = None
-        while time.monotonic() < deadline:
-            running = self.call('/api/scdfe_c/status')[1]['item']
-            if running['process_status'] == 2 and int(running['process_pid'] or 0) > 0:
-                break
-            time.sleep(0.1)
-        try:
-            self.assertIsNotNone(running)
-            self.assertEqual(running['process_status'], 2)
-            self.assertGreater(int(running['process_pid'] or 0), 0)
-
-            status, body = self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 0})
-            self.assertEqual(status, 200, body)
-            deadline = time.monotonic() + 8
-            stopped = None
+        from core.scdfe_control import CONTROL_TABLE
+        self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'worker_start_delay_ms': 0, 'scan_interval_ms': 100})[0], 200)
+        def wait_operation():
+            deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
-                stopped = self.call('/api/scdfe_c/status')[1]['item']
-                if stopped['process_status'] == 0 and int(stopped['process_pid'] or 0) == 0:
-                    break
+                result = self.call('/api/processes')[1]
+                if not result['busy']:
+                    self.assertEqual(result['operation']['status'], 'completed', result)
+                    return result
                 time.sleep(0.1)
-            self.assertIsNotNone(stopped)
-            self.assertEqual((stopped['process_status'], int(stopped['process_pid'] or 0)), (0, 0))
+            self.fail('process operation timed out')
+        try:
+            self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 1})[0], 202)
+            wait_operation()
+            running = self.call('/api/scdfe_c/status')[1]['item']
+            self.assertEqual(running['process_status'], 2)
+            self.assertGreater(running['process_pid'], 0)
+            self.assertEqual(self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 0})[0], 202)
+            wait_operation()
+            stopped = self.call('/api/scdfe_c/status')[1]['item']
+            self.assertEqual((stopped['process_status'], stopped['process_pid']), (0, 0))
         finally:
-            # Keep the test isolated if an assertion or process startup race
-            # interrupts the normal stop path.
-            current = self.call('/api/scdfe_c/status')[1]['item']
-            if int(current.get('process_pid') or 0):
-                self.call('/api/scdfe_c/control', 'PATCH', {'process_enable': 0})
+            self.server.store.update_row(CONTROL_TABLE, [1], {'process_enable': 0})
+            thread = self.server.process_controller._thread
+            if thread:
+                thread.join(12)
+
+    def test_process_routes_and_runtime_tables_are_read_only(self):
+        status, body = self.call('/api/processes')
+        self.assertEqual(status, 200)
+        self.assertEqual([r['process_key'] for r in body['items']], ['main', 'writer'])
+        self.assertNotIn('process_restart_count', body['items'][0])
+        self.assertNotIn('owner_token', body['items'][0])
+        for table in ('fes_process_define', 'fes_scdfe_c_define'):
+            path = f'/api/tables/{table}/rows'
+            self.assertEqual(self.call(path, 'POST', {})[0], 405)
+            key = 'main' if table == 'fes_process_define' else '1'
+            self.assertEqual(self.call(path + '/' + key, 'PATCH', {'process_pid': 1})[0], 405)
+            self.assertEqual(self.call(path + '/' + key, 'DELETE')[0], 405)
+        for body in ({}, {'target': 'bad', 'action': 'start'}, {'target': 'main', 'action': []},
+                     {'target': 'all', 'action': 'configure'}, {'target': 'writer', 'action': 'start', 'unknown': 1}):
+            self.assertEqual(self.call('/api/processes/control', 'POST', body)[0], 400, body)
 
 
 if __name__ == '__main__':

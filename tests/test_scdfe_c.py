@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import os
 import pickle
 from pathlib import Path
@@ -83,7 +84,7 @@ class ScdfeCTest(unittest.TestCase):
         self.store = ScadaStore(self.root / "scada.sqlite3")
         self.store.create_row("fes_rtu_define", {
             "rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
-            "chan_addr": "127.0.0.1", "chan_port": 1502, "name": "测试站",
+            "name": "测试站",
         })
         self.store.create_row("fes_channel_modbus_tcp_define", {
             "rtu_id": 7, "remote_host": "127.0.0.1", "remote_port": 1502,
@@ -134,7 +135,7 @@ class ScdfeCTest(unittest.TestCase):
 
         master = DefinitionChangingMaster(self.store)
         worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs", poll_interval=0,
             master_factory=lambda _store, _spec: master,
         )
@@ -145,18 +146,22 @@ class ScdfeCTest(unittest.TestCase):
 
     def test_per_process_hourly_log_and_retention_cleanup(self):
         log_dir = self.root / "logs"
-        logger = ScdfeLogger(log_dir, process_name="scdfe_c-rtu-7-ch-70", rtu_id=7, channel_id=70)
+        logger = ScdfeLogger(log_dir, process_name="scdfe_c-rtu-7", rtu_id=7, channel_id=70)
         logger.normal("normal")
         logger.alarm("alarm")
         logger.error("error")
         logger.process("process")
         files = list(log_dir.glob("*.log"))
         self.assertEqual(len(files), 1)
-        self.assertRegex(files[0].name, r"^scdfe_c-rtu-7-ch-70-\d{8}-\d{2}\.log$")
+        self.assertRegex(files[0].name, r"^scdfe_c-rtu-7-\d{8}-\d{2}\.log$")
         content = files[0].read_text(encoding="utf-8")
+        self.assertRegex(content, r"(?m)^\d{2}:\d{2}:\d{2} \[(?:INFO|WARNING|ERROR|PROCESS)\]")
+        self.assertNotRegex(content, r"(?m)^\d{4}-\d{2}-\d{2}T")
+        self.assertNotIn("+08:00", content)
         self.assertIn("[INFO]", content)
         self.assertIn("[WARNING]", content)
         self.assertIn("[ERROR]", content)
+        self.assertIn("rtu=7 channel=70", content)
         old = log_dir / "scdfe_c-main-20200101-00.log"
         old.write_text("old\n", encoding="utf-8")
         os.utime(old, (time.time() - 3 * 86400, time.time() - 3 * 86400))
@@ -164,9 +169,37 @@ class ScdfeCTest(unittest.TestCase):
         self.assertIn(old, removed)
         self.assertFalse(old.exists())
 
+    def test_worker_channel_change_and_failure_share_rtu_log(self):
+        log_dir = self.root / "logs"
+        with patch.object(runtime, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 1, 9, 0).astimezone()
+            for rtu_id, channel_id in ((7, 70), (7, 71), (8, 80)):
+                worker = ChannelWorker(
+                    self.store, ChannelSpec(rtu_id, channel_id, "modbus-tcp", "测试站"),
+                    log_dir=log_dir,
+                )
+                worker.logger.process("channel definition loaded")
+            with patch.object(runtime, "ScadaStore", side_effect=RuntimeError("startup failed")):
+                _worker_thread_entry(
+                    str(self.store.db_path), str(self.store.catalog.directory),
+                    {"rtu_id": 7, "channel_id": 71, "channel_type": "modbus-tcp",
+                     "name": "测试站"},
+                    str(log_dir), 1, 1, threading.Event(),
+                )
+        self.assertEqual({p.name for p in log_dir.glob("*.log")}, {
+            "scdfe_c-rtu-7-20261101-09.log", "scdfe_c-rtu-8-20261101-09.log",
+        })
+        info = ScdfeLogger.read_file(log_dir, "scdfe_c-rtu-7-20261101-09.log")
+        self.assertEqual(info["rtu_id"], 7)
+        self.assertNotIn("channel_id", info)
+        self.assertIn("rtu=7 channel=70", info["content"])
+        self.assertIn("rtu=7 channel=71", info["content"])
+        self.assertIn("startup failed", info["content"])
+        self.assertNotIn("rtu=8", info["content"])
+
     def test_worker_updates_measurements_and_sends_changed_commands(self):
         master = FakeMaster()
-        spec = ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站")
+        spec = ChannelSpec(7, 70, "modbus-tcp", "测试站")
         worker = ChannelWorker(
             self.store, spec, log_dir=self.root / "logs",
             master_factory=lambda _store, _spec: master,
@@ -216,7 +249,7 @@ class ScdfeCTest(unittest.TestCase):
 
         queue = Queue()
         worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs", writer_queue=queue,
         )
         values = [Value("yc", 1, 221.5), Value("yx", 1, True)]
@@ -237,7 +270,7 @@ class ScdfeCTest(unittest.TestCase):
 
         queue = Queue()
         worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs", writer_queue=queue,
             measurement_heartbeat_interval=60,
         )
@@ -259,7 +292,7 @@ class ScdfeCTest(unittest.TestCase):
         # that require every poll to refresh all fields.
         every_poll_queue = Queue()
         every_poll_worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs", writer_queue=every_poll_queue,
             measurement_heartbeat_interval=0,
         )
@@ -280,7 +313,7 @@ class ScdfeCTest(unittest.TestCase):
                 self.acknowledged += 1
 
         queue = Queue()
-        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                log_dir=self.root / "logs", writer_queue=queue)
         first = {"value": 10.0, "status": 3, "refresh_time": 123}
         rows = [("fes_yc_define", 7, 1, first), ("fes_yx_define", 7, 1, {"value": 1}),
@@ -308,7 +341,7 @@ class ScdfeCTest(unittest.TestCase):
 
         queue = Queue()
         worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs", writer_queue=queue,
             measurement_heartbeat_interval=0,
         )
@@ -323,7 +356,7 @@ class ScdfeCTest(unittest.TestCase):
         for queued in (False, True):
             with self.subTest(queued=queued):
                 queue = CaptureWriterQueue() if queued else None
-                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                        log_dir=self.root / "logs", writer_queue=queue)
                 with patch("scdfe_c._now_ms", return_value=123456):
                     self.assertEqual(worker._sync_measurements([
@@ -352,7 +385,7 @@ class ScdfeCTest(unittest.TestCase):
             with self.subTest(queued=queued):
                 self.store.update_row("fes_yc_define", [7, 1], {"raw_base": 2.0, "raw_scale": 1.1})
                 queue = CaptureWriterQueue() if queued else None
-                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                        log_dir=self.root / "logs", writer_queue=queue,
                                        measurement_heartbeat_interval=0)
 
@@ -376,7 +409,7 @@ class ScdfeCTest(unittest.TestCase):
                 self.assertEqual((row["raw_value"], row["value"], row["raw_time"]), (12.5, -5.0, 300))
 
     def test_invalid_scaling_or_sample_is_isolated_to_one_point(self):
-        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                log_dir=self.root / "logs")
         worker._load_yc_scaling()
         for base, scale, value in ((0, 1, float("nan")), (0, 1, float("inf")),
@@ -398,7 +431,7 @@ class ScdfeCTest(unittest.TestCase):
         for cached, values, expected_value, expected_quality in samples:
             with self.subTest(cached=cached, values=values):
                 queue = CaptureWriterQueue()
-                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                        log_dir=self.root / "logs", writer_queue=queue,
                                        measurement_heartbeat_interval=0)
                 worker._load_yc_scaling()
@@ -416,7 +449,7 @@ class ScdfeCTest(unittest.TestCase):
 
     def test_full_queue_leaves_changed_and_heartbeat_points_eligible_for_retry(self):
         queue = CaptureWriterQueue()
-        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                log_dir=self.root / "logs", writer_queue=queue)
         worker._load_yc_scaling()
         worker._measurement_cache = {("yc", 1): (12.5, 12.5, 0, 0), ("yx", 1): (1, 1, 0, 0)}
@@ -437,7 +470,7 @@ class ScdfeCTest(unittest.TestCase):
 
     def test_bad_measurement_does_not_block_other_points_in_same_sample(self):
         queue = CaptureWriterQueue()
-        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
                                log_dir=self.root / "logs", writer_queue=queue)
         self.assertEqual(worker._sync_measurements([
             Value("yc", 1, 12.5), Value("yc", 2, "invalid"), Value("yx", 1, True),
@@ -450,7 +483,7 @@ class ScdfeCTest(unittest.TestCase):
 
     def test_command_poll_skips_rows_when_command_versions_are_unchanged(self):
         worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
             log_dir=self.root / "logs",
         )
         self.addCleanup(worker._close_command_connection)
@@ -470,7 +503,7 @@ class ScdfeCTest(unittest.TestCase):
         _worker_thread_entry(
             str(self.store.db_path), str(self.root / "missing-schema"),
             {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
-             "address": "127.0.0.1", "port": 1502, "name": "测试站"},
+             "name": "测试站"},
             str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
         )
         self.assertTrue((self.root / "logs").exists())
@@ -483,7 +516,7 @@ class ScdfeCTest(unittest.TestCase):
             _worker_thread_entry(
                 str(self.store.db_path), str(self.root / "missing-schema"),
                 {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
-                 "address": "127.0.0.1", "port": 1502, "name": "失败通道"},
+                 "name": "失败通道"},
                 str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
             )
 
@@ -513,12 +546,12 @@ class ScdfeCTest(unittest.TestCase):
         bad_stop = threading.Event()
         good_stop = threading.Event()
         bad_worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "bad"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "bad"),
             log_dir=self.root / "logs", poll_interval=0.01, retry_interval=0.02,
             master_factory=lambda _store, _spec: BrokenMaster(), stop_event=bad_stop,
         )
         good_worker = ChannelWorker(
-            self.store, ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "good"),
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "good"),
             log_dir=self.root / "logs", poll_interval=0.01, retry_interval=0.02,
             master_factory=lambda _store, _spec: FakeMaster(), stop_event=good_stop,
         )
@@ -633,7 +666,7 @@ class ScdfeCTest(unittest.TestCase):
 
         self.store.create_row("fes_rtu_define", {
             "rtu_id": 8, "channel_id": 80, "channel_type": "modbus-tcp",
-            "chan_addr": "127.0.0.1", "chan_port": 1503, "name": "测试站2",
+            "name": "测试站2",
         })
         supervisor = ScdfeSupervisor(
             self.store.db_path, schema_dir=self.store.catalog.directory,
@@ -641,13 +674,13 @@ class ScdfeCTest(unittest.TestCase):
             worker_start_delay=0.08, thread_factory=thread_factory,
         )
         self.addCleanup(supervisor.stop)
-        supervisor._start_worker(ChannelSpec(7, 70, "modbus-tcp", "127.0.0.1", 1502, "测试站"))
-        supervisor._start_worker(ChannelSpec(8, 80, "modbus-tcp", "127.0.0.1", 1503, "测试站2"))
+        supervisor._start_worker(ChannelSpec(7, 70, "modbus-tcp", "测试站"))
+        supervisor._start_worker(ChannelSpec(8, 80, "modbus-tcp", "测试站2"))
 
         self.assertEqual(len(starts), 2)
         self.assertGreaterEqual(starts[1] - starts[0], 0.07)
 
-    def test_rtu_process_enable_stops_child_and_restart_is_consumed(self):
+    def test_rtu_process_enable_stops_child_without_manual_restart_operation(self):
         supervisor = ScdfeSupervisor(
             self.store.db_path, schema_dir=self.store.catalog.directory,
             log_dir=self.root / "logs", scan_interval=0.1, retry_interval=0.1,
@@ -661,15 +694,11 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual((state["process_enable"], state["process_status"], state["process_pid"]),
                          (0, 0, 0))
 
-        self.store.update_row("fes_rtu_define", [7], {
-            "process_enable": 1, "process_restart": 1,
-        })
+        self.store.update_row("fes_rtu_define", [7], {"process_enable": 1})
         result = supervisor.reconcile()
-        self.assertEqual(result["reloaded"], 1)
+        self.assertEqual(result["started"], 1)
         state = self.store.get_row("fes_rtu_define", [7])
-        self.assertEqual(state["process_restart"], 0)
-        self.assertEqual(state["process_restart_count"], 1)
-        self.assertIn(state["process_status"], (1, 2, 4, 5))
+        self.assertIn(state["process_status"], (1, 2, 5))
 
 if __name__ == "__main__":
     unittest.main()

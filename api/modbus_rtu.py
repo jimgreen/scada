@@ -74,7 +74,7 @@ class ModbusRtuMaster(_ModbusMasterOperations, _ModbusRtuTransport):
     """串口主站：共用 TCP 主站点表 API，传输完全由 pymodbus RTU 处理。
 
     configure/collect_once/poll_loop/send_yk_point/send_yt_point 与 TCP 主站相同。
-    from_store 使用规约16；chan_addr 是串口名，串口参数通过关键字显式传入。
+    from_store 使用协议参数表中的 serial_port；串口参数通过参数表或关键字显式传入。
     一条物理串口总线应共用一个实例，可通过 unit_id/irtuaddr 访问多个从站。
     构造不打开串口；connect 或 with 打开，写命令不自动重发。
     """
@@ -92,7 +92,7 @@ class ModbusRtuMaster(_ModbusMasterOperations, _ModbusRtuTransport):
 
     @classmethod
     def from_channel(cls, channel, **kwargs):
-        """chan_addr 填 COM3 等串口名；不把 chan_port 解释为波特率。"""
+        """协议参数中的 serial_port 填 COM3 等串口名。"""
         kwargs.setdefault('rtu_id', field(channel, 'rtu_id'))
         kwargs.setdefault('unit_id', field(channel, 'irtuaddr', 1))
-        return cls(field(channel, 'chan_addr'), **kwargs)
+        return cls(field(channel, 'serial_port'), **kwargs)

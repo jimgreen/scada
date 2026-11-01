@@ -123,8 +123,7 @@ class MasterStoreTests(unittest.TestCase):
         self.store = ScadaStore(Path(self.temp.name) / 'scada.sqlite3')
         self.store.create_row('fes_rtu_define', {
             'rtu_id': 7, 'channel_id': 70, 'channel_type': 'modbus-tcp',
-            'chan_addr': '127.0.0.1', 'chan_port': 1502,
-        })
+                    })
         self.store.create_row('fes_channel_modbus_define', {'id': 1, 'rtu_id': 7, 'irtuaddr': 9})
         self.store.create_row('fes_channel_modbus_tcp_define', {
             'rtu_id': 7, 'remote_host': '127.0.0.1', 'remote_port': 1503,

@@ -4,18 +4,31 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import errno
+import socket
+import sys
 
 
 CONTROL_TABLE = "fes_scdfe_c_define"
 CONTROL_FIELDS = frozenset({
-    "process_enable", "process_restart", "log_dir", "log_retention_hours",
+    "process_enable", "log_dir", "log_retention_hours",
     "scan_interval_ms", "poll_interval_ms", "retry_interval_ms",
     "worker_start_delay_ms",
 })
-CONFIG_FIELDS = CONTROL_FIELDS - {"process_enable", "process_restart"}
+CONFIG_FIELDS = CONTROL_FIELDS - {"process_enable"}
 LOG_PATTERN = re.compile(
-    r"(?P<process>scdfe_c-[A-Za-z0-9-]+)-(?P<hour>\d{8}-\d{2})\.log$"
+    r"(?P<process>scdfe_c-(?:main|db-writer|(?:debug-)?rtu-\d+))-"
+    r"(?P<hour>\d{8}-\d{2})\.log$"
 )
+LEGACY_LOG_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T(?P<clock>\d{2}:\d{2}:\d{2})"
+    r"(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?=\s+\[)"
+)
+
+
+def compact_log_line(line):
+    """Display legacy ISO log lines with the current compact clock format."""
+    return LEGACY_LOG_TIMESTAMP.sub(lambda match: match.group("clock"), line, count=1)
 
 
 def validate_control(values):
@@ -31,7 +44,7 @@ def validate_control(values):
             continue
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} 必须是整数")
-        if name in {"process_enable", "process_restart"}:
+        if name == "process_enable":
             low, high = 0, 1
         elif name == "log_retention_hours":
             low, high = 1, 87600
@@ -57,11 +70,11 @@ def ensure_control_row(store):
         if getattr(exc, "code", None) != "not_found":
             raise
         return store.create_row(CONTROL_TABLE, {
-            "id": 1, "process_enable": 1, "process_restart": 0,
+            "id": 1, "process_enable": 1,
             "process_status": 0, "process_pid": 0, "process_start_time": 0,
-            "process_stop_time": 0, "process_restart_time": 0,
+            "process_stop_time": 0,
             "process_heartbeat_time": 0, "process_exit_code": 0,
-            "process_restart_count": 0, "process_error": "",
+            "process_error": "",
             "log_dir": "logs", "log_retention_hours": 720,
             "scan_interval_ms": 2000, "poll_interval_ms": 1000,
             "retry_interval_ms": 5000,
@@ -70,10 +83,10 @@ def ensure_control_row(store):
 
 
 class InstanceLock:
-    """An OS-released lock; a crashed process never leaves a stale PID lock."""
+    """Database/file-scoped lock for offline tools, not runtime ownership."""
 
     def __init__(self, db_path, role="main"):
-        self.path = Path(str(db_path) + f".scdfe_c-{role}.lock")
+        self.path = Path(str(Path(db_path).resolve()) + f".scdfe_c-{role}.lock")
         self.stream = None
 
     def acquire(self):
@@ -107,6 +120,110 @@ class InstanceLock:
     @classmethod
     def held(cls, db_path, role="main"):
         lock = cls(db_path, role)
+        if not lock.acquire():
+            return True
+        lock.release()
+        return False
+
+
+class ServerInstanceLock:
+    """Host-wide runtime lease, independent of database, directory and user.
+
+    No RTU means the automatic supervisor; an RTU ID means its communication
+    owner (automatic or debug). Windows uses the lifetime of a Global named
+    kernel object, Linux an abstract UNIX socket binding. Neither uses a PID
+    file or a network port. Closing the handle/socket, including process death,
+    releases ownership. Our writer processes use spawn and never inherit it.
+
+    Linux containers with separate network namespaces have separate leases;
+    use the host network namespace if several containers share this service.
+    """
+
+    def __init__(self, rtu_id: int | None = None):
+        if rtu_id is not None and (type(rtu_id) is not int or rtu_id <= 0):
+            raise ValueError("rtu_id 必须为正整数")
+        self.name = "SCADA.scdfe_c." + ("main" if rtu_id is None else f"rtu-{rtu_id}")
+        self._socket = None
+        self._handle = None
+        self._kernel32 = None
+
+    def acquire(self) -> bool:
+        if self._socket is not None or self._handle is not None:
+            raise RuntimeError("同一个锁对象不能重复获取")
+        if os.name == "nt":
+            return self._acquire_windows()
+        if not sys.platform.startswith("linux"):
+            raise OSError("服务器级 scdfe_c 互斥支持 Windows/Linux")
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            # Abstract names are system-wide within the network namespace;
+            # filesystem permissions and per-user TMPDIR cannot split them.
+            sock.bind("\0" + self.name)
+        except OSError as exc:
+            sock.close()
+            if exc.errno == errno.EADDRINUSE:
+                return False
+            raise
+        self._socket = sock
+        return True
+
+    def _acquire_windows(self) -> bool:
+        import ctypes
+        from ctypes import wintypes
+
+        class SecurityAttributes(ctypes.Structure):
+            _fields_ = [("nLength", wintypes.DWORD),
+                        ("lpSecurityDescriptor", wintypes.LPVOID),
+                        ("bInheritHandle", wintypes.BOOL)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32.CreateMutexExW.argtypes = [ctypes.POINTER(SecurityAttributes), wintypes.LPCWSTR,
+                                          wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateMutexExW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+        kernel32.LocalFree.restype = wintypes.HLOCAL
+        convert = advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW
+        convert.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID),
+                            ctypes.POINTER(wintypes.DWORD)]
+        convert.restype = wintypes.BOOL
+        descriptor = wintypes.LPVOID()
+        # Allow other users/services to probe existence, without granting them
+        # mutation rights. CreateMutexEx requests SYNCHRONIZE only. Ownership is
+        # the object's lifetime, not thread-affine Wait/ReleaseMutex ownership.
+        if not convert("D:(A;;0x00100000;;;WD)", 1, ctypes.byref(descriptor), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+            ctypes.set_last_error(0)
+            handle = kernel32.CreateMutexExW(ctypes.byref(attributes), "Global\\" + self.name,
+                                            0, 0x00100000)
+            error = ctypes.get_last_error()
+        finally:
+            kernel32.LocalFree(descriptor)
+        if not handle:
+            raise ctypes.WinError(error)
+        if error == 183:  # ERROR_ALREADY_EXISTS: close the probe, not the owner.
+            kernel32.CloseHandle(handle)
+            return False
+        self._kernel32 = kernel32
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        if self._handle is not None:
+            self._kernel32.CloseHandle(self._handle)
+            self._handle = None
+            self._kernel32 = None
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+    @classmethod
+    def held(cls, rtu_id: int | None = None) -> bool:
+        lock = cls(rtu_id)
         if not lock.acquire():
             return True
         lock.release()

@@ -159,7 +159,7 @@ class OpcTests(unittest.TestCase):
             store = ScadaStore(Path(directory) / "scada.sqlite3")
             store.create_row("fes_rtu_define", {
                 "rtu_id": 8, "channel_type": "opc",
-                "channel_id": 1, "chan_addr": "127.0.0.1", "chan_port": 4840,
+                "channel_id": 1,
             })
             store.create_row("fes_channel_opc_define", {
                 "id": 1, "rtu_id": 8,

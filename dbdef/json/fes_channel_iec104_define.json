@@ -131,6 +131,24 @@
       "data_type": "int",
       "disp_type": "单选菜单",
       "disp_menu": "二值判断"
+    },
+    {
+      "chn_name": "远端主机",
+      "eng_name": "remote_host",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": "127.0.0.1"
+    },
+    {
+      "chn_name": "远端端口",
+      "eng_name": "remote_port",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 2404
     }
   ],
   "unique_keys": [

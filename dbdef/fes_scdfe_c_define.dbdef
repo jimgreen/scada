@@ -7,15 +7,12 @@
 # 1 id 固定编号 LONG 8 1 scada INT '' 0 0 0 0 0
 # 2 name 名称 STRING 1024 0 scada STRING '' 0 0 0 0 0
 # 3 process_enable 主进程启用 LONG 8 0 scada 单选菜单 二值判断 0 0 0 0 0
-# 4 process_restart 主进程重启请求 LONG 8 0 scada 单选菜单 二值判断 0 0 0 0 0
 # 5 process_status 主进程状态 LONG 8 0 scada INT '' 0 0 0 0 0
 # 6 process_pid 主进程号 LONG 8 0 scada LONG '' 0 0 0 0 0
 # 7 process_start_time 主进程启动时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
 # 8 process_stop_time 主进程停止时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
-# 9 process_restart_time 主进程重启时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
 # 10 process_heartbeat_time 主进程心跳时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
 # 11 process_exit_code 主进程退出码 LONG 8 0 scada INT '' 0 0 0 0 0
-# 12 process_restart_count 主进程重启次数 LONG 8 0 scada INT '' 0 0 0 0 0
 # 13 process_error 主进程错误信息 STRING 1024 0 scada STRING '' 0 0 0 0 0
 # 14 log_dir 日志目录（相对数据库目录） STRING 1024 0 scada STRING '' 0 0 0 0 0
 # 15 log_retention_hours 日志保留小时数 LONG 8 0 scada INT '' 0 0 0 0 0

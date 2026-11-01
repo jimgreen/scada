@@ -66,18 +66,30 @@ class ScdfeControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             main = ScdfeLogger(root, process_name="scdfe_c-main")
-            child = ScdfeLogger(root, process_name="scdfe_c-rtu-2-ch-1", rtu_id=2, channel_id=1)
+            child = ScdfeLogger(root, process_name="scdfe_c-rtu-2", rtu_id=2, channel_id=1)
             main.process("main")
             child.error("child")
             names = {item["name"] for item in ScdfeLogger.list_files(root)}
             hour = __import__("datetime").datetime.now().strftime("%Y%m%d-%H")
             self.assertIn("scdfe_c-main-" + hour + ".log", names)
-            self.assertIn("scdfe_c-rtu-2-ch-1-" + hour + ".log", names)
-            item = ScdfeLogger.read_file(root, "scdfe_c-rtu-2-ch-1-" + hour + ".log", tail=1)
+            self.assertIn("scdfe_c-rtu-2-" + hour + ".log", names)
+            item = ScdfeLogger.read_file(root, "scdfe_c-rtu-2-" + hour + ".log", tail=1)
             self.assertIn("child", item["content"])
             self.assertEqual(item["hour"], hour)
             with self.assertRaises(ValueError):
                 ScdfeLogger.read_file(root, "..\\secret.log")
+
+    def test_large_log_tail_is_bounded_and_keeps_complete_unicode_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scdfe_c-main-20261101-00.log"
+            line = "[INFO] 中文日志内容 " + "x" * 1000 + "\n"
+            path.write_text(line * 3000 + "[ERROR] 最后一条完整记录\n", encoding="utf-8")
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("must read bounded tail")):
+                result = ScdfeLogger.read_file(directory, path.name, tail=2)
+            self.assertEqual(result['content'].splitlines(), [line.rstrip(), "[ERROR] 最后一条完整记录"])
+            self.assertEqual(result['line_count'], 2)
+            self.assertTrue(result['truncated'])
+            self.assertNotIn("\ufffd", result['content'])
 
     def test_main_process_enable_zero_requests_cooperative_exit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,7 +101,7 @@ class ScdfeControlTests(unittest.TestCase):
                 result = supervisor.reconcile()
                 self.assertEqual(result["running"], 0)
                 self.assertTrue(supervisor.stop_event.is_set())
-                self.assertEqual(store.get_row(CONTROL_TABLE, [1])["process_status"], 0)
+                self.assertEqual(store.get_row(CONTROL_TABLE, [1])["process_status"], 3)
             finally:
                 supervisor.stop()
 
@@ -190,6 +202,11 @@ class ScdfeControlTests(unittest.TestCase):
             queue.close()
             queue.join_thread()
             self.assertEqual(process.exitcode, 0)
+            files = list((root / "logs").glob("scdfe_c-db-writer-*.log"))
+            content = "".join(path.read_text(encoding="utf-8") for path in files)
+            self.assertIn(f"pid={process.pid}", content)
+            self.assertIn("写库进程运行摘要", content)
+            self.assertIn("累计成功批次=1 消息数=1 输入更新数=1 待写消息=0 待写更新=0", content)
 
     def test_batch_flush_coalesces_duplicate_row_updates(self):
         class Queue:

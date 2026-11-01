@@ -137,8 +137,7 @@ class RtuConfigTests(unittest.TestCase):
             store = ScadaStore(Path(directory) / 'scada.sqlite3')
             store.create_row('fes_rtu_define', {
                 'rtu_id': 7, 'channel_id': 70, 'channel_type': 'modbus-rtu',
-                'chan_addr': 'COM99',
-            })
+                            })
             store.create_row('fes_channel_modbus_rtu_define', {
                 'rtu_id': 7, 'serial_port': 'COM98', 'unit_id': 10,
                 'response_timeout': 0.2,

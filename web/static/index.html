@@ -1,63 +1,423 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SCADA 数据与定义管理</title>
-  <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">SCADA / WEB ACCESS</p>
-      <h1>数据与定义管理</h1>
-      <p class="subtitle">通道、RTU、点表和四遥运行数据</p>
-    </div>
-    <div class="header-tools"><a href="/api-docs" target="_blank" rel="noopener">接口文档 ↗</a><div class="health" id="health"><span class="dot"></span><span>连接检查中</span></div></div>
-  </header>
-  <main class="shell">
-    <section class="summary" id="summary"></section>
-    <section class="workspace">
-      <aside class="sidebar">
-        <div class="side-title">管理对象</div>
-        <button class="nav active" data-resource="rtus"><span>01</span><b>RTU 与通道</b><small>一 RTU 一通道与类型</small></button>
-        <button class="nav" data-resource="yc"><span>02</span><b>遥测点表</b><small>模拟量定义与状态</small></button>
-        <button class="nav" data-resource="yx"><span>03</span><b>遥信点表</b><small>开关量定义与状态</small></button>
-        <button class="nav" data-resource="yt"><span>04</span><b>遥调点表</b><small>设定值定义与状态</small></button>
-        <button class="nav" data-resource="yk"><span>05</span><b>遥控点表</b><small>控制量定义与状态</small></button>
-        <button class="nav" data-resource="scdfe"><span>06</span><b>scdfe_c 守护进程</b><small>主进程、通信线程与日志</small></button>
-        <div class="extra-tables"><label for="extra-table">协议参数与辅助表</label><select id="extra-table"><option value="">选择表…</option></select></div>
-        <div class="side-note">数据文件<br><code id="database-path">读取中…</code></div>
-      </aside>
-      <section class="content">
-        <div class="toolbar">
-          <div><p class="eyebrow" id="section-kicker">RTU</p><h2 id="section-title">RTU 定义</h2></div>
-          <div class="actions">
-            <label class="rtu-picker" id="rtu-picker">RTU <input id="rtu-filter" type="text" inputmode="numeric" list="rtu-options" placeholder="全部 RTU" aria-label="筛选 RTU 编号"></label>
-            <datalist id="rtu-options"></datalist>
-            <input id="search" type="search" placeholder="搜索名称、编码或主键…" aria-label="搜索记录">
-            <button class="button secondary" id="refresh">刷新</button>
-            <button class="button primary" id="add" disabled>新增记录</button>
-          </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SCADA · 运行工作台</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">S</span
+        ><strong>SCADA <span>运行工作台</span></strong>
+      </div>
+      <div class="header-tools">
+        <span id="last-updated">等待更新</span
+        ><label class="refresh-toggle"
+          ><input type="checkbox" id="auto-refresh" checked /> 5 秒刷新</label
+        >
+        <div class="health" id="health">
+          <span class="dot"></span><span>连接检查中</span>
         </div>
-        <div class="hint" id="hint"></div>
-        <div class="view-tools"><div class="segments" aria-label="显示字段"><button id="view-common" class="selected">常用字段</button><button id="view-live">四遥数据</button><button id="view-all">全部字段</button></div><label class="refresh-toggle"><input type="checkbox" id="auto-refresh"> 5 秒自动刷新</label><button class="row-button" id="show-schema">表结构</button></div>
-        <div id="table-error" class="error-panel" role="alert" hidden></div>
-        <div class="table-wrap"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
-        <div class="pager"><span id="result-count"></span><button class="button secondary" id="prev">上一页</button><span id="page"></span><button class="button secondary" id="next">下一页</button></div>
-      </section>
-    </section>
-    <section id="scdfe-panel" class="scdfe-panel" hidden>
-      <div class="toolbar"><div><p class="eyebrow">PROCESS CONTROL</p><h2>scdfe_c 守护进程</h2></div><div class="actions"><button class="button primary" id="scdfe-start">启动</button><button class="button secondary" id="scdfe-stop">停止</button><button class="button secondary" id="scdfe-restart">重启通信线程</button><button class="button secondary" id="scdfe-refresh">刷新</button></div></div>
-      <div class="scdfe-config" aria-label="scdfe_c 运行参数"><label for="scdfe-worker-delay">通信线程启动间隔</label><input id="scdfe-worker-delay" type="number" min="0" max="60000" step="10" inputmode="numeric"><span>毫秒</span><button class="button secondary" id="scdfe-save-delay">保存间隔</button><label for="scdfe-retention-hours">日志保留</label><input id="scdfe-retention-hours" type="number" min="1" max="87600" step="1" inputmode="numeric"><span>小时</span><button class="button secondary" id="scdfe-save-retention">保存保留时间</button><small>按 RTU-通道顺序启动，避免协议栈同时初始化；日志按进程每小时轮转，超过保留小时数自动删除。</small></div>
-      <div id="scdfe-status" class="scdfe-status"></div>
-      <div class="scdfe-grid"><section><h3>通信线程</h3><div class="table-wrap"><table><thead><tr><th>RTU</th><th>通道</th><th>规约</th><th>状态</th><th>线程 ID</th><th>心跳</th><th>错误</th></tr></thead><tbody id="scdfe-rtus"></tbody></table></div></section><section><h3>日志文件</h3><div class="log-tools"><select id="log-process"><option value="">全部进程</option></select></div><div class="table-wrap"><table><thead><tr><th>文件</th><th>进程</th><th>小时</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="scdfe-logs"></tbody></table></div></section></div>
-      <pre id="scdfe-log-content" class="log-content" hidden></pre>
-    </section>
-  </main>
-  <dialog id="editor" aria-labelledby="form-title"><form id="editor-form"><div class="dialog-head"><div><p class="eyebrow" id="form-kicker">新增</p><h2 id="form-title">新增记录</h2></div><button type="button" class="icon-button" id="close-editor" aria-label="关闭编辑窗口">×</button></div><p class="hint">带 * 的字段必填。数值框留空保存为 NULL；主键建立后不能修改。</p><div id="form-fields" class="form-grid"></div><div class="dialog-foot"><span class="form-error" id="form-error" role="alert"></span><button type="button" class="button secondary" id="cancel-editor">取消</button><button type="submit" class="button primary" id="save">保存</button></div></form></dialog>
-  <dialog id="schema-dialog" aria-labelledby="schema-title"><div class="schema-content"><div class="dialog-head"><h2 id="schema-title">表结构</h2><button class="icon-button" id="close-schema" aria-label="关闭表结构">×</button></div><pre id="schema-json"></pre></div></dialog>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/static/app.js"></script>
-</body>
+        <a href="/api-docs" target="_blank" rel="noopener">接口文档 ↗</a>
+      </div>
+    </header>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="side-title">运行管理</div>
+        <button class="nav" data-resource="processes">
+          <span>▤</span><b>进程监控</b>
+        </button>
+        <button class="nav" data-resource="scdfe">
+          <span>◉</span><b>通信监控</b>
+        </button>
+        <button class="nav" data-resource="logs">
+          <span>≡</span><b>运行日志</b>
+        </button>
+        <div class="side-title">数据与定义</div>
+        <button class="nav active" data-resource="data">
+          <span>▦</span><b>数据与定义</b>
+        </button>
+        <div class="side-note">
+          <span class="dot"></span> 本地数据库<code id="database-path"
+            >读取中…</code>
+        </div>
+      </aside>
+      <div class="workspace">
+        <section
+          class="summary"
+          id="summary"
+          aria-label="数据库记录概览"
+        ></section>
+        <section class="content page-panel" id="data-panel">
+          <div class="toolbar">
+            <div class="title-group">
+              <h1 id="section-title">RTU 与通道</h1>
+            </div>
+            <div class="actions">
+              <button class="button secondary" id="refresh">刷新</button
+              ><button class="button secondary" id="add-channel" hidden>
+                ＋ 新建通道</button
+              ><button class="button primary" id="add" disabled>
+                ＋ 新增记录
+              </button>
+            </div>
+          </div>
+          <nav class="data-tabs" id="data-tabs" aria-label="数据与定义表">
+            <button type="button" data-tab-resource="rtus" class="selected">RTU 与通道</button>
+            <button type="button" data-tab-resource="yc">遥测</button>
+            <button type="button" data-tab-resource="yx">遥信</button>
+            <button type="button" data-tab-resource="yt">遥调</button>
+            <button type="button" data-tab-resource="yk">遥控</button>
+            <button type="button" data-tab-group="parameters" disabled>协议参数</button>
+            <button type="button" data-tab-group="helpers" disabled>辅助表</button>
+          </nav>
+          <nav class="data-tabs table-tabs" id="helper-tabs" aria-label="选择参数或辅助表" hidden></nav>
+          <div class="filterbar">
+            <label class="rtu-picker" id="rtu-picker"
+              >RTU
+              <input
+                id="rtu-filter"
+                inputmode="numeric"
+                list="rtu-options"
+                placeholder="全部 RTU"
+                aria-label="筛选 RTU 编号" /></label
+            ><datalist id="rtu-options"></datalist
+            ><input
+              id="search"
+              type="search"
+              placeholder="搜索名称、编码或主键…"
+              aria-label="搜索记录"
+            /><button class="row-button" id="clear-filters">清除筛选</button>
+          </div>
+          <div class="view-tools">
+            <div class="segments" aria-label="显示字段">
+              <button id="view-common" class="selected">常用字段</button
+              ><button id="view-live">四遥数据</button
+              ><button id="view-all">全部字段</button>
+            </div>
+            <button class="row-button" id="show-schema">表结构</button>
+          </div>
+          <div id="table-error" class="error-panel" role="alert" hidden></div>
+          <div class="table-wrap data-table">
+            <table>
+              <thead id="table-head"></thead>
+              <tbody id="table-body"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <span id="result-count"></span
+            ><label
+              >每页
+              <select id="page-size" aria-label="每页记录数">
+                <option>25</option>
+                <option selected>50</option>
+                <option>100</option>
+                <option>200</option>
+                <option>500</option>
+              </select>
+              条</label
+            ><button class="button secondary" id="prev">上一页</button
+            ><span id="page"></span
+            ><button class="button secondary" id="next">下一页</button>
+          </div>
+        </section>
+        <section id="processes-panel" class="page-panel" hidden>
+          <div class="toolbar">
+            <div class="title-group"><h1>进程监控</h1></div>
+            <div class="actions">
+              <button class="button primary" id="process-all-start">一键启动全部</button>
+              <button class="button secondary" id="process-all-stop">一键停止全部</button>
+              <button class="button secondary" id="process-refresh">刷新</button>
+            </div>
+          </div>
+          <div id="process-error" class="error-panel" role="alert" hidden></div>
+          <div id="process-summary" class="scdfe-status"></div>
+          <div id="process-operation" class="process-operation" aria-live="polite" hidden></div>
+          <form id="debug-process-form" class="filterbar">
+            <label for="debug-rtu">独立调试 RTU</label>
+            <input id="debug-rtu" inputmode="numeric" list="rtu-options" placeholder="输入 RTU 编号" required />
+            <label><input id="debug-include" type="checkbox" checked /> 参与一键启动</label>
+            <button class="button secondary" type="submit" id="debug-start">启动调试</button>
+          </form>
+          <div class="filterbar">
+            <h2>运行进程</h2><input id="process-search" type="search" placeholder="筛选进程、RTU 或 PID" aria-label="筛选进程" />
+            <span id="process-count" class="muted"></span>
+          </div>
+          <div class="table-wrap process-table">
+            <table><thead><tr>
+              <th>进程 / 一键启动</th><th>状态 / 心跳</th><th>PID / 父 PID</th>
+              <th>启动 / 停止</th><th>运行信息</th><th class="sticky-actions">操作</th>
+            </tr></thead><tbody id="process-rows"></tbody></table>
+          </div>
+          <div class="pager">
+            <button class="button secondary" id="process-prev">上一页</button><span id="process-page"></span><button class="button secondary" id="process-next">下一页</button>
+          </div>
+        </section>
+        <section id="scdfe-panel" class="page-panel" hidden>
+          <div class="toolbar">
+            <div class="title-group">
+              <h1>通信运行监控</h1>
+            </div>
+            <div class="actions">
+              <button class="button primary" id="scdfe-processes">进程启停</button
+              ><button class="button secondary" id="scdfe-refresh">刷新</button>
+            </div>
+          </div>
+          <div id="scdfe-error" class="error-panel" role="alert" hidden></div>
+          <div id="scdfe-status" class="scdfe-status"></div>
+          <div id="scdfe-details" class="process-details"></div>
+          <details class="config-panel">
+            <summary>运行参数与日志保留</summary>
+            <div class="scdfe-config">
+              <label
+                >线程启动间隔
+                <input
+                  id="scdfe-worker-delay"
+                  type="number"
+                  min="0"
+                  max="60000"
+                  step="10"
+                />
+                ms</label
+              ><button class="button secondary" id="scdfe-save-delay">
+                保存间隔</button
+              ><label
+                >日志保留
+                <input
+                  id="scdfe-retention-hours"
+                  type="number"
+                  min="1"
+                  max="87600"
+                />
+                小时</label
+              ><button class="button secondary" id="scdfe-save-retention">
+                保存保留时间</button>
+            </div>
+          </details>
+          <div class="filterbar">
+            <h2>RTU 通信线程</h2>
+            <input
+              id="thread-search"
+              type="search"
+              placeholder="搜索 RTU、名称或规约"
+              aria-label="搜索通信线程"
+            /><select id="thread-status" aria-label="通信线程状态">
+              <option value="">全部状态</option>
+              <option value="2">运行中</option>
+              <option value="5">错误</option>
+              <option value="0">停止</option>
+              <option value="disabled">退出自动通信</option></select
+            ><span id="thread-count" class="muted"></span>
+          </div>
+          <div class="table-wrap thread-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>RTU / 名称</th>
+                  <th>通道 / 规约</th>
+                  <th>自动通信</th>
+                  <th>线程状态</th>
+                  <th>线程 ID</th>
+                  <th>最近心跳</th>
+                  <th>错误信息</th>
+                  <th class="sticky-actions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="scdfe-rtus"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button class="button secondary" id="thread-prev">上一页</button
+            ><span id="thread-page"></span
+            ><button class="button secondary" id="thread-next">下一页</button>
+          </div>
+        </section>
+        <section id="logs-panel" class="page-panel" hidden>
+          <div class="toolbar">
+            <div class="title-group">
+              <h1>运行日志</h1>
+            </div>
+            <div class="actions">
+              <span id="log-file-count" class="muted"></span
+              ><button class="button secondary" id="logs-refresh">
+                刷新日志
+              </button>
+            </div>
+          </div>
+          <div class="filterbar">
+            <select id="log-scope" aria-label="日志检索范围">
+              <option value="file">当前文件</option>
+              <option value="all">全部匹配文件</option>
+            </select>
+            <select id="log-process" aria-label="日志进程">
+              <option value="">全部进程</option></select
+            ><input
+              id="log-rtu"
+              inputmode="numeric"
+              placeholder="全部 RTU"
+              aria-label="日志 RTU 编号"
+            /><input
+              id="log-file-search"
+              type="search"
+              placeholder="文件名 / 日期"
+              aria-label="搜索日志文件"
+            /><button class="row-button" id="log-clear">清除筛选</button>
+          </div>
+          <div id="logs-error" class="error-panel" role="alert" hidden></div>
+          <div class="log-workspace">
+            <section class="log-files">
+              <div class="panel-label">日志文件</div>
+              <div
+                id="scdfe-logs"
+                class="log-file-list"
+                aria-label="日志文件列表"
+              ></div>
+              <div class="file-pager">
+                <button id="log-prev" class="row-button">上一页</button
+                ><span id="log-page"></span
+                ><button id="log-next" class="row-button">下一页</button>
+              </div>
+            </section>
+            <section class="log-reader" aria-label="日志正文">
+              <div class="reader-head">
+                <div>
+                  <strong id="log-title">选择日志文件</strong
+                  ><small id="log-meta"></small>
+                </div>
+                <button class="button secondary" id="log-download" disabled>
+                  导出筛选结果
+                </button>
+              </div>
+              <div class="reader-tools">
+                <input
+                  id="log-search"
+                  type="search"
+                  placeholder="日志关键词"
+                  maxlength="256"
+                  aria-label="日志关键词"
+                /><select id="log-level" aria-label="日志类型">
+                  <option value="">全部类型</option>
+                  <option value="INFO">正常 · INFO</option>
+                  <option value="WARNING">告警 · WARNING</option>
+                  <option value="ERROR">错误 · ERROR</option>
+                  <option value="PROCESS">过程 · PROCESS</option></select
+                ><select id="log-tail" aria-label="读取日志行数">
+                  <option value="200">每批 200 条</option>
+                  <option value="1000" selected>每批 1000 条</option>
+                  <option value="5000">每批 5000 条</option></select
+                ><label
+                  ><input type="checkbox" id="log-wrap" checked /> 换行</label
+                ><label
+                  ><input type="checkbox" id="log-follow" checked />
+                  跟随最新</label
+                >
+              </div>
+              <div class="reader-tools log-time-filters">
+                <label for="log-start">开始时间 <input id="log-start" type="datetime-local" step="1" /></label>
+                <label for="log-end">结束时间 <input id="log-end" type="datetime-local" step="1" /></label>
+                <button class="button secondary" id="log-apply">筛选</button>
+                <button class="row-button" id="log-content-clear">清除条件</button>
+              </div>
+              <div
+                id="scdfe-log-content"
+                class="log-content wrap"
+                tabindex="0"
+                aria-label="日志内容"
+              >
+                <div class="log-empty">正在读取日志文件列表…</div>
+              </div>
+              <div class="reader-foot">
+                <span id="log-lines">0 条</span>
+                <span id="log-search-info"></span>
+                <div class="log-result-pager">
+                  <button class="row-button" id="log-result-prev" disabled>上一批</button>
+                  <button class="row-button" id="log-result-next" disabled>更早日志</button>
+                </div>
+              </div>
+            </section>
+          </div>
+          <div id="log-directory" class="log-directory"></div>
+        </section>
+      </div>
+    </main>
+    <dialog id="editor" aria-labelledby="form-title">
+      <form id="editor-form">
+        <div class="dialog-head">
+          <div>
+            <h2 id="form-title">新增记录</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button"
+            id="close-editor"
+            aria-label="关闭编辑窗口"
+          >
+            ×
+          </button>
+        </div>
+        <div class="filterbar">
+          <input
+            id="field-search"
+            type="search"
+            placeholder="查找字段名称…"
+            aria-label="搜索编辑字段"
+          />
+        </div>
+        <div id="form-fields" class="form-grid"></div>
+        <div class="dialog-foot">
+          <span class="form-error" id="form-error" role="alert"></span
+          ><button type="button" class="button secondary" id="cancel-editor">
+            取消</button
+          ><button type="submit" class="button primary" id="save">保存</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="channel-select-dialog" aria-labelledby="channel-select-title">
+      <form method="dialog" id="channel-select-form" class="small-dialog">
+        <div class="dialog-head">
+          <div>
+            <h2 id="channel-select-title">选择 RTU</h2>
+          </div>
+          <button class="icon-button" value="cancel" aria-label="关闭选择窗口">×</button>
+        </div>
+        <label class="dialog-select-label" for="channel-select-rtu">RTU</label>
+        <select id="channel-select-rtu" required></select>
+        <div class="dialog-foot">
+          <button type="button" class="button secondary" id="cancel-channel-select">取消</button>
+          <button type="submit" class="button primary">维护通道</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="detail-dialog" aria-labelledby="detail-title">
+      <div class="detail-content">
+        <div class="dialog-head">
+          <div>
+            <h2 id="detail-title">完整记录</h2>
+          </div>
+          <button class="icon-button" id="close-detail" aria-label="关闭详情">
+            ×
+          </button>
+        </div>
+        <dl id="detail-fields"></dl>
+        <div class="dialog-foot">
+          <button class="button primary" id="detail-edit">编辑记录</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="schema-dialog" aria-labelledby="schema-title">
+      <div class="schema-content">
+        <div class="dialog-head">
+          <h2 id="schema-title">表结构</h2>
+          <button class="icon-button" id="close-schema" aria-label="关闭表结构">
+            ×
+          </button>
+        </div>
+        <pre id="schema-json"></pre>
+      </div>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

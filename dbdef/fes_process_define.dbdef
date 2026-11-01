@@ -1,0 +1,21 @@
+<table_info>
+@ table_id table_name_eng table_name_chn app_type max_record_num down_load is_model module_name
+# 751 fes_process_define 运行进程监控表 scada 10000 1 0 scada
+</table_info>
+<fes_process_define>
+@ column_id column_name_eng column_name_chn data_type data_length is_key app_type display_type menu_name reference_display reference_flag reference_table is_model column_special
+# 1 process_key 进程标识 STRING 1024 1 scada STRING '' 0 0 0 0 0
+# 2 kind 进程类型 STRING 1024 0 scada STRING '' 0 0 0 0 0
+# 3 target_rtu 调试RTU LONG 8 0 scada LONG '' 0 0 0 0 0
+# 4 process_enable 期望运行 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 5 include_in_all 参与一键启动 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 6 process_status 进程状态 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 7 process_pid 进程号 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 8 parent_pid 父进程号 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 9 process_start_time 启动时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 10 process_stop_time 停止时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 12 process_heartbeat_time 心跳时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 13 process_exit_code 退出码 LONG 8 0 scada LONG '' 0 0 0 0 0
+# 14 process_error 错误信息 STRING 1024 0 scada STRING '' 0 0 0 0 0
+# 15 owner_token 运行实例标识 STRING 1024 0 scada STRING '' 0 0 0 0 0
+</fes_process_define>

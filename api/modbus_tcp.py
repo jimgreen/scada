@@ -334,8 +334,8 @@ class _ModbusMasterOperations:
     def from_store(cls, store, rtu_id, *, unit_id=None, **kwargs):
         """从 ``ScadaStore`` 读取通道、召唤、数据点和遥控遥调配置。
 
-        ``fes_rtu_define`` 同时保存唯一通道的 TCP 目标或串口名；Modbus 专用表保存从站号和
-        点表。每个召唤行自己的 ``irtuaddr`` 仍优先于默认值。
+        Modbus 专用参数表保存 TCP 目标、从站号和点表；每个召唤行自己的 ``irtuaddr``
+        仍优先于默认值。
         """
         integer(rtu_id, 'rtu_id', 1, 2**63 - 1)
         # 同一只读事务加载完整配置，避免分页截断或跨表读取不同版本。
@@ -362,15 +362,15 @@ class _ModbusMasterOperations:
             if len(rows) > 1:
                 raise ValueError(f'RTU {rtu_id} 需要唯一 {cls.PARAMETER_TABLE} 参数定义，实际找到 {len(rows)} 条')
             parameter = rows[0] if rows else None
-        channel = dict(rtu)
+        channel = {'rtu_id': rtu_id}
+        address_name = 'remote_host' if cls.CHANNEL_TYPE == 'modbus-tcp' else 'serial_port'
         if parameter:
-            # 协议专用参数表是 Web 当前配置入口；RTU 通用记录仍作为缺省值。
-            address = field(parameter, 'remote_host', field(parameter, 'serial_port'))
+            address = field(parameter, address_name)
             if address:
-                channel['chan_addr'] = address
+                channel[address_name] = address
             port = field(parameter, 'remote_port')
             if port is not None:
-                channel['chan_port'] = port
+                channel['remote_port'] = port
             if unit_id is None and field(parameter, 'unit_id') is not None:
                 unit_id = field(parameter, 'unit_id')
             for name in ('baudrate', 'bytesize', 'parity', 'stopbits'):
@@ -378,8 +378,8 @@ class _ModbusMasterOperations:
                     kwargs[name] = field(parameter, name)
             if field(parameter, 'response_timeout') is not None and 'timeout' not in kwargs:
                 kwargs['timeout'] = field(parameter, 'response_timeout')
-        if not field(channel, 'chan_addr'):
-            raise ValueError(f'RTU {rtu_id} 尚未配置唯一通道')
+        if not field(channel, address_name):
+            raise ValueError(f'RTU {rtu_id} 尚未配置 {address_name}')
         modbus_channels = tables['fes_channel_modbus_define']
         if unit_id is None and len(modbus_channels) > 1:
             raise ValueError('存在多个 Modbus 从站定义，请指定 unit_id')
@@ -552,7 +552,10 @@ class ModbusTcpMaster(_ModbusMasterOperations, _ModbusTcpTransport):
 
     @classmethod
     def from_channel(cls, channel, **kwargs):
-        """通道地址/端口决定 TCP 目标，irtuaddr（若有）提供默认从站号。"""
+        """协议参数中的远端主机/端口决定 TCP 目标。"""
         kwargs.setdefault('rtu_id', field(channel, 'rtu_id'))
         kwargs.setdefault('unit_id', field(channel, 'irtuaddr', 1))
-        return cls(field(channel, 'chan_addr'), field(channel, 'chan_port', 502), **kwargs)
+        host = field(channel, 'remote_host')
+        if not host:
+            raise ValueError('Modbus TCP 参数需要 remote_host')
+        return cls(host, field(channel, 'remote_port', 502), **kwargs)

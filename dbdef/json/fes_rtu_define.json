@@ -29,43 +29,11 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "RDFID",
-      "eng_name": "rdfid",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "所属厂站",
-      "eng_name": "st_id",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "KEYID类型",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "操作区域",
-      "eng_name": "oper_area",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "状态",
       "eng_name": "status",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "104编码",
-      "eng_name": "rtu_104code",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "SHORT",
       "disp_menu": ""
     },
     {
@@ -128,22 +96,6 @@
       ]
     },
     {
-      "chn_name": "通道地址",
-      "eng_name": "chan_addr",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "通道端口",
-      "eng_name": "chan_port",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "通信线程启用",
       "eng_name": "process_enable",
       "primary_key": false,
@@ -151,15 +103,6 @@
       "disp_type": "单选菜单",
       "disp_menu": "二值判断",
       "default": 1
-    },
-    {
-      "chn_name": "通信线程重启请求",
-      "eng_name": "process_restart",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "单选菜单",
-      "disp_menu": "二值判断",
-      "default": 0
     },
     {
       "chn_name": "通信线程状态",
@@ -198,15 +141,6 @@
       "default": 0
     },
     {
-      "chn_name": "通信线程重启时间",
-      "eng_name": "process_restart_time",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
-      "disp_menu": "",
-      "default": 0
-    },
-    {
       "chn_name": "通信线程心跳时间",
       "eng_name": "process_heartbeat_time",
       "primary_key": false,
@@ -218,15 +152,6 @@
     {
       "chn_name": "通信线程退出结果",
       "eng_name": "process_exit_code",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": "",
-      "default": 0
-    },
-    {
-      "chn_name": "通信线程重启次数",
-      "eng_name": "process_restart_count",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",

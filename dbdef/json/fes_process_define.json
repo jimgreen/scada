@@ -1,0 +1,133 @@
+{
+  "head": {
+    "chn_name": "运行进程监控表",
+    "eng_name": "fes_process_define"
+  },
+  "columns": [
+    {
+      "chn_name": "进程标识",
+      "eng_name": "process_key",
+      "primary_key": true,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "进程类型",
+      "eng_name": "kind",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "调试RTU",
+      "eng_name": "target_rtu",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "期望运行",
+      "eng_name": "process_enable",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "参与一键启动",
+      "eng_name": "include_in_all",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 1
+    },
+    {
+      "chn_name": "进程状态",
+      "eng_name": "process_status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "进程号",
+      "eng_name": "process_pid",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "父进程号",
+      "eng_name": "parent_pid",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "启动时间",
+      "eng_name": "process_start_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "停止时间",
+      "eng_name": "process_stop_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "心跳时间",
+      "eng_name": "process_heartbeat_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "退出码",
+      "eng_name": "process_exit_code",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "错误信息",
+      "eng_name": "process_error",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "运行实例标识",
+      "eng_name": "owner_token",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    }
+  ]
+}

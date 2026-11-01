@@ -67,14 +67,14 @@ class ProtocolSeedTests(unittest.TestCase):
                         master = cls.from_store(self.store, rtu_id)
                         master.close()
             opc = connection.execute(
-                "SELECT chan_addr, opc_name FROM fes_rtu_define r "
+                "SELECT opc_name, opc_name FROM fes_rtu_define r "
                 "JOIN fes_channel_opc_define p ON r.rtu_id=p.rtu_id"
             ).fetchall()
             self.assertTrue(all(a == b for a, b in opc))
             self.assertEqual(len({a for a, _ in opc}), 10)
             bacnet_ports = connection.execute(
-                "SELECT chan_port, bind_port FROM fes_rtu_define r "
-                "JOIN fes_channel_bacnet_define p ON r.rtu_id=p.rtu_id"
+                "SELECT remote_port, bind_port FROM fes_channel_bacnet_define p "
+                "JOIN fes_rtu_define r ON r.rtu_id=p.rtu_id"
             ).fetchall()
             self.assertEqual(len({p for ports in bacnet_ports for p in ports}), 20)
 

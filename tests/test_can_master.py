@@ -135,7 +135,7 @@ class CanMasterTests(unittest.TestCase):
 class CanMasterConstructionTests(unittest.TestCase):
     def test_channel_constructor_defers_opening_hardware(self):
         with patch('api.can.can.Bus') as bus:
-            master = CanMaster.from_channel({'rtu_id': 7, 'chan_addr': 'PCAN_USBBUS1'},
+            master = CanMaster.from_channel({'rtu_id': 7, 'channel': 'PCAN_USBBUS1'},
                                             interface='pcan', bitrate=250000)
             self.assertEqual(master.rtu_id, 7)
             self.assertFalse(master.connected)
@@ -151,8 +151,7 @@ class CanMasterConstructionTests(unittest.TestCase):
             store = ScadaStore(Path(directory) / 'scada.sqlite3')
             store.create_row('fes_rtu_define', {
                 'rtu_id': 7, 'channel_id': 70, 'channel_type': 'can',
-                'chan_addr': 'fallback',
-            })
+                            })
             store.create_row('fes_channel_can_define', {
                 'rtu_id': 7, 'interface': 'virtual', 'channel': 'configured',
                 'bitrate': 250000, 'fd': 1,

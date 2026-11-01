@@ -230,11 +230,11 @@ class CanMaster(_CanTransport):
 
     @classmethod
     def from_channel(cls, channel, *, interface, **kwargs):
-        """chan_addr 为驱动通道名，interface/bitrate 由调用者指定。"""
+        """协议参数中的 channel 为驱动通道名，interface/bitrate 由调用者指定。"""
         def value(name):
             return channel.get(name) if isinstance(channel, Mapping) else getattr(channel, name, None)
         kwargs.setdefault('rtu_id', value('rtu_id'))
-        return cls(interface=interface, channel=value('chan_addr'), **kwargs)
+        return cls(interface=interface, channel=value('channel'), **kwargs)
 
     @classmethod
     def from_store(cls, store, rtu_id, **kwargs):
@@ -255,7 +255,7 @@ class CanMaster(_CanTransport):
             raise ValueError(f'RTU {rtu_id} 需要唯一 CAN 参数定义，实际找到 {len(rows)} 条')
         parameter = rows[0] if rows else {}
         interface = kwargs.pop('interface', parameter.get('interface'))
-        bus_channel = kwargs.pop('channel', parameter.get('channel', rtu['chan_addr']))
+        bus_channel = kwargs.pop('channel', parameter.get('channel'))
         if not interface:
             raise ValueError('CAN 参数需要 interface，例如 virtual、socketcan 或 pcan')
         for name in ('bitrate', 'data_bitrate', 'fd', 'receive_own_messages'):

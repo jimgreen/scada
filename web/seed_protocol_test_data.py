@@ -187,13 +187,11 @@ def _rtu_values(spec: dict, rtu_id: int, channel_id: int, now: int) -> dict:
     return {
         "rtu_id": rtu_id,
         "code": rtu_code,
-        "rdfid": rtu_code,
         "name": spec["name"],
         "status": 0, "call_all_cycle": 30000, "refresh_trigger": 1000,
         "his_save": 0, "refresh_time": now,
         "process_enable": 0 if spec.get("station_index", 1) > 1 else 1,
         "channel_id": channel_id, "channel_type": spec["key"],
-        "chan_addr": spec["channel"], "chan_port": spec["port"],
     }
 
 
@@ -251,7 +249,8 @@ def _parameter_values(spec: dict, rtu_id: int, identifier: int) -> dict:
     code = f"{PREFIX}_{_key_token(spec)}_PARAM"
     base = {"code": code, "rdfid": code, "name": f"{spec['name']}参数", "rtu_id": rtu_id}
     if key == "iec104":
-        base.update(id=identifier, rtu_addr=1, ycbegin_addr=0x4001, yxbegin_addr=1,
+        base.update(id=identifier, remote_host=spec["channel"], remote_port=spec["port"],
+                    rtu_addr=1, ycbegin_addr=0x4001, yxbegin_addr=1,
                     ykbegin_addr=0x6001, ytbegin_addr=0x6201, yx_data_type=1,
                     yk_excute_type=1, yc_data_type=1, yt_excute_type=2,
                     call_alldata_time=30, if_autosend_alldata=1)
@@ -266,7 +265,8 @@ def _parameter_values(spec: dict, rtu_id: int, identifier: int) -> dict:
                     data_bitrate=2000000, fd=0, receive_own_messages=0,
                     receive_timeout=0.2, retry_count=0, is_extended_id=0)
     elif key == "bacnet":
-        base.update(id=identifier, bind_ip="127.0.0.1",
+        base.update(id=identifier, remote_host=spec["channel"], remote_port=spec["port"],
+                    bind_ip="127.0.0.1",
                     bind_port=int(spec["port"]) + 1, dev_id=1234 + int(spec.get("station_index", 1)) - 1)
     elif key == "opc":
         base.pop("rdfid", None)

@@ -51,7 +51,7 @@ with ModbusTcpMaster("127.0.0.1", port=1502, unit_id=1, rtu_id=7) as master:
 from api.modbus_tcp import ModbusTcpMaster
 
 master = ModbusTcpMaster.from_channel(
-    {"rtu_id": 7, "chan_addr": "127.0.0.1", "chan_port": 1502,
+    {"rtu_id": 7, "remote_host": "127.0.0.1", "remote_port": 1502,
      "irtuaddr": 1},
 )
 master.configure(modbus_calls, modbus_points, ytyk_definitions)
@@ -98,7 +98,8 @@ ytyk_definitions = [
 遥控和遥调允许点号相同；同一种类型重复点号则报错。
 
 配置在一个只读事务中完整加载，不受 Web 列表每页500条限制。TCP/RTU 的协议专用参数分别从
-`fes_channel_modbus_tcp_define` / `fes_channel_modbus_rtu_define` 读取；通用 RTU 通道字段仍作为缺省值。
+`fes_channel_modbus_tcp_define` / `fes_channel_modbus_rtu_define` 读取；RTU 表只保存站点和通道标识，
+连接地址、端口或串口名必须配置在对应协议参数表中。
 
 `collect_once()` 使用 `fes_channel_modbus_define_call` 和 `fes_channel_modbus_define_data` 的
 快照返回 `ModbusValue`，不会自动改写数据库。需要持续采集时传入回调和停止事件：
@@ -116,8 +117,8 @@ with master:
 `timeout` 限制。通信或回调异常会抛出，调用方可记录告警和安排下一次连接。
 
 主站 API 不自动扫描从站、不自动重连、不自动重发写命令；连接、异常和重试策略
-由部署层明确控制。`irtuaddr` 必须是1..247的从站地址，`chan_addr`/`chan_port`
-只决定 TCP 目标地址。
+由部署层明确控制。`irtuaddr` 必须是1..247的从站地址，TCP 目标由协议参数表中的
+`remote_host`/`remote_port` 决定。
 
 功能码支持01/02/03/04读取、05/06单点写入、0F/10批量写入，使用标准 MBAP
 Modbus TCP 帧。特殊寄存器位遥控通过 `send_yk_point(..., current_value=...)`
@@ -144,8 +145,7 @@ with ModbusRtuMaster("COM3", baudrate=9600, bytesize=8,
 `ModbusRtuMaster` 与 `ModbusTcpMaster` 共用 `configure`、`collect_once`、
 `poll_loop`、`send_yk_point` 和 `send_yt_point`。`from_store` 从合并后的 RTU/通道记录、
 Modbus 召唤表和数据表加载配置，并要求 RTU `channel_type=modbus-rtu`。
-`chan_addr` 是 `COM3` 或 `socket://host:port`；
-协议专用表中的 `serial_port`、`baudrate`、`bytesize`、`parity`、`stopbits`、`unit_id`、
+协议专用表中的 `serial_port`（可为 `COM3` 或 `socket://host:port`）、`baudrate`、`bytesize`、`parity`、`stopbits`、`unit_id`、
 `response_timeout` 会覆盖 RTU 通用记录的缺省值；直接构造时串口参数仍需显式给出。
 
 ```python
