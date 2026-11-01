@@ -60,21 +60,15 @@ def _bulk_create(store: ScadaStore, table: str, rows: list[dict[str, object]]) -
 class LegacyWorker(ChannelWorker):
     """Use the previous one-queue-message-per-point write protocol."""
 
-    def _write_rows(self, rows):  # type: ignore[no-untyped-def]
-        rows = [(table, rtu_id, point_no, updates) for table, rtu_id, point_no, updates in rows
-                if updates]
-        if not rows:
-            return []
-        coalesced = {}
-        for table, rtu_id, point_no, updates in rows:
-            coalesced.setdefault((table, rtu_id, point_no), {}).update(updates)
-        for (table, rtu_id, point_no), updates in coalesced.items():
-            self.writer_queue.put({
-                "op": "update", "table": table,
-                "key": {"rtu_id": rtu_id, "pnt_no": point_no},
-                "values": updates,
-            })
-        return [True] * len(rows)
+    def _queue_groups(self, groups):  # type: ignore[no-untyped-def]
+        for group in groups:
+            value_count = len(group["value_names"])
+            for row in group["rows"]:
+                self.writer_queue.put({
+                    "op": "update", "table": group["table"],
+                    "key": dict(zip(group["key_names"], row[value_count:])),
+                    "values": dict(zip(group["value_names"], row[:value_count])),
+                })
 
     def _command_rows(self):  # type: ignore[no-untyped-def]
         result = []

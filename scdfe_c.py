@@ -60,6 +60,17 @@ BATCH_WRITER_MAX_BATCH = 500
 WORKER_HEARTBEAT_INTERVAL = 5.0
 WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
+_MEASUREMENT_SHAPES = {
+    ("yc", False): ("fes_yc_define", (
+        "raw_value", "raw_status", "raw_time", "value", "value_dev", "status",
+        "status_dev", "refresh_time", "refresh_time_dev",
+    )),
+    ("yx", False): ("fes_yx_define", (
+        "value", "value_dev", "status", "status_dev", "refresh_time", "refresh_time_dev",
+    )),
+    ("yc", True): ("fes_yc_define", ("refresh_time", "refresh_time_dev", "raw_time")),
+    ("yx", True): ("fes_yx_define", ("refresh_time", "refresh_time_dev")),
+}
 _SIGNATURE_PROJECTION_CACHE: dict[
     tuple[str, str], tuple[tuple[str, ...], str, str]
 ] = {}
@@ -779,6 +790,12 @@ class ChannelWorker:
             self._command_connection = self.store.open_connection()
         return self._command_connection
 
+    def _queue_groups(self, groups: list[dict[str, Any]]) -> None:
+        self.writer_queue.put(
+            {"op": "batch", "groups": groups},
+            timeout=max(1.0, self.retry_interval),
+        )
+
     def _write_rows(self, rows: list[tuple[str, int, int, Mapping[str, Any]]]) -> list[bool]:
         rows = [(table, rtu_id, point_no, updates) for table, rtu_id, point_no, updates in rows
                 if updates]
@@ -798,10 +815,7 @@ class ChannelWorker:
                              "value_names": value_names, "rows": []}
                     groups[shape] = group
                 group["rows"].append((*point_updates.values(), point_no, rtu_id))
-            self.writer_queue.put(
-                {"op": "batch", "groups": list(groups.values())},
-                timeout=max(1.0, self.retry_interval),
-            )
+            self._queue_groups(list(groups.values()))
             # The writer owns the connection, so existence is confirmed when
             # it commits. The worker's counters represent accepted updates.
             return [True] * len(rows)
@@ -878,38 +892,40 @@ class ChannelWorker:
         raise ValueError(f"不支持的实时点类型: {kind}")
 
     @staticmethod
-    def _measurement_update_from_state(kind: str, value: Any, quality_value: int,
-                                       *, now: int) -> tuple[str, dict[str, Any]]:
+    def _measurement_params(kind: str, value: Any, quality: int, now: int,
+                            heartbeat: bool) -> tuple[Any, ...]:
+        """Values in _MEASUREMENT_SHAPES order, shared by queued/direct writes."""
+        if heartbeat:
+            return (now, now, now) if kind == "yc" else (now, now)
         if kind == "yc":
-            updates = {
-                "raw_value": value, "raw_status": quality_value, "raw_time": now,
-                "value": value, "value_dev": value, "status": quality_value,
-                "status_dev": quality_value, "refresh_time": now,
-                "refresh_time_dev": now,
-            }
-            table = "fes_yc_define"
-        elif kind == "yx":
-            updates = {
-                "value": value, "value_dev": value, "status": quality_value,
-                "status_dev": quality_value, "refresh_time": now,
-                "refresh_time_dev": now,
-            }
-            table = "fes_yx_define"
-        else:
-            raise ValueError(f"不支持的实时点类型: {kind}")
-        return table, updates
+            return value, quality, now, value, value, quality, quality, now, now
+        return value, value, quality, quality, now, now
 
-    @staticmethod
-    def _measurement_update(kind: str, value: Any, quality: Any, *, now: int | None = None) -> tuple[str, dict[str, Any]]:
-        value, quality_value = ChannelWorker._measurement_state(kind, value, quality)
-        return ChannelWorker._measurement_update_from_state(
-            kind, value, quality_value, now=_now_ms() if now is None else now,
-        )
+    def _queue_measurements(self, pending: dict[tuple[str, int], tuple[Any, int, float]],
+                            changed: set[tuple[str, int]], now: int) -> None:
+        groups: dict[tuple[str, bool], dict[str, Any]] = {}
+        rtu_id = self.spec.rtu_id
+        for cache_key, (value, quality, _) in pending.items():
+            kind, point_no = cache_key
+            heartbeat = cache_key not in changed
+            shape = (kind, heartbeat)
+            group = groups.get(shape)
+            if group is None:
+                table, columns = _MEASUREMENT_SHAPES[shape]
+                group = {"table": table, "key_names": ("pnt_no", "rtu_id"),
+                         "value_names": columns, "rows": []}
+                groups[shape] = group
+            group["rows"].append(
+                (*self._measurement_params(kind, value, quality, now, heartbeat), point_no, rtu_id)
+            )
+        self._queue_groups(list(groups.values()))
 
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
         yc = yx = 0
+        queued = self.writer_queue is not None
         pending: list[tuple[str, int, int, Mapping[str, Any]]] = []
         metadata: list[tuple[str, tuple[str, int], tuple[Any, Any], float]] = []
+        changed_points: set[tuple[str, int]] = set()
         # Only retain states seen in this result.  Copying the whole cache on
         # every poll made stable 200-point scans O(points) before any work was
         # selected, and is unnecessary because duplicate point numbers are the
@@ -935,23 +951,30 @@ class ChannelWorker:
                 )
                 if not value_changed and not heartbeat_due:
                     continue
-                table, updates = self._measurement_update_from_state(
-                    kind, state[0], state[1], now=now,
-                )
-                if not value_changed:
-                    updates = {
-                        "refresh_time": now,
-                        "refresh_time_dev": now,
-                    }
+                if queued:
+                    # A later duplicate heartbeat must not discard a full
+                    # value/quality update already seen in this sample.
+                    if value_changed:
+                        changed_points.add(cache_key)
                     if kind == "yc":
-                        updates["raw_time"] = now
-                pending.append((table, self.spec.rtu_id, point_no, updates))
-                metadata.append((kind, cache_key, state, monotonic_now))
+                        yc += 1
+                    else:
+                        yx += 1
+                else:
+                    table, columns = _MEASUREMENT_SHAPES[(kind, not value_changed)]
+                    params = self._measurement_params(kind, *state, now, not value_changed)
+                    pending.append((table, self.spec.rtu_id, point_no, dict(zip(columns, params))))
+                    metadata.append((kind, cache_key, state, monotonic_now))
                 candidate_cache[cache_key] = (*state, monotonic_now)
             except Exception as exc:  # noqa: BLE001 - 单点异常不能中断整站采集
                 self.stats.errors += 1
                 self.logger.error(f"写回实时点失败: {exc}")
-        if pending:
+        if queued and candidate_cache:
+            self._queue_measurements(candidate_cache, changed_points, now)
+            # Publish cache state only after the entire message was accepted.
+            # Full queues and failed puts leave every point eligible for retry.
+            self._measurement_cache.update(candidate_cache)
+        elif pending:
             changed = self._write_rows(pending)
             # _write_rows 保持输入顺序；数据库更新不存在的点时对应项为 False。
             for (kind, cache_key, state, write_time), was_changed in zip(metadata, changed):

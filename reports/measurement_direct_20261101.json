@@ -1,0 +1,603 @@
+{
+  "created_at": "2026-11-01T00:59:55.471304+00:00",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "sqlite": "3.53.1",
+  "config": {
+    "replicas": [
+      1,
+      10
+    ],
+    "cycles": 1000,
+    "db_cycles": 20,
+    "command_cycles": 1000,
+    "definition_cycles": 10,
+    "scan_cycles": 1000,
+    "pipeline_only": true,
+    "repeat": 3,
+    "profile_writer": false,
+    "baseline_ref": "260a7f3",
+    "output": "reports\\measurement_direct_20261101.json"
+  },
+  "runtimes": {
+    "before": {
+      "sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "interval_seconds": 0.2,
+      "max_batch": 500
+    },
+    "after": {
+      "sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "interval_seconds": 0.2,
+      "max_batch": 500
+    }
+  },
+  "isolation": "frozen runtime sources; parent/child SHA-256 verification; exclusive benchmark lock; serial runs, variant order reversed on even repeats",
+  "measurement_heartbeat_seconds": 5,
+  "scope": "concurrent threads/spawn writer; no device I/O",
+  "results": [
+    {
+      "rtus": 6,
+      "repeat": 1,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 800.5637000023853,
+        "drained_ms": 1183.3078999989084,
+        "updates_per_second": 202821.26063742276,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 6,
+      "repeat": 1,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 503.256700001657,
+        "drained_ms": 892.8775000022142,
+        "updates_per_second": 268793.8714990632,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 1,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 16343.288800002483,
+        "drained_ms": 16900.373900003615,
+        "updates_per_second": 142008.6924822111,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 1,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 10954.054600006202,
+        "drained_ms": 11572.083400002157,
+        "updates_per_second": 207395.67086075034,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 6,
+      "repeat": 2,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 631.9633000020985,
+        "drained_ms": 1020.7694999990053,
+        "updates_per_second": 235116.74281043257,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 6,
+      "repeat": 2,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 1031.1137000026065,
+        "drained_ms": 1387.0852000036393,
+        "updates_per_second": 173024.69956378333,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 2,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 10487.715299997944,
+        "drained_ms": 11087.973100002273,
+        "updates_per_second": 216450.74156966596,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 2,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 16465.632000006735,
+        "drained_ms": 17056.988700001966,
+        "updates_per_second": 140704.7892339709,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 6,
+      "repeat": 3,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 1045.2692000035313,
+        "drained_ms": 1426.7404999991413,
+        "updates_per_second": 168215.5935155303,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 6,
+      "repeat": 3,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 6,
+        "fes_yc_define": 6000,
+        "fes_yx_define": 6000,
+        "fes_yk_define": 1200,
+        "fes_yt_define": 1200,
+        "fes_channel_iec104_define": 1,
+        "fes_channel_modbus_tcp_define": 1,
+        "fes_channel_modbus_rtu_define": 1,
+        "fes_channel_can_define": 1,
+        "fes_channel_bacnet_define": 1,
+        "fes_channel_opc_define": 1,
+        "fes_channel_modbus_define": 2,
+        "fes_channel_modbus_define_call": 18,
+        "fes_channel_modbus_define_data": 4000,
+        "fes_channel_modbus_define_ytyk": 800
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 6,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 120,
+        "point_updates": 240000,
+        "producer_ms": 670.2502000043751,
+        "drained_ms": 1060.0608000022476,
+        "updates_per_second": 226402.10825595207,
+        "final_rows_verified": 12000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 3,
+      "variant": "before",
+      "runtime_sha256": "760011b229e1c5061633a41591034cb8c372b0060e2363d5044c36279311a758",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 16493.74220000027,
+        "drained_ms": 17101.6810000001,
+        "updates_per_second": 140337.08148339254,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    },
+    {
+      "rtus": 60,
+      "repeat": 3,
+      "variant": "after",
+      "runtime_sha256": "4814bab8c3ec496002a6cf5ac18b2015235c91148213ae6f5cba4f748aa04f8b",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 96790
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 10099.664699999266,
+        "drained_ms": 10684.363200001826,
+        "updates_per_second": 224627.33202476587,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    }
+  ]
+}

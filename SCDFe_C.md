@@ -203,3 +203,5 @@ ruff check api web tests scdfe_c.py
 逐点校验和完整计时口径见 [第 2 轮效率报告](reports/writer_packed_20261101.md)；
 [上一轮报告](reports/writer_optimization_20261101.md)保留作历史记录。
 本机 SQLite/IPC 压测未包含设备通信时延，Linux 尚未实机复测。
+
+第 3 轮继续优化通信线程的测量写回：`_sync_measurements` 直接生成 YC/YX 分组参数，避免逐点更新字典的创建、复制和再次转换；变化值、心跳和重复点的最后值语义保持不变，队列入队失败时缓存不会提前更新。对照上一版 `260a7f3`，6 个 RTU 完整写回中位数从 1.387 秒降至 1.021 秒，60 个 RTU 从 17.057 秒降至 11.088 秒，吞吐分别提高 35.9% 和 53.8%。详细逐点核验和三次原始结果见 [第 3 轮效率报告](reports/measurement_direct_20261101.md)；[原始数据](reports/measurement_direct_20261101.json)。
