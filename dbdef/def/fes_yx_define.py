@@ -18,7 +18,7 @@ class fes_yx_define:
 
     __tablename__: ClassVar[str] = 'fes_yx_define'
     __table_name_chn__: ClassVar[str] = '遥信定义表'
-    __primary_keys__: ClassVar[tuple[str, ...]] = ('rtu_id', 'pnt_no')
+    __primary_keys__: ClassVar[tuple[str, ...]] = ('rtu_id', 'pnt_no',)
 
     rtu_id: Optional[int] = field(
         default=None,
@@ -105,21 +105,6 @@ class fes_yx_define:
         metadata={'chn_name': '刷新时间', 'eng_name': 'refresh_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
     )
 
-    value_dev: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后值', 'eng_name': 'value_dev', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
-    )
-
-    status_dev: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后状态', 'eng_name': 'status_dev', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '遥信状态'},
-    )
-
-    refresh_time_dev: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新时间', 'eng_name': 'refresh_time_dev', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
-    )
-
     lock_begintime: Optional[int] = field(
         default=None,
         metadata={'chn_name': '闭锁开始时间', 'eng_name': 'lock_begintime', 'primary_key': False, 'data_type': 'int', 'disp_type': 'DATETIME', 'disp_menu': ''},
@@ -140,59 +125,14 @@ class fes_yx_define:
         metadata={'chn_name': '遥信ID_1', 'eng_name': 'yx_id_1', 'primary_key': False, 'data_type': 'int', 'disp_type': '带域号的KEYID', 'disp_menu': ''},
     )
 
-    value_dev_1: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后值_1', 'eng_name': 'value_dev_1', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
-    )
-
-    status_dev_1: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后状态_1', 'eng_name': 'status_dev_1', 'primary_key': False, 'data_type': 'int', 'disp_type': '多选菜单', 'disp_menu': '遥信状态'},
-    )
-
-    refresh_time_dev_1: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新时间_1', 'eng_name': 'refresh_time_dev_1', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
-    )
-
     yx_id_2: Optional[int] = field(
         default=None,
         metadata={'chn_name': '遥信ID_2', 'eng_name': 'yx_id_2', 'primary_key': False, 'data_type': 'int', 'disp_type': '带域号的KEYID', 'disp_menu': ''},
     )
 
-    value_dev_2: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后值_2', 'eng_name': 'value_dev_2', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
-    )
-
-    status_dev_2: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后状态_2', 'eng_name': 'status_dev_2', 'primary_key': False, 'data_type': 'int', 'disp_type': '多选菜单', 'disp_menu': '遥信状态'},
-    )
-
-    refresh_time_dev_2: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新时间_2', 'eng_name': 'refresh_time_dev_2', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
-    )
-
     yx_id_3: Optional[int] = field(
         default=None,
         metadata={'chn_name': '遥信ID_3', 'eng_name': 'yx_id_3', 'primary_key': False, 'data_type': 'int', 'disp_type': '带域号的KEYID', 'disp_menu': ''},
-    )
-
-    value_dev_3: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后值_3', 'eng_name': 'value_dev_3', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
-    )
-
-    status_dev_3: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新后状态_3', 'eng_name': 'status_dev_3', 'primary_key': False, 'data_type': 'int', 'disp_type': '多选菜单', 'disp_menu': '遥信状态'},
-    )
-
-    refresh_time_dev_3: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '设备更新时间_3', 'eng_name': 'refresh_time_dev_3', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
     )
 
     yk_rtu: Optional[int] = field(

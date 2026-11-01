@@ -46,6 +46,18 @@ class ProtocolSeedTests(unittest.TestCase):
                 self.assertEqual(connection.execute(
                     f"SELECT COUNT(*) - COUNT(DISTINCT code) FROM {table}"
                 ).fetchone()[0], 0)
+            for table, count in (("fes_yc_define", 60000), ("fes_yt_define", 12000)):
+                self.assertEqual(tuple(connection.execute(
+                    f"SELECT COUNT(DISTINCT raw_value), COUNT(DISTINCT value), "
+                    f"SUM(raw_value=value), SUM(value != raw_base+raw_scale*raw_value) FROM {table}"
+                ).fetchone()), (count, count, 0, 0))
+            for table in ("fes_yc_define", "fes_yx_define"):
+                columns = self.store.catalog.public(table)["columns"]
+                self.assertFalse(any(c["eng_name"].startswith(
+                    ("value_dev", "status_dev", "refresh_time_dev")) for c in columns))
+                self.assertEqual(connection.execute(
+                    f"SELECT COUNT(DISTINCT status) FROM {table}"
+                ).fetchone()[0], 4)
             for protocol in ("modbus-tcp", "modbus-rtu"):
                 from api import ModbusTcpMaster, ModbusRtuMaster
                 cls = ModbusTcpMaster if protocol == "modbus-tcp" else ModbusRtuMaster

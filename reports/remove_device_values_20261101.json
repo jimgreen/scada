@@ -1,0 +1,51 @@
+{
+  "database": "D:\\codex\\scada\\db\\scada.sqlite3",
+  "backup": "D:\\codex\\scada\\db\\backups\\scada.sqlite3.before_remove_device_values.20261101_105032_353379.bak",
+  "removed": {
+    "fes_yc_define": [
+      "value_dev",
+      "status_dev",
+      "refresh_time_dev",
+      "value_dev_1",
+      "status_dev_1",
+      "refresh_time_dev_1",
+      "value_dev_2",
+      "status_dev_2",
+      "refresh_time_dev_2",
+      "value_dev_3",
+      "status_dev_3",
+      "refresh_time_dev_3"
+    ],
+    "fes_yx_define": [
+      "value_dev",
+      "status_dev",
+      "refresh_time_dev",
+      "value_dev_1",
+      "status_dev_1",
+      "refresh_time_dev_1",
+      "value_dev_2",
+      "status_dev_2",
+      "refresh_time_dev_2",
+      "value_dev_3",
+      "status_dev_3",
+      "refresh_time_dev_3"
+    ]
+  },
+  "retained": {
+    "fes_yc_define": {
+      "rows": 60000,
+      "sha256": "8dbd436c36d7320cc235dd1e9a37dfcc9ec8bcaf5ef9a8b9c13132c8f3b4d8c5"
+    },
+    "fes_yx_define": {
+      "rows": 60000,
+      "sha256": "4f74a6b4aa3a5b9360917a68cd0c509c1b5eb5d3a37b017db056801f9166db1f"
+    }
+  },
+  "test_rows_updated": {
+    "fes_yc_define": 60000,
+    "fes_yx_define": 60000,
+    "fes_yt_define": 12000
+  },
+  "integrity_check": "ok",
+  "foreign_key_violations": 0
+}

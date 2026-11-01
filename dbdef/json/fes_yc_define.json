@@ -213,30 +213,6 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "设备更新后值",
-      "eng_name": "value_dev",
-      "primary_key": false,
-      "data_type": "float",
-      "disp_type": "FLOAT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新后状态",
-      "eng_name": "status_dev",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新时间",
-      "eng_name": "refresh_time_dev",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "闭锁开始时间",
       "eng_name": "lock_begintime",
       "primary_key": false,
@@ -357,30 +333,6 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "设备更新后值_1",
-      "eng_name": "value_dev_1",
-      "primary_key": false,
-      "data_type": "float",
-      "disp_type": "FLOAT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新后状态_1",
-      "eng_name": "status_dev_1",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新时间_1",
-      "eng_name": "refresh_time_dev_1",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "遥测ID_2",
       "eng_name": "yc_id_2",
       "primary_key": false,
@@ -389,59 +341,11 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "设备更新后值_2",
-      "eng_name": "value_dev_2",
-      "primary_key": false,
-      "data_type": "float",
-      "disp_type": "FLOAT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新后状态_2",
-      "eng_name": "status_dev_2",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新时间_2",
-      "eng_name": "refresh_time_dev_2",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "遥测ID_3",
       "eng_name": "yc_id_3",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "带域号的KEYID",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新后值_3",
-      "eng_name": "value_dev_3",
-      "primary_key": false,
-      "data_type": "float",
-      "disp_type": "FLOAT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新后状态_3",
-      "eng_name": "status_dev_3",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "设备更新时间_3",
-      "eng_name": "refresh_time_dev_3",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "带毫秒的DATETIME",
       "disp_menu": ""
     },
     {

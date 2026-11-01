@@ -246,12 +246,12 @@ class ScdfeCTest(unittest.TestCase):
         changed = [Value("yc", 1, 222.5), Value("yx", 1, True)]
         self.assertEqual(worker._sync_measurements(changed), (1, 0))
         self.assertEqual(len(queue.messages), 2)
-        worker._measurement_cache[("yc", 1)] = (222.5, 0, time.monotonic() - 61)
-        worker._measurement_cache[("yx", 1)] = (1, 0, time.monotonic() - 61)
+        worker._measurement_cache[("yc", 1)] = (222.5, 222.5, 0, time.monotonic() - 61)
+        worker._measurement_cache[("yx", 1)] = (1, 1, 0, time.monotonic() - 61)
         self.assertEqual(worker._sync_measurements(changed), (1, 1))
         heartbeat_groups = queue.messages[2]["groups"]
         self.assertEqual(set(heartbeat_groups[0]["value_names"]),
-                         {"refresh_time", "refresh_time_dev", "raw_time"})
+                         {"refresh_time"})
 
         # A zero interval keeps an explicit full-write mode for installations
         # that require every poll to refresh all fields.
@@ -317,6 +317,7 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(len(queue.messages), 1)
 
     def test_measurement_fields_match_for_queued_and_direct_writes(self):
+        self.store.update_row("fes_yc_define", [7, 1], {"raw_base": 2.0, "raw_scale": 1.1})
         for queued in (False, True):
             with self.subTest(queued=queued):
                 queue = CaptureWriterQueue() if queued else None
@@ -330,24 +331,67 @@ class ScdfeCTest(unittest.TestCase):
                     self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
                 yc = self.store.get_row("fes_yc_define", [7, 1])
                 yx = self.store.get_row("fes_yx_define", [7, 1])
-                for field in ("raw_value", "value", "value_dev"):
-                    self.assertEqual(yc[field], 12.5, field)
-                for field in ("raw_status", "status", "status_dev"):
+                self.assertEqual(yc["raw_value"], 12.5)
+                self.assertEqual(yc["value"], 2.0 + 1.1 * 12.5)
+                self.assertNotEqual(yc["raw_value"], yc["value"])
+                for field in ("raw_status", "status"):
                     self.assertEqual(yc[field], 4, field)
-                for field in ("raw_time", "refresh_time", "refresh_time_dev"):
+                for field in ("raw_time", "refresh_time"):
                     self.assertEqual(yc[field], 123456, field)
-                for field in ("value", "value_dev"):
+                for field in ("value",):
                     self.assertEqual(yx[field], 1, field)
-                for field in ("status", "status_dev"):
+                for field in ("status",):
                     self.assertEqual(yx[field], 8, field)
-                for field in ("refresh_time", "refresh_time_dev"):
+                for field in ("refresh_time",):
                     self.assertEqual(yx[field], 123456, field)
+
+    def test_scaling_reload_and_heartbeat_preserve_raw_sample(self):
+        for queued in (False, True):
+            with self.subTest(queued=queued):
+                self.store.update_row("fes_yc_define", [7, 1], {"raw_base": 2.0, "raw_scale": 1.1})
+                queue = CaptureWriterQueue() if queued else None
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                                       log_dir=self.root / "logs", writer_queue=queue,
+                                       measurement_heartbeat_interval=0)
+
+                def sync(stamp):
+                    with patch("scdfe_c._now_ms", return_value=stamp):
+                        self.assertEqual(worker._sync_measurements([Value("yc", 1, 12.5, 3)]), (1, 0))
+                    if queue:
+                        self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
+                        queue.messages.clear()
+
+                sync(100)
+                sync(200)
+                row = self.store.get_row("fes_yc_define", [7, 1])
+                self.assertEqual((row["raw_time"], row["refresh_time"]), (100, 200))
+                before = definition_signature(self.store, 7)
+                self.store.update_row("fes_yc_define", [7, 1], {"raw_base": -5.0, "raw_scale": 0.0})
+                self.assertNotEqual(before, definition_signature(self.store, 7))
+                worker._load_yc_scaling()
+                sync(300)
+                row = self.store.get_row("fes_yc_define", [7, 1])
+                self.assertEqual((row["raw_value"], row["value"], row["raw_time"]), (12.5, -5.0, 300))
+
+    def test_invalid_scaling_or_sample_is_isolated_to_one_point(self):
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
+                               log_dir=self.root / "logs")
+        worker._load_yc_scaling()
+        for base, scale, value in ((0, 1, float("nan")), (0, 1, float("inf")),
+                                   (0, float("inf"), 10), (0, "invalid", 10)):
+            worker._yc_scaling[1] = (base, scale)
+            worker._measurement_cache.clear()
+            self.assertEqual(worker._sync_measurements([
+                Value("yc", 1, value), Value("yx", 1, True),
+            ]), (0, 1))
+            self.assertNotIn(("yc", 1), worker._measurement_cache)
+        self.assertEqual(worker.stats.errors, 4)
 
     def test_duplicate_measurements_keep_full_update_across_heartbeats(self):
         samples = [
             (None, [Value("yc", 1, 12.5, 3), Value("yc", 1, 12.5, 3)], 12.5, 3),
-            ((12.5, 3, 0), [Value("yc", 1, 12.5, 3), Value("yc", 1, 14.0, 4)], 14.0, 4),
-            ((12.5, 3, 0), [Value("yc", 1, 14.0, 4), Value("yc", 1, 12.5, 3)], 12.5, 3),
+            ((12.5, 12.5, 3, 0), [Value("yc", 1, 12.5, 3), Value("yc", 1, 14.0, 4)], 14.0, 4),
+            ((12.5, 12.5, 3, 0), [Value("yc", 1, 14.0, 4), Value("yc", 1, 12.5, 3)], 12.5, 3),
         ]
         for cached, values, expected_value, expected_quality in samples:
             with self.subTest(cached=cached, values=values):
@@ -355,6 +399,7 @@ class ScdfeCTest(unittest.TestCase):
                 worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
                                        log_dir=self.root / "logs", writer_queue=queue,
                                        measurement_heartbeat_interval=0)
+                worker._load_yc_scaling()
                 if cached is not None:
                     worker._measurement_cache[("yc", 1)] = cached
                 before = self.store.get_row("fes_yc_define", [7, 1])["_version"]
@@ -371,7 +416,8 @@ class ScdfeCTest(unittest.TestCase):
         queue = CaptureWriterQueue()
         worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom", None, None),
                                log_dir=self.root / "logs", writer_queue=queue)
-        worker._measurement_cache = {("yc", 1): (12.5, 0, 0), ("yx", 1): (1, 0, 0)}
+        worker._load_yc_scaling()
+        worker._measurement_cache = {("yc", 1): (12.5, 12.5, 0, 0), ("yx", 1): (1, 1, 0, 0)}
         original = dict(worker._measurement_cache)
         values = [Value("yc", 1, 15.5), Value("yx", 1, True)]
         queue.fail_next = True
@@ -385,7 +431,7 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(len(queue.messages), 1)
         self.assertEqual(runtime._batch_message_size(queue.messages[0]), 2)
         yx_group = next(g for g in queue.messages[0]["groups"] if g["table"] == "fes_yx_define")
-        self.assertEqual(set(yx_group["value_names"]), {"refresh_time", "refresh_time_dev"})
+        self.assertEqual(set(yx_group["value_names"]), {"refresh_time"})
 
     def test_bad_measurement_does_not_block_other_points_in_same_sample(self):
         queue = CaptureWriterQueue()

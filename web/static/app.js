@@ -15,9 +15,9 @@ const resources = {
 const pointKinds = ['yc', 'yx', 'yt', 'yk'];
 const common = {
   rtus: ['rtu_id', 'name', 'code', 'channel_type', 'chan_addr', 'chan_port', 'status'],
-  yc: ['rtu_id', 'pnt_no', 'name', 'code', 'value', 'status', 'refresh_time'],
+  yc: ['rtu_id', 'pnt_no', 'name', 'code', 'raw_value', 'value', 'status', 'refresh_time'],
   yx: ['rtu_id', 'pnt_no', 'name', 'name_0', 'name_1', 'value', 'status', 'refresh_time'],
-  yt: ['rtu_id', 'pnt_no', 'name', 'value', 'status', 'raw_scale', 'refresh_time'],
+  yt: ['rtu_id', 'pnt_no', 'name', 'raw_value', 'value', 'status', 'raw_scale', 'refresh_time'],
   yk: ['rtu_id', 'pnt_no', 'name', 'value', 'status', 'refresh_time'],
 };
 
@@ -157,7 +157,7 @@ function visibleColumns() {
   let names = common[state.resource] || schema.columns.slice(0, 8).map(c => c.eng_name);
   if (state.view === 'live' && pointKinds.includes(state.resource)) {
     names = ['rtu_id', 'pnt_no', 'name', 'value', 'status', 'refresh_time', 'raw_value', 'raw_status',
-      'value_dev', 'status_dev', 'refresh_time_dev', 'refresh_time1', 'refresh_time2', 'refresh_time3'];
+      'refresh_time1', 'refresh_time2', 'refresh_time3'];
   }
   return names.map(n => schema.columns.find(c => c.eng_name === n)).filter(Boolean);
 }

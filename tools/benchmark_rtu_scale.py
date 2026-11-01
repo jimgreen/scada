@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import cProfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import hashlib
@@ -27,6 +26,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.scdfe_control import InstanceLock
+from tools.benchmark_inputs import DEFAULT_SEED, MeasurementStream
 from web.seed_protocol_test_data import COUNTS, seed_protocol_test_data
 from web.service import ScadaStore
 
@@ -44,19 +44,26 @@ def load_runtime(source_path, expected_hash):
     return sys.modules[name]
 
 
-@dataclass(frozen=True)
-class Value:
-    kind: str
-    point_no: int
-    value: float | int
-    quality: int = 0
+def unshared_binding_source(source):
+    """A controlled baseline: same schema/scaling/queue/writer, expanded YC binds.
 
-
-def measurements(cycle: int = 0, rtu_id: int = 0) -> list[Value]:
-    return [
-        *(Value("yc", p, float(rtu_id * 100000 + p + cycle)) for p in range(1, COUNTS["yc"] + 1)),
-        *(Value("yx", p, (p + cycle + rtu_id) % 2) for p in range(1, COUNTS["yx"] + 1)),
-    ]
+    Only the YC parameter layout changes. No old fields or old runtime APIs
+    are introduced. Reject changed source patterns instead of silently timing
+    two identical variants. The report records both frozen source hashes.
+    """
+    replacements = (
+        (b'), (0, 2, 3, 1, 2, 3)),', b'), (0, 1, 2, 3, 4, 5)),'),
+        (b'row = (raw_value, value, quality, now, point_no, rtu_id)',
+         b'row = (raw_value, quality, now, value, quality, now, point_no, rtu_id)'),
+        # The pipeline uses the queue; keep the direct-write branch correct too.
+        (b'((*state, now) if kind == "yc" else (*state[1:], now))',
+         b'((state[0], state[2], now, state[1], state[2], now) if kind == "yc" else (*state[1:], now))'),
+    )
+    for before, after in replacements:
+        if source.count(before) != 1:
+            raise RuntimeError('unshared binding baseline no longer matches the current source')
+        source = source.replace(before, after)
+    return source
 
 
 class CountQueue:
@@ -97,7 +104,7 @@ def writer_entry(db, schema, log_dir, queue, ready, runtime_path, runtime_hash, 
             profiler.dump_stats(profile_path)
 
 
-def payload_metrics(store, spec, root, runtime):
+def payload_metrics(store, spec, root, runtime, seed):
     """Inspect one full-change message outside the pipeline timing."""
     class SampleQueue:
         def put(self, message, **_kwargs):
@@ -105,12 +112,19 @@ def payload_metrics(store, spec, root, runtime):
 
     queue = SampleQueue()
     worker = runtime.ChannelWorker(store, spec, log_dir=root / "payload-logs", writer_queue=queue)
-    worker._sync_measurements(measurements(rtu_id=spec.rtu_id))
+    sample = MeasurementStream(spec.rtu_id, COUNTS["yc"], COUNTS["yx"], seed).next()
+    worker._sync_measurements(sample)
     return {"point_updates": runtime._batch_message_size(queue.message),
-            "serialized_bytes": len(mp.reduction.ForkingPickler.dumps(queue.message))}
+            "serialized_bytes": len(mp.reduction.ForkingPickler.dumps(queue.message)),
+            "yc_unique_values": len({p.value for p in sample if p.kind == "yc"}),
+            "yc_unique_engineering_values": len({worker._yc_scaling[p.point_no][0] +
+                                                 worker._yc_scaling[p.point_no][1] * p.value
+                                                 for p in sample if p.kind == "yc"}),
+            "quality_counts": {kind: {str(q): sum(p.quality == q for p in sample if p.kind == kind)
+                                       for q in range(4)} for kind in ("yc", "yx")}}
 
 
-def pipeline(store, specs, root, cycles, runtime_path, runtime_hash, profile_path=None):
+def pipeline(store, specs, root, cycles, runtime_path, runtime_hash, seed, profile_path=None):
     runtime = load_runtime(runtime_path, runtime_hash)
     context = mp.get_context("spawn")
     queue = context.JoinableQueue(maxsize=64)
@@ -128,12 +142,13 @@ def pipeline(store, specs, root, cycles, runtime_path, runtime_hash, profile_pat
         # Each worker and its connection (if used) belongs to this thread.
         worker = runtime.ChannelWorker(store, spec, log_dir=root / "worker-logs", writer_queue=queue,
                                        retry_interval=30)
+        samples = MeasurementStream(spec.rtu_id, COUNTS["yc"], COUNTS["yx"], seed)
         accepted = 0
         release.wait()
-        for cycle in range(cycles):
-            # Both YC and YX change on every cycle: stable filtering cannot
-            # suppress any update, and station-specific values detect mixing.
-            accepted += sum(worker._sync_measurements(measurements(cycle, spec.rtu_id)))
+        for _ in range(cycles):
+            # Independent quality changes keep every point eligible for update,
+            # including a binary YX point that happens to retain its value.
+            accepted += sum(worker._sync_measurements(samples.next()))
         if worker.stats.errors:
             raise AssertionError(f"RTU {spec.rtu_id}: {worker.stats.errors} point errors")
         return accepted
@@ -155,20 +170,31 @@ def pipeline(store, specs, root, cycles, runtime_path, runtime_hash, profile_pat
         expected_points = len(specs) * (COUNTS["yc"] + COUNTS["yx"])
         if accepted != expected_points * cycles:
             raise AssertionError((accepted, expected_points * cycles))
-        # Each message has 2000 points and triggers its own transaction with
-        # max_batch=500. Check every row's version and final value, not a sample.
+        # Regenerate the same station streams outside timing and check every
+        # persisted raw/engineering value, quality, timestamp and version.
+        expected = {}
+        for spec in specs:
+            samples = MeasurementStream(spec.rtu_id, COUNTS["yc"], COUNTS["yx"], seed)
+            for _ in range(cycles):
+                final_sample = samples.next()
+            expected.update(((spec.rtu_id, p.kind, p.point_no), p) for p in final_sample)
         with store.connection() as connection:
             for kind in ("yc", "yx"):
-                rows = connection.execute(
-                    f"SELECT rtu_id,pnt_no,value,_version,status FROM fes_{kind}_define"
-                ).fetchall()
+                rows = connection.execute(f"SELECT * FROM fes_{kind}_define").fetchall()
                 if len(rows) != len(specs) * COUNTS[kind]:
                     raise AssertionError("point count mismatch")
-                for rtu_id, number, value, version, status in rows:
-                    expected = (float(rtu_id * 100000 + number + cycles - 1) if kind == "yc"
-                                else (number + cycles - 1 + rtu_id) % 2)
-                    if (value, version, status) != (expected, 1 + cycles, 0):
-                        raise AssertionError((kind, rtu_id, number, value, version, status, expected))
+                for row in rows:
+                    point = expected[(row["rtu_id"], kind, row["pnt_no"])]
+                    fields = {"value": point.value, "status": point.quality,
+                              "_version": 1 + cycles}
+                    if kind == "yc":
+                        fields.update(raw_value=point.value, raw_status=point.quality,
+                                      raw_time=row["refresh_time"],
+                                      value=row["raw_base"] + row["raw_scale"] * point.value)
+                        if row["raw_value"] == row["value"]:
+                            raise AssertionError("test YC raw and engineering values must differ")
+                    if row["refresh_time"] <= 0 or any(row[k] != v for k, v in fields.items()):
+                        raise AssertionError((kind, row["rtu_id"], row["pnt_no"], fields, dict(row)))
         queue.join()  # Writer exited cleanly and acknowledged every item.
         success = True
         return {"threads": len(specs), "writer_processes": 1, "cycles_per_rtu": cycles,
@@ -200,7 +226,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
         result = {"rtus": len(specs), "repeat": repeat, "variant": variant,
                   "runtime_sha256": runtime_hash,
                   "points_per_rtu": dict(COUNTS), "table_counts": seeded["totals"]}
-        result["sample_payload"] = payload_metrics(store, specs[0], root, runtime)
+        result["sample_payload"] = payload_metrics(store, specs[0], root, runtime, args.seed)
         print(f"{variant} repeat={repeat} RTUs={len(specs)} setup complete", flush=True)
 
         started = time.perf_counter()
@@ -214,7 +240,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
         for index, spec in enumerate([] if args.pipeline_only else specs, 1):
             worker = runtime.ChannelWorker(store, spec, log_dir=root / "stage-logs", writer_queue=queue)
             try:
-                values = measurements(rtu_id=spec.rtu_id)
+                values = MeasurementStream(spec.rtu_id, COUNTS["yc"], COUNTS["yx"], args.seed).next()
                 started = time.perf_counter()
                 for _ in range(args.cycles):
                     worker._sync_measurements(values)
@@ -245,7 +271,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
         profile_path = (str(args.output.resolve().with_suffix(f".{variant}.{len(specs)}rtus.{repeat}.prof"))
                         if args.profile_writer else None)
         result["pipeline"] = pipeline(store, specs, root, args.db_cycles,
-                                      runtime_path, runtime_hash, profile_path)
+                                      runtime_path, runtime_hash, args.seed, profile_path)
         if profile_path is not None:
             result["writer_profile"] = profile_path
         with store.connection() as connection:
@@ -259,6 +285,7 @@ def run_scale(replicas, args, repeat, variant, runtime_path, runtime_hash):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="reproducible random workload seed")
     parser.add_argument("--replicas", type=int, nargs="+", default=[1, 10])
     parser.add_argument("--cycles", type=int, default=1000)
     parser.add_argument("--db-cycles", type=int, default=20)
@@ -271,8 +298,11 @@ def main():
                         help="independent runs, each using a fresh temporary database")
     parser.add_argument("--profile-writer", action="store_true",
                         help="save writer cProfile data (adds overhead; do not compare timings)")
-    parser.add_argument("--baseline-ref", help="Git revision of scdfe_c.py to compare with current source; "
+    baseline = parser.add_mutually_exclusive_group()
+    baseline.add_argument("--baseline-ref", help="Git revision of scdfe_c.py to compare with current source; "
                         "freeze both versions and alternate their sequential execution order")
+    baseline.add_argument("--compare-bindings", action="store_true",
+                          help="compare separate YC parameters with shared quality/time bindings; same schema and scaling")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if min(args.cycles, args.db_cycles, args.command_cycles, args.definition_cycles,
@@ -287,9 +317,19 @@ def main():
         "sqlite": sqlite3.sqlite_version,
         "config": {**vars(args), "output": str(args.output)},
         "runtimes": {},
+        "workload_sha256": hashlib.sha256((repo / "tools/benchmark_inputs.py").read_bytes()).hexdigest(),
+        "benchmark_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "isolation": "frozen runtime sources; parent/child SHA-256 verification; exclusive benchmark lock; "
                      "serial runs, variant order reversed on even repeats",
         "measurement_heartbeat_seconds": 5,
+        "data_generation": (
+            "independent per-RTU Random streams; unique YC values in [-10000,10000]; "
+            "each point randomly chooses quality 0..3 excluding its previous quality; "
+            "YX random 0/1 may repeat, YC changes every cycle; "
+            "YC raw_value=input, value=raw_base+raw_scale*input; fixture base=2, scale=1.1"
+        ),
+        "baseline_method": ("current source with expanded YC quality/time parameters only"
+                            if args.compare_bindings else "git revision" if args.baseline_ref else "none"),
         "scope": ("concurrent threads/spawn writer; no device I/O" if args.pipeline_only else
                   "serial stage microbenchmarks plus concurrent threads/spawn writer; no device I/O"),
         "results": [],
@@ -304,6 +344,8 @@ def main():
             if args.baseline_ref:
                 sources["before"] = subprocess.check_output(
                     ["git", "show", f"{args.baseline_ref}:scdfe_c.py"], cwd=repo)
+            elif args.compare_bindings:
+                sources["before"] = unshared_binding_source((repo / "scdfe_c.py").read_bytes())
             sources["after"] = (repo / "scdfe_c.py").read_bytes()
             variants = []
             for variant, source in sources.items():

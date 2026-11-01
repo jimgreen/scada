@@ -439,6 +439,51 @@ class BatchWriterTransactionTests(unittest.TestCase):
         self.assertEqual(self.store.get_row("fes_yx_define", [8, 1])["_version"], 1)
         self.assertEqual(self.acknowledged, 1)
 
+    def test_shared_parameters_bind_reordered_slots_and_keys(self):
+        group = {"table": "fes_yc_define", "key_names": ("rtu_id", "pnt_no"),
+                 "value_names": ("value", "status", "raw_status", "refresh_time"),
+                 "value_indexes": (2, 0, 0, 1),
+                 "rows": [(3, 123, 7.5, 7, 1), [4, 124, 8.5, 8, 1]]}
+        messages = [{"op": "batch", "groups": [group]}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        for rtu_id, value, status, stamp in ((7, 7.5, 3, 123), (8, 8.5, 4, 124)):
+            row = self.store.get_row("fes_yc_define", [rtu_id, 1])
+            self.assertEqual((row["value"], row["raw_status"], row["status"],
+                              row["refresh_time"], row["_version"]), (value, status, status, stamp, 2))
+        self.assertEqual(messages, original)
+
+    def test_shared_parameters_merge_partial_overrides_without_changing_other_columns(self):
+        group = {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                 "value_names": ("raw_value", "value", "status", "raw_status"),
+                 "value_indexes": (0, 1, 2, 2), "rows": [(7.5, 10.25, 3, 1, 7)]}
+        last = {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                "value_names": ("raw_time", "refresh_time"),
+                "value_indexes": (0, 0), "rows": [(123, 1, 7)]}
+        messages = [{"op": "batch", "groups": [group]}, self.update(value=8.5, status=4),
+                    {"op": "batch", "groups": [last]}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["raw_value"], row["value"], row["status"],
+                          row["raw_status"], row["raw_time"], row["refresh_time"], row["_version"]),
+                         (7.5, 8.5, 4, 3, 123, 123, 2))
+        self.assertEqual(messages, original)
+        self.assertEqual(self.acknowledged, 3)
+
+    def test_invalid_shared_parameter_indexes_reject_entire_batch(self):
+        valid = point_batch(self.update(value=20))["groups"][0]
+        for indexes in (None, "0", (), (0, 0), (-1,), (1,), (True,), (0.0,), ("0",), ([0],)):
+            with self.subTest(indexes=indexes):
+                self.acknowledged = 0
+                bad = {**valid, "value_indexes": indexes}
+                self.assertFalse(_flush_batch(self.store, self.logger,
+                                              [{"op": "batch", "groups": [valid, bad]}],
+                                              self, self.connection))
+                self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["_version"], 1)
+                self.assertFalse(self.connection.in_transaction)
+                self.assertEqual(self.acknowledged, 1)
+
     def test_invalid_group_rejects_whole_batch_before_writing(self):
         valid = point_batch(self.update(value=20))["groups"][0]
         invalid = [

@@ -113,9 +113,16 @@ Invoke-RestMethod "$base/api/rtus/3" -Method Patch `
 文件锁、守护线程、SQLite WAL 和写库进程的启动/停止流程均按当前平台选择实现。
 
 通信线程连接成功后持续调用主站的 `collect_once()`，把 `yc`、`yx` 返回值和质量/状态写回
-`fes_yc_define`、`fes_yx_define`，同时更新 `raw_*`、`value*`、`status*` 和刷新时间字段。
+`fes_yc_define`、`fes_yx_define`。遥测保留 `raw_value/raw_status/raw_time` 和
+`value/status/refresh_time`：前者为通信采样原始数据，后者为工程运行数据，
+工程值按 `raw_base + raw_scale * raw_value` 计算。比例配置每次连接/定义重载读取一次，
+空配置默认基值 0、比例 1，显式比例 0 仍按 0 处理。非有限值或单点换算失败只记录该点错误。
+遥信保留 `value/status/refresh_time`，保持开关量语义。
+两表已删除 `value_dev/status_dev/refresh_time_dev` 及 `_1/_2/_3` 三组字段，
+schema、数据类、Web 和物理 SQLite 同步删除，不提供旧字段兼容访问。
 值和质量发生变化时立即写入；值和质量稳定时，默认每 5 秒写一次刷新时间心跳，避免稳定点
 在每个采集周期重复产生完整数据库更新，同时保留数据新鲜度信息。
+心跳只写 `refresh_time`，`raw_time` 保留最近一次写入原始值/质量的时间。
 它读取 `fes_yk_define`、`fes_yt_define` 的命令时间和值；首次启动只下发满足
 `cmd_time > cmd_handle_time` 的明确未处理命令，运行期间仅下发命令时间或值发生变化的命令。
 通信线程复用自己的只读 SQLite 连接，通过命令点表 `_version` 汇总值判断是否有变化；
@@ -158,6 +165,17 @@ Web 页面选择“scdfe_c 守护进程”可查看主进程和各 RTU 通道状
   时会记录错误日志，不会猜测设备协议。接入 CAN 设备前应实现明确的帧解码和命令映射主站。
 
 ## 测试
+
+已有数据库应先停止 Web 和 `scdfe_c`，执行一次字段迁移，再启动新版本：
+
+```powershell
+.\.venv\Scripts\python.exe tools/remove_device_values.py --db D:\codex\scada\db\scada.sqlite3
+```
+
+工具在 `db/backups` 创建 SQLite 完整备份，在事务中删除列并更新 schema 指纹；
+校验剩余字段摘要、行数、外键及完整性，任何失败回滚。重复执行不修改数据、不生成备份。
+额外指定 `--refresh-test-values` 才重置明确标识的协议样例值；保留点定义、命令时间，
+跳过已下发或待处理的遥调命令。常规 seed 命令仍只补齐缺失记录，不覆盖用户编辑。
 
 ```powershell
 Set-Location D:\codex\scada
@@ -207,3 +225,13 @@ ruff check api web tests scdfe_c.py
 第 3 轮继续优化通信线程的测量写回：`_sync_measurements` 直接生成 YC/YX 分组参数，避免逐点更新字典的创建、复制和再次转换；变化值、心跳和重复点的最后值语义保持不变，队列入队失败时缓存不会提前更新。对照上一版 `260a7f3`，6 个 RTU 完整写回中位数从 1.387 秒降至 1.021 秒，60 个 RTU 从 17.057 秒降至 11.088 秒，吞吐分别提高 35.9% 和 53.8%。详细逐点核验和三次原始结果见 [第 3 轮效率报告](reports/measurement_direct_20261101.md)；[原始数据](reports/measurement_direct_20261101.json)。
 
 第 4 轮优化独立写库进程的参数准备：单条消息、规范主键顺序且无重复键时，直接按 SQL 分组使用参数元组，省去逐点合并字典和二次分组；重复键、部分字段覆盖与多消息批次继续使用通用合并路径，两条路径共享元数据校验。对照 `71444c2`，最终代码每种规模、每个版本共测七次：6 RTU 中位数 0.923 → 0.897 秒，60 RTU 8.859 → 8.368 秒，吞吐分别提高 2.90% 和 5.87%。全部 28 次运行、3696 万次点更新均通过最终值、状态、版本与完整性核验。结果存在波动，包含优化后更慢的单次运行；不表示最坏延迟保证。完整原始结果、测试与复现命令见 [第 4 轮效率报告](reports/writer_fastpath_20261101.md)。本轮未改动 SQLite 持久性设置，未连接现场设备，Linux 尚未实机复测。
+
+本轮负载使用逐点、逐站独立随机流，固定种子使对照可复现。YC 原始值和工程值分别保持多样性，工程值按测试配置 `2 + 1.1 * raw_value` 计算；YC/YX 质量码随机取 0–3，且每点相邻周期质量不同。质量码只有 4 种，允许不同测点使用相同质量码，不能解释为所有点质量码唯一。实时协议数据不注入随机值。
+
+删除设备字段后的性能对照使用同一 schema、相同换算和输入，只比较遥测质量/时间参数的独立绑定与复用绑定：
+
+```powershell
+.\.venv\Scripts\python.exe tools/benchmark_rtu_scale.py --pipeline-only --compare-bindings --replicas 1 10 --db-cycles 20 --repeat 3 --seed 20261101 --output reports/raw_engineering_binding_20261101.json
+```
+
+`--compare-bindings` 从当前源码生成仅修改 YC 参数布局的基线，冻结两份源码并记录 SHA-256；父进程和 spawn 写库进程使用相同快照。它与 `--baseline-ref` 互斥。旧字段结构下的历史报告不能直接用于计算本轮收益。最新结果及测量边界见 [原始值/工程值效率报告](reports/raw_engineering_binding_20261101.md)。

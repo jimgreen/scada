@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
 import json
+import math
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -62,14 +63,13 @@ WORKER_DEFINITION_CHECK_INTERVAL = 2.0
 MEASUREMENT_HEARTBEAT_INTERVAL = 5.0
 _MEASUREMENT_SHAPES = {
     ("yc", False): ("fes_yc_define", (
-        "raw_value", "raw_status", "raw_time", "value", "value_dev", "status",
-        "status_dev", "refresh_time", "refresh_time_dev",
-    )),
+        "raw_value", "raw_status", "raw_time", "value", "status", "refresh_time",
+    ), (0, 2, 3, 1, 2, 3)),
     ("yx", False): ("fes_yx_define", (
-        "value", "value_dev", "status", "status_dev", "refresh_time", "refresh_time_dev",
-    )),
-    ("yc", True): ("fes_yc_define", ("refresh_time", "refresh_time_dev", "raw_time")),
-    ("yx", True): ("fes_yx_define", ("refresh_time", "refresh_time_dev")),
+        "value", "status", "refresh_time",
+    ), (0, 1, 2)),
+    ("yc", True): ("fes_yc_define", ("refresh_time",), (0,)),
+    ("yx", True): ("fes_yx_define", ("refresh_time",), (0,)),
 }
 _SIGNATURE_PROJECTION_CACHE: dict[
     tuple[str, str], tuple[tuple[str, ...], str, str]
@@ -106,7 +106,7 @@ def _thread_id(thread: threading.Thread) -> int:
 RUNTIME_FIELDS = {
     "_version",
     "raw_value", "raw_status", "raw_time", "value", "status",
-    "value_dev", "status_dev", "refresh_time", "refresh_time_dev",
+    "refresh_time",
     "refresh_time1", "refresh_time2", "refresh_time3",
     "cmd_time", "cmd_handle_time", "cmd_check_id",
     "man_disable_last_tm", "lock_begintime", "lock_holdtime",
@@ -321,15 +321,19 @@ class ScdfeLogger:
 
 @lru_cache(maxsize=256)
 def _batch_update_sql(table: str, value_names: tuple[str, ...],
-                      key_names: tuple[str, ...]) -> str:
+                      key_names: tuple[str, ...], value_indexes: tuple[int, ...]) -> str:
     """Build and cache the SQL for one table/key/value shape.
 
     Communication cycles repeatedly update the same YC/YX columns. Caching
     the quoted statement removes string construction from the hot path while
     keeping identifiers validated by :func:`quote_identifier`.
     """
-    assignments = ", ".join(f"{quote_identifier(name)}=?" for name in value_names)
-    predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in key_names)
+    assignments = ", ".join(
+        f"{quote_identifier(name)}=?{index + 1}" for name, index in zip(value_names, value_indexes)
+    )
+    key_start = len(set(value_indexes)) + 1
+    predicate = " AND ".join(f"{quote_identifier(name)}=?{index}"
+                             for index, name in enumerate(key_names, key_start))
     return (
         f"UPDATE {quote_identifier(table)} SET {assignments}, _version=_version+1 "
         f"WHERE {predicate}"
@@ -356,7 +360,7 @@ def _message_groups(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
              "rows": [(*values.values(), *(key[name] for name in key_names))]}]
 
 
-def _validated_batch_group(group: Any) -> tuple[str, tuple, tuple, list]:
+def _validated_batch_group(group: Any) -> tuple[str, tuple, tuple, tuple, list]:
     """Validate common group metadata once, outside the per-point loops."""
     if not isinstance(group, Mapping):
         raise ValueError("批量写入分组不是对象")
@@ -373,7 +377,17 @@ def _validated_batch_group(group: Any) -> tuple[str, tuple, tuple, list]:
         raise ValueError("批量写入分组包含重复字段")
     if not isinstance(rows, list) or not rows:
         raise ValueError("批量写入分组缺少 rows")
-    return table, key_names, value_names, rows
+    value_indexes = group.get("value_indexes", tuple(range(len(value_names))))
+    if not isinstance(value_indexes, (tuple, list)):
+        raise ValueError("批量写入字段参数索引不是序列")
+    value_indexes = tuple(value_indexes)
+    # Validate before the SQL cache: (0.0,) and (0,) compare equal in a cache
+    # key, but only integer positions are valid input metadata.
+    if (len(value_indexes) != len(value_names) or not value_indexes
+            or any(type(index) is not int or index < 0 for index in value_indexes)
+            or set(value_indexes) != set(range(len(set(value_indexes))))):
+        raise ValueError("批量写入字段参数索引必须从 0 开始连续编号")
+    return table, key_names, value_names, value_indexes, rows
 
 
 def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[tuple[Any, ...]]]:
@@ -394,14 +408,14 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
         fast_seen: set[tuple[str, tuple[str, ...], tuple[Any, ...]]] = set()
         fast_path = True
         for group in _message_groups(messages[0]):
-            table, key_names, value_names, rows = _validated_batch_group(group)
+            table, key_names, value_names, value_indexes, rows = _validated_batch_group(group)
             canonical_keys = tuple(sorted(key_names))
             if key_names != canonical_keys:
                 fast_path = False
                 break
-            value_count = len(value_names)
+            sql = _batch_update_sql(table, value_names, canonical_keys, value_indexes)
+            value_count = len(set(value_indexes))
             param_count = value_count + len(key_names)
-            sql = _batch_update_sql(table, value_names, canonical_keys)
             prepared_rows = fast_grouped.setdefault(sql, [])
             for row in rows:
                 if not isinstance(row, (tuple, list)) or len(row) != param_count:
@@ -422,14 +436,14 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
     coalesced: dict[tuple, tuple[tuple, tuple[Any, ...]]] = {}
     for message in messages:
         for group in _message_groups(message):
-            table, key_names, value_names, rows = _validated_batch_group(group)
+            table, key_names, value_names, value_indexes, rows = _validated_batch_group(group)
             # Validate identifiers once per group, not once per point. Key
             # order must be canonical so differently ordered keys still merge.
             canonical_keys = tuple(sorted(key_names))
-            _batch_update_sql(table, value_names, canonical_keys)
+            _batch_update_sql(table, value_names, canonical_keys, value_indexes)
             key_order = tuple(key_names.index(name) for name in canonical_keys)
-            shape = (table, value_names, canonical_keys)
-            value_count = len(value_names)
+            shape = (table, value_names, canonical_keys, value_indexes)
+            value_count = len(set(value_indexes))
             param_count = value_count + len(key_names)
             for row in rows:
                 if not isinstance(row, (tuple, list)) or len(row) != param_count:
@@ -445,9 +459,10 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
                     coalesced[token] = (shape, params)
                 else:
                     previous_shape, previous_params = previous
-                    fields = dict(zip(previous_shape[1], previous_params))
-                    fields.update(zip(value_names, params))
-                    merged_shape = (table, tuple(fields), canonical_keys)
+                    fields = {name: previous_params[index]
+                              for name, index in zip(previous_shape[1], previous_shape[3])}
+                    fields.update((name, params[index]) for name, index in zip(value_names, value_indexes))
+                    merged_shape = (table, tuple(fields), canonical_keys, tuple(range(len(fields))))
                     coalesced[token] = (merged_shape, (*fields.values(), *keys))
     grouped: dict[tuple, list[tuple[Any, ...]]] = {}
     for shape, params in coalesced.values():
@@ -815,7 +830,21 @@ class ChannelWorker:
         self._next_cycle_log = 0.0
         self._master: Any | None = None
         self._command_connection: sqlite3.Connection | None = None
-        self._measurement_cache: dict[tuple[str, int], tuple[Any, Any, float]] = {}
+        self._measurement_cache: dict[tuple[str, int], tuple[Any, Any, int, float]] = {}
+        self._yc_scaling: dict[int, tuple[Any, Any]] | None = None
+
+    def _load_yc_scaling(self) -> None:
+        """Load once per connection/definition reload, never once per point."""
+        if self.store is None:  # In-memory benchmarks without a database.
+            scaling = {}
+        else:
+            with self.store.connection() as connection:
+                scaling = {int(row[0]): (row[1], row[2]) for row in connection.execute(
+                    "SELECT pnt_no, COALESCE(raw_base, 0.0), COALESCE(raw_scale, 1.0) "
+                    "FROM fes_yc_define WHERE rtu_id=?", (self.spec.rtu_id,),
+                )}
+        self._yc_scaling = scaling
+        self._measurement_cache.clear()
 
     def _close_command_connection(self) -> None:
         connection = self._command_connection
@@ -918,8 +947,8 @@ class ChannelWorker:
             )
             connection.commit()
 
-    @staticmethod
-    def _measurement_state(kind: str, value: Any, quality: Any) -> tuple[Any, int]:
+    def _measurement_state(self, kind: str, point_no: int, value: Any,
+                           quality: Any) -> tuple[Any, Any, int]:
         if isinstance(quality, int):
             quality_value = int(quality)
         else:
@@ -928,51 +957,53 @@ class ChannelWorker:
             except (TypeError, ValueError):
                 quality_value = 0
         if kind == "yc":
-            return float(value), quality_value
+            raw_value = float(value)
+            base, scale = self._yc_scaling.get(point_no, (0.0, 1.0))
+            engineering_value = float(base) + float(scale) * raw_value
+            if not math.isfinite(raw_value) or not math.isfinite(engineering_value):
+                raise ValueError(f"YC {point_no} 原始值或工程值不是有限数")
+            return raw_value, engineering_value, quality_value
         if kind == "yx":
-            return int(bool(value)), quality_value
+            value = int(bool(value))
+            return value, value, quality_value
         raise ValueError(f"不支持的实时点类型: {kind}")
 
-    @staticmethod
-    def _measurement_params(kind: str, value: Any, quality: int, now: int,
-                            heartbeat: bool) -> tuple[Any, ...]:
-        """Values in _MEASUREMENT_SHAPES order, shared by queued/direct writes."""
-        if heartbeat:
-            return (now, now, now) if kind == "yc" else (now, now)
-        if kind == "yc":
-            return value, quality, now, value, value, quality, quality, now, now
-        return value, value, quality, quality, now, now
-
-    def _queue_measurements(self, pending: dict[tuple[str, int], tuple[Any, int, float]],
+    def _queue_measurements(self, pending: dict[tuple[str, int], tuple[Any, Any, int, float]],
                             changed: set[tuple[str, int]], now: int) -> None:
         groups: dict[tuple[str, bool], dict[str, Any]] = {}
         rtu_id = self.spec.rtu_id
-        for cache_key, (value, quality, _) in pending.items():
+        for cache_key, (raw_value, value, quality, _) in pending.items():
             kind, point_no = cache_key
             heartbeat = cache_key not in changed
             shape = (kind, heartbeat)
             group = groups.get(shape)
             if group is None:
-                table, columns = _MEASUREMENT_SHAPES[shape]
+                table, columns, value_indexes = _MEASUREMENT_SHAPES[shape]
                 group = {"table": table, "key_names": ("pnt_no", "rtu_id"),
-                         "value_names": columns, "rows": []}
+                         "value_names": columns, "value_indexes": value_indexes, "rows": []}
                 groups[shape] = group
-            group["rows"].append(
-                (*self._measurement_params(kind, value, quality, now, heartbeat), point_no, rtu_id)
-            )
+            if heartbeat:
+                row = (now, point_no, rtu_id)
+            elif kind == "yc":
+                row = (raw_value, value, quality, now, point_no, rtu_id)
+            else:
+                row = (value, quality, now, point_no, rtu_id)
+            group["rows"].append(row)
         self._queue_groups(list(groups.values()))
 
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
+        if self._yc_scaling is None:
+            self._load_yc_scaling()
         yc = yx = 0
         queued = self.writer_queue is not None
         pending: list[tuple[str, int, int, Mapping[str, Any]]] = []
-        metadata: list[tuple[str, tuple[str, int], tuple[Any, Any], float]] = []
+        metadata: list[tuple[str, tuple[str, int], tuple[Any, Any, int], float]] = []
         changed_points: set[tuple[str, int]] = set()
         # Only retain states seen in this result.  Copying the whole cache on
         # every poll made stable 200-point scans O(points) before any work was
         # selected, and is unnecessary because duplicate point numbers are the
         # only case that needs a tentative state within the current result.
-        candidate_cache: dict[tuple[str, int], tuple[Any, Any, float]] = {}
+        candidate_cache: dict[tuple[str, int], tuple[Any, Any, int, float]] = {}
         monotonic_now = time.monotonic()
         now = _now_ms()
         for item in values or ():
@@ -980,16 +1011,16 @@ class ChannelWorker:
                 kind, point_no, value, quality = _measurement(item)
                 if kind not in {"yc", "yx"} or point_no is None:
                     continue
-                state = self._measurement_state(kind, value, quality)
+                state = self._measurement_state(kind, point_no, value, quality)
                 cache_key = (kind, point_no)
                 previous = candidate_cache.get(cache_key)
                 if previous is None:
                     previous = self._measurement_cache.get(cache_key)
-                value_changed = previous is None or previous[:2] != state
+                value_changed = previous is None or previous[:3] != state
                 heartbeat_due = (
                     previous is None
                     or self.measurement_heartbeat_interval == 0
-                    or monotonic_now - previous[2] >= self.measurement_heartbeat_interval
+                    or monotonic_now - previous[3] >= self.measurement_heartbeat_interval
                 )
                 if not value_changed and not heartbeat_due:
                     continue
@@ -1003,9 +1034,10 @@ class ChannelWorker:
                     else:
                         yx += 1
                 else:
-                    table, columns = _MEASUREMENT_SHAPES[(kind, not value_changed)]
-                    params = self._measurement_params(kind, *state, now, not value_changed)
-                    pending.append((table, self.spec.rtu_id, point_no, dict(zip(columns, params))))
+                    table, columns, value_indexes = _MEASUREMENT_SHAPES[(kind, not value_changed)]
+                    params = ((*state, now) if kind == "yc" else (*state[1:], now)) if value_changed else (now,)
+                    updates = {name: params[index] for name, index in zip(columns, value_indexes)}
+                    pending.append((table, self.spec.rtu_id, point_no, updates))
                     metadata.append((kind, cache_key, state, monotonic_now))
                 candidate_cache[cache_key] = (*state, monotonic_now)
             except Exception as exc:  # noqa: BLE001 - 单点异常不能中断整站采集
@@ -1157,6 +1189,7 @@ class ChannelWorker:
                     self._last_signature = definition_signature(
                         self.store, self.spec.rtu_id, self._read_connection(),
                     )
+                    self._load_yc_scaling()
                     self._master = self.master_factory(self.store, self.spec)
                     self._master.connect()
                     self._measurement_cache.clear()

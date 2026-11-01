@@ -28,7 +28,7 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 - `service.py`：JSON 表结构加载、参数化 SQL、SQLite 事务和数据校验。
 - `static/`：中文管理页面、字段编辑、API 说明。
 - `test_server.py`、`test_protocol_seed_data.py`：HTTP 和协议测试数据回归测试。
-- 表结构：`D:\codex\scada\dbdef\json\*.json`，共 18 表、353 个定义字段。
+- 表结构：`D:\codex\scada\dbdef\json\*.json`，共 18 表、329 个定义字段。
 - 业务数据：`D:\codex\scada\db\scada.sqlite3`，首次启动建立空表；不会自动填充示例数据。
 - SQLite 的 WAL/SHM 伴随文件也位于数据库目录。不要在运行期间只复制主文件作为备份；应使用 SQLite backup API 或在停服后备份。
 
@@ -39,6 +39,10 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 存储使用原生 SQLite（单文件多表），采用 WAL、每次操作独立连接、`BEGIN IMMEDIATE` 写事务、外键约束、30 秒 busy_timeout 和 mmap_size。此文件格式不是 `D:\codex\rtdb` 的每表独立 SQLite 封装格式；复用了它的 JSON 公共定义约定。旧 EMS 共享内存/二进制 RTDB 文件未直接接入。
 
 ## 页面操作
+
+遥测、遥调常用列同时显示 `raw_value`（原始值）和 `value`（工程值）。遥测工程值由
+`scdfe_c` 按 `raw_base + raw_scale * raw_value` 计算。遥测、遥信表已移除设备值、
+设备状态、设备刷新时间及其 1/2/3 组字段；API 不返回或接受这些字段。
 
 1. 在“RTU 与通道”中一次新增 RTU 和通道字段，再配置对应协议参数及四遥点。
 2. RTU 行的“四遥”按钮进入其点表；遥测、遥信、遥调、遥控页面共享 RTU 过滤条件。

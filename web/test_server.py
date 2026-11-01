@@ -74,7 +74,7 @@ class WebTests(unittest.TestCase):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
         self.assertEqual(len(body['items']), 18)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 353)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 329)
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')
         rtu_columns = {column['eng_name'] for column in rtu_schema['columns']}
         self.assertNotIn('proto_type', rtu_columns)
@@ -87,6 +87,20 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.call('/')[0], 200)
         self.assertEqual(self.call('/api/health')[1]['status'], 'ok')
         self.assertEqual(self.call('/api/rtus')[1]['total'], 0)
+
+    def test_removed_device_fields_are_absent_and_rejected(self):
+        self.rtu()
+        removed = [base + suffix for suffix in ('', '_1', '_2', '_3')
+                   for base in ('value_dev', 'status_dev', 'refresh_time_dev')]
+        for kind in ('yc', 'yx'):
+            schema = self.call(f'/api/tables/fes_{kind}_define/schema')[1]['schema']
+            self.assertTrue(set(removed).isdisjoint(c['eng_name'] for c in schema['columns']))
+            base = f'/api/rtus/1/points/{kind}'
+            self.assertEqual(self.call(base, 'POST', {'pnt_no': 1, 'value': 1})[0], 201)
+            for field in removed:
+                self.assertEqual(self.call(base + '/1', 'PATCH', {field: 5})[0], 400)
+                self.assertEqual(self.call(base, 'POST', {'pnt_no': 2, field: 5})[0], 400)
+            self.assertTrue(set(removed).isdisjoint(self.call(base + '/1')[1]['item']))
 
     def test_all_four_types_scoped_crud_and_persistence(self):
         self.rtu(7)

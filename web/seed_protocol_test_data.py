@@ -19,6 +19,7 @@ from collections import Counter
 from contextlib import closing
 from datetime import datetime
 import json
+import random
 from pathlib import Path
 import sqlite3
 import time
@@ -204,21 +205,23 @@ def _point_values(spec: dict, rtu_id: int, kind: str, number: int,
         "rtu_id": rtu_id, "pnt_no": number, "code": code, "rdfid": code,
         "name": f"{spec['key']}测试{kind.upper()}{number:03d}",
     }
+    rng = random.Random(f"scada-test:{rtu_id}:{kind}:{number}")
+    quality = rng.randrange(4)
     if kind == "yx":
         result.update(
-            name_0="分位", name_1="合位", value=number % 2,
-            status=0, refresh_time=now, value_dev=number % 2,
-            status_dev=0, iflock=0, ifreverse=0, ifalarm=0, ifdata_curb=0,
+            name_0="分位", name_1="合位", value=rng.randrange(2),
+            status=quality, refresh_time=now,
+            iflock=0, ifreverse=0, ifalarm=0, ifdata_curb=0,
             yk_pnt=number if number <= COUNTS["yk"] else None,
             yk_rtu=rtu_id if number <= COUNTS["yk"] else None,
         )
     elif kind == "yc":
-        value = round(220.0 + number * 0.5, 3)
+        value = rng.uniform(20.0, 800.0)
         result.update(
-            raw_base=0.0, raw_scale=1.0, raw_value=value, value=value,
-            value_dev=value, raw_status=0, status=0, status_dev=0,
+            raw_base=2.0, raw_scale=1.1, raw_value=value, value=2.0 + 1.1 * value,
+            raw_status=quality, status=quality,
             raw_min=-1000.0, eng_min=-1000.0, raw_max=1000.0, eng_max=1000.0,
-            raw_time=now, refresh_time=now, refresh_time_dev=now,
+            raw_time=now, refresh_time=now,
             value_zone=0.01, time_zone=60, iflock=0, ifreverse=0,
             ifalarm=0, ifdata_curb=0,
             yt_pnt=number if number <= COUNTS["yt"] else None,
@@ -232,9 +235,9 @@ def _point_values(spec: dict, rtu_id: int, kind: str, number: int,
             cmd_handle_time=0, refresh_time=0,
         )
     else:
-        value = float(number * 5)
+        value = rng.uniform(20.0, 800.0)
         result.update(
-            raw_base=0.0, raw_scale=1.0, raw_value=value, value=value,
+            raw_base=2.0, raw_scale=1.1, raw_value=value, value=2.0 + 1.1 * value,
             raw_min=-1000.0, eng_min=-1000.0, raw_max=1000.0, eng_max=1000.0,
             raw_status=0, status=0, is_step=0.0, step=0.0,
             max_wait_time=10000, icode=6, man_disable=0, auto_disable=0,

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import pickle
 from pathlib import Path
 import sys
@@ -13,18 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scdfe_c import ChannelSpec, ChannelWorker, _apply_batch_updates, definition_signature
 from web.service import ScadaStore, quote_identifier
+from tools.benchmark_inputs import MeasurementStream
 
 
-@dataclass
-class Value:
-    kind: str
-    point_no: int
-    value: object
-    quality: int = 0
-
-
-# Match the enlarged protocol seed data: each station has ten times the
-# previous YC/YX/YK/YT population.
 POINT_COUNTS = {"yc": 1000, "yx": 1000, "yk": 200, "yt": 200}
 
 
@@ -62,12 +52,13 @@ class LegacyWorker(ChannelWorker):
 
     def _queue_groups(self, groups):  # type: ignore[no-untyped-def]
         for group in groups:
-            value_count = len(group["value_names"])
+            indexes = group.get("value_indexes", tuple(range(len(group["value_names"]))))
+            value_count = len(set(indexes))
             for row in group["rows"]:
                 self.writer_queue.put({
                     "op": "update", "table": group["table"],
                     "key": dict(zip(group["key_names"], row[value_count:])),
-                    "values": dict(zip(group["value_names"], row[:value_count])),
+                    "values": {name: row[index] for name, index in zip(group["value_names"], indexes)},
                 })
 
     def _command_rows(self):  # type: ignore[no-untyped-def]
@@ -94,12 +85,8 @@ def main() -> None:
     if (args.cycles < 1 or args.db_cycles < 0 or args.command_cycles < 1
             or args.definition_cycles < 1):
         raise SystemExit("cycle counts must be positive and --db-cycles cannot be negative")
-    values = [
-        *(Value("yc", point_no, float(point_no))
-          for point_no in range(1, POINT_COUNTS["yc"] + 1)),
-        *(Value("yx", point_no, point_no % 2)
-          for point_no in range(1, POINT_COUNTS["yx"] + 1)),
-    ]
+    # This stage intentionally holds a random sample stable to measure heartbeat filtering.
+    values = MeasurementStream(1, POINT_COUNTS["yc"], POINT_COUNTS["yx"]).next()
     with tempfile.TemporaryDirectory() as log_dir:
         legacy_queue = CountingQueue()
         legacy_worker = LegacyWorker(
@@ -107,6 +94,7 @@ def main() -> None:
             log_dir=log_dir, writer_queue=legacy_queue,
             measurement_heartbeat_interval=0,
         )
+        legacy_worker._yc_scaling = dict.fromkeys(range(1, POINT_COUNTS["yc"] + 1), (2.0, 1.1))
         legacy_started = time.perf_counter()
         for _ in range(args.cycles):
             legacy_worker._sync_measurements(values)
@@ -117,6 +105,7 @@ def main() -> None:
             None, ChannelSpec(1, 1, "custom", None, None),
             log_dir=log_dir, writer_queue=queue,
         )
+        worker._yc_scaling = dict.fromkeys(range(1, POINT_COUNTS["yc"] + 1), (2.0, 1.1))
         started = time.perf_counter()
         for _ in range(args.cycles):
             worker._sync_measurements(values)
@@ -144,7 +133,8 @@ def main() -> None:
                 "rtu_id": 1, "channel_id": 1, "channel_type": "custom",
             }])
             _bulk_create(store, "fes_yc_define", [
-                {"rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}"}
+                {"rtu_id": 1, "pnt_no": point_no, "name": f"YC{point_no}",
+                 "raw_base": 2.0, "raw_scale": 1.1}
                 for point_no in range(1, POINT_COUNTS["yc"] + 1)
             ])
             _bulk_create(store, "fes_yx_define", [

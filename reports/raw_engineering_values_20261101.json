@@ -1,0 +1,121 @@
+{
+  "fes_yc_define": {
+    "rows": 60000,
+    "unique_raw": 60000,
+    "unique_engineering": 60000,
+    "equal_pairs": 0,
+    "conversion_mismatches": 0,
+    "samples": [
+      {
+        "rtu_id": 2,
+        "pnt_no": 1,
+        "raw_value": 135.61142342354998,
+        "value": 151.17256576590498,
+        "raw_status": 1,
+        "status": 1
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 2,
+        "raw_value": 451.7134625050028,
+        "value": 498.8848087555031,
+        "raw_status": 1,
+        "status": 1
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 3,
+        "raw_value": 164.77927449714707,
+        "value": 183.25720194686178,
+        "raw_status": 0,
+        "status": 0
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 4,
+        "raw_value": 519.5045844691049,
+        "value": 573.4550429160154,
+        "raw_status": 1,
+        "status": 1
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 5,
+        "raw_value": 665.1595613460236,
+        "value": 733.675517480626,
+        "raw_status": 1,
+        "status": 1
+      }
+    ],
+    "quality_counts": {
+      "0": 14865,
+      "1": 15312,
+      "2": 14972,
+      "3": 14851
+    }
+  },
+  "fes_yx_define": {
+    "rows": 60000,
+    "quality_counts": {
+      "0": 14998,
+      "1": 14821,
+      "2": 15162,
+      "3": 15019
+    }
+  },
+  "fes_yk_define": {
+    "rows": 12000
+  },
+  "fes_yt_define": {
+    "rows": 12000,
+    "unique_raw": 12000,
+    "unique_engineering": 12000,
+    "equal_pairs": 0,
+    "conversion_mismatches": 0,
+    "samples": [
+      {
+        "rtu_id": 2,
+        "pnt_no": 1,
+        "raw_value": 550.0778398071574,
+        "value": 607.0856237878731,
+        "raw_status": 0,
+        "status": 0
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 2,
+        "raw_value": 576.7754351801657,
+        "value": 636.4529786981823,
+        "raw_status": 0,
+        "status": 0
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 3,
+        "raw_value": 597.6068220788105,
+        "value": 659.3675042866917,
+        "raw_status": 0,
+        "status": 0
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 4,
+        "raw_value": 176.42551919139854,
+        "value": 196.0680711105384,
+        "raw_status": 0,
+        "status": 0
+      },
+      {
+        "rtu_id": 2,
+        "pnt_no": 5,
+        "raw_value": 558.8962012260379,
+        "value": 616.7858213486417,
+        "raw_status": 0,
+        "status": 0
+      }
+    ]
+  },
+  "rtus": 61,
+  "integrity_check": "ok",
+  "foreign_key_violations": 0
+}
