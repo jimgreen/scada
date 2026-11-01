@@ -1,0 +1,179 @@
+{
+  "created_at": "2026-11-01T04:02:30.206795+00:00",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "sqlite": "3.53.1",
+  "config": {
+    "seed": 20261101,
+    "replicas": [
+      10
+    ],
+    "cycles": 1000,
+    "db_cycles": 20,
+    "command_cycles": 1000,
+    "definition_cycles": 10,
+    "scan_cycles": 1000,
+    "pipeline_only": true,
+    "repeat": 1,
+    "profile_writer": true,
+    "baseline_ref": null,
+    "compare_bindings": false,
+    "output": "output\\writer_unique_rows_profile_20261101.json"
+  },
+  "runtimes": {
+    "after": {
+      "sha256": "835fdfc100efab8d5a67971907a2b28129672bbe4adaa06a42b1a232f87678f9",
+      "interval_seconds": 0.2,
+      "max_batch": 500
+    }
+  },
+  "workload_sha256": "07fa6fc1716b6f1df16036603f6e5f3579cce0d9e9879090ba4d9af0ed4c429b",
+  "benchmark_sha256": "5bc4230237722234d7160569d665ee7fcd433eb32fbd6ab8a801d96cec139fec",
+  "isolation": "frozen runtime sources; parent/child SHA-256 verification; exclusive benchmark lock; serial runs, variant order reversed on even repeats",
+  "measurement_heartbeat_seconds": 5,
+  "data_generation": "independent per-RTU Random streams; unique YC values in [-10000,10000]; each point randomly chooses quality 0..3 excluding its previous quality; YX random 0/1 may repeat, YC changes every cycle; YC raw_value=input, value=raw_base+raw_scale*input; fixture base=2, scale=1.1",
+  "baseline_method": "none",
+  "scope": "Instrumented writer diagnosis only; excluded from before/after performance medians",
+  "results": [
+    {
+      "rtus": 60,
+      "repeat": 1,
+      "variant": "after",
+      "runtime_sha256": "835fdfc100efab8d5a67971907a2b28129672bbe4adaa06a42b1a232f87678f9",
+      "points_per_rtu": {
+        "yc": 1000,
+        "yx": 1000,
+        "yk": 200,
+        "yt": 200
+      },
+      "table_counts": {
+        "fes_rtu_define": 60,
+        "fes_yc_define": 60000,
+        "fes_yx_define": 60000,
+        "fes_yk_define": 12000,
+        "fes_yt_define": 12000,
+        "fes_channel_iec104_define": 10,
+        "fes_channel_modbus_tcp_define": 10,
+        "fes_channel_modbus_rtu_define": 10,
+        "fes_channel_can_define": 10,
+        "fes_channel_bacnet_define": 10,
+        "fes_channel_opc_define": 10,
+        "fes_channel_modbus_define": 20,
+        "fes_channel_modbus_define_call": 180,
+        "fes_channel_modbus_define_data": 40000,
+        "fes_channel_modbus_define_ytyk": 8000
+      },
+      "sample_payload": {
+        "point_updates": 2000,
+        "serialized_bytes": 55790,
+        "yc_unique_values": 1000,
+        "yc_unique_engineering_values": 1000,
+        "quality_counts": {
+          "yc": {
+            "0": 248,
+            "1": 255,
+            "2": 224,
+            "3": 273
+          },
+          "yx": {
+            "0": 271,
+            "1": 230,
+            "2": 247,
+            "3": 252
+          }
+        }
+      },
+      "pipeline": {
+        "threads": 60,
+        "writer_processes": 1,
+        "cycles_per_rtu": 20,
+        "messages": 1200,
+        "point_updates": 2400000,
+        "producer_ms": 11095.522800000253,
+        "drained_ms": 11588.921000000028,
+        "updates_per_second": 207094.344676264,
+        "final_rows_verified": 120000,
+        "writer_exitcode": 0
+      },
+      "writer_profile": "D:\\codex\\scada\\output\\writer_unique_rows_profile_20261101.after.60rtus.1.prof",
+      "integrity_check": "ok",
+      "foreign_key_violations": 0
+    }
+  ],
+  "profiler_total_seconds": 11.618244599999997,
+  "profile_sha256": "1a90c5569e9d7b007cc77931ff2ed6b9798c62ee697be51a293d943c0d89f8b4",
+  "functions": [
+    {
+      "file": "after.py",
+      "line": 554,
+      "name": "_batch_writer_entry",
+      "calls": 1,
+      "own_seconds": 0.052546800000000005,
+      "cumulative_seconds": 11.6182443
+    },
+    {
+      "file": "after.py",
+      "line": 502,
+      "name": "_flush_batch",
+      "calls": 1205,
+      "own_seconds": 0.011476700000000001,
+      "cumulative_seconds": 8.3051662
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'executemany' of 'sqlite3.Connection' objects>",
+      "calls": 2400,
+      "own_seconds": 4.3752364,
+      "cumulative_seconds": 4.3752364
+    },
+    {
+      "file": "queues.py",
+      "line": 98,
+      "name": "get",
+      "calls": 1205,
+      "own_seconds": 0.0066049,
+      "cumulative_seconds": 3.1743324000000004
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'commit' of 'sqlite3.Connection' objects>",
+      "calls": 1201,
+      "own_seconds": 2.8807474,
+      "cumulative_seconds": 2.8807474
+    },
+    {
+      "file": "after.py",
+      "line": 393,
+      "name": "_prepare_batch_updates",
+      "calls": 1200,
+      "own_seconds": 0.7468317000000001,
+      "cumulative_seconds": 1.0115720000000001
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<built-in method _pickle.loads>",
+      "calls": 1201,
+      "own_seconds": 0.2417069,
+      "cumulative_seconds": 0.2417069
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'close' of 'sqlite3.Connection' objects>",
+      "calls": 2,
+      "own_seconds": 0.0347388,
+      "cumulative_seconds": 0.0347388
+    },
+    {
+      "file": "~",
+      "line": 0,
+      "name": "<method 'execute' of 'sqlite3.Connection' objects>",
+      "calls": 1277,
+      "own_seconds": 0.020319200000000003,
+      "cumulative_seconds": 0.020319200000000003
+    }
+  ]
+}

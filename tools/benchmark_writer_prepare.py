@@ -57,7 +57,10 @@ def main():
                 def put(self, message, **_kwargs):
                     self.messages.append(message)
 
-            runtime = runtimes['before']
+            # Use the production producer so the optimized internal
+            # `_unique_rows` marker is present in the identical payload sent
+            # to both writer implementations.
+            runtime = runtimes['after']
             queue = CaptureQueue()
             worker = runtime.ChannelWorker(None, runtime.ChannelSpec(7, 7, 'custom', None, None),
                                            log_dir=root / 'logs', writer_queue=queue)

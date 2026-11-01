@@ -470,6 +470,49 @@ class BatchWriterTransactionTests(unittest.TestCase):
         self.assertEqual(self.store.get_row("fes_yx_define", [8, 1])["_version"], 1)
         self.assertEqual(self.acknowledged, 1)
 
+    def test_unique_marker_only_applies_within_one_group(self):
+        for first_marked, last_marked in ((True, True), (True, False), (False, True)):
+            for split_messages in (False, True):
+                with self.subTest(first=first_marked, last=last_marked, split=split_messages):
+                    groups = [
+                        {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                         "value_names": ("value", "status"), "rows": [(7.5, 2, 1, 7)],
+                         "_unique_rows": first_marked},
+                        {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                         "value_names": ("status", "refresh_time"), "rows": [(3, 123, 1, 7)],
+                         "_unique_rows": last_marked},
+                    ]
+                    messages = ([{"op": "batch", "groups": [group]} for group in groups]
+                                if split_messages else [{"op": "batch", "groups": groups}])
+                    original = deepcopy(messages)
+                    version = self.store.get_row("fes_yc_define", [7, 1])["_version"]
+                    self.acknowledged = 0
+                    self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+                    row = self.store.get_row("fes_yc_define", [7, 1])
+                    self.assertEqual((row["value"], row["status"], row["refresh_time"], row["_version"]),
+                                     (7.5, 3, 123, version + 1))
+                    self.assertEqual(self.acknowledged, len(messages))
+                    self.assertEqual(messages, original)
+
+    def test_unique_marker_keeps_row_validation_and_list_conversion(self):
+        group = {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                 "value_names": ("value",), "rows": [[7.5, 1, 7]], "_unique_rows": True}
+        for bad_row in (42, "bad", (7.5, 1), (7.5, 1, 7, 8), (7.5, [], 7)):
+            with self.subTest(row=bad_row):
+                self.acknowledged = 0
+                messages = [{"op": "batch", "groups": [{**group, "rows": [group["rows"][0], bad_row]}]}]
+                self.assertFalse(_flush_batch(self.store, self.logger, messages, self, self.connection))
+                row = self.store.get_row("fes_yc_define", [7, 1])
+                self.assertEqual((row["value"], row["_version"]), (0, 1))
+                self.assertEqual(self.acknowledged, 1)
+                self.assertFalse(self.connection.in_transaction)
+        messages = [{"op": "batch", "groups": [group]}]
+        original = deepcopy(messages)
+        self.assertTrue(_flush_batch(self.store, self.logger, messages, self, self.connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (7.5, 2))
+        self.assertEqual(messages, original)
+
     def test_shared_parameters_bind_reordered_slots_and_keys(self):
         group = {"table": "fes_yc_define", "key_names": ("rtu_id", "pnt_no"),
                  "value_names": ("value", "status", "raw_status", "refresh_time"),

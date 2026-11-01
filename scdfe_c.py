@@ -406,6 +406,7 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
     if len(messages) == 1:
         fast_grouped: dict[str, list[tuple[Any, ...]]] = {}
         fast_seen: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]] = {}
+        fast_unique: set[tuple[str, tuple[str, ...]]] = set()
         fast_path = True
         for group in _message_groups(messages[0]):
             table, key_names, value_names, value_indexes, rows = _validated_batch_group(group)
@@ -417,9 +418,20 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
             value_count = len(set(value_indexes))
             param_count = value_count + len(key_names)
             prepared_rows = fast_grouped.setdefault(sql, [])
+            unique_rows = group.get("_unique_rows") is True
+            key_group = (table, canonical_keys)
+            # The producer guarantees uniqueness within its group only. If
+            # another group touches the same keys, use the general merger
+            # so partial updates still increment a point's version just once.
+            if key_group in fast_unique or (unique_rows and key_group in fast_seen):
+                fast_path = False
+                break
+            if unique_rows:
+                fast_unique.add(key_group)
             # Table and key names are fixed for the entire group. Hash them
             # once per group instead of wrapping every point key in a token.
-            seen_keys = fast_seen.setdefault((table, canonical_keys), set())
+            seen_keys = (None if unique_rows else
+                         fast_seen.setdefault(key_group, set()))
             for row in rows:
                 if type(row) is not tuple:
                     if not isinstance(row, (tuple, list)):
@@ -427,11 +439,12 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
                     row = tuple(row)
                 if len(row) != param_count:
                     raise ValueError("批量写入行参数数量不匹配")
-                keys = row[value_count:]
-                if keys in seen_keys:  # also rejects unhashable keys
-                    fast_path = False
-                    break
-                seen_keys.add(keys)
+                if not unique_rows:
+                    keys = row[value_count:]
+                    if keys in seen_keys:  # also rejects unhashable keys
+                        fast_path = False
+                        break
+                    seen_keys.add(keys)
                 prepared_rows.append(row)
             if not fast_path:
                 break
@@ -987,7 +1000,12 @@ class ChannelWorker:
             if group is None:
                 table, columns, value_indexes = _MEASUREMENT_SHAPES[shape]
                 group = {"table": table, "key_names": ("pnt_no", "rtu_id"),
-                         "value_names": columns, "value_indexes": value_indexes, "rows": []}
+                         "value_names": columns, "value_indexes": value_indexes,
+                         # candidate_cache is keyed by (kind, point_no), so
+                         # each producer group is unique by construction. The
+                         # writer still validates row shape; this internal
+                         # marker only avoids rebuilding a duplicate-key set.
+                         "_unique_rows": True, "rows": []}
                 groups[shape] = group
             if heartbeat:
                 row = (now, point_no, rtu_id)

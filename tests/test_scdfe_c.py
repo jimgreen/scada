@@ -224,6 +224,7 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(len(queue.messages), 1)
         self.assertEqual(queue.messages[0]["op"], "batch")
         self.assertEqual(sum(len(g["rows"]) for g in queue.messages[0]["groups"]), 2)
+        self.assertTrue(all(g["_unique_rows"] for g in queue.messages[0]["groups"]))
 
     def test_worker_skips_stable_measurements_until_heartbeat(self):
         class Queue:
