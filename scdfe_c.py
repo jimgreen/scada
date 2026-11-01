@@ -405,7 +405,7 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
     # to the general coalescing path below.
     if len(messages) == 1:
         fast_grouped: dict[str, list[tuple[Any, ...]]] = {}
-        fast_seen: set[tuple[str, tuple[str, ...], tuple[Any, ...]]] = set()
+        fast_seen: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]] = {}
         fast_path = True
         for group in _message_groups(messages[0]):
             table, key_names, value_names, value_indexes, rows = _validated_batch_group(group)
@@ -417,17 +417,22 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
             value_count = len(set(value_indexes))
             param_count = value_count + len(key_names)
             prepared_rows = fast_grouped.setdefault(sql, [])
+            # Table and key names are fixed for the entire group. Hash them
+            # once per group instead of wrapping every point key in a token.
+            seen_keys = fast_seen.setdefault((table, canonical_keys), set())
             for row in rows:
-                if not isinstance(row, (tuple, list)) or len(row) != param_count:
+                if type(row) is not tuple:
+                    if not isinstance(row, (tuple, list)):
+                        raise ValueError("批量写入行参数数量不匹配")
+                    row = tuple(row)
+                if len(row) != param_count:
                     raise ValueError("批量写入行参数数量不匹配")
-                params = tuple(row)
-                keys = params[value_count:]
-                token = (table, canonical_keys, keys)
-                if token in fast_seen:  # also rejects unhashable keys
+                keys = row[value_count:]
+                if keys in seen_keys:  # also rejects unhashable keys
                     fast_path = False
                     break
-                fast_seen.add(token)
-                prepared_rows.append(params)
+                seen_keys.add(keys)
+                prepared_rows.append(row)
             if not fast_path:
                 break
         if fast_path:
@@ -562,8 +567,10 @@ def _batch_writer_entry(
             if message == BATCH_WRITER_STOP:
                 batch, pending = pending, []
                 pending_updates = 0
-                flush_ok = _flush_batch(store, logger, batch, queue, connection)
-                queue.task_done()
+                try:
+                    flush_ok = _flush_batch(store, logger, batch, queue, connection)
+                finally:
+                    queue.task_done()
                 if not flush_ok:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 break

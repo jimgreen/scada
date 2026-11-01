@@ -1,0 +1,93 @@
+{
+  "scope": "CPU preparation only; unique canonical keys, 1000 YC + 1000 YX",
+  "baseline_ref": "3aca070",
+  "cycles": 700,
+  "repeat": 5,
+  "seed": 20261101,
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "runtime_sha256": {
+    "before": "848d4ef41d20dd1e19d0276c7dd04fde71f74a6f46743a4563b0c6420ba1aa52",
+    "after": "0d803fecea3873842252b5e2c98068144e608790cd705227548d3e6181ce7b15"
+  },
+  "payload_sha256": "b1a92566fd11d32a73aa5143d81626fe5242b36480c54be623480e85aa11fe87",
+  "benchmark_sha256": "0d43cbed73a0a1c3a56fcf86e656a4920aaaeba7abae8a30da8051f9ce50c9ef",
+  "sql_and_parameters_equal": true,
+  "input_unchanged": true,
+  "median_ms": {
+    "before": 310.6822999998258,
+    "after": 208.95000000018626
+  },
+  "results": [
+    {
+      "repeat": 1,
+      "variant": "before",
+      "elapsed_ms": 304.90529999997307,
+      "point_updates": 1400000,
+      "updates_per_second": 4591589.585356908
+    },
+    {
+      "repeat": 1,
+      "variant": "after",
+      "elapsed_ms": 208.046899999772,
+      "point_updates": 1400000,
+      "updates_per_second": 6729251.913878718
+    },
+    {
+      "repeat": 2,
+      "variant": "after",
+      "elapsed_ms": 214.8950999999215,
+      "point_updates": 1400000,
+      "updates_per_second": 6514806.526535558
+    },
+    {
+      "repeat": 2,
+      "variant": "before",
+      "elapsed_ms": 309.7518999998101,
+      "point_updates": 1400000,
+      "updates_per_second": 4519746.287273325
+    },
+    {
+      "repeat": 3,
+      "variant": "before",
+      "elapsed_ms": 312.175500000194,
+      "point_updates": 1400000,
+      "updates_per_second": 4484656.867688623
+    },
+    {
+      "repeat": 3,
+      "variant": "after",
+      "elapsed_ms": 208.95000000018626,
+      "point_updates": 1400000,
+      "updates_per_second": 6700167.504181632
+    },
+    {
+      "repeat": 4,
+      "variant": "after",
+      "elapsed_ms": 207.80620000005,
+      "point_updates": 1400000,
+      "updates_per_second": 6737046.34414018
+    },
+    {
+      "repeat": 4,
+      "variant": "before",
+      "elapsed_ms": 315.72070000038366,
+      "point_updates": 1400000,
+      "updates_per_second": 4434299.049755999
+    },
+    {
+      "repeat": 5,
+      "variant": "before",
+      "elapsed_ms": 310.6822999998258,
+      "point_updates": 1400000,
+      "updates_per_second": 4506211.007195406
+    },
+    {
+      "repeat": 5,
+      "variant": "after",
+      "elapsed_ms": 223.32460000006904,
+      "point_updates": 1400000,
+      "updates_per_second": 6268901.858548352
+    }
+  ]
+}

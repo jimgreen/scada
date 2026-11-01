@@ -62,6 +62,11 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 队列发送遥测、遥信、遥控/遥调状态和 RTU/线程状态更新，写库进程每 200 ms 或累计 500 条
 消息统一提交事务。主进程停止或重载前会先通知通信线程退出并等待队列完成，避免通信线程直接争抢 SQLite 写锁。
 
+批量写入快路径按表和规范主键字段组复用已见键集合，减少每个点的临时对象；参数和 SQL 结果保持不变。
+若写库异常时日志也无法写入，停止消息仍会被确认，避免队列排空等待卡住。该优化的 CPU 参数准备收益及
+6/60 RTU 链路对照记录在 `reports/writer_prepare_20261101.md`；链路测量受 Windows 调度和系统负载影响，
+报告不把不稳定的端到端差异宣称为吞吐保证。
+
 ## API
 
 请求和响应采用 UTF-8 JSON；写请求要求 `Content-Type: application/json`，最大 2 MB。成功返回对象；错误返回 `{"error":{"code":"...","message":"...","details":...}}`。

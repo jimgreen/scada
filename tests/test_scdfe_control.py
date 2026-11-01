@@ -276,6 +276,37 @@ class BatchWriterTransactionTests(unittest.TestCase):
         return {"op": "update", "table": table,
                 "key": {"rtu_id": rtu_id, "pnt_no": 1}, "values": values}
 
+    def test_tuple_subclasses_are_normalized_before_key_slicing(self):
+        class Row(tuple):
+            def __getitem__(self, index):
+                raise AssertionError("normalize tuple subclass before slicing")
+
+        group = {"table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                 "value_names": ("value",), "rows": [Row((12.5, 1, 7))]}
+        self.assertTrue(_flush_batch(self.store, self.logger, [{"op": "batch", "groups": [group]}],
+                                     self, self.connection))
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (12.5, 2))
+
+    def test_stop_is_acknowledged_even_when_error_log_cannot_be_written(self):
+        messages = iter([self.update(value=10), self.update("fes_yx_define", missing_column=1),
+                         BATCH_WRITER_STOP])
+        test = self
+
+        class Queue:
+            def get(self, **_kwargs):
+                return next(messages)
+
+            def task_done(self):
+                test.acknowledged += 1
+
+        with patch.object(ScdfeLogger, "error", side_effect=OSError("log disk full")):
+            with self.assertRaisesRegex(OSError, "log disk full"):
+                _batch_writer_entry(str(self.store.db_path), str(self.store.catalog.directory),
+                                    str(self.logger.directory), Queue(), 0.2, 100)
+        self.assertEqual(self.acknowledged, 3)
+        self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["_version"], 1)
+
     def test_mixed_tables_stations_and_partial_updates_preserve_latest_fields(self):
         reordered = self.update(value=12.5, status=3)
         reordered["key"] = {"pnt_no": 1, "rtu_id": 7}
