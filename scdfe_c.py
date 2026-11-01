@@ -1050,17 +1050,48 @@ class ChannelWorker:
         candidate_cache: dict[tuple[str, int], tuple[Any, Any, int, float]] = {}
         monotonic_now = time.monotonic()
         now = _now_ms()
+        scaling = self._yc_scaling
+        measurement_state = self._measurement_state
         for item in values or ():
             try:
                 kind, point_no, value, quality = _measurement(item)
                 if kind not in {"yc", "yx"} or point_no is None:
                     continue
-                state = self._measurement_state(kind, point_no, value, quality)
+                # Keep the validated method for unusual point kinds, while
+                # doing the two adapter point types inline.  This removes a
+                # Python method call and repeated attribute lookup for every
+                # normal YC/YX sample without changing conversion semantics.
+                if isinstance(quality, int):
+                    quality_value = int(quality)
+                else:
+                    try:
+                        quality_value = int(getattr(quality, "value", quality or 0))
+                    except (TypeError, ValueError):
+                        quality_value = 0
+                if kind == "yc":
+                    raw_value = float(value)
+                    base, scale = scaling.get(point_no, (0.0, 1.0))
+                    engineering_value = float(base) + float(scale) * raw_value
+                    if not math.isfinite(raw_value) or not math.isfinite(engineering_value):
+                        raise ValueError(f"YC {point_no} 原始值或工程值不是有限数")
+                    state = (raw_value, engineering_value, quality_value)
+                elif kind == "yx":
+                    binary_value = int(bool(value))
+                    state = (binary_value, binary_value, quality_value)
+                else:
+                    state = measurement_state(kind, point_no, value, quality)
                 cache_key = (kind, point_no)
                 previous = candidate_cache.get(cache_key)
                 if previous is None:
                     previous = self._measurement_cache.get(cache_key)
-                value_changed = previous is None or previous[:3] != state
+                # Avoid allocating a three-item slice for every stable or
+                # changed point in the common polling path.
+                value_changed = (
+                    previous is None
+                    or previous[0] != state[0]
+                    or previous[1] != state[1]
+                    or previous[2] != state[2]
+                )
                 heartbeat_due = (
                     previous is None
                     or self.measurement_heartbeat_interval == 0
