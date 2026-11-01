@@ -230,6 +230,43 @@ class ScdfeControlTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
             connection.close()
 
+    def test_preserved_messages_share_transaction_without_coalescing_versions(self):
+        class Queue:
+            def __init__(self):
+                self.acknowledged = 0
+
+            def task_done(self):
+                self.acknowledged += 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = ScadaStore(root / "scada.sqlite3")
+            store.create_row("fes_rtu_define", {
+                "rtu_id": 7, "channel_id": 70, "channel_type": "custom",
+            })
+            store.create_row("fes_yc_define", {
+                "rtu_id": 7, "pnt_no": 1, "name": "电压", "value": 0.0,
+            })
+            queue = Queue()
+            logger = ScdfeLogger(root / "logs", process_name="scdfe_c-db-writer")
+            connection = store.open_connection()
+            messages = [
+                {"op": "batch", "_preserve_versions": True, "groups": [{
+                    "table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                    "value_names": ("value",), "rows": [(221.5, 1, 7)],
+                }]},
+                {"op": "batch", "_preserve_versions": True, "groups": [{
+                    "table": "fes_yc_define", "key_names": ("pnt_no", "rtu_id"),
+                    "value_names": ("refresh_time",), "rows": [(124, 1, 7)],
+                }]},
+            ]
+            self.assertTrue(_flush_batch(store, logger, messages, queue, connection))
+            row = store.get_row("fes_yc_define", [7, 1])
+            self.assertEqual((row["value"], row["refresh_time"], row["_version"]),
+                             (221.5, 124, 3))
+            self.assertEqual(queue.acknowledged, 2)
+            connection.close()
+
     def test_batch_writer_failure_exits_after_acknowledging_failed_batch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

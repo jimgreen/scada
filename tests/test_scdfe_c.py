@@ -223,6 +223,7 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(worker._sync_measurements(values), (1, 1))
         self.assertEqual(len(queue.messages), 1)
         self.assertEqual(queue.messages[0]["op"], "batch")
+        self.assertTrue(queue.messages[0]["_preserve_versions"])
         self.assertEqual(sum(len(g["rows"]) for g in queue.messages[0]["groups"]), 2)
         self.assertTrue(all(g["_unique_rows"] for g in queue.messages[0]["groups"]))
 

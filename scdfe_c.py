@@ -512,14 +512,26 @@ def _flush_batch(
     owned_connection = connection is None
     active_connection = connection
     try:
-        prepared = _prepare_batch_updates(messages)
+        # Production messages represent separate acquisition/status updates.
+        # They may share one SQLite transaction, but each message must retain
+        # its own version increment and field ordering. Generic/test messages
+        # keep the historical cross-message coalescing behavior.
+        preserve_versions = bool(messages) and all(
+            isinstance(message, Mapping) and message.get("_preserve_versions") is True
+            for message in messages
+        )
+        prepared_batches = (
+            [_prepare_batch_updates([message]) for message in messages]
+            if preserve_versions else [_prepare_batch_updates(messages)]
+        )
         if active_connection is None:
             active_connection = store.open_connection()
         for attempt in range(4):
             try:
                 active_connection.execute("BEGIN IMMEDIATE")
-                for sql, params in prepared.items():
-                    active_connection.executemany(sql, params)
+                for prepared in prepared_batches:
+                    for sql, params in prepared.items():
+                        active_connection.executemany(sql, params)
                 active_connection.commit()
                 return True
             except sqlite3.OperationalError as exc:
@@ -888,7 +900,7 @@ class ChannelWorker:
 
     def _queue_groups(self, groups: list[dict[str, Any]]) -> None:
         self.writer_queue.put(
-            {"op": "batch", "groups": groups},
+            {"op": "batch", "groups": groups, "_preserve_versions": True},
             timeout=max(1.0, self.retry_interval),
         )
 
@@ -938,6 +950,7 @@ class ChannelWorker:
                 "op": "update", "table": "fes_rtu_define",
                 "key": {"rtu_id": self.spec.rtu_id},
                 "values": {"status": int(status), "refresh_time": _now_ms()},
+                "_preserve_versions": True,
             }, timeout=max(1.0, self.retry_interval))
             return
         with self.store.connection() as connection:
@@ -961,6 +974,7 @@ class ChannelWorker:
                 "op": "update", "table": "fes_rtu_define",
                 "key": {"rtu_id": self.spec.rtu_id},
                 "values": dict(updates),
+                "_preserve_versions": True,
             }, timeout=max(1.0, self.retry_interval))
             return
         assignments = ", ".join(f"{quote_identifier(name)}=?" for name in updates)

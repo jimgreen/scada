@@ -1,0 +1,239 @@
+{
+  "baseline_source_sha256": "aa1a56ca4c39f8676ad333e0641c59163d08669bc6275bed18618bd83de60b42",
+  "baseline_threshold": 500,
+  "thresholds": [
+    100,
+    200,
+    500,
+    1000,
+    2000,
+    5000
+  ],
+  "workload": {
+    "rtus": [
+      6,
+      60
+    ],
+    "yc_per_rtu": 1000,
+    "yx_per_rtu": 1000,
+    "yk_per_rtu": 200,
+    "yt_per_rtu": 200,
+    "cycles_per_rtu": 20,
+    "seed": 20261101,
+    "updates_per_cycle_per_rtu": 2000
+  },
+  "semantics": "Production messages carry _preserve_versions=True. Multiple messages may share one SQLite transaction, but each message is prepared/executed in order so every acquisition cycle increments _version once.",
+  "rows": [
+    {
+      "threshold": 100,
+      "rtus": 6,
+      "runs_ms": [
+        967.8389000000607,
+        1118.0317999996987,
+        1132.772599999953
+      ],
+      "median_ms": 1118.0317999996987,
+      "updates_per_second": 214662.94608084016,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": -11.371027003912836,
+      "vs500_throughput_pct": -10.210040537305398
+    },
+    {
+      "threshold": 100,
+      "rtus": 60,
+      "runs_ms": [
+        10293.58989999946,
+        10340.261100000134,
+        10497.371200000089
+      ],
+      "median_ms": 10340.261100000134,
+      "updates_per_second": 232102.45629097015,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": -16.632338447760155,
+      "vs500_throughput_pct": -14.26048613027665
+    },
+    {
+      "threshold": 200,
+      "rtus": 6,
+      "runs_ms": [
+        1043.5819000003903,
+        1135.5864000006477,
+        1286.8258999997124
+      ],
+      "median_ms": 1135.5864000006477,
+      "updates_per_second": 211344.552911045,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": -13.119701621888025,
+      "vs500_throughput_pct": -11.598069508476705
+    },
+    {
+      "threshold": 200,
+      "rtus": 60,
+      "runs_ms": [
+        10328.512299999602,
+        10424.656000000141,
+        10642.457199999626
+      ],
+      "median_ms": 10424.656000000141,
+      "updates_per_second": 230223.4241590291,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": -17.584265526280983,
+      "vs500_throughput_pct": -14.954607614868987
+    },
+    {
+      "threshold": 500,
+      "rtus": 6,
+      "runs_ms": [
+        1003.8802999997642,
+        1015.7940000008239,
+        965.5284999998912
+      ],
+      "median_ms": 1003.8802999997642,
+      "updates_per_second": 239072.32764708737,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": 0.0,
+      "vs500_throughput_pct": 0.0
+    },
+    {
+      "threshold": 500,
+      "rtus": 60,
+      "runs_ms": [
+        8865.689600000223,
+        8654.233999999633,
+        8893.825499999366
+      ],
+      "median_ms": 8865.689600000223,
+      "updates_per_second": 270706.5223668489,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": 0.0,
+      "vs500_throughput_pct": 0.0
+    },
+    {
+      "threshold": 1000,
+      "rtus": 6,
+      "runs_ms": [
+        1030.1892999996198,
+        954.8132999998415,
+        952.859900000476
+      ],
+      "median_ms": 954.8132999998415,
+      "updates_per_second": 251358.04036248743,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": 4.887734125267151,
+      "vs500_throughput_pct": 5.138910402686148
+    },
+    {
+      "threshold": 1000,
+      "rtus": 60,
+      "runs_ms": [
+        8944.245300000148,
+        8708.287499999642,
+        8697.866299999987
+      ],
+      "median_ms": 8708.287499999642,
+      "updates_per_second": 275599.53664829035,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": 1.775407296016518,
+      "vs500_throughput_pct": 1.8074977428178318
+    },
+    {
+      "threshold": 2000,
+      "rtus": 6,
+      "runs_ms": [
+        957.4779000004128,
+        1002.4137999998857,
+        1063.3052000002863
+      ],
+      "median_ms": 1002.4137999998857,
+      "updates_per_second": 239422.08297613956,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": 0.14608315352726553,
+      "vs500_throughput_pct": 0.14629686860643254
+    },
+    {
+      "threshold": 2000,
+      "rtus": 60,
+      "runs_ms": [
+        8873.332899999696,
+        9785.921400000007,
+        10373.003700000481
+      ],
+      "median_ms": 9785.921400000007,
+      "updates_per_second": 245250.28373924998,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": -10.379697931221955,
+      "vs500_throughput_pct": -9.40362958565949
+    },
+    {
+      "threshold": 5000,
+      "rtus": 6,
+      "runs_ms": [
+        1054.6957999995357,
+        1087.934099999984,
+        956.7238999998153
+      ],
+      "median_ms": 1054.6957999995357,
+      "updates_per_second": 227553.764791806,
+      "messages": 120,
+      "point_updates": 240000,
+      "final_rows_verified": 12000,
+      "all_valid": true,
+      "vs500_time_pct": -5.0619082772899615,
+      "vs500_throughput_pct": -4.818024306135838
+    },
+    {
+      "threshold": 5000,
+      "rtus": 60,
+      "runs_ms": [
+        11608.67159999998,
+        9643.331000000217,
+        9407.896400000027
+      ],
+      "median_ms": 9643.331000000217,
+      "updates_per_second": 248876.6589055116,
+      "messages": 1200,
+      "point_updates": 2400000,
+      "final_rows_verified": 120000,
+      "all_valid": true,
+      "vs500_time_pct": -8.771358293436915,
+      "vs500_throughput_pct": -8.064033060775122
+    }
+  ],
+  "all_runs_valid": true,
+  "message_serialized_bytes": {
+    "without_preserve_marker": 55790,
+    "with_preserve_marker": 55812,
+    "delta_bytes": 22,
+    "delta_pct": 0.039433590249148595
+  }
+}
