@@ -252,18 +252,8 @@
               <option value="all">全部匹配文件</option>
             </select>
             <select id="log-process" aria-label="日志进程">
-              <option value="">全部进程</option></select
-            ><input
-              id="log-rtu"
-              inputmode="numeric"
-              placeholder="全部 RTU"
-              aria-label="日志 RTU 编号"
-            /><input
-              id="log-file-search"
-              type="search"
-              placeholder="文件名 / 日期"
-              aria-label="搜索日志文件"
-            /><button class="row-button" id="log-clear">清除筛选</button>
+              <option value="">全部进程</option>
+            </select>
           </div>
           <div id="logs-error" class="error-panel" role="alert" hidden></div>
           <div class="log-workspace">
@@ -271,7 +261,8 @@
               <div class="panel-label">日志文件</div>
               <div
                 id="scdfe-logs"
-                class="log-file-list"
+                class="log-file-list log-tree"
+                role="tree"
                 aria-label="日志文件列表"
               ></div>
               <div class="file-pager">
@@ -299,10 +290,10 @@
                   aria-label="日志关键词"
                 /><select id="log-level" aria-label="日志类型">
                   <option value="">全部类型</option>
-                  <option value="INFO">正常 · INFO</option>
-                  <option value="WARNING">告警 · WARNING</option>
-                  <option value="ERROR">错误 · ERROR</option>
-                  <option value="PROCESS">过程 · PROCESS</option></select
+                  <option value="INFO">日志</option>
+                  <option value="WARNING">警告</option>
+                  <option value="ERROR">错误</option>
+                  <option value="PROCESS">进程</option></select
                 ><select id="log-tail" aria-label="读取日志行数">
                   <option value="200">每批 200 条</option>
                   <option value="1000" selected>每批 1000 条</option>
@@ -315,8 +306,8 @@
                 >
               </div>
               <div class="reader-tools log-time-filters">
-                <label for="log-start">开始时间 <input id="log-start" type="datetime-local" step="1" /></label>
-                <label for="log-end">结束时间 <input id="log-end" type="datetime-local" step="1" /></label>
+                <label for="log-start">开始时间 <input id="log-start" type="time" step="1" /></label>
+                <label for="log-end">结束时间 <input id="log-end" type="time" step="1" /></label>
                 <button class="button secondary" id="log-apply">筛选</button>
                 <button class="row-button" id="log-content-clear">清除条件</button>
               </div>

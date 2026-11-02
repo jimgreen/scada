@@ -66,14 +66,16 @@ class ScdfeControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             main = ScdfeLogger(root, process_name="scdfe_c-main")
-            child = ScdfeLogger(root, process_name="scdfe_c-rtu-2", rtu_id=2, channel_id=1)
+            child = ScdfeLogger(root, process_name="scdfe_c-rtu-2")
             main.process("main")
             child.error("child")
             names = {item["name"] for item in ScdfeLogger.list_files(root)}
             hour = __import__("datetime").datetime.now().strftime("%Y%m%d-%H")
-            self.assertIn("scdfe_c-main-" + hour + ".log", names)
-            self.assertIn("scdfe_c-rtu-2-" + hour + ".log", names)
-            item = ScdfeLogger.read_file(root, "scdfe_c-rtu-2-" + hour + ".log", tail=1)
+            year, month, day, hour_number = hour[:4], hour[4:6], hour[6:8], hour[9:]
+            prefix = f"{year}/{month}/{day}/{hour_number}"
+            self.assertIn(prefix + "/scdfe_c-main-" + hour + ".log", names)
+            self.assertIn(prefix + "/scdfe_c-rtu-2-" + hour + ".log", names)
+            item = ScdfeLogger.read_file(root, prefix + "/scdfe_c-rtu-2-" + hour + ".log", tail=1)
             self.assertIn("child", item["content"])
             self.assertEqual(item["hour"], hour)
             with self.assertRaises(ValueError):
@@ -82,11 +84,11 @@ class ScdfeControlTests(unittest.TestCase):
     def test_large_log_tail_is_bounded_and_keeps_complete_unicode_lines(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "scdfe_c-main-20261101-00.log"
-            line = "[INFO] 中文日志内容 " + "x" * 1000 + "\n"
-            path.write_text(line * 3000 + "[ERROR] 最后一条完整记录\n", encoding="utf-8")
+            line = "00:00:00 [日志] 中文日志内容 " + "x" * 1000 + "\n"
+            path.write_text(line * 3000 + "00:00:01 [错误] 最后一条完整记录\n", encoding="utf-8")
             with patch.object(Path, "read_bytes", side_effect=AssertionError("must read bounded tail")):
                 result = ScdfeLogger.read_file(directory, path.name, tail=2)
-            self.assertEqual(result['content'].splitlines(), [line.rstrip(), "[ERROR] 最后一条完整记录"])
+            self.assertEqual(result['content'].splitlines(), [line.rstrip(), "00:00:01 [错误] 最后一条完整记录"])
             self.assertEqual(result['line_count'], 2)
             self.assertTrue(result['truncated'])
             self.assertNotIn("\ufffd", result['content'])
@@ -202,9 +204,10 @@ class ScdfeControlTests(unittest.TestCase):
             queue.close()
             queue.join_thread()
             self.assertEqual(process.exitcode, 0)
-            files = list((root / "logs").glob("scdfe_c-db-writer-*.log"))
+            files = list((root / "logs").rglob("scdfe_c-db-writer-*.log"))
             content = "".join(path.read_text(encoding="utf-8") for path in files)
-            self.assertIn(f"pid={process.pid}", content)
+            self.assertNotRegex(content, r"(?:pid|rtu|channel|chanel|tid)=\d+")
+            self.assertIn("[进程]", content)
             self.assertIn("写库进程运行摘要", content)
             self.assertIn("累计成功批次=1 消息数=1 输入更新数=1 待写消息=0 待写更新=0", content)
 

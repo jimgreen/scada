@@ -20,15 +20,22 @@ LOG_PATTERN = re.compile(
     r"(?P<process>scdfe_c-(?:main|db-writer|(?:debug-)?rtu-\d+))-"
     r"(?P<hour>\d{8}-\d{2})\.log$"
 )
-LEGACY_LOG_TIMESTAMP = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T(?P<clock>\d{2}:\d{2}:\d{2})"
-    r"(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?=\s+\[)"
-)
+LOG_LEVEL_LABELS = {
+    "INFO": "日志",
+    "WARNING": "警告",
+    "ERROR": "错误",
+    "PROCESS": "进程",
+}
+LOG_LEVEL_CODES = {label: code for code, label in LOG_LEVEL_LABELS.items()}
+LOG_WRITER_PID = re.compile(r"写库\s*pid\s*=\s*\d+\b", re.IGNORECASE)
+LOG_IDENTITY = re.compile(r"\b(?:pid|rtu|channel|chanel|tid)\s*=\s*\d+\b", re.IGNORECASE)
 
 
-def compact_log_line(line):
-    """Display legacy ISO log lines with the current compact clock format."""
-    return LEGACY_LOG_TIMESTAMP.sub(lambda match: match.group("clock"), line, count=1)
+def sanitize_log_message(message):
+    """Keep runtime identity fields out of persisted log content."""
+    value = LOG_WRITER_PID.sub("", str(message))
+    value = LOG_IDENTITY.sub("", value)
+    return re.sub(r"[ \t]{2,}", " ", value).strip()
 
 
 def validate_control(values):

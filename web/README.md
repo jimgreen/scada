@@ -1,17 +1,25 @@
 # SCADA Web 管理接口
 
-Python 标准库实现的本地管理服务，无需额外安装 Python 依赖。要求 Python 3.10 或更新版本、支持原生 dialog 和 BigInt 的现代浏览器。
+Python 标准库实现的本地管理服务；启动 `scdfe_c` 通信进程时还需要项目协议依赖。要求 Python 3.10 或更新版本、支持原生 dialog 和 BigInt 的现代浏览器。
 
 ## 启动
 
 在任意目录运行：
 
 ```powershell
-python -B D:\codex\scada\web\server.py --host 127.0.0.1 --port 8877
+D:\codex\scada\.venv\Scripts\python.exe -B D:\codex\scada\web\server.py --host 127.0.0.1 --port 8877
 ```
 
 Windows 可运行 `D:\codex\scada\web\start.bat`；Linux/macOS 可运行
 `sh web/start.sh`。也可以在项目目录直接执行上面的 Python 命令，两个平台相同。
+
+首次部署先在项目解释器中安装协议依赖：
+
+```powershell
+D:\codex\scada\.venv\Scripts\python.exe -m pip install -r D:\codex\scada\requirements.txt
+```
+
+Web 进程即使由系统 Python 启动，只要项目下存在 `.venv`，进程监控也会优先用该环境启动 `scdfe_c`；需要指定其他解释器时可设置 `SCADA_PYTHON`。
 
 浏览器打开 http://127.0.0.1:8877/，接口文档为 http://127.0.0.1:8877/api-docs。
 默认仅监听本机。此版本没有登录和权限系统；若需要对外提供服务，应通过带身份认证和 HTTPS 的反向代理部署。
@@ -62,9 +70,13 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 
 “通信监控”（`/#scdfe`）显示主进程 PID、状态、启动/停止时间、心跳、退出码和错误；RTU 线程支持搜索、状态筛选和分页，超过 500 个 RTU 也可完整浏览。顶部线程统计始终覆盖全库。可从每行查看完整错误、打开日志或启停自动通信；单 RTU 控制使用版本检查。
 
-“运行日志”（`/#logs`）使用文件列表和正文双栏，支持“当前文件/全部匹配文件”范围、关键词、起止时间、进程、RTU、文件名和日志类型组合筛选。日志类型对应正文级别：正常（INFO）、告警（WARNING）、错误（ERROR）、过程（PROCESS）。起止时间使用浏览器本地时间并包含起止秒；“更早日志”按游标分批查找更早小时文件。结果可高亮关键词、分页查看、换行和导出；后端单次最多扫描 4 MB，超长日志行和轮转删除文件会安全跳过或要求刷新。主进程、通信线程、调试进程和数据库写进程仍各自每小时一个日志文件。
+“运行日志”（`/#logs`）使用 `年 → 月 → 日 → 时 → 文件` 的可展开目录树和正文双栏，支持“当前文件/全部匹配文件”范围、关键词、起止时间、进程和日志类型组合筛选。目录树的文件项仅显示进程名称和文件大小；从通信监控打开日志时自动定位到对应 RTU。日志文件正文统一使用中文类型：日志、警告、错误、进程，不写入 `pid`、`rtu`、`channel`、`tid` 等运行身份字段。起止时间仅输入时分秒，日期取自当前选中的日志文件，使用浏览器本地时间并包含起止秒；切换日志文件后按新文件的日期筛选。“更早日志”按游标分批查找更早小时文件。结果可高亮关键词、分页查看、换行和导出；后端单次最多扫描 4 MB，超长日志行和轮转删除文件会安全跳过或要求刷新。主进程、通信线程、调试进程和数据库写进程仍各自每小时一个日志文件，文件按 `年/月/日/时/` 分目录保存。
 
-日志运行策略：主进程、数据库写进程和正常采集均按 30 秒输出周期摘要，异常和生命周期事件即时记录。主进程记录通信线程及写库进程状态，写库进程记录累计成功批次、输入消息/更新数和本地待写数量（不含跨进程队列）；无 RTU 或写库空闲时，运行中的主进程和写库进程仍各自生成每小时日志。主进程每 60 秒清理超过 `log_retention_hours` 的文件，默认保留 720 小时；写库独立暂停时主进程仍继续记录和清理。日志正文时间为本地 `HH:MM:SS`，文件名提供日期和小时，支持 Windows/Linux。
+日志运行策略：主进程、数据库写进程和正常采集均按 30 秒输出周期摘要，异常和生命周期事件即时记录。主进程记录通信线程及写库进程状态，写库进程记录累计成功批次、输入消息/更新数和本地待写数量（不含跨进程队列）；无 RTU 或写库空闲时，运行中的主进程和写库进程仍各自生成每小时日志。主进程每 60 秒清理超过 `log_retention_hours` 的文件，默认保留 720 小时；写库独立暂停时主进程仍继续记录和清理。日志正文时间为本地 `HH:MM:SS`，路径按 `YYYY/MM/DD/HH/` 分层，文件名提供进程和日期小时，支持 Windows/Linux。
+
+旧版本产生的根目录平铺日志可在停止 Web 和 `scdfe_c` 后执行 `python tools/migrate_log_directories.py D:\codex\scada\db\logs` 一次性整理；工具只移动已知日志，重复执行安全。
+
+旧日志正文格式迁移使用 `python tools/migrate_log_content.py D:\codex\scada\db\logs`，迁移后文件只保留中文类型和精简正文。
 
 数据库写入策略：`scdfe_c` 启用后启动独立的 `scdfe_c-db-writer` 写库进程。通信线程通过有界
 队列发送遥测、遥信、遥控/遥调状态和 RTU/线程状态更新，写库进程在队列连续空闲 100 ms 或累计 500 个
@@ -96,8 +108,8 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 - `GET /api/tables/{table}/schema`：单表结构。
 - `GET /api/overview[?rtu_id=7]`：全部或指定 RTU 的数量概览。
 - `GET /api/scdfe_c/status`：scdfe_c 主进程控制记录及 RTU-通道通信线程状态；支持 `limit`（1–500，默认 50）、`offset`、`q`、`process_status`、`process_enable`。响应含 `total/limit/offset` 与全库 `counts`（total/running/errors/automatic）；主进程使用 `item.process_pid`，每个 RTU 通信线程使用 `rtus[].thread_id`。
-- `GET /api/scdfe_c/logs[?process=...&rtu_id=...]`：按进程、RTU 筛选按小时轮转的日志文件元数据。通信日志名为 `scdfe_c-rtu-7-YYYYMMDD-HH.log`，不含通道号；通道号保留在每条日志正文中。
-- `GET /api/scdfe_c/logs/{filename}?tail=200`：安全读取指定日志尾部。日志正文时间为本地 `HH:MM:SS`；日期和小时来自文件名，不显示年月日、毫秒或时区。
+- `GET /api/scdfe_c/logs[?process=...&rtu_id=...]`：按进程、RTU 筛选按小时轮转的日志文件元数据。通信日志文件位于 `YYYY/MM/DD/HH/scdfe_c-rtu-7-YYYYMMDD-HH.log`，正文不含通道号或其他运行身份字段。
+- `GET /api/scdfe_c/logs/{filename}?tail=200`：安全读取指定日志尾部；`filename` 可包含 `YYYY/MM/DD/HH/` 相对路径。日志正文时间为本地 `HH:MM:SS`；日期和小时来自文件名，不显示年月日、毫秒或时区。
 - `GET /api/scdfe_c/logs/search`：按 `q`、`level`、`start`、`end`、`process`、`rtu_id`、`filename` 和 `file_query` 组合检索日志；每批返回最多 5000 条，使用 `next_cursor` 继续向前检索。
 
 独立调试入口为 `python -m scdfe_c --rtu-id 7`，只接受 RTU 编号，通道信息从数据库自动读取。

@@ -9,14 +9,13 @@ import os
 from pathlib import Path
 import re
 
-from core.scdfe_control import LOG_PATTERN, compact_log_line
+from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN
 
 MAX_SCAN_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 128 * 1024
 CHUNK_SIZE = 64 * 1024
-HEADER = re.compile(r"^(\S+) \[(INFO|WARNING|ERROR|PROCESS)\](?:\s|$)")
-CLOCK = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[(日志|警告|错误|进程)\](?:\s|$)")
 
 
 def _timestamp(value):
@@ -30,25 +29,39 @@ def _timestamp(value):
 
 
 def _log_timestamp(value, file_hour):
-    """Parse current and legacy log line timestamps.
-
-    Current files contain only local ``HH:MM:SS``. Their date/hour comes from
-    the validated hourly filename. Older files may still contain a full ISO
-    timestamp, which remains readable for historical log searches.
-    """
-    if CLOCK.fullmatch(value):
-        try:
-            stamp = datetime.strptime(file_hour, "%Y%m%d-%H").replace(
-                hour=int(value[0:2]), minute=int(value[3:5]), second=int(value[6:8]),
-            )
-            return stamp.astimezone().timestamp()
-        except (ValueError, OverflowError, OSError) as exc:
-            raise ValueError("日志时间无效") from exc
-    return _timestamp(value)
+    """Combine the filename date with the HH:MM:SS log clock."""
+    try:
+        stamp = datetime.strptime(file_hour, "%Y%m%d-%H").replace(
+            hour=int(value[0:2]), minute=int(value[3:5]), second=int(value[6:8]),
+        )
+        return stamp.astimezone().timestamp()
+    except (ValueError, OverflowError, OSError) as exc:
+        raise ValueError("日志时间无效") from exc
 
 
 def _file_key(name):
-    return LOG_PATTERN.fullmatch(name).group("hour"), name
+    match = LOG_PATTERN.fullmatch(Path(name).name)
+    if match is None:
+        raise ValueError("日志文件名无效")
+    return match.group("hour"), name
+
+
+def _relative_filename(root: Path, value: str) -> str:
+    """Validate and normalize a client-supplied relative log path."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("日志文件名无效")
+    candidate = Path(value)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValueError("日志文件名无效")
+    normalized = candidate.as_posix()
+    if LOG_PATTERN.fullmatch(candidate.name) is None:
+        raise ValueError("日志文件名无效")
+    path = (root / candidate).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("日志文件名无效") from exc
+    return normalized
 
 
 def _encode(payload):
@@ -61,7 +74,10 @@ def _decode(cursor, fingerprint):
             raise ValueError
         data = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
         if (not isinstance(data, dict) or data.get("query") != fingerprint
-                or not isinstance(data.get("file"), str) or not LOG_PATTERN.fullmatch(data["file"])
+                or not isinstance(data.get("file"), str)
+                or Path(data["file"]).is_absolute()
+                or any(part in {"", ".", ".."} for part in Path(data["file"]).parts)
+                or LOG_PATTERN.fullmatch(Path(data["file"]).name) is None
                 or type(data.get("offset")) is not int or data["offset"] < 0
                 or not isinstance(data.get("identity"), list) or len(data["identity"]) != 2
                 or any(type(n) is not int for n in data["identity"])
@@ -134,20 +150,25 @@ def search_logs(directory, query):
     end = _timestamp(query["end"]) if "end" in query else None
     if start is not None and end is not None and start > end:
         raise ValueError("开始时间不能晚于结束时间")
-    filename = query.get("filename")
-    if filename and not LOG_PATTERN.fullmatch(filename):
-        raise ValueError("日志文件名无效")
+    root = Path(directory).resolve()
+    filename = _relative_filename(root, query["filename"]) if query.get("filename") else None
     fingerprint = hashlib.sha256(json.dumps(
         {k: v for k, v in query.items() if k not in {"cursor", "limit"}}, sort_keys=True,
     ).encode()).hexdigest()
     cursor = _decode(query["cursor"], fingerprint) if "cursor" in query else None
-    root = Path(directory).resolve()
     files = []
-    for path in root.glob("scdfe_c-*.log"):
+    for path in root.rglob("scdfe_c-*.log"):
         match = LOG_PATTERN.fullmatch(path.name)
-        if not match or (filename and path.name != filename):
+        if not match:
             continue
-        if path.is_symlink() or not path.is_file() or path.resolve().parent != root:
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except ValueError:
+            continue
+        relative_name = path.relative_to(root).as_posix()
+        if filename and relative_name != filename:
             continue
         process = match.group("process")
         if query.get("process") and query["process"] != process:
@@ -156,26 +177,30 @@ def search_logs(directory, query):
             continue
         if query.get("file_query", "").casefold() not in path.name.casefold():
             continue
-        if cursor and _file_key(path.name) > _file_key(cursor["file"]):
+        if cursor and _file_key(relative_name) > _file_key(cursor["file"]):
             continue
-        files.append(path)
-    files.sort(key=lambda p: _file_key(p.name), reverse=True)
+        files.append((path, relative_name, match))
+    files.sort(key=lambda item: _file_key(item[1]), reverse=True)
     items, scanned_files, skipped = [], 0, 0
     budget = [MAX_SCAN_BYTES]
     result_bytes = 0
     next_cursor = None
     needle = keyword.casefold()
-    for index, path in enumerate(files):
+    for index, (path, relative_name, file_match) in enumerate(files):
         try:
             # Retention cleanup may delete files between listing and opening.
-            if path.resolve().parent != root or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                path.resolve().relative_to(root)
+            except ValueError:
                 continue
             with path.open("rb") as stream:
                 stat = os.fstat(stream.fileno())
                 identity = [stat.st_dev, stat.st_ino]
                 offset = stat.st_size
                 discard = False
-                if cursor and path.name == cursor["file"]:
+                if cursor and relative_name == cursor["file"]:
                     if cursor["identity"] != identity or cursor["size"] > offset:
                         raise ValueError("日志文件已替换或截断，请刷新后重新筛选")
                     offset = cursor["offset"]
@@ -191,25 +216,26 @@ def search_logs(directory, query):
                         stamp = None
                         if header:
                             try:
-                                stamp = _log_timestamp(header[1], match.group("hour"))
+                                stamp = _log_timestamp(header[1], file_match.group("hour"))
                             except ValueError:
                                 pass
-                        if ((not level or (header and header[2] == level))
+                        header_level = LOG_LEVEL_CODES[header[2]] if header else ""
+                        if ((not level or (header and header_level == level))
                                 and (start is None or (stamp is not None and stamp >= start))
                                 and (end is None or (stamp is not None and stamp <= end))
                                 and (not needle or needle in line.casefold())):
-                            items.append({"filename": path.name, "text": compact_log_line(line),
-                                          "level": header[2] if header else "",
+                            items.append({"filename": relative_name, "text": line,
+                                          "level": header_level,
                                           "time": int(stamp * 1000) if stamp is not None else None})
                             result_bytes += len(raw)
                     if len(items) >= limit or budget[0] <= 0 or result_bytes >= MAX_RESULT_BYTES:
                         if boundary > 0 or index + 1 < len(files):
-                            next_cursor = _encode({"file": path.name, "offset": boundary,
+                            next_cursor = _encode({"file": relative_name, "offset": boundary,
                                                    "identity": identity, "query": fingerprint,
                                                    "discard": discard, "size": stat.st_size})
                         break
                 if not next_cursor and scanned_files >= 128 and index + 1 < len(files):
-                    next_cursor = _encode({"file": path.name, "offset": 0,
+                    next_cursor = _encode({"file": relative_name, "offset": 0,
                                            "identity": identity, "query": fingerprint, "size": stat.st_size})
                 if next_cursor:
                     break

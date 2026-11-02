@@ -1029,8 +1029,6 @@ function openProcessLogs(name) {
   const select = $("#log-process");
   if (![...select.options].some((option) => option.value === name)) select.add(new Option(processLabel(name), name));
   select.value = name;
-  $("#log-rtu").value = "";
-  $("#log-file-search").value = "";
   logs.offset = 0;
   filterLogs();
   changeResource("logs");
@@ -1230,6 +1228,8 @@ async function controlRtu(row, action, button) {
 function processLabel(name) {
   if (name === "scdfe_c-main") return "主进程";
   if (name === "scdfe_c-db-writer") return "数据库写进程";
+  const rtu = /^rtu:(\d+)$/.exec(name);
+  if (rtu) return "RTU " + rtu[1] + " · 全部日志";
   const match = /^scdfe_c-(debug-)?rtu-(\d+)$/.exec(name);
   return match
     ? "RTU " +
@@ -1245,14 +1245,12 @@ function fmtSize(size) {
       : size + " B";
 }
 function openRtuLogs(rtu) {
-  $("#log-process").value = "";
-  $("#log-rtu").value = rtu;
-  $("#log-file-search").value = "";
-  logs.offset = 0;
-  // Apply the new scope immediately; do not flash another RTU's cached log
-  // while the refreshed file index is still in flight.
-  filterLogs();
-  changeResource("logs");
+  openProcessLogs("rtu:" + rtu);
+}
+function logProcessFilter() {
+  const value = $("#log-process").value;
+  const rtu = /^rtu:(\d+)$/.exec(value);
+  return rtu ? { rtu_id: rtu[1] } : value ? { process: value } : {};
 }
 async function loadScdfeLogs(refreshContent = true) {
   const request = ++logs.request;
@@ -1290,14 +1288,9 @@ async function loadScdfeLogs(refreshContent = true) {
   }
 }
 async function filterLogs(refresh = false, refreshContent = true) {
-  const process = $("#log-process").value,
-    rtu = $("#log-rtu").value.trim(),
-    search = $("#log-file-search").value.trim().toLowerCase();
+  const filters = Object.entries(logProcessFilter());
   logs.filtered = logs.files.filter(
-    (item) =>
-      (!process || item.process === process) &&
-      (!rtu || String(item.rtu_id ?? "") === rtu) &&
-      (!search || item.name.toLowerCase().includes(search)),
+    (item) => filters.every(([key, value]) => String(item[key] ?? "") === value),
   );
   if (logs.offset >= logs.filtered.length) logs.offset = 0;
   let selected = logs.filtered.find((item) => item.name === logs.selected);
@@ -1313,28 +1306,10 @@ async function filterLogs(refresh = false, refreshContent = true) {
 function renderLogFiles() {
   $("#log-file-count").textContent =
     logs.filtered.length + " / " + logs.files.length + " 个文件";
-  $("#scdfe-logs").innerHTML =
-    logs.filtered
-      .slice(logs.offset, logs.offset + 50)
-      .map(
-        (item) =>
-          '<button class="log-file' +
-          (item.name === logs.selected ? " selected" : "") +
-          '" data-log-name="' +
-          esc(item.name) +
-          '" aria-pressed="' +
-          (item.name === logs.selected) +
-          '"><strong>' +
-          esc(processLabel(item.process)) +
-          "</strong><small>" +
-          esc(item.name) +
-          '</small><div class="file-info"><span>' +
-          esc(item.hour) +
-          "</span><span>" +
-          esc(fmtSize(item.size)) +
-          "</span></div></button>",
-      )
-      .join("") || '<div class="empty">暂无匹配文件</div>';
+  const page = logs.filtered.slice(logs.offset, logs.offset + 50);
+  $("#scdfe-logs").innerHTML = page.length
+    ? renderLogTree(page)
+    : '<div class="empty">暂无匹配文件</div>';
   $("#scdfe-logs")
     .querySelectorAll("[data-log-name]")
     .forEach((button) => {
@@ -1353,17 +1328,72 @@ function renderLogFiles() {
   $("#log-prev").disabled = logs.offset === 0;
   $("#log-next").disabled = logs.offset + 50 >= logs.filtered.length;
 }
+function logTreeDirectoryLabel(name, depth) {
+  const suffix = ["年", "月", "日", "时"][depth] || "";
+  return suffix ? name + suffix : name;
+}
+function logTreeFile(item) {
+  return (
+    '<button class="log-file' +
+    (item.name === logs.selected ? " selected" : "") +
+    '" data-log-name="' +
+    esc(item.name) +
+    '" aria-pressed="' +
+    (item.name === logs.selected) +
+    '" role="treeitem"><strong>' +
+    esc(processLabel(item.process)) +
+    '</strong><span class="log-file-size">' +
+    esc(fmtSize(item.size)) +
+    "</span></button>"
+  );
+}
+function renderLogTree(items) {
+  const root = { children: new Map(), files: [], count: 0 };
+  for (const item of items) {
+    const parts = item.name.split("/").filter(Boolean);
+    parts.pop();
+    let node = root;
+    node.count += 1;
+    parts.forEach((part, depth) => {
+      if (!node.children.has(part))
+        node.children.set(part, { name: part, depth, children: new Map(), files: [], count: 0 });
+      node = node.children.get(part);
+      node.count += 1;
+    });
+    node.files.push(item);
+  }
+  function renderNode(node) {
+    const groups = [...node.children.values()]
+      .map((child) =>
+        '<details class="log-tree-group" open><summary role="treeitem">' +
+        '<span class="log-tree-folder" aria-hidden="true"></span><strong>' +
+        esc(logTreeDirectoryLabel(child.name, child.depth)) +
+        '</strong><small>' + child.count + ' 个文件</small></summary>' +
+        '<div class="log-tree-children" role="group">' +
+        renderNode(child) +
+        '</div></details>',
+      )
+      .join("");
+    return (
+      groups +
+      node.files.map(logTreeFile).join("")
+    );
+  }
+  return renderNode(root);
+}
 function logSearchParams(filename) {
-  const params = new URLSearchParams({ limit: $("#log-tail").value });
-  for (const [id, key] of [["log-search", "q"], ["log-level", "level"],
-    ["log-process", "process"], ["log-rtu", "rtu_id"], ["log-file-search", "file_query"]]) {
+  const params = new URLSearchParams({ limit: $("#log-tail").value, ...logProcessFilter() });
+  for (const [id, key] of [["log-search", "q"], ["log-level", "level"]]) {
     const value = $("#" + id).value.trim();
     if (value) params.set(key, value);
   }
   const start = $("#log-start"), end = $("#log-end");
   if (!start.validity.valid || !end.validity.valid) throw new Error("请输入完整且有效的起止时间");
-  const from = start.value ? new Date(start.value).getTime() : null;
-  const to = end.value ? new Date(end.value).getTime() + 999 : null;
+  const date = /-(\d{4})(\d{2})(\d{2})-\d{2}\.log$/.exec(filename || "");
+  if ((start.value || end.value) && !date) throw new Error("请先选择日志文件");
+  const day = date ? `${date[1]}-${date[2]}-${date[3]}` : "";
+  const from = start.value ? new Date(day + "T" + start.value).getTime() : null;
+  const to = end.value ? new Date(day + "T" + end.value).getTime() + 999 : null;
   if ((from !== null && !Number.isFinite(from)) || (to !== null && !Number.isFinite(to)))
     throw new Error("请输入有效的起止时间");
   if (from !== null && to !== null && from > to) throw new Error("开始时间不能晚于结束时间");
@@ -1398,7 +1428,8 @@ async function readLog(filename = logs.selected, changed = false, cursor = null,
     if (request !== logs.contentRequest) return;
     logs.entries = data.items.slice().reverse();
     logs.content = logs.entries.map((entry) =>
-      ($("#log-scope").value === "all" ? "[" + entry.filename + "] " : "") + entry.text).join("\n");
+      ($("#log-scope").value === "all" ? "[" + entry.filename + "] " : "") +
+      entry.text).join("\n");
     logs.meta = data;
     logs.nextCursor = data.next_cursor;
     $("#log-meta").textContent = "第 " + (history.length + 1) + " 批 · " + data.scanned_files + " 个文件";
@@ -1585,19 +1616,6 @@ $("#thread-next").onclick = () => {
 $("#logs-refresh").onclick = () => loadScdfeLogs(true);
 $("#log-scope").onchange = () => readLog(logs.selected, true);
 $("#log-process").onchange = () => {
-  logs.offset = 0;
-  filterLogs();
-};
-for (const id of ["log-rtu", "log-file-search"])
-  $("#" + id).oninput = debounce(() => {
-    logs.offset = 0;
-    filterLogs();
-  });
-$("#log-clear").onclick = () => {
-  $("#log-process").value = "";
-  $("#log-rtu").value = "";
-  $("#log-file-search").value = "";
-  clearLogConditions();
   logs.offset = 0;
   filterLogs();
 };

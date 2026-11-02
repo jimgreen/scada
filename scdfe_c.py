@@ -39,7 +39,8 @@ from core.scdfe_control import (
     CONTROL_TABLE,
     ServerInstanceLock,
     LOG_PATTERN as LOG_FILE_RE,
-    compact_log_line,
+    LOG_LEVEL_LABELS,
+    sanitize_log_message,
     ensure_control_row,
     log_directory,
 )
@@ -214,25 +215,19 @@ class ScdfeLogger:
     """多线程/多进程安全的轻量日志写入器。
 
     每个逻辑进程独立使用一个按小时轮转的文件，例如
-    ``scdfe_c-main-20261029-18.log``。通信线程日志文件只使用 RTU 编号，
-    例如 ``scdfe_c-rtu-7-20261029-18.log``；通道编号保留在日志内容中。
-    日志级别保留在每行内容中，但不再
+    ``2026/10/29/18/scdfe_c-main-20261029-18.log``。通信线程日志文件只使用
+    RTU 编号，例如 ``2026/10/29/18/scdfe_c-rtu-7-20261029-18.log``。RTU 和通道编号
+    由文件名与数据库定义关联，不再写入每条日志正文。日志类型使用中文标签，且不再
     按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
     日期和小时由文件名提供。每条记录打开、追加并关闭文件，
     避免在线程和写库进程间共享 logging handler；主调度线程按小时数定期清理旧文件。
     """
 
-    def __init__(self, directory: Path | str, *, process_name: str | None = None,
-                 rtu_id: int | None = None, channel_id: int | None = None,
-                 console: bool = False):
+    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.rtu_id = rtu_id
-        self.channel_id = channel_id
         self.console = console
-        # Runtime callers provide an explicit process name.  The stable
-        # fallback keeps library callers within the same hourly-file contract.
-        self.process_name = process_name or "scdfe_c-unknown"
+        self.process_name = process_name
 
     def emit(self, category: str, message: str, *, level: str = "INFO") -> None:
         if category not in LOG_CATEGORIES:
@@ -242,12 +237,17 @@ class ScdfeLogger:
         # line compact and readable; log search reconstructs the full local
         # timestamp from the filename hour plus this clock time.
         stamp = now.strftime("%H:%M:%S")
-        identity = ""
-        if self.rtu_id is not None:
-            identity = f" rtu={self.rtu_id} channel={self.channel_id}"
-        line = f"{stamp} [{level}] pid={os.getpid()}{identity} {message}\n"
+        label = LOG_LEVEL_LABELS.get(level)
+        if label is None:
+            raise ValueError(f"未知日志级别: {level}")
+        line = f"{stamp} [{label}] {sanitize_log_message(message)}\n"
         hour = now.strftime("%Y%m%d-%H")
-        path = self.directory / f"{self.process_name}-{hour}.log"
+        # Partition the log root by calendar year/month/day/hour. This keeps
+        # long-retention deployments from putting every process file in one
+        # directory while preserving one file per process and hour.
+        hour_directory = self.directory / now.strftime("%Y/%m/%d/%H")
+        hour_directory.mkdir(parents=True, exist_ok=True)
+        path = hour_directory / f"{self.process_name}-{hour}.log"
         with path.open("a", encoding="utf-8", newline="") as stream:
             stream.write(line)
             stream.flush()
@@ -277,7 +277,7 @@ class ScdfeLogger:
             return []
         cutoff = (time.time() if now is None else now) - retention_hours * 3600
         removed: list[Path] = []
-        for path in root.glob("*.log"):
+        for path in root.rglob("*.log"):
             match = LOG_FILE_RE.fullmatch(path.name)
             if not match or (process_name is not None and match.group("process") != process_name):
                 continue
@@ -296,15 +296,19 @@ class ScdfeLogger:
         items = []
         if not root.is_dir():
             return items
-        for path in root.glob("scdfe_c-*.log"):
-            match = LOG_FILE_RE.match(path.name)
+        for path in root.rglob("scdfe_c-*.log"):
+            match = LOG_FILE_RE.fullmatch(path.name)
             if not match or path.is_symlink() or not path.is_file():
+                continue
+            try:
+                relative_name = path.relative_to(root).as_posix()
+            except ValueError:
                 continue
             try:
                 stat = path.stat()
             except FileNotFoundError:
                 continue  # A concurrent retention cleanup may remove this file.
-            item = {"name": path.name, "process": match.group("process"),
+            item = {"name": relative_name, "process": match.group("process"),
                     "hour": match.group("hour"), "size": stat.st_size,
                     "modified_at": int(stat.st_mtime * 1000)}
             process_match = re.fullmatch(
@@ -318,15 +322,22 @@ class ScdfeLogger:
 
     @classmethod
     def read_file(cls, directory: Path | str, filename: str, *, tail: int = 200) -> dict[str, Any]:
-        if not isinstance(filename, str) or Path(filename).name != filename:
+        if not isinstance(filename, str) or not filename.strip():
             raise ValueError("日志文件名无效")
         if not 1 <= tail <= 5000:
             raise ValueError("tail 必须在 1 到 5000 之间")
         root = Path(directory).resolve()
-        path = (root / filename).resolve()
-        if path.parent != root or not path.is_file():
+        candidate = Path(filename)
+        if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+            raise ValueError("日志文件名无效")
+        path = (root / candidate).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("日志文件名无效") from exc
+        if path.is_symlink() or not path.is_file():
             raise FileNotFoundError(filename)
-        match = LOG_FILE_RE.match(path.name)
+        match = LOG_FILE_RE.fullmatch(path.name)
         if not match:
             raise ValueError("日志文件名无效")
         # Read only the bounded tail; refreshing a large hourly file must not
@@ -340,8 +351,8 @@ class ScdfeLogger:
             # The first chunk can start inside a UTF-8 code point/log line.
             data = data.partition(b"\n")[2]
         text = data.decode("utf-8", "replace")
-        lines = [compact_log_line(line) for line in text.splitlines()[-tail:]]
-        item = {"name": path.name, "process": match.group("process"),
+        lines = text.splitlines()[-tail:]
+        item = {"name": path.relative_to(root).as_posix(), "process": match.group("process"),
                 "hour": match.group("hour"), "size": path.stat().st_size,
                 "modified_at": int(path.stat().st_mtime * 1000), "content": "\n".join(lines),
                 "line_count": len(lines), "truncated": bool(start or len(text.splitlines()) > tail)}
@@ -355,7 +366,7 @@ class ScdfeLogger:
 
 
 def _worker_process_name(rtu_id: int, *, debug: bool = False) -> str:
-    """Return the stable log process name; channel_id stays in log content."""
+    """Return the stable RTU-only log process name."""
     return f"scdfe_c-{'debug-' if debug else ''}rtu-{rtu_id}"
 
 
@@ -930,7 +941,7 @@ class ChannelWorker:
         self.master_factory = master_factory or build_master
         self.stop_event = stop_event or threading.Event()
         self.writer_queue = writer_queue
-        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id), rtu_id=spec.rtu_id, channel_id=spec.channel_id)
+        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id))
         self.stats = WorkerStats()
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
@@ -1543,11 +1554,10 @@ def run_channel_debug(
             with store.connection() as connection:
                 control = connection.execute(f"SELECT * FROM {CONTROL_TABLE} WHERE id=1").fetchone()
             log_dir = log_directory(store, control) if control is not None else store.db_path.parent / "logs"
-        logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True),
-                             rtu_id=rtu_id, channel_id=channel_id, console=True)
+        logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True), console=True)
         stop_event = stop_event or threading.Event()
         stats = WorkerStats()
-        logger.process(f"独立调试启动 pid={os.getpid()} 规约={spec.channel_type} "
+        logger.process(f"独立调试启动 规约={spec.channel_type} "
                        f"命令下发={'启用' if send_commands else '关闭'}")
         try:
             while not stop_event.is_set():
@@ -1594,7 +1604,7 @@ def _worker_thread_entry(db_path: str, schema_dir: str, spec_data: dict[str, Any
                       retry_interval=retry_interval, stop_event=stop_event,
                       writer_queue=writer_queue).run()
     except Exception as exc:  # noqa: BLE001 - 主调度线程负责拉起并记录异常
-        ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id), rtu_id=spec.rtu_id, channel_id=spec.channel_id).error(
+        ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id)).error(
             f"通信线程异常退出: {exc}"
         )
         # Thread exceptions must not escape into the main scheduler.  The
@@ -1672,8 +1682,7 @@ class ScdfeSupervisor:
             self.logger.normal(
                 f"主进程运行摘要: 扫描次数={self._scan_count} "
                 f"通信线程={alive}/{len(self._workers)} "
-                f"写库进程={'运行' if writer_alive else '停止'} "
-                f"写库pid={writer.pid if writer_alive else 0}",
+                f"写库进程={'运行' if writer_alive else '停止'}",
             )
             self._next_log_summary = now + PROCESS_LOG_INTERVAL
         if now >= self._next_log_cleanup:
@@ -1711,7 +1720,7 @@ class ScdfeSupervisor:
                 pass
             raise
         self._writer_process = process
-        self.logger.process(f"启动批量数据库写入进程 pid={process.pid}")
+        self.logger.process("启动批量数据库写入进程")
         deadline = time.monotonic() + 15.0
         while not ready.wait(0.05):
             if not process.is_alive() or time.monotonic() >= deadline:
@@ -1731,7 +1740,7 @@ class ScdfeSupervisor:
             )
             if not stopped:
                 self.logger.error(
-                    f"通信线程未能在超时内退出 rtu={key.rtu_id} channel={key.channel_id}；"
+                    "通信线程未能在超时内退出；"
                     "暂不启动重复线程",
                 )
             # _stop_worker records the final error while it still owns the
@@ -1897,7 +1906,7 @@ class ScdfeSupervisor:
         managed = self._workers.get(key)
         if managed is None:
             return True
-        self.logger.process(f"停止通信线程 rtu={key.rtu_id} channel={key.channel_id}: {reason}")
+        self.logger.process(f"停止通信线程: {reason}")
         try:
             self._update_process_state(
                 key.rtu_id, process_status=PROCESS_STOPPING,
@@ -1910,7 +1919,7 @@ class ScdfeSupervisor:
         managed.thread.join(timeout=max(1.0, self.retry_interval))
         if managed.thread.is_alive():
             self.logger.error(
-                f"通信线程停止超时 rtu={key.rtu_id} channel={key.channel_id}；"
+                "通信线程停止超时；"
                 "保留线程记录，避免重复启动同一通道",
             )
             try:
@@ -1992,7 +2001,7 @@ class ScdfeSupervisor:
                 )
             except Exception as state_exc:  # noqa: BLE001
                 self.logger.error(f"写入通信线程启动错误状态失败: {state_exc}")
-            self.logger.error(f"启动通信线程失败 rtu={spec.rtu_id} channel={spec.channel_id}: {exc}")
+            self.logger.error(f"启动通信线程失败: {exc}")
             channel_lock.release()
             return False
         self._workers[spec.key] = _ManagedWorker(spec, thread, event, channel_lock)
@@ -2002,10 +2011,7 @@ class ScdfeSupervisor:
                 self._update_process_state(spec.rtu_id, process_pid=thread_id)
             except Exception as exc:  # noqa: BLE001
                 self.logger.error(f"写入通信线程 ID 失败: {exc}")
-        self.logger.process(
-            f"启动通信线程 tid={thread_id} "
-            f"rtu={spec.rtu_id} channel={spec.channel_id}",
-        )
+        self.logger.process("启动通信线程")
         return True
 
     def reconcile(self) -> dict[str, int]:

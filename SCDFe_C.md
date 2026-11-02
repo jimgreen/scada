@@ -16,6 +16,9 @@ Set-Location D:\codex\scada
   --log-dir D:\codex\scada\db\logs
 ```
 
+Web 页面启动的主进程、写库进程和调试进程会优先复用项目下的 `.venv`；如果部署在其他位置，
+可通过环境变量 `SCADA_PYTHON` 指定同一套已安装协议依赖的 Python 解释器。
+
 Linux/macOS：
 
 ```sh
@@ -73,11 +76,11 @@ Linux 示例：
 - 调试进程只运行选中 RTU 的通信循环，直接在本进程内用事务写库，不启动全站守护器或额外写库子进程。
 - 默认采集并写回遥测/遥信，不下发遥控/遥调、不更新命令处理状态。需要调试命令时加 `--send-commands`，会处理该 RTU 当前待处理及后续变化的命令。
 - 复用 IEC104、Modbus TCP、Modbus RTU、CAN、BACnet/IP、OPC UA 的现有主站适配器；各规约能力边界与正常运行一致。
-- 控制台实时输出连接、错误、重载及每周期计数，文件为 `scdfe_c-debug-rtu-7-YYYYMMDD-HH.log`，各级别写入同一小时文件。默认使用主进程控制表配置的日志目录（无记录时为数据库旁的 `logs`），可用 `--log-dir` 覆盖。Web 现有日志列表和 RTU 过滤可查询这些文件。
+- 控制台实时输出连接、错误、重载及每周期计数，文件位于 `YYYY/MM/DD/HH/scdfe_c-debug-rtu-7-YYYYMMDD-HH.log`，各级别写入同一小时文件。默认使用主进程控制表配置的日志目录（无记录时为数据库旁的 `logs`），可用 `--log-dir` 覆盖。Web 现有日志列表和 RTU 过滤可查询这些文件。
 - `--retention-hours` 设置调试日志保留小时数（默认 720）。调试进程每 60 秒清理自己的过期日志；主程序运行时仍执行其日志目录的统一保留策略。
 - 连接失败按 `--retry-interval` 重试；四遥/协议静态定义变化会关闭连接、重新加载，并继续调试同一 RTU。通道编号变更或 RTU 删除会结束本次调试。
 - Ctrl+C/SIGTERM 请求正常退出。将目标 RTU 的 `process_enable` 改回 `1`，调试进程会在后续控制检查时退出并释放锁，主程序随后可恢复自动运行。`--scan-interval` 控制调试模式的控制检查间隔；实际停止还受采集/重试等待及协议调用超时约束。`--max-cycles` 只统计成功周期，持续连接失败时仍重试，需 Ctrl+C 退出。
-- RTU 的状态、心跳和开始/结束时间继续回写；`process_pid` 保持原有的通信执行线程 native ID 语义，独立调试的实际操作系统 PID 登记在 `fes_process_define`，同时显示在进程监控、控制台和日志中。全站主进程控制记录及其他 RTU 不受调试进程修改。
+- RTU 的状态、心跳和开始/结束时间继续回写；`process_pid` 保持原有的通信执行线程 native ID 语义，独立调试的实际操作系统 PID 登记在 `fes_process_define`，显示在进程监控和控制台中。日志正文不显示这些运行身份字段。全站主进程控制记录及其他 RTU 不受调试进程修改。
 
 同一服务器使用两层互斥，锁名不含数据库路径、工作目录、安装目录或用户名称：
 
@@ -200,27 +203,35 @@ schema、数据类、Web 和物理 SQLite 同步删除，不提供旧字段兼�
 
 ## 日志
 
-默认目录为 `db/logs`。主进程、每个通信线程和数据库写进程各使用一个独立的按小时日志文件，格式为：
+默认目录为 `db/logs`。主进程、每个通信线程和数据库写进程各使用一个独立的按小时日志文件，并按 `年/月/日/时/` 分目录，格式为：
 
 ```text
-scdfe_c-main-YYYYMMDD-HH.log
-scdfe_c-rtu-2-YYYYMMDD-HH.log
-scdfe_c-debug-rtu-2-YYYYMMDD-HH.log
-scdfe_c-db-writer-YYYYMMDD-HH.log
+YYYY/MM/DD/HH/scdfe_c-main-YYYYMMDD-HH.log
+YYYY/MM/DD/HH/scdfe_c-rtu-2-YYYYMMDD-HH.log
+YYYY/MM/DD/HH/scdfe_c-debug-rtu-2-YYYYMMDD-HH.log
+YYYY/MM/DD/HH/scdfe_c-db-writer-YYYYMMDD-HH.log
 ```
 
 通信日志文件名只含 RTU 编号，不含通道号；同一 RTU 在同一小时更换通道后继续写入该小时文件，自动通信和人工调试仍分别保存。日志 API 元数据与筛选按 RTU、进程识别，不从当前数据库通道配置推断历史文件的通道号。
 
-正常、告警、错误和过程信息统一写入所属进程的当前小时文件，级别保留在每行内容中，不再按级别拆分文件。日志正文时间只显示本地 `HH:MM:SS`，日期和小时由文件名提供，不显示年月日、毫秒或时区；每行还包含级别、进程号和消息，通信日志包含 RTU、通道。文件名小时与行时间取自同一次时钟读取，整点及跨日切换时保持一致。日志检索按文件名小时还原完整本地时间，历史 ISO 时间格式仍可读取。日志每次追加后关闭文件，不在多个进程间共享 handler，兼容 Windows/Linux。
+日志、警告、错误和进程信息统一写入所属进程的当前小时文件，不再按级别拆分文件。日志正文类型固定使用中文“日志/警告/错误/进程”，时间只写本地 `HH:MM:SS`，日期和小时由文件名提供，不显示年月日、毫秒或时区；正文不写入 PID、RTU、通道或线程 ID 等运行身份字段。文件名小时与行时间取自同一次时钟读取，整点及跨日切换时保持一致。日志检索按文件名小时还原完整本地时间，只接受当前中文日志格式。日志每次追加后关闭文件，不在多个进程间共享 handler，兼容 Windows/Linux。
 
 主进程、数据库写进程均每 30 秒输出运行摘要，因此无 RTU、写库队列空闲时，持续运行的进程也会生成每小时日志。主进程记录扫描次数、通信线程存活数及写库进程状态/PID；写库进程记录累计成功批次、消息数、输入更新数及本地待写数量。输入更新数包含合并前的重复更新，不等同于不同测点数或数据库实际影响行数；待写数量不包含尚在跨进程队列中的消息。摘要在循环中节流输出，不按每批写入记录日志。正常采集同样按 30 秒输出周期摘要；连接、告警、错误、定义变化和进程生命周期事件即时记录。停止的进程不再产生新的小时日志。
 
 主进程每 60 秒按 `log_retention_hours` 清除旧文件，默认保留 720 小时；写库被独立暂停时仍执行清理，修改保留小时数或日志目录后在下一轮扫描采用。单个文件清理失败不会中断采集。独立调试进程也定期清理自身日志。
 
+升级前已经生成的平铺日志可以在停止 Web 和 `scdfe_c` 后一次性迁移到新目录：
+
+```powershell
+python tools/migrate_log_directories.py D:\codex\scada\db\logs
+```
+
+迁移只处理日志根目录下的已知 `scdfe_c-*.log` 文件；旧的带通道文件会合并为 RTU 文件，未知文件保持不动。重复执行不会重复搬运或追加内容。
+
 Web 页面选择“通信监控”可查看主进程和各 RTU 通道状态，执行启动和停止；
 通信线程支持分页和状态筛选，点击行内“日志”直接进入该 RTU 的日志。
 “运行日志”页面按进程/小时列出文件，并在同一屏显示可搜索、筛选和自动刷新的日志正文。对应接口为 `GET /api/scdfe_c/status`、
-`PATCH /api/scdfe_c/control`、`GET /api/scdfe_c/logs` 和 `GET /api/scdfe_c/logs/{filename}`。
+`PATCH /api/scdfe_c/control`、`GET /api/scdfe_c/logs` 和 `GET /api/scdfe_c/logs/{filename}`，其中 `filename` 可包含 `YYYY/MM/DD/HH/` 相对路径。
 Web 请求启动时，如果当前库没有活动主进程，但服务器级主锁已被占用，则返回 HTTP 409
 （`process_already_running`），不修改本库控制配置；实际子进程启动时仍再次原子获取同一把锁。
 

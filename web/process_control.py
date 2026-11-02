@@ -24,6 +24,32 @@ def popen_options():
     return {"start_new_session": True, "close_fds": True}
 
 
+def runtime_python():
+    """Return the interpreter used for scdfe_c child processes.
+
+    The Web UI is often launched with the system ``python`` command while
+    protocol dependencies are installed in the project virtual environment.
+    Reusing ``sys.executable`` in that situation starts workers in the wrong
+    environment and every protocol reports a misleading missing-dependency
+    error.  An explicit ``SCADA_PYTHON`` override wins; otherwise the local
+    project environment is preferred when it exists, with the Web interpreter
+    as the portable fallback for deployments without a project venv.
+    """
+    configured = os.environ.get("SCADA_PYTHON", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_file():
+            return str(configured_path.resolve())
+        # Allow a command name such as ``python3`` in PATH.  Let Popen produce
+        # its normal useful error if it is not resolvable.
+        return configured
+    executable = "python.exe" if os.name == "nt" else "python"
+    candidate = ROOT / ".venv" / ("Scripts" if os.name == "nt" else "bin") / executable
+    if candidate.is_file():
+        return str(candidate.resolve())
+    return sys.executable
+
+
 class ProcessController:
     def __init__(self, store, *, timeout=150):
         self.store = store
@@ -154,7 +180,7 @@ class ProcessController:
         if ServerInstanceLock.held(rtu):
             raise RuntimeError("本服务器已有相应通信实例，请先停止原实例")
         token = uuid.uuid4().hex
-        command = [sys.executable, "-m", "scdfe_c", "--db", str(self.store.db_path),
+        command = [runtime_python(), "-m", "scdfe_c", "--db", str(self.store.db_path),
                    "--schema-dir", str(self.store.catalog.directory), "--launch-token", token]
         if rtu is not None:
             self._validate_debug(key)

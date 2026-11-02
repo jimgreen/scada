@@ -58,7 +58,8 @@ class HourlyLogTests(unittest.TestCase):
         self.clock = Clock()
 
     def content(self, process, hour):
-        return (self.logs / f"scdfe_c-{process}-{hour}.log").read_text(encoding="utf-8")
+        path = next(self.logs.rglob(f"scdfe_c-{process}-{hour}.log"))
+        return path.read_text(encoding="utf-8")
 
     def writer(self, queue, max_batch=500):
         with patch.object(runtime, "datetime", self.clock), \
@@ -83,13 +84,13 @@ class HourlyLogTests(unittest.TestCase):
             old = self.content(role, "20261101-23")
             new = self.content(role, "20261102-00")
             self.assertEqual(len(old.splitlines()), 1)
-            self.assertIn("23:59:50 [PROCESS]", old)
+            self.assertIn("23:59:50 [进程]", old)
             self.assertEqual(len(new.splitlines()), 3)
             self.assertTrue(all(line.startswith("00:00:00 ") for line in new.splitlines()))
             self.assertTrue(all("+08:00" not in line and "2026-" not in line for line in old + new))
-            for level in ("INFO", "WARNING", "ERROR"):
+            for level in ("日志", "警告", "错误"):
                 self.assertIn(f"[{level}]", new)
-        self.assertEqual(len(list(self.logs.glob("*.log"))), 4)
+        self.assertEqual(len(list(self.logs.rglob("*.log"))), 4)
 
     def test_idle_writer_rolls_hours_and_throttles_summaries(self):
         queue = ScriptedQueue(self.clock, [
@@ -152,8 +153,9 @@ class HourlyLogTests(unittest.TestCase):
         self.assertEqual(self.content("main", "20261101-23").count("运行摘要"), 1)
         new = self.content("main", "20261102-00")
         self.assertEqual(new.count("运行摘要"), 2)
-        self.assertIn("通信线程=0/0 写库进程=停止 写库pid=0", new)
-        self.assertEqual(list(self.logs.glob("scdfe_c-db-writer-*.log")), [])
+        self.assertIn("通信线程=0/0 写库进程=停止", new)
+        self.assertNotRegex(new, r"(?:pid|rtu|channel|chanel)=\d+")
+        self.assertEqual(list(self.logs.rglob("scdfe_c-db-writer-*.log")), [])
         self.assertFalse(supervisor.stop_event.is_set())
 
     def test_main_logs_during_long_scan_wait_and_uses_changed_log_directory(self):
@@ -175,7 +177,7 @@ class HourlyLogTests(unittest.TestCase):
             supervisor.run(max_scans=2)
             self.assertEqual(waits, [30, 30])
             self.assertEqual(self.content("main", "20261102-00").count("运行摘要"), 2)
-        new_file = self.root / "new-logs" / "scdfe_c-main-20261102-00.log"
+        new_file = self.root / "new-logs" / "2026" / "11" / "02" / "00" / "scdfe_c-main-20261102-00.log"
         self.assertIn("主进程运行摘要", new_file.read_text(encoding="utf-8"))
 
 

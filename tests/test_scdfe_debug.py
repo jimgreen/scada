@@ -97,9 +97,9 @@ class DebugTests(unittest.TestCase):
                          ("scdfe_c-debug-rtu-7", 7))
         self.assertNotIn("channel_id", logs[0])
         log = runtime.ScdfeLogger.read_file(self.root / "logs", logs[0]["name"])
-        self.assertIn(f"pid={os.getpid()}", log["content"])
+        self.assertIn("[进程]", log["content"])
         self.assertEqual(log["rtu_id"], 7)
-        self.assertIn("rtu=7 channel=70", log["content"])
+        self.assertNotRegex(log["content"], r"(?:pid|rtu|channel|chanel)=\d+")
 
     def test_commands_require_explicit_option(self):
         master = FakeMaster()
@@ -283,7 +283,7 @@ class DebugTests(unittest.TestCase):
             os.utime(path, (0, 0))
         removed = runtime.ScdfeLogger.cleanup(self.root, retention_hours=1, process_name=names[0])
         self.assertEqual(len(removed), 1)
-        self.assertEqual(len(list(self.root.glob("*.log"))), 2)
+        self.assertEqual(len(list(self.root.rglob("*.log"))), 2)
 
     def test_cli_signals_stop_cooperatively(self):
         # Use a fresh interpreter: earlier protocol tests may have closed an
@@ -361,11 +361,8 @@ assert result == 0 and master.closed
             self.store.update_row("fes_rtu_define", [7], {"process_enable": 1})
             output, _ = process.communicate(timeout=15)
             self.assertEqual(process.returncode, 0, output)
-            # Windows venv python.exe can be a launcher for a child Python.
-            # Check the actual runtime PID emitted consistently in its logs.
-            pids = {int(p) for p in re.findall(r"pid=(\d+)", output)}
-            self.assertEqual(len(pids), 1)
-            self.assertNotIn(os.getpid(), pids)
+            self.assertIn("[进程] 独立调试启动", output)
+            self.assertNotRegex(output, r"(?:pid|rtu|channel|chanel|tid)=\d+")
             self.assertFalse(ServerInstanceLock.held(7))
             self.store.update_row("fes_rtu_define", [7], {"process_enable": 0})
             result = subprocess.run(command + ["--max-cycles", "2"], cwd=Path(runtime.__file__).parent,

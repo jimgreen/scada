@@ -146,22 +146,23 @@ class ScdfeCTest(unittest.TestCase):
 
     def test_per_process_hourly_log_and_retention_cleanup(self):
         log_dir = self.root / "logs"
-        logger = ScdfeLogger(log_dir, process_name="scdfe_c-rtu-7", rtu_id=7, channel_id=70)
+        logger = ScdfeLogger(log_dir, process_name="scdfe_c-rtu-7")
         logger.normal("normal")
         logger.alarm("alarm")
         logger.error("error")
         logger.process("process")
-        files = list(log_dir.glob("*.log"))
+        files = list(log_dir.rglob("*.log"))
         self.assertEqual(len(files), 1)
         self.assertRegex(files[0].name, r"^scdfe_c-rtu-7-\d{8}-\d{2}\.log$")
+        self.assertEqual(len(files[0].relative_to(log_dir).parts), 5)
         content = files[0].read_text(encoding="utf-8")
-        self.assertRegex(content, r"(?m)^\d{2}:\d{2}:\d{2} \[(?:INFO|WARNING|ERROR|PROCESS)\]")
+        self.assertRegex(content, r"(?m)^\d{2}:\d{2}:\d{2} \[(?:日志|警告|错误|进程)\]")
         self.assertNotRegex(content, r"(?m)^\d{4}-\d{2}-\d{2}T")
         self.assertNotIn("+08:00", content)
-        self.assertIn("[INFO]", content)
-        self.assertIn("[WARNING]", content)
-        self.assertIn("[ERROR]", content)
-        self.assertIn("rtu=7 channel=70", content)
+        self.assertIn("[日志]", content)
+        self.assertIn("[警告]", content)
+        self.assertIn("[错误]", content)
+        self.assertNotRegex(content, r"(?:pid|rtu|channel|chanel)=\d+")
         old = log_dir / "scdfe_c-main-20200101-00.log"
         old.write_text("old\n", encoding="utf-8")
         os.utime(old, (time.time() - 3 * 86400, time.time() - 3 * 86400))
@@ -186,14 +187,14 @@ class ScdfeCTest(unittest.TestCase):
                      "name": "测试站"},
                     str(log_dir), 1, 1, threading.Event(),
                 )
-        self.assertEqual({p.name for p in log_dir.glob("*.log")}, {
-            "scdfe_c-rtu-7-20261101-09.log", "scdfe_c-rtu-8-20261101-09.log",
+        self.assertEqual({p.relative_to(log_dir).as_posix() for p in log_dir.rglob("*.log")}, {
+            "2026/11/01/09/scdfe_c-rtu-7-20261101-09.log",
+            "2026/11/01/09/scdfe_c-rtu-8-20261101-09.log",
         })
-        info = ScdfeLogger.read_file(log_dir, "scdfe_c-rtu-7-20261101-09.log")
+        info = ScdfeLogger.read_file(log_dir, "2026/11/01/09/scdfe_c-rtu-7-20261101-09.log")
         self.assertEqual(info["rtu_id"], 7)
         self.assertNotIn("channel_id", info)
-        self.assertIn("rtu=7 channel=70", info["content"])
-        self.assertIn("rtu=7 channel=71", info["content"])
+        self.assertNotRegex(info["content"], r"(?:pid|rtu|channel|chanel)=\d+")
         self.assertIn("startup failed", info["content"])
         self.assertNotIn("rtu=8", info["content"])
 

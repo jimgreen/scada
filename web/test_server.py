@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import sys
 import threading
 import time
 import unittest
@@ -16,6 +17,7 @@ import core.process_registry as registry_module
 from web.server import make_server
 from core.process_registry import process_is_alive
 from web.process_control import popen_options
+from web.process_control import runtime_python
 
 
 class WebTests(unittest.TestCase):
@@ -68,6 +70,20 @@ class WebTests(unittest.TestCase):
                 patch.object(process_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200):
             options = popen_options()
         self.assertEqual(options, {"creationflags": 0x200, "close_fds": True})
+
+    def test_child_runtime_prefers_project_virtual_environment(self):
+        with patch.object(process_module, "ROOT", Path(self.temp.name)), \
+                patch.object(process_module, "sys") as process_sys:
+            process_sys.executable = "system-python"
+            # No project venv in the temporary root: the Web interpreter is
+            # the portable fallback.
+            self.assertEqual(runtime_python(), "system-python")
+
+        expected = Path(process_module.ROOT) / ".venv" / (
+            "Scripts" if os.name == "nt" else "bin"
+        ) / ("python.exe" if os.name == "nt" else "python")
+        expected_runtime = str(expected.resolve()) if expected.is_file() else sys.executable
+        self.assertEqual(runtime_python(), expected_runtime)
 
     def test_process_probe_posix_branch_uses_kill_zero(self):
         with patch.object(registry_module.os, "name", "posix"), \
@@ -368,8 +384,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('api test', body['item']['content'])
         self.assertEqual(self.call('/api/scdfe_c/logs/..%2Fsecret.log')[0], 404)
-        debug = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-debug-rtu-7',
-                            rtu_id=7, channel_id=70)
+        debug = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-debug-rtu-7')
         debug.process('debug route test')
         status, body = self.call('/api/scdfe_c/logs?rtu_id=7')
         self.assertEqual((status, body['total']), (200, 1))
@@ -379,7 +394,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body['item']['rtu_id'], 7)
         self.assertIn('debug route test', body['item']['content'])
-        self.assertIn('rtu=7 channel=70', body['item']['content'])
+        self.assertNotRegex(body['item']['content'], r'(?:pid|rtu|channel|chanel)=\d+')
         self.assertNotIn('channel_id', body['item'])
         self.assertEqual(self.call('/api/scdfe_c/logs?channel_id=70')[0], 400)
 
@@ -404,6 +419,21 @@ class WebTests(unittest.TestCase):
             status, result = self.call('/api/scdfe_c/logs/search?level=INFO&q=summary&process=' + process)
             self.assertEqual(status, 200)
             self.assertEqual(len(result['items']), 2)
+
+    def test_nested_log_files_can_be_listed_read_and_searched(self):
+        from scdfe_c import ScdfeLogger
+        logger = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-db-writer')
+        logger.normal('nested web log')
+        status, body = self.call('/api/scdfe_c/logs?process=scdfe_c-db-writer')
+        self.assertEqual(status, 200)
+        filename = body['items'][0]['name']
+        self.assertGreaterEqual(filename.count('/'), 4)
+        status, result = self.call('/api/scdfe_c/logs/' + filename)
+        self.assertEqual(status, 200)
+        self.assertIn('nested web log', result['item']['content'])
+        status, result = self.call('/api/scdfe_c/logs/search?process=scdfe_c-db-writer&level=INFO&q=nested')
+        self.assertEqual(status, 200, result)
+        self.assertEqual(len(result['items']), 1)
 
     def test_scdfe_status_pagination_and_filters_include_all_rtus(self):
         with self.server.store.connection() as connection:

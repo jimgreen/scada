@@ -286,8 +286,9 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         "rdfid": channel_code, "name": f"{spec['name']}Modbus通道",
         "irtuaddr": 3 if key == "modbus-tcp" else 4,
     }, indexes)
-    # Keep the initial YC/YX sequence numbers; additional YC frames use 2+.
-    # Modbus limits FC3 to 125 registers and FC1 to 2000 coils per request.
+    # Keep sequence 0 for the first YC frame and sequence 1 for YX; additional
+    # YC frames use 2+. Modbus limits FC3 to 125 registers and FC1 to 2000
+    # coils per request. The point rows below use the same block calculation.
     calls = [(0 if block == 0 else block + 1, 3, start, min(125, COUNTS["yc"] - start))
              for block, start in enumerate(range(0, COUNTS["yc"], 125))]
     calls.append((1, 1, 0, COUNTS["yx"]))

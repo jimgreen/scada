@@ -286,7 +286,7 @@ class ScadaHandler(BaseHTTPRequestHandler):
                             expected = query[key]
                         items = [item for item in items if item.get(key) == expected]
                 return self._json(200, {"items": items, "total": len(items), "directory": str(directory)})
-            if len(parts) == 4 and method == "GET":
+            if len(parts) >= 4 and method == "GET":
                 try:
                     tail = int(query.pop("tail", "200")) if "tail" in query else 200
                 except ValueError as exc:
@@ -294,7 +294,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 if query:
                     raise ApiError(400, "未知日志查询参数")
                 try:
-                    return self._json(200, {"item": ScdfeLogger.read_file(directory, parts[3], tail=tail)})
+                    filename = "/".join(parts[3:])
+                    return self._json(200, {"item": ScdfeLogger.read_file(directory, filename, tail=tail)})
                 except (ValueError, FileNotFoundError) as exc:
                     raise ApiError(404, str(exc), code="not_found") from exc
             raise ApiError(405, "日志接口只支持 GET")
