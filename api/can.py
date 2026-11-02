@@ -6,10 +6,10 @@
 """
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
 import math
 import threading
 import time
+from typing import NamedTuple
 
 try:
     import can
@@ -31,8 +31,8 @@ class CanTimeout(CanError, TimeoutError):
     """在指定期限内未收到匹配的 CAN 应答。"""
 
 
-@dataclass(frozen=True)
-class CanFrame:
+class CanFrame(NamedTuple):
+    """不可变的独立帧快照；data 始终从驱动缓冲区复制为 bytes。"""
     arbitration_id: int
     data: bytes
     is_extended_id: bool = False
@@ -153,6 +153,10 @@ class _CanTransport:
             raise CanError('CAN 总线未打开')
         if timeout is not None:
             _seconds(timeout, 'timeout')
+        return self._recv_frame(timeout)
+
+    def _recv_frame(self, timeout):
+        """Receive after the public entry point checked state and timeout."""
         try:
             message = self.bus.recv(timeout)
         except Exception as exc:
@@ -289,7 +293,7 @@ class CanMaster(_CanTransport):
                 raise CanError('CAN 总线未打开')
             if self._pending:
                 return self._pending.popleft()
-            return super().recv(timeout)
+            return self._recv_frame(timeout)
 
     def request(self, arbitration_id, data=b'', *, response_id, timeout=1.0,
                 response_extended=False, matcher=None, **kwargs):
@@ -332,16 +336,36 @@ class CanMaster(_CanTransport):
         _seconds(timeout, 'timeout')
         _count(max_frames, 'max_frames')
         with self._receive_lock:
-            deadline = time.monotonic() + timeout
+            if not self.connected:
+                raise CanError('CAN 总线未打开')
+            # Keep the hot loop local-variable only.  A zero timeout is used by
+            # drain-style polling and has no deadline to enforce, so avoid a
+            # monotonic clock call for every frame in that common path.
             frames = []
-            while len(frames) < max_frames:
-                remaining = max(0.0, deadline - time.monotonic())
-                if timeout > 0 and frames and remaining == 0:
-                    break
-                frame = self.recv(remaining)
+            append = frames.append
+            pending = self._pending
+            popleft = pending.popleft
+            receive_frame = self._recv_frame
+            if timeout == 0:
+                for _ in range(max_frames):
+                    frame = popleft() if pending else receive_frame(0.0)
+                    if frame is None:
+                        break
+                    append(frame)
+                return frames
+
+            monotonic = time.monotonic
+            deadline = monotonic() + timeout
+            for index in range(max_frames):
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    if index:
+                        break
+                    remaining = 0.0
+                frame = popleft() if pending else receive_frame(remaining)
                 if frame is None:
                     break
-                frames.append(frame)
+                append(frame)
             return frames
 
     def poll_loop(self, callback, *, timeout=0.1, max_frames=100, interval=0.0,

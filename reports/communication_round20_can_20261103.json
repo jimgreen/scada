@@ -1,0 +1,382 @@
+{
+  "source_sha256": {
+    "modbus": {
+      "before": "ca8bbed23dcc770eeb1339a356ee624996d5fa1a425453ab918c369d4d373ce3",
+      "after": "7e8c95b98ff62bc6f6f4aa90ed7e7729a5814f8ff180b20cf1a12063bc3bd365"
+    },
+    "opc": {
+      "before": "b0e56138cd82455d63380e89fecb4b924aa4bbeee0e9858bb508e41ef459b5ce",
+      "after": "9be3963ee39e961e5a6d11174f029fa3dcb7d53f5318599e1f8bd9d2bc0c4384"
+    },
+    "bacnet": {
+      "before": "5f0a1e3d630aa564c1e4902664e7ac75103b82231faa81fc1729cb59376d8fa5",
+      "after": "c1d2e7a6a42f130a3657684ed4c691642cfcf5bf9a47773347753579e1a974d3"
+    },
+    "can": {
+      "before": "81fa48c34548db93800fa318f6e72e338c918555dba7051096bed547ea4774c9",
+      "after": "8e67dd1e46beb3e0b6e4e86b6c53aa58c81f6d28faacb20641704dd62008f501"
+    }
+  },
+  "platform": "Windows-10-10.0.26200-SP0",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "method": "Seven alternating repeats; command lookup uses 400 lookups per cycle; CAN uses a fake python-can bus with real Message conversion; profiler separate",
+  "arguments": {
+    "baseline_dir": "output\\backend_round15_baseline",
+    "repeat": 5,
+    "cycles": 20,
+    "frames": 10000,
+    "profile": false,
+    "output": "reports\\communication_round20_can_20261103.json"
+  },
+  "results": [
+    {
+      "case": "modbus_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.28082228749917704,
+      "repeat": 1
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0005165375005162787,
+      "repeat": 1
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.1467474500004755,
+      "repeat": 1
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0001832625002862187,
+      "repeat": 1
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.14749647499957064,
+      "repeat": 1
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00018306250058230944,
+      "repeat": 1
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "before",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.00319939200009685,
+      "total_frames": 100000,
+      "repeat": 1
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "after",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0014474709999922196,
+      "total_frames": 100000,
+      "repeat": 1
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00048372499986726325,
+      "repeat": 2
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.2678674124999816,
+      "repeat": 2
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00017636250049690716,
+      "repeat": 2
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.14856630000031146,
+      "repeat": 2
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0002024000004894333,
+      "repeat": 2
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.1465050999995583,
+      "repeat": 2
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "after",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0014488079999864568,
+      "total_frames": 100000,
+      "repeat": 2
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "before",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0033773339999606834,
+      "total_frames": 100000,
+      "repeat": 2
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.26735408750028,
+      "repeat": 3
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0005448874999274267,
+      "repeat": 3
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.14966241250112944,
+      "repeat": 3
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0001700749999145046,
+      "repeat": 3
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.1494293875002768,
+      "repeat": 3
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00024012500034586992,
+      "repeat": 3
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "before",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0031514659999811556,
+      "total_frames": 100000,
+      "repeat": 3
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "after",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.001499383000045782,
+      "total_frames": 100000,
+      "repeat": 3
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0005125874995428603,
+      "repeat": 4
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.2759514499994111,
+      "repeat": 4
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0001557750001666136,
+      "repeat": 4
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.15869362499870476,
+      "repeat": 4
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00024152500009222422,
+      "repeat": 4
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.16213012499974866,
+      "repeat": 4
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "after",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0014702950000355485,
+      "total_frames": 100000,
+      "repeat": 4
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "before",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.0031133870000485332,
+      "total_frames": 100000,
+      "repeat": 4
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.2763321000002179,
+      "repeat": 5
+    },
+    {
+      "case": "modbus_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0005559000001085224,
+      "repeat": 5
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.1652209750009206,
+      "repeat": 5
+    },
+    {
+      "case": "opc_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.00018953750077344012,
+      "repeat": 5
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "before",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.15483244999995804,
+      "repeat": 5
+    },
+    {
+      "case": "bacnet_command_lookup",
+      "variant": "after",
+      "cycles": 20,
+      "operations": 8000,
+      "ms_per_operation": 0.0001766125005815411,
+      "repeat": 5
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "before",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.003098176999919815,
+      "total_frames": 100000,
+      "repeat": 5
+    },
+    {
+      "case": "can_batch_receive",
+      "variant": "after",
+      "cycles": 10,
+      "frames": 10000,
+      "ms_per_frame": 0.001430594999983441,
+      "total_frames": 100000,
+      "repeat": 5
+    }
+  ],
+  "profiles": [],
+  "medians_ms": {
+    "modbus_command_lookup": {
+      "before": 0.2759514499994111,
+      "after": 0.0005165375005162787
+    },
+    "opc_command_lookup": {
+      "before": 0.14966241250112944,
+      "after": 0.00017636250049690716
+    },
+    "bacnet_command_lookup": {
+      "before": 0.1494293875002768,
+      "after": 0.0002024000004894333
+    },
+    "can_batch_receive": {
+      "before": 0.0031514659999811556,
+      "after": 0.0014488079999864568
+    }
+  }
+}
