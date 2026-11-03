@@ -27,6 +27,20 @@ KIND_TABLES = {
     "yt": "fes_yt_define",
     "yk": "fes_yk_define",
 }
+_DEFINITION_VERSION_TABLE = '_scada_definition_version'
+_COMMAND_VERSION_TABLE = '_scada_command_version'
+# Runtime columns are deliberately excluded from the definition version.  A
+# communication worker updates these fields continuously and those writes must
+# never cause a protocol reconnect/reload.
+_DEFINITION_RUNTIME_COLUMNS = frozenset({
+    '_version', 'raw_value', 'raw_status', 'raw_time', 'value', 'status',
+    'refresh_time', 'refresh_time1', 'refresh_time2', 'refresh_time3',
+    'cmd_time', 'cmd_handle_time', 'cmd_check_id',
+    'man_disable_last_tm', 'lock_begintime', 'lock_holdtime',
+    'process_enable', 'process_status', 'process_pid', 'process_start_time',
+    'process_stop_time', 'process_heartbeat_time', 'process_exit_code',
+    'process_error',
+})
 CHANNEL_PARAMETER_TABLES = {
     "iec104": "fes_channel_iec104_define",
     "modbus-rtu": "fes_channel_modbus_rtu_define",
@@ -36,6 +50,7 @@ CHANNEL_PARAMETER_TABLES = {
     "opc": "fes_channel_opc_define",
 }
 CHANNEL_TYPES = frozenset(CHANNEL_PARAMETER_TABLES) | {"custom"}
+POINT_KINDS = frozenset({"yc", "yx", "yk", "yt"})
 class ApiError(Exception):
     def __init__(self, status: int, message: str, *, details: Any = None, code: str = "bad_request"):
         super().__init__(message)
@@ -127,6 +142,16 @@ class SchemaCatalog:
                 or any(name not in names for name in unique_key)
             ):
                 raise RuntimeError(f"schema {filename}: invalid unique key {unique_key!r}")
+        indexes = payload.get('indexes', [])
+        if not isinstance(indexes, list):
+            raise RuntimeError(f"schema {filename}: indexes must be a list")
+        for index in indexes:
+            if (
+                not isinstance(index, list) or not index
+                or len(set(index)) != len(index)
+                or any(name not in names for name in index)
+            ):
+                raise RuntimeError(f"schema {filename}: invalid index {index!r}")
 
     def get(self, table: str) -> dict[str, Any]:
         try:
@@ -145,6 +170,7 @@ class SchemaCatalog:
             "columns": columns,
             "primary_keys": [c["eng_name"] for c in columns if c["primary_key"]],
             "unique_keys": payload.get("unique_keys", []),
+            "indexes": payload.get("indexes", []),
         }
 
 
@@ -221,13 +247,25 @@ class ScadaStore:
                     connection.execute(
                         "CREATE TABLE IF NOT EXISTS _scada_schema (table_name TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)"
                     )
+                    connection.execute(
+                        f"CREATE TABLE IF NOT EXISTS {quote_identifier(_DEFINITION_VERSION_TABLE)} ("
+                        "rtu_id INTEGER PRIMARY KEY CHECK (rtu_id > 0), "
+                        "version INTEGER NOT NULL DEFAULT 0)"
+                    )
+                    connection.execute(
+                        f"CREATE TABLE IF NOT EXISTS {quote_identifier(_COMMAND_VERSION_TABLE)} ("
+                        "rtu_id INTEGER PRIMARY KEY CHECK (rtu_id > 0), "
+                        "version INTEGER NOT NULL DEFAULT 0)"
+                    )
                     expected_tables = set(self.catalog.names())
                     actual_tables = {
                         row[0] for row in connection.execute(
                             "SELECT name FROM sqlite_master WHERE type='table'"
                         )
                     }
-                    unexpected_tables = actual_tables - expected_tables - {'_scada_schema'}
+                    unexpected_tables = actual_tables - expected_tables - {
+                        '_scada_schema', _DEFINITION_VERSION_TABLE, _COMMAND_VERSION_TABLE,
+                    }
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -258,6 +296,7 @@ class ScadaStore:
                             connection.execute(
                                 f"CREATE TABLE {quote_identifier(name)} ({', '.join(parts)})"
                             )
+                            self._ensure_indexes(connection, name, payload)
                             connection.execute(
                                 "INSERT INTO _scada_schema(table_name, fingerprint) VALUES (?,?)",
                                 (name, fingerprint),
@@ -277,6 +316,16 @@ class ScadaStore:
                                     '请重新初始化数据库'
                                 )
                             self._ensure_indexes(connection, name, payload)
+                    self._ensure_definition_version_triggers(connection)
+                    self._ensure_command_version_triggers(connection)
+                    connection.execute(
+                        f'INSERT OR IGNORE INTO {quote_identifier(_DEFINITION_VERSION_TABLE)}(rtu_id, version) '
+                        'SELECT rtu_id, 0 FROM fes_rtu_define'
+                    )
+                    connection.execute(
+                        f'INSERT OR IGNORE INTO {quote_identifier(_COMMAND_VERSION_TABLE)}(rtu_id, version) '
+                        'SELECT rtu_id, 0 FROM fes_rtu_define'
+                    )
                     metadata_tables = {
                         row[0] for row in connection.execute(
                             'SELECT table_name FROM _scada_schema'
@@ -315,6 +364,22 @@ class ScadaStore:
         for index, unique_key in enumerate(payload.get('unique_keys', []), 1):
             suffix = '_'.join(unique_key)
             index_name = f'{name}_uq_{index}_{suffix}'
+            # A database created with a table-level UNIQUE clause already has
+            # an equivalent SQLite auto-index.  Also tolerate an index made
+            # by an earlier schema migration: creating another index with the
+            # same columns only wastes space and slows writes.
+            existing = False
+            for row in connection.execute(f'PRAGMA index_list({quote_identifier(name)})'):
+                if not row[2]:
+                    continue
+                columns = tuple(info[2] for info in connection.execute(
+                    f'PRAGMA index_info({quote_identifier(row[1])})'
+                ))
+                if columns == tuple(unique_key):
+                    existing = True
+                    break
+            if existing:
+                continue
             try:
                 connection.execute(
                     f'CREATE UNIQUE INDEX IF NOT EXISTS {quote_identifier(index_name)} '
@@ -325,6 +390,92 @@ class ScadaStore:
                 raise RuntimeError(
                     f'表 {name} 中存在违反当前唯一约束 {unique_key} 的重复数据'
                 ) from exc
+        for index, keys in enumerate(payload.get('indexes', []), 1):
+            suffix = '_'.join(keys)
+            index_name = f'{name}_idx_{index}_{suffix}'
+            connection.execute(
+                f'CREATE INDEX IF NOT EXISTS {quote_identifier(index_name)} '
+                f'ON {quote_identifier(name)} ('
+                + ', '.join(quote_identifier(key) for key in keys) + ')'
+            )
+
+    def _ensure_definition_version_triggers(self, connection) -> None:
+        """Maintain a cheap per-RTU version for static definition changes.
+
+        Definition fingerprints used to serialize every static cell from every
+        point table on each worker check.  SQLite triggers move that work to
+        the write that actually changes a definition, leaving the hot read to
+        one indexed lookup.  Runtime value/quality/heartbeat fields are
+        excluded so normal acquisition never asks a protocol to reconnect.
+        """
+        version_table = quote_identifier(_DEFINITION_VERSION_TABLE)
+
+        def bump(alias: str) -> str:
+            return (
+                f'INSERT INTO {version_table}(rtu_id, version) VALUES ({alias}.rtu_id, 1) '
+                'ON CONFLICT(rtu_id) DO UPDATE SET version=version+1;'
+            )
+
+        for name in self.catalog.names():
+            columns = self.schema(name)['columns']
+            if not any(column['eng_name'] == 'rtu_id' for column in columns):
+                continue
+            static_columns = [
+                column['eng_name'] for column in columns
+                if column['eng_name'] not in _DEFINITION_RUNTIME_COLUMNS
+                and column['eng_name'] != 'rtu_id'
+            ]
+            table = quote_identifier(name)
+            trigger_prefix = f'_scada_defver_{name}'
+            connection.execute(
+                f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(trigger_prefix + "_ins")} '
+                f'AFTER INSERT ON {table} BEGIN {bump("NEW")} END'
+            )
+            connection.execute(
+                f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(trigger_prefix + "_del")} '
+                f'AFTER DELETE ON {table} BEGIN {bump("OLD")} END'
+            )
+            if static_columns:
+                update_columns = ', '.join(quote_identifier(column) for column in static_columns)
+                connection.execute(
+                    f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(trigger_prefix + "_upd")} '
+                    f'AFTER UPDATE OF {update_columns} ON {table} BEGIN {bump("NEW")} END'
+                )
+
+    def _ensure_command_version_triggers(self, connection) -> None:
+        """Maintain one cheap command-change token per RTU.
+
+        Polling the command tables used to aggregate ``_version`` for every
+        YK/YT row on every communication cycle.  Status/acknowledgement writes
+        also changed that aggregate, so an idle channel repeatedly scanned and
+        materialised the same command rows.  These triggers advance a compact
+        token only when command input changes or rows are added/removed.
+        """
+        version_table = quote_identifier(_COMMAND_VERSION_TABLE)
+
+        def bump(alias: str) -> str:
+            return (
+                f'INSERT INTO {version_table}(rtu_id, version) VALUES ({alias}.rtu_id, 1) '
+                'ON CONFLICT(rtu_id) DO UPDATE SET version=version+1;'
+            )
+
+        for table_name in ('fes_yk_define', 'fes_yt_define'):
+            table = quote_identifier(table_name)
+            prefix = f'_scada_cmdver_{table_name}'
+            connection.execute(
+                f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(prefix + "_ins")} '
+                f'AFTER INSERT ON {table} BEGIN {bump("NEW")} END'
+            )
+            connection.execute(
+                f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(prefix + "_del")} '
+                f'AFTER DELETE ON {table} BEGIN {bump("OLD")} END'
+            )
+            connection.execute(
+                f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(prefix + "_upd")} '
+                f'AFTER UPDATE OF "value", "cmd_time" ON {table} '
+                f'WHEN OLD."value" IS NOT NEW."value" OR OLD."cmd_time" IS NOT NEW."cmd_time" '
+                f'BEGIN {bump("NEW")} END'
+            )
 
     def schema(self, table: str) -> dict[str, Any]:
         return self.catalog.get(table)
@@ -365,10 +516,41 @@ class ScadaStore:
                 raise ApiError(400, f'{name} 必须在 1 到 87600 之间')
             if name == 'worker_start_delay_ms' and not 0 <= number <= 60000:
                 raise ApiError(400, f'{name} 必须在 0 到 60000 之间')
+            if name == 'retry_count' and not 0 <= number <= 10:
+                raise ApiError(400, f'字段 {name} 必须在 0 到 10 之间')
+            if name in {'unit_id', 'irtuaddr'} and not 1 <= number <= 247:
+                raise ApiError(400, f'字段 {name} 必须在 1 到 247 之间')
+            if name == 'baudrate' and not 1 <= number <= 10000000:
+                raise ApiError(400, f'字段 {name} 必须在 1 到 10000000 之间')
+            if name == 'bytesize' and number != 8:
+                raise ApiError(400, 'Modbus RTU bytesize 必须为 8')
+            if name == 'stopbits' and number not in {1, 2}:
+                raise ApiError(400, 'Modbus RTU stopbits 必须为 1 或 2')
             if name in {'scan_interval_ms', 'poll_interval_ms', 'retry_interval_ms'} and not 50 <= number <= 60000:
                 raise ApiError(400, f'{name} 必须在 50 到 60000 之间')
-            if name in {'remote_port', 'bind_port'} and not 0 <= number <= 65535:
-                raise ApiError(400, f'{name} 必须在 0 到 65535 之间')
+            if name == 'bind_port' and not 0 <= number <= 65535:
+                raise ApiError(400, '字段 bind_port 必须在 0 到 65535 之间')
+            if name == 'remote_port' and not 1 <= number <= 65535:
+                raise ApiError(400, '字段 remote_port 必须在 1 到 65535 之间')
+            if name in {'keep_alive', 'if_yx', 'if_reverse', 'ifyk', 'ifreverse',
+                         'send_ff_replace_01'} and number not in {0, 1}:
+                raise ApiError(400, f'字段 {name} 必须是 0 或 1')
+            if name == 'trans_type' and not 1 <= number <= 11:
+                raise ApiError(400, '字段 trans_type 必须在 1 到 11 之间')
+            if name == 'ytyk_type' and not 1 <= number <= 7:
+                raise ApiError(400, '字段 ytyk_type 必须在 1 到 7 之间')
+            if name in {'iplace', 'reg_addr'} and not 0 <= number <= 65535:
+                raise ApiError(400, f'字段 {name} 必须在 0 到 65535 之间')
+            if name == 'inum' and not 1 <= number <= 2000:
+                raise ApiError(400, '字段 inum 必须在 1 到 2000 之间')
+            if name in {'offset_bit', 'special_yk_bit'} and not 0 <= number <= 15:
+                raise ApiError(400, f'字段 {name} 必须在 0 到 15 之间')
+            if name == 'all_bit' and not 1 <= number <= 16:
+                raise ApiError(400, '字段 all_bit 必须在 1 到 16 之间')
+            if name in {'twobytedata_byteseq', 'fourbytedata_byteseq'} and not 0 <= number <= 3:
+                raise ApiError(400, f'字段 {name} 必须在 0 到 3 之间')
+            if name == 'special_yk_yccnt' and number < 0:
+                raise ApiError(400, '字段 special_yk_yccnt 不能为负数')
             return number
         if kind == "float":
             if isinstance(value, bool):
@@ -379,6 +561,8 @@ class ScadaStore:
                 raise ApiError(400, f"字段 {name} 必须是数字") from exc
             if number != number or number in (float("inf"), float("-inf")):
                 raise ApiError(400, f"字段 {name} 必须是有限数字")
+            if name in {'connect_timeout', 'response_timeout'} and number <= 0:
+                raise ApiError(400, f"字段 {name} 必须是正数")
             return number
         if kind == "bool":
             if not isinstance(value, bool):
@@ -386,13 +570,89 @@ class ScadaStore:
             return int(value)
         if not isinstance(value, str):
             raise ApiError(400, f"字段 {name} 必须是字符串")
+        if name in {'remote_host', 'serial_port'} and not value.strip():
+            raise ApiError(400, f'字段 {name} 不能为空')
         if name == 'channel_type':
             if value not in CHANNEL_TYPES:
                 raise ApiError(400, f"字段 {name} 必须是受支持的通道类型")
         allowed_values = column.get('allowed_values')
         if allowed_values is not None and value not in allowed_values:
             raise ApiError(400, f"字段 {name} 的值不在允许范围内")
+        if name == "kind" and value not in POINT_KINDS:
+            raise ApiError(400, "字段 kind 必须是 yc、yx、yk 或 yt")
+        if name == "command_mode" and value.upper() not in {"DIRECT", "SELECT_AND_EXECUTE", "SELECT-AND-EXECUTE", "SELECT"}:
+            raise ApiError(400, "字段 command_mode 必须是 DIRECT 或 SELECT_AND_EXECUTE")
+        if name == "value_type" and value.lower() not in {"bool", "uint", "int", "float"}:
+            raise ApiError(400, "字段 value_type 必须是 bool、uint、int 或 float")
+        if name == "byte_order" and value.lower() not in {"big", "little"}:
+            raise ApiError(400, "字段 byte_order 必须是 big 或 little")
         return value
+
+    @staticmethod
+    def _validate_modbus_row(table: str, values: dict[str, Any], *, partial: bool) -> None:
+        """Validate Modbus auxiliary rows at the API boundary.
+
+        The JSON schema carries field types and menus, while these constraints
+        describe the relationship between fields in a Modbus frame.  Keeping
+        them here prevents a row that is individually well typed from becoming
+        an unusable poll/command definition.
+        """
+        if not table.startswith('fes_channel_modbus_'):
+            return
+
+        def present(name: str) -> bool:
+            return name in values and values[name] is not None
+
+        def integer_field(name: str, lo: int, hi: int | None = None) -> None:
+            if not present(name):
+                return
+            value = values[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < lo or (hi is not None and value > hi):
+                bound = f'{lo}' if hi is None else f'{lo} 到 {hi}'
+                raise ApiError(400, f'字段 {name} 必须在 {bound} 之间')
+
+        if table in {'fes_channel_modbus_define', 'fes_channel_modbus_define_call'}:
+            integer_field('irtuaddr', 1, 247)
+            integer_field('iplace', 0, 65535)
+            integer_field('inum', 1, 2000)
+            if present('icode'):
+                code = values['icode']
+                if code not in {1, 2, 3, 4}:
+                    raise ApiError(400, '召唤功能码必须是 1、2、3 或 4')
+                if present('inum') and code >= 3 and values['inum'] > 125:
+                    raise ApiError(400, '寄存器召唤的 inum 不能超过 125')
+            integer_field('ioffset', 0, 65535)
+            integer_field('ibitnum', 1, 16)
+        elif table == 'fes_channel_modbus_define_data':
+            integer_field('if_yx', 0, 1)
+            integer_field('cnt', 0, 2**31 - 1)
+            integer_field('trans_type', 1, 11)
+            integer_field('reg_addr', 0, 65535)
+            integer_field('offset_bit', 0, 15)
+            integer_field('all_bit', 1, 16)
+            integer_field('if_reverse', 0, 1)
+            integer_field('twobytedata_byteseq', 0, 3)
+            integer_field('fourbytedata_byteseq', 0, 3)
+            if present('trans_type') and values['trans_type'] == 9:
+                if not present('offset_bit') or not present('all_bit'):
+                    raise ApiError(400, '多位数据必须提供 offset_bit 和 all_bit')
+        elif table == 'fes_channel_modbus_define_ytyk':
+            integer_field('ifyk', 0, 1)
+            integer_field('cnt', 0, 2**31 - 1)
+            integer_field('irtuaddr', 1, 247)
+            integer_field('reg_addr', 0, 65535)
+            integer_field('ifreverse', 0, 1)
+            integer_field('twobytedata_byteseq', 0, 3)
+            integer_field('fourbytedata_byteseq', 0, 3)
+            integer_field('special_yk_yccnt', 0, 2**31 - 1)
+            integer_field('special_yk_bit', 0, 15)
+            integer_field('send_ff_replace_01', 0, 1)
+            if present('ytyk_type') and values['ytyk_type'] not in {1, 2, 3, 4, 5, 6, 7}:
+                raise ApiError(400, '字段 ytyk_type 必须在 1 到 7 之间')
+            if present('icode'):
+                code = values['icode']
+                if code not in {5, 6, 16}:
+                    raise ApiError(400, '遥控/遥调功能码必须是 5、6 或 16')
 
     def _normalise(self, table: str, values: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
@@ -412,6 +672,9 @@ class ScadaStore:
                 )
             elif not partial and (column["primary_key"] or name == 'rtu_id' or column.get('required', False)):
                 raise ApiError(400, f"缺少必填字段: {name}")
+            elif not partial and 'default' in column:
+                result[name] = self._coerce(column['default'], column)
+        self._validate_modbus_row(canonical, result, partial=partial)
         return result
 
     def _key_values(self, table: str, raw: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
@@ -433,12 +696,73 @@ class ScadaStore:
         result["_version"] = int(row["_version"])
         return result
 
+    @staticmethod
+    def _public_rows(rows: list[sqlite3.Row], columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert a page of SQLite rows without repeating name lookups.
+
+        ``list_rows`` is the main high-volume Web read path.  The old
+        per-row converter looked up every column by name and rebuilt the
+        schema loop for every result row.  ``SELECT *`` returns the same
+        physical column order for a table, so resolve the indexes once and
+        use the row slice for the common layout (``_version`` first).  The
+        indexed fallback keeps the method correct for databases whose column
+        order was created externally, and retains the existing bool/bytes
+        JSON conversion semantics.
+        """
+        if not rows:
+            return []
+        names = tuple(column["eng_name"] for column in columns)
+        bool_indexes = tuple(
+            index for index, column in enumerate(columns)
+            if column["data_type"] == "bool"
+        )
+        row_keys = rows[0].keys()
+        direct_layout = bool(row_keys and row_keys[0] == "_version"
+                             and tuple(row_keys[1:]) == names)
+        value_indexes = (None if direct_layout else
+                         tuple(row_keys.index(name) for name in names))
+        version_index = 0 if direct_layout else row_keys.index("_version")
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            values = row[1:] if direct_layout else tuple(row[index] for index in value_indexes)
+            if bool_indexes:
+                values = list(values)
+                for index in bool_indexes:
+                    if values[index] is not None:
+                        values[index] = bool(values[index])
+            if any(isinstance(value, bytes) for value in values):
+                values = list(values)
+                for index, value in enumerate(values):
+                    if isinstance(value, bytes):
+                        values[index] = _json_value(value)
+            item = dict(zip(names, values))
+            item["_version"] = int(row[version_index])
+            result.append(item)
+        return result
+
     def list_rows(self, table: str, *, where: dict[str, Any] | None = None, search: str = "", limit: int = 50,
-                  offset: int = 0, sort: str | None = None, order: str = "asc") -> dict[str, Any]:
+                  offset: int = 0, sort: str | None = None, order: str = "asc",
+                  fields: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
         if limit < 1 or limit > 500 or offset < 0:
             raise ApiError(400, "limit 必须在 1 到 500 之间，offset 不能为负数")
         by_name = {c["eng_name"]: c for c in columns}
+        # List views often show only a small projection of a wide point or
+        # protocol auxiliary table.  Keep the full schema authoritative while
+        # allowing callers to avoid reading/serialising hidden columns.  Keys
+        # and the optimistic-concurrency token are always returned so row
+        # actions remain safe even when a caller requests a narrow projection.
+        if fields is None:
+            selected_columns = columns
+        else:
+            requested = list(fields)
+            if not requested or any(not isinstance(name, str) or not name for name in requested):
+                raise ApiError(400, "fields 必须是非空字段名列表")
+            unknown_fields = sorted(set(requested) - set(by_name))
+            if unknown_fields:
+                raise ApiError(400, "未知投影字段", details={"unknown_fields": unknown_fields})
+            selected_names = list(dict.fromkeys([*primary_keys, *requested]))
+            selected_columns = [by_name[name] for name in selected_names]
         where = where or {}
         unknown = sorted(set(where) - set(by_name))
         if unknown:
@@ -465,11 +789,14 @@ class ScadaStore:
             connection.execute('BEGIN')
             total = connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(canonical)}{predicate}", params).fetchone()[0]
             ordering = ', '.join(f'{quote_identifier(name)} {order.upper()}' for name in [sort] + [k for k in primary_keys if k != sort])
+            projection = ', '.join([quote_identifier('_version'), *(
+                quote_identifier(column["eng_name"]) for column in selected_columns
+            )])
             rows = connection.execute(
-                f"SELECT * FROM {quote_identifier(canonical)}{predicate} ORDER BY {ordering} LIMIT ? OFFSET ?",
+                f"SELECT {projection} FROM {quote_identifier(canonical)}{predicate} ORDER BY {ordering} LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
-        return {"items": [self._public_row(row, columns) for row in rows], "total": int(total), "limit": limit, "offset": offset}
+        return {"items": self._public_rows(rows, selected_columns), "total": int(total), "limit": limit, "offset": offset}
 
     def get_row(self, table: str, key: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
@@ -514,6 +841,146 @@ class ScadaStore:
         if if_match is not None and row['_version'] != if_match:
             raise ApiError(409, '记录已被其他操作修改，请关闭并重新打开编辑窗口', code='version_conflict')
 
+    def _rtu_reference_tables(self) -> list[tuple[str, str]]:
+        """Return every schema that is owned by an RTU.
+
+        The relationship is defined by the schema itself, rather than by a
+        hard-coded protocol list.  This keeps cascade deletion complete when a
+        new protocol auxiliary table is added with an ``rtu_id`` column.
+        """
+        references = []
+        for name in self.catalog.names():
+            if name == 'fes_rtu_define':
+                continue
+            columns = self.schema(name)['columns']
+            if any(column['eng_name'] == 'rtu_id' for column in columns):
+                references.append((name, self.schema(name)['head']['chn_name']))
+        return references
+
+    def describe_rtu_cascade(self, rtu_id: int | str) -> dict[str, Any]:
+        """Describe the records that deleting one RTU will remove."""
+        keys = self._key_values('fes_rtu_define', [rtu_id])
+        with self.connection() as connection:
+            row = connection.execute(
+                'SELECT * FROM fes_rtu_define WHERE rtu_id=?',
+                (keys['rtu_id'],),
+            ).fetchone()
+            if row is None:
+                raise ApiError(404, '记录不存在', code='not_found')
+            rtu = self._public_row(row, self.schema('fes_rtu_define')['columns'])
+            references = [{
+                'table': 'fes_rtu_define',
+                'name': self.schema('fes_rtu_define')['head']['chn_name'],
+                'count': 1,
+            }]
+            for name, label in self._rtu_reference_tables():
+                count = connection.execute(
+                    f'SELECT COUNT(*) FROM {quote_identifier(name)} WHERE rtu_id=?',
+                    (keys['rtu_id'],),
+                ).fetchone()[0]
+                if count:
+                    references.append({'table': name, 'name': label, 'count': int(count)})
+        return {
+            'rtu_id': keys['rtu_id'],
+            'rtu': rtu,
+            'references': references,
+            'total': sum(item['count'] for item in references),
+        }
+
+    def delete_rtu_cascade(self, rtu_id: int | str, if_match: int | None = None) -> dict[str, Any]:
+        """Delete an RTU and all of its owned rows in one SQLite transaction."""
+        keys = self._key_values('fes_rtu_define', [rtu_id])
+        deleted_rows: dict[str, int] = {}
+        try:
+            with self.connection() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                parent = self._read(connection, 'fes_rtu_define', [keys['rtu_id']])
+                self._check_version(parent, if_match)
+                for name, _label in self._rtu_reference_tables():
+                    count = connection.execute(
+                        f'SELECT COUNT(*) FROM {quote_identifier(name)} WHERE rtu_id=?',
+                        (keys['rtu_id'],),
+                    ).fetchone()[0]
+                    if count:
+                        connection.execute(
+                            f'DELETE FROM {quote_identifier(name)} WHERE rtu_id=?',
+                            (keys['rtu_id'],),
+                        )
+                        deleted_rows[name] = int(count)
+                connection.execute(
+                    'DELETE FROM fes_rtu_define WHERE rtu_id=?',
+                    (keys['rtu_id'],),
+                )
+                # The RTU delete trigger bumps this row before the parent is
+                # removed.  Drop both internal tokens so recreating the same
+                # RTU starts from a clean definition/command generation.
+                connection.execute(
+                    f'DELETE FROM {quote_identifier(_DEFINITION_VERSION_TABLE)} WHERE rtu_id=?',
+                    (keys['rtu_id'],),
+                )
+                connection.execute(
+                    f'DELETE FROM {quote_identifier(_COMMAND_VERSION_TABLE)} WHERE rtu_id=?',
+                    (keys['rtu_id'],),
+                )
+                deleted_rows['fes_rtu_define'] = 1
+                connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ApiError(409, 'RTU 仍被其他数据引用，不能删除', details=str(exc), code='conflict') from exc
+        return {
+            'deleted': True,
+            'rtu_id': keys['rtu_id'],
+            'deleted_rows': deleted_rows,
+            'total_deleted': sum(deleted_rows.values()),
+        }
+
+    def submit_command(self, rtu_id, kind, point_no, body, if_match=None):
+        """Atomically publish one explicit command for the channel worker.
+
+        A point has one command slot. Do not replace an unhandled command;
+        cmd_time is strictly increasing even for repeated identical values.
+        """
+        if kind not in {'yk', 'yt'}:
+            raise ApiError(400, '只支持遥控和遥调指令')
+        if set(body) != {'value'}:
+            raise ApiError(400, '指令只接受 value 字段')
+        if if_match is None:
+            raise ApiError(428, '请先读取测点并提交 If-Match 版本', code='version_required')
+        table = KIND_TABLES[kind]
+        key = [rtu_id, point_no]
+        columns = {column['eng_name']: column for column in self.schema(table)['columns']}
+        value = self._coerce(body['value'], columns['value'], required=True)
+        if kind == 'yk' and value not in {0, 1}:
+            raise ApiError(400, '遥控值只能为 0 或 1')
+        with self.connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            row = self._read(connection, table, key)
+            self._check_version(row, if_match)
+            rtu = self._read(connection, 'fes_rtu_define', [rtu_id])
+            if rtu['channel_type'] not in {'iec104', 'modbus-tcp', 'modbus-rtu', 'bacnet', 'opc'}:
+                raise ApiError(409, '该规约尚未配置按点遥控/遥调下发接口', code='command_unsupported')
+            if row.get('man_disable') or row.get('auto_disable'):
+                raise ApiError(409, '测点已闭锁，禁止下发', code='command_disabled')
+            if int(row.get('cmd_time') or 0) > int(row.get('cmd_handle_time') or 0):
+                raise ApiError(409, '该测点还有待处理指令', code='command_pending')
+            if kind == 'yt':
+                low, high = row.get('eng_min'), row.get('eng_max')
+                if low is not None and high is not None and low > high:
+                    raise ApiError(409, '遥调工程上下限配置错误', code='command_range')
+                if (low is not None and value < low) or (high is not None and value > high):
+                    raise ApiError(400, '遥调值超出工程上下限', code='command_range')
+            command_time = max(int(time.time() * 1000),
+                               int(row.get('cmd_time') or 0) + 1,
+                               int(row.get('cmd_handle_time') or 0) + 1)
+            keys = self._key_values(table, key)
+            connection.execute(
+                f'UPDATE {quote_identifier(table)} SET value=?, cmd_time=?, status=0, '
+                '_version=_version+1 WHERE rtu_id=? AND pnt_no=?',
+                (value, command_time, keys['rtu_id'], keys['pnt_no']),
+            )
+            item = self._read(connection, table, key)
+            connection.commit()
+        return item
+
     def update_row(self, table: str, key: str | list[Any] | tuple[Any, ...], values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
         keys = self._key_values(table, key)
@@ -541,6 +1008,11 @@ class ScadaStore:
 
     def delete_row(self, table: str, key: str | list[Any] | tuple[Any, ...], if_match: int | None = None) -> None:
         canonical, columns, primary_keys = self._table_parts(table)
+        if canonical == 'fes_rtu_define':
+            # Keep every RTU deletion path consistent, including callers that
+            # use the store directly instead of the HTTP route.
+            self.delete_rtu_cascade(key, if_match)
+            return
         keys = self._key_values(table, key)
         predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in primary_keys)
         params = list(keys.values())
@@ -548,15 +1020,6 @@ class ScadaStore:
             with self.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 self._check_version(self._read(connection, table, key), if_match)
-                if canonical == 'fes_rtu_define':
-                    references = {}
-                    for name in self.catalog.names():
-                        if name != canonical and any(c['eng_name'] == 'rtu_id' for c in self.schema(name)['columns']):
-                            count = connection.execute(f'SELECT COUNT(*) FROM {quote_identifier(name)} WHERE rtu_id=?', [keys['rtu_id']]).fetchone()[0]
-                            if count:
-                                references[name] = count
-                    if references:
-                        raise ApiError(409, '该 RTU 仍有关联点表或通道参数记录，请先删除关联记录', details=references, code='referenced')
                 connection.execute(f"DELETE FROM {quote_identifier(canonical)} WHERE {predicate}", params)
                 connection.commit()
         except sqlite3.IntegrityError as exc:
@@ -565,15 +1028,34 @@ class ScadaStore:
     def overview(self, rtu_id=None):
         if rtu_id is not None:
             self.get_row('fes_rtu_define', [rtu_id])
-        counts = {}
+        names = self.catalog.names()
+        count_queries = []
+        count_params = []
+        for name in names:
+            scoped = rtu_id is not None and any(
+                column['eng_name'] == 'rtu_id' for column in self.schema(name)['columns']
+            )
+            count_queries.append(
+                'SELECT ? AS table_name, COUNT(*) AS row_count FROM '
+                + quote_identifier(name)
+                + (' WHERE rtu_id=?' if scoped else '')
+            )
+            count_params.append(name)
+            if scoped:
+                count_params.append(rtu_id)
         with self.connection() as connection:
             connection.execute('BEGIN')
-            for name in self.catalog.names():
-                scoped = rtu_id is not None and any(c['eng_name'] == 'rtu_id' for c in self.schema(name)['columns'])
-                counts[name] = connection.execute(f'SELECT COUNT(*) FROM {quote_identifier(name)}' + (' WHERE rtu_id=?' if scoped else ''), [rtu_id] if scoped else []).fetchone()[0]
+            count_rows = connection.execute(
+                ' UNION ALL '.join(count_queries), count_params,
+            ).fetchall()
+            channel_rows = connection.execute(
+                'SELECT channel_type FROM fes_rtu_define '
+                'ORDER BY "rtu_id" ASC LIMIT 500'
+            ).fetchall()
+        counts = {row['table_name']: int(row['row_count']) for row in count_rows}
         channel_types = {}
-        for row in self.list_rows('fes_rtu_define', limit=500)['items']:
-            channel_type = row.get('channel_type') or 'custom'
+        for row in channel_rows:
+            channel_type = row['channel_type'] or 'custom'
             channel_types[channel_type] = channel_types.get(channel_type, 0) + 1
         return {
             'counts': counts, 'rtu_id': rtu_id, 'database': str(self.db_path),
@@ -672,20 +1154,43 @@ class ScadaStore:
         return self.create_row(table, body)
 
     def channel_for_rtu(self, rtu_id):
-        row = self.get_row('fes_rtu_define', [rtu_id])
-        if row.get('channel_id') is None or row.get('channel_type') is None:
-            raise ApiError(404, '该 RTU 尚未配置通道', code='not_found')
-        table = self.channel_parameter_table(row.get('channel_type'))
-        parameter = None
-        if table:
-            parameter_rows = self.list_rows(table, where={'rtu_id': rtu_id}, limit=2)['items']
-            if len(parameter_rows) > 1:
-                raise ApiError(409, f'{table} 对同一 RTU 存在多个参数记录', code='relationship_conflict')
-            parameter = parameter_rows[0] if parameter_rows else None
+        canonical, columns, _ = self._table_parts('fes_rtu_define')
+        with self.connection() as connection:
+            row = connection.execute(
+                f'SELECT * FROM {quote_identifier(canonical)} WHERE rtu_id=?',
+                (rtu_id,),
+            ).fetchone()
+            if row is None:
+                raise ApiError(404, '记录不存在', code='not_found')
+            item = self._public_row(row, columns)
+            if item.get('channel_id') is None or item.get('channel_type') is None:
+                raise ApiError(404, '该 RTU 尚未配置通道', code='not_found')
+            table = self.channel_parameter_table(item.get('channel_type'))
+            parameter = None
+            parameter_schema = None
+            if table:
+                parameter_schema = self.catalog.public(table)
+                parameter_canonical, parameter_columns, primary_keys = self._table_parts(table)
+                ordering = ', '.join(
+                    f'{quote_identifier(name)} ASC' for name in primary_keys
+                )
+                parameter_rows = connection.execute(
+                    f'SELECT * FROM {quote_identifier(parameter_canonical)} '
+                    f'WHERE rtu_id=? ORDER BY {ordering} LIMIT 2',
+                    (rtu_id,),
+                ).fetchall()
+                if len(parameter_rows) > 1:
+                    raise ApiError(
+                        409,
+                        f'{table} 对同一 RTU 存在多个参数记录',
+                        code='relationship_conflict',
+                    )
+                if parameter_rows:
+                    parameter = self._public_row(parameter_rows[0], parameter_columns)
         return {
-            'item': row,
+            'item': item,
             'parameter_table': table,
             'parameter': parameter,
-            'parameter_schema': self.catalog.public(table) if table else None,
+            'parameter_schema': parameter_schema,
         }
 
