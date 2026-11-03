@@ -20,6 +20,7 @@ else:
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
 from web.process_control import ProcessController
+from web.iec104_service import IEC104Service, IEC104ServiceError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 def public_control_row(row):
@@ -187,7 +188,7 @@ class ScadaHandler(BaseHTTPRequestHandler):
         if parts[:3] != ["api", "scdfe_c", "status"] and parts[:3] != ["api", "scdfe_c", "control"] and parts[:3] != ["api", "scdfe_c", "logs"]:
             return False
         from core.scdfe_control import CONTROL_TABLE, ensure_control_row, log_directory, validate_control
-        ensure_control_row(self.store)
+        control_row = ensure_control_row(self.store)
         if parts[:3] == ["api", "scdfe_c", "status"]:
             if len(parts) != 3:
                 raise ApiError(404, "路径不存在", code="not_found")
@@ -195,7 +196,7 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 raise ApiError(405, "状态接口只支持 GET")
             if set(query) - {"limit", "offset", "q", "process_status", "process_enable"}:
                 raise ApiError(400, "未知状态查询参数")
-            control = self.store.get_row(CONTROL_TABLE, [1])
+            control = control_row
             # A Windows console/service stop can terminate the interpreter
             # before its finally block gets a chance to persist state. Repair
             # that small stale window when the Web UI reads status.
@@ -259,7 +260,10 @@ class ScadaHandler(BaseHTTPRequestHandler):
             return self._json(200, {"item": public_control_row(updated)})
         if parts[:3] == ["api", "scdfe_c", "logs"]:
             from scdfe_c import ScdfeLogger
-            directory = log_directory(self.store)
+            # ``ensure_control_row`` above already loaded the singleton
+            # configuration. Reuse it instead of opening a second SQLite
+            # connection merely to resolve the log directory on every poll.
+            directory = log_directory(self.store, control_row)
             if parts == ["api", "scdfe_c", "logs", "search"]:
                 if method != "GET":
                     raise ApiError(405, "日志检索接口只支持 GET")
@@ -301,9 +305,118 @@ class ScadaHandler(BaseHTTPRequestHandler):
             raise ApiError(405, "日志接口只支持 GET")
         return False
 
+    def _iec104_control(self, parts, query, method):
+        """IEC104 测试服务的配置、生命周期、四遥和诊断接口。"""
+        if parts[:2] != ["api", "iec104"]:
+            return False
+        service = self.server.iec104_service
+        if parts == ["api", "iec104", "status"]:
+            if method != "GET" or query:
+                raise ApiError(405, "IEC104 状态接口只支持 GET")
+            return self._json(200, {"item": service.status()})
+        if parts == ["api", "iec104", "logs"]:
+            if method != "GET":
+                raise ApiError(405, "IEC104 日志接口只支持 GET")
+            if set(query) - {"limit"}:
+                raise ApiError(400, "未知 IEC104 日志查询参数")
+            return self._json(200, {"items": service.logs(int(query.get("limit", "200")))})
+        if parts == ["api", "iec104", "alerts"]:
+            if method != "GET":
+                raise ApiError(405, "IEC104 告警接口只支持 GET")
+            if set(query) - {"limit"}:
+                raise ApiError(400, "未知 IEC104 告警查询参数")
+            return self._json(200, {"items": service.alerts(int(query.get("limit", "100")))})
+        if parts == ["api", "iec104", "connections"]:
+            if method != "GET" or query:
+                raise ApiError(405, "IEC104 连接接口只支持 GET")
+            return self._json(200, {"items": service.status()["connections"]})
+        if parts == ["api", "iec104", "commands"]:
+            if method != "GET" or query:
+                raise ApiError(405, "IEC104 命令接口只支持 GET")
+            return self._json(200, {"items": service.commands()})
+        if parts == ["api", "iec104", "start"]:
+            if method != "POST" or query:
+                raise ApiError(405, "IEC104 启动接口只支持 POST")
+            return self._json(200, {"item": service.start()})
+        if parts == ["api", "iec104", "stop"]:
+            if method != "POST" or query:
+                raise ApiError(405, "IEC104 停止接口只支持 POST")
+            return self._json(200, {"item": service.stop()})
+        if parts == ["api", "iec104", "config"]:
+            if query:
+                raise ApiError(400, "IEC104 配置接口不接受查询参数")
+            if method == "GET":
+                return self._json(200, {"item": service.config()})
+            if method == "PATCH":
+                return self._json(200, {"item": service.configure(self._body())})
+            raise ApiError(405, "IEC104 配置接口只支持 GET 或 PATCH")
+        if len(parts) == 3 and parts[2] == "points":
+            if method == "GET":
+                if set(query) - {"kind"}:
+                    raise ApiError(400, "未知 IEC104 点查询参数")
+                return self._json(200, {"items": service.points(query.get("kind"))})
+            if method == "POST":
+                if query:
+                    raise ApiError(400, "IEC104 点定义不接受查询参数")
+                return self._json(201, {"item": service.define_point(self._body())})
+            raise ApiError(405, "IEC104 点定义接口只支持 GET 或 POST")
+        if len(parts) == 5 and parts[2] == "points":
+            kind, raw_point = parts[3], parts[4]
+            try:
+                point_no = int(raw_point)
+            except ValueError as exc:
+                raise ApiError(400, "点号必须是整数") from exc
+            if method == "GET" and not query:
+                table = {"yc": "fes_yc_define", "yx": "fes_yx_define", "yk": "fes_yk_define", "yt": "fes_yt_define"}.get(kind)
+                if table is None:
+                    raise ApiError(400, "kind 必须是 yc、yx、yk 或 yt")
+                config = service.config()
+                rtu_id = config.get("effective_rtu_id")
+                if rtu_id is None:
+                    raise ApiError(404, "没有配置 IEC104 RTU", code="not_found")
+                return self._json(200, {"item": self.store.get_row(table, [rtu_id, point_no])})
+            if query:
+                raise ApiError(400, "IEC104 点定义写操作不接受查询参数")
+            if method == "PATCH":
+                body = self._body()
+                if_match = self._if_match()
+                if if_match is not None:
+                    body["_if_match"] = if_match
+                return self._json(200, {"item": service.update_point(kind, point_no, body)})
+            if method == "DELETE":
+                service.delete_point(kind, point_no, self._if_match())
+                return self._json(200, {"deleted": True})
+            raise ApiError(405, "IEC104 单点定义只支持 GET、PATCH 或 DELETE")
+        if parts == ["api", "iec104", "update", "incremental"]:
+            if method != "POST" or query:
+                raise ApiError(405, "增量更新接口只支持 POST")
+            body = self._body()
+            try:
+                return self._json(200, {"item": service.incremental_update(
+                    body["kind"], int(body["pnt_no"]), body["value"]
+                )})
+            except KeyError as exc:
+                raise ApiError(400, f"缺少字段: {exc.args[0]}") from exc
+        if parts == ["api", "iec104", "update", "full"]:
+            if method != "POST" or query:
+                raise ApiError(405, "全量更新接口只支持 POST")
+            body = self._body()
+            return self._json(200, {"item": service.full_update(body.get("values", body))})
+        if len(parts) == 5 and parts[2] == "commands":
+            if method != "POST" or query:
+                raise ApiError(405, "IEC104 测试命令接口只支持 POST")
+            body = self._body()
+            try:
+                return self._json(200, {"item": service.simulate_command(
+                    parts[3], int(parts[4]), body["value"]
+                )})
+            except KeyError as exc:
+                raise ApiError(400, f"缺少字段: {exc.args[0]}") from exc
+        raise ApiError(404, "IEC104 接口路径不存在", code="not_found")
+
     def _list(self, table, query, scope):
         columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
-        reserved = {"q", "limit", "offset", "sort", "order"}
+        reserved = {"q", "limit", "offset", "sort", "order", "fields"}
         unknown = set(query) - reserved - set(columns)
         if unknown:
             raise ApiError(400, "未知查询参数", details=sorted(unknown))
@@ -316,14 +429,25 @@ class ScadaHandler(BaseHTTPRequestHandler):
             limit, offset = int(query.get("limit", "25")), int(query.get("offset", "0"))
         except ValueError as exc:
             raise ApiError(400, "limit 和 offset 必须是整数") from exc
+        fields = None
+        if "fields" in query:
+            fields = [name.strip() for name in query["fields"].split(",")]
         return self.store.list_rows(table, where=where, search=query.get("q", ""),
                                     limit=limit, offset=offset, sort=query.get("sort"),
-                                    order=query.get("order", "asc"))
+                                    order=query.get("order", "asc"), fields=fields)
 
     def _dispatch(self):
         self._request_guard()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
+            if method != 'POST':
+                raise ApiError(405, '指令下发只支持 POST')
+            if query:
+                raise ApiError(400, '指令下发不接受查询参数')
+            item = self.store.submit_command(self._rtu_id(parts[2]), parts[4], parts[5],
+                                             self._body(), self._if_match())
+            return self._json(202, {'item': item, 'command_status': 'pending'})
         if parts[:2] == ["api", "processes"]:
             if query:
                 raise ApiError(400, "进程接口不接受查询参数")
@@ -334,6 +458,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 return self._json(202, {"operation": operation})
             raise ApiError(405, "进程接口支持 GET /api/processes 和 POST /api/processes/control")
         if self._scdfe_control(parts, query, method):
+            return
+        if self._iec104_control(parts, query, method):
             return
         if method == "GET":
             if not parts:
@@ -346,6 +472,10 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 return self._static("/".join(parts[1:]))
             if parts == ["api", "health"]:
                 return self._json(200, {"status": "ok", "database": str(self.store.db_path)})
+            if len(parts) == 4 and parts[:2] == ["api", "rtus"] and parts[3] == "delete-preview":
+                if query:
+                    raise ApiError(400, "删除预览接口不接受查询参数")
+                return self._json(200, self.store.describe_rtu_cascade(parts[2]))
             if parts == ["api", "schemas"]:
                 items = self.store.schemas()
                 return self._json(200, {"items": items, "total": len(items)})
@@ -429,6 +559,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
             body = self._body()
             return self._json(200, {"item": self.store.update_row(table, key, body, self._if_match())})
         if method == "DELETE" and key is not None:
+            if table == "fes_rtu_define":
+                return self._json(200, self.store.delete_rtu_cascade(key, self._if_match()))
             self.store.delete_row(table, key, self._if_match())
             return self._json(200, {"deleted": True})
         raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
@@ -446,6 +578,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 self._json(error.status, {"error": payload})
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                 LOG.debug("client disconnected while sending API error")
+        except IEC104ServiceError as error:
+            self._json(409, {"error": {"code": "iec104_error", "message": str(error)}})
         except ValueError:
             self._json(400, {"error": {"code": "bad_request", "message": "无效的请求参数"}})
         except sqlite3.OperationalError:
@@ -472,7 +606,12 @@ class ScadaHTTPServer(ThreadingHTTPServer):
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
         self.store = ScadaStore(db_path, schema_dir)
         self.process_controller = ProcessController(self.store)
+        self.iec104_service = IEC104Service(self.store)
         super().__init__(address, ScadaHandler)
+
+    def server_close(self):
+        self.iec104_service.close()
+        super().server_close()
 
 
 def make_server(host="127.0.0.1", port=8877, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

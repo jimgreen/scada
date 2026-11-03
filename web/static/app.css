@@ -206,6 +206,8 @@ small,
   border-radius: 5px;
   text-align: left;
   min-height: 40px;
+  cursor: pointer;
+  text-decoration: none;
 }
 .nav span {
   width: 22px;
@@ -228,6 +230,91 @@ small,
 }
 .nav.active span {
   color: #b4e8e5;
+}
+.iec104-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.iec104-card {
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.iec104-card h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+.iec104-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.iec104-form label,
+.iec104-inline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.iec104-form input,
+.iec104-inline-form input,
+.iec104-inline-form select {
+  width: 100%;
+}
+.iec104-form .button {
+  align-self: end;
+}
+.iec104-inline-form {
+  display: grid;
+  grid-template-columns: 150px 110px minmax(100px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin: 0 0 12px;
+}
+.toolbar.compact {
+  margin-bottom: 10px;
+}
+.toolbar.compact h2 {
+  margin-bottom: 3px;
+}
+.iec104-small-table {
+  min-height: 90px;
+  max-height: 220px;
+  margin-bottom: 16px;
+}
+.iec104-log {
+  max-height: 280px;
+  overflow: auto;
+  background: #142535;
+  border-radius: 5px;
+  padding: 8px 10px;
+  color: #c2d4e1;
+  font: 11px/1.8 Consolas, "Microsoft YaHei", monospace;
+}
+.iec104-log-line {
+  border-bottom: 1px solid #ffffff12;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.iec104-log-line span {
+  color: #88a6b8;
+}
+.iec104-log-line.error {
+  color: #ffadb0;
+}
+@media (max-width: 850px) {
+  .iec104-grid {
+    grid-template-columns: 1fr;
+  }
+  .iec104-form,
+  .iec104-inline-form {
+    grid-template-columns: 1fr 1fr;
+  }
+  .iec104-inline-form .button {
+    grid-column: 1 / -1;
+  }
 }
 .side-note {
   margin: auto 10px 0;
@@ -420,6 +507,9 @@ small,
 .rtu-picker input {
   width: 125px;
 }
+.rtu-picker select {
+  width: 240px;
+}
 .view-tools {
   display: flex;
   align-items: center;
@@ -567,6 +657,7 @@ tbody tr:hover .sticky-actions {
 }
 .actions-cell {
   overflow: visible;
+  white-space: nowrap;
 }
 .empty {
   text-align: center !important;
@@ -1042,6 +1133,21 @@ dialog::backdrop {
 .small-dialog {
   width: min(480px, calc(100vw - 30px));
 }
+#command-dialog { width: min(520px, calc(100vw - 30px)); }
+.command-form { padding: 22px; }
+#command-point { overflow-wrap: anywhere; }
+#command-value { width: 100%; }
+#command-range { min-height: 16px; font-size: 12px; }
+.command-state {
+  display: inline-block;
+  margin: 0 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.command-state.pending { color: #936006; }
+.command-state.failed { color: var(--red); }
+.command-state.sent { color: var(--teal); }
 .dialog-select-label {
   display: block;
   margin-bottom: 6px;

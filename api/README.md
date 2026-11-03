@@ -4,7 +4,7 @@
 
 ## 安装
 
-在 Windows 或 Linux 的项目解释器中安装锁定版本（建议使用 Python 3.10+ 虚拟环境）：
+在 Windows 或 Linux 的项目解释器中安装锁定版本（使用 Python 3.11+ 虚拟环境）：
 
 ```text
 python -m pip install -r <项目目录>/requirements.txt
@@ -102,7 +102,22 @@ ytyk_definitions = [
 连接地址、端口或串口名必须配置在对应协议参数表中。
 
 `collect_once()` 使用 `fes_channel_modbus_define_call` 和 `fes_channel_modbus_define_data` 的
-快照返回 `ModbusValue`，不会自动改写数据库。需要持续采集时传入回调和停止事件：
+快照返回 `ModbusValue`，不会自动改写数据库。
+`ModbusValue` 是不可变 `NamedTuple`，字段名和构造参数保持一致，可用属性读取，
+需要字典时使用 `_asdict()`。
+
+Modbus 辅助表的约束是：同一 RTU 的 `call_seq` 唯一；同一 RTU 的遥测/遥信由
+`(if_yx, cnt)` 唯一；遥控/遥调由 `(ifyk, cnt)` 唯一。召唤功能码只允许 1/2/3/4，
+寄存器召唤每帧最多 125 个寄存器，线圈/离散量每帧最多 2000 个；点表地址必须落在
+对应召唤帧范围内。Web 接口会在写入时提前拒绝越界、非法字节序和非法类型，避免把
+无法加载的定义写入数据库。
+
+TCP/RTU 在 `configure()` 中预先关联、校验并生成采集计划；无参数的 `collect_once()`
+复用该计划。配置失败保留原计划，成功替换会等待当前整轮采集完成。
+显式传入 `calls` 或 `points` 时，每次请求前重新校验全部临时定义，且不覆盖已配置计划。
+后台定义变更仍由 `scdfe_c` 检测并重建主站，无须手动清理计划。
+
+需要持续采集时传入回调和停止事件：
 
 ```python
 import threading
@@ -116,9 +131,12 @@ with master:
 或异常，应用可自行放入工作线程；等待时可立即停止，进行中的请求受通信
 `timeout` 限制。通信或回调异常会抛出，调用方可记录告警和安排下一次连接。
 
-主站 API 不自动扫描从站、不自动重连、不自动重发写命令；连接、异常和重试策略
-由部署层明确控制。`irtuaddr` 必须是1..247的从站地址，TCP 目标由协议参数表中的
-`remote_host`/`remote_port` 决定。
+主站 API 不自动扫描从站；协议参数表中的 `retry_count` 只对读取请求重试，写入请求
+保持单次执行，避免通信超时后重复下发控制命令。TCP `keep_alive` 控制连接是否在
+请求之间保持，`connect_timeout` 用于 TCP 建连，`response_timeout` 用于响应等待；
+`irtuaddr` 必须是 1..247 的从站地址，TCP 目标由协议参数表中的
+`remote_host`/`remote_port` 决定。TCP 主站仍需先 `connect()` 或进入 `with`；关闭保持
+连接模式下，每次请求完成后的自动断开会在同一会话内自动重连。
 
 功能码支持01/02/03/04读取、05/06单点写入、0F/10批量写入，使用标准 MBAP
 Modbus TCP 帧。特殊寄存器位遥控通过 `send_yk_point(..., current_value=...)`
@@ -146,7 +164,8 @@ with ModbusRtuMaster("COM3", baudrate=9600, bytesize=8,
 `poll_loop`、`send_yk_point` 和 `send_yt_point`。`from_store` 从合并后的 RTU/通道记录、
 Modbus 召唤表和数据表加载配置，并要求 RTU `channel_type=modbus-rtu`。
 协议专用表中的 `serial_port`（可为 `COM3` 或 `socket://host:port`）、`baudrate`、`bytesize`、`parity`、`stopbits`、`unit_id`、
-`response_timeout` 会覆盖 RTU 通用记录的缺省值；直接构造时串口参数仍需显式给出。
+`response_timeout` 和 `retry_count` 会覆盖 RTU 通用记录的缺省值；读取请求按 `retry_count`
+重试，写入请求只执行一次；直接构造时串口参数仍需显式给出。
 
 ```python
 master = ModbusRtuMaster.from_store(
@@ -176,10 +195,18 @@ with IEC104Master("10.0.0.20", common_address=1,
     current = master.collect_once()
 ```
 
-点号到信息体地址沿用旧工程的 `start + point_no - 1`。`data_type=1/2/3` 对应 IEC104 浮点/标度/归一化配置，遥信 `1/2` 对应单点/双点。`c104` 自己的后台线程负责接收；`collect_once()` 只读取已接收的点，不阻塞等待某个报文。
+点号到信息体地址沿用旧工程的 `start + point_no - 1`。`data_type=1/2/3` 对应 IEC104 浮点/标度/归一化配置，遥信 `1/2` 对应单点/双点；点表也可以直接填写标准 Type ID（YC 9/11/13、YX 1/3、YK 45/46、YT 48/49/50），适配器会转换为对应的 c104 信息体类型。`c104` 自己的后台线程负责接收；`collect_once()` 只读取已接收的点，不阻塞等待某个报文。
 `IEC104Master` 同时提供 `from_channel`、`from_store`、`collect_once`、`poll_loop`、
 `send_yk_point` 和 `send_yt_point`。`from_store` 读取当前 `fes_channel_iec104_define`
-参数表，四遥点的 IEC104 类型可通过 `point_map` 显式指定。
+参数表，并优先读取 `fes_channel_iec104_point_define` 中每个四遥点的 IOA、类型标识、
+主动上送周期和关联信息体；显式 `point_map` 只用于临时覆盖数据库定义。
+`IEC104Value` 使用不可变 `NamedTuple` 保存快照；一次读取同一份 `Point.info` 的
+数值、质量码和时标，避免分次读取 `Point` 属性期间混入不同更新。`received_at`
+仍为逐点读取时间，`recorded_at` 保持底层协议返回的时标语义。
+
+测量同步复用当前缩放表和缓存查找方法；稳定点在心跳未到期时直接跳过临时状态构造，变化点
+和心跳点仍分别保留完整更新与仅刷新时间的写入形状。质量码、逐点采样时间、重复点合并、
+队列背压和失败重试语义不变。
 
 ## CAN / CAN-FD
 
@@ -207,8 +234,29 @@ J1939 或其他应用层协议，应用层 ID、字节序、信号缩放和请�
 调试可使用 `interface="virtual"`；现场使用 `socketcan`、`pcan`、`vector`、
 `kvaser` 等 python-can 支持的接口。CAN-FD 使用 `fd=True`，最多 64 字节。
 从 `ScadaStore` 构造时使用 `CanMaster.from_store(store, rtu_id)`，接口、通道、
-仲裁波特率和 CAN-FD 参数由当前 `fes_channel_can_define` 读取；CAN 原始帧没有统一的四遥点表，
-请求/应答的帧 ID 和数据布局由调用方显式指定。
+仲裁波特率和 CAN-FD 参数由当前 `fes_channel_can_define` 读取，四遥报文定义由
+`fes_channel_can_point_define` 读取。点表中的接收/发送帧 ID、扩展帧、字节/位偏移、
+位长度、大小端、值类型、缩放和质量码字段会用于 `collect_once()` 解码以及遥控/遥调报文编码；
+没有点映射时才保留原始 `CanFrame` 接口。
+如果点定义同时配置了 `response_id`，可在下发时使用
+`send_yk_point(..., wait_response=True)` 或 `send_yt_point(..., wait_response=True)`；
+`response_data_hex` 会作为应答数据前缀匹配，未匹配的帧仍保留在接收队列中。
+
+## 规约四遥辅助表
+
+四遥业务表继续只保存统一的点号、原始值、工程值、质量码和命令状态；协议原生地址与报文
+解析字段放在独立辅助表中，由 `from_store()` 和 `scdfe_c` 一次加载：
+
+| 规约 | 辅助表 | 关键解析字段 |
+| --- | --- | --- |
+| IEC104 | `fes_channel_iec104_point_define` | IOA、类型标识、上送周期、命令方式、关联信息体 |
+| BACnet/IP | `fes_channel_bacnet_point_define` | 对象类型、实例、值属性、质量属性、数组下标、写入优先级 |
+| OPC UA | `fes_channel_opc_point_define` | NodeId、值类型、值属性、质量属性、死区 |
+| CAN/CAN-FD | `fes_channel_can_point_define` | 收发帧 ID、扩展帧、字节/位范围、大小端、值类型、缩放、质量掩码 |
+
+辅助表以 `(rtu_id, kind, pnt_no)` 作为四遥点主键，`kind` 只能是 `yc`、`yx`、`yk`、`yt`。
+定义发生变化后，`scdfe_c` 的规约线程会重新加载协议点表；CAN 解析结果统一返回
+`CanValue`，与其他主站的四遥快照一样由写库进程归档。
 
 ## IEC104 服务端
 
@@ -236,11 +284,16 @@ with server:
 
 - `add_point(kind, point_no, ...)`：注册 `yx`、`yc`、`yk`、`yt` 点；`data_type` 沿用客户端 API 的 1/2/3 映射。
 - `update(kind, point_no, value, cause="SPONTANEOUS")`：更新并主动上送遥信或遥测。
+- `set_value(kind, point_no, value, transmit=False)`：设置任意四遥点的站内当前值；遥控、遥调默认不伪造客户端报文。
 - `transmit_many(kind, {point_no: value})`：使用 `c104.Batch` 批量上送同一类型的信息体。
+- `transmit_full(values)`：按信息体类型分批完成全站遥信、遥测上送，同时更新遥控、遥调站内值。
 - `set_command_handler("yk" 或 "yt", point_no, handler)`：注册命令回调，回调参数为 `IEC104Command`。
 - `signal_initialized()`：发送站点初始化完成通知。
 
 `IEC104Command` 包含点类型、点号、值、选择/执行标志、传送原因、源地址和接收时间。命令回调异常会被转换为 IEC104 失败响应，并保存在 `last_error` 中，避免异常逃逸到 c104 后台线程。
+服务端也支持 `IEC104Server.from_store(store, rtu_id)`：它从 IEC104 通道参数表、
+四遥定义表和 `fes_channel_iec104_point_define` 一次加载公共地址、IOA、类型标识、
+上送周期和命令方式；需要业务处理时通过 `command_handlers={("yk", 1): handler}` 注入回调。
 
 ## BACnet/IP 主站
 
@@ -270,7 +323,8 @@ with master:
 `read_property`/`write_property` 可直接访问任意标准对象属性；`collect_once` 返回
 `BacnetValue`，`poll_loop` 的回调在调用线程中执行。`send_yk_point` 和
 `send_yt_point` 按配置点号选择对象并写入 `presentValue`。从 `ScadaStore` 构造时，
-使用 `BacnetMaster.from_store(store, rtu_id, point_map=...)`，例如：
+使用 `BacnetMaster.from_store(store, rtu_id)`，协议点表从
+`fes_channel_bacnet_point_define` 加载；`point_map` 仍可用于临时覆盖，例如：
 
 ```python
 point_map = {
@@ -280,9 +334,13 @@ point_map = {
 master = BacnetMaster.from_store(ScadaStore(), 7, point_map=point_map)
 ```
 
-`fes_channel_bacnet_define` 保存本端绑定地址、远端设备实例号和 BACnet 通道；现有四遥
-表没有 BACnet 对象类型/实例字段，因此 `point_map` 是必要的显式映射。BACnet
-设备实例号用于配置校验和设备语义，实际 BACnet/IP 请求同时需要远端 IP 地址。
+`fes_channel_bacnet_define` 保存本端绑定地址、远端设备实例号和 BACnet 通道，
+`fes_channel_bacnet_point_define` 保存四遥对象类型、实例、值属性和 `statusFlags` 质量属性。BACnet 设备实例号用于
+配置校验和设备语义，实际 BACnet/IP 请求同时需要远端 IP 地址。
+
+原生 `collect_once()` 每 100 点在专属 asyncio 线程内完成一组采集，减少线程往返。
+设备侧仍顺序发送逐点 `ReadProperty`，每个请求独立限时；中途失败时停止本轮，
+不返回不完整批次，不并发压设备。各点保留各自的 UTC 接收时间。
 
 ## OPC UA 主站
 
@@ -311,11 +369,18 @@ with master:
 主站一致的 `poll_loop`、`send_yk_point`、`send_yt_point`。从数据库构造时可用：
 
 ```python
-master = OpcUaMaster.from_store(
-    ScadaStore(), 7,
-    point_map={("yc", 1): "ns=2;s=YC_001", ("yk", 1): "ns=2;s=YK_001"},
-)
+master = OpcUaMaster.from_store(ScadaStore(), 7)
 ```
+
+`from_store()` 从 `fes_channel_opc_point_define` 读取 NodeId、数据类型、值属性和质量属性；
+标准 OPC UA 值属性为 `Value`，质量来自同一 `DataValue.StatusCode`。读取和下发会按
+`data_type` 转换 Python 值，需要临时替换节点时再传入 `point_map`。
+
+原生 `read_nodes()` 和 `collect_once()` 使用多节点 Read 服务，默认每批 100 点，
+可通过构造参数 `read_batch_size` 调整。收到服务级 `BadTooManyOperations` 时，
+自动减小本次连接的批量；重连恢复配置上限。其他通信错误、超时或点状态异常
+直接报错，不自动重试。结果保持输入顺序、重复地址、逐点状态码和 UTC 接收时间，
+并校验服务返回数量。`read_node`、`read_node_data`、写入及命令下发规则保持不变。
 
 旧 `scdfe_c` 的 `opc_name` 是 OPC DA/COM ProgID；本 API 不把 ProgID 冒充 OPC UA。
 传入 `Matrikon.OPC.Simulation.1` 等 DA 名称会直接报错。若必须连接 OPC DA，需

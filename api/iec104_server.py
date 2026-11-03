@@ -60,11 +60,17 @@ class IEC104Server:
         'yk': ('C_SC_NA_1', 'C_DC_NA_1'),
         'yt': ('C_SE_NC_1', 'C_SE_NB_1', 'C_SE_NA_1'),
     }
+    IEC_TYPE_SELECTORS = {
+        'yx': {1: 1, 3: 2},
+        'yc': {9: 3, 11: 2, 13: 1},
+        'yk': {45: 1, 46: 2},
+        'yt': {48: 1, 49: 2, 50: 3},
+    }
 
     def __init__(self, *, ip='0.0.0.0', port=2404, common_address=1,
                  ycbegin_addr=0x4001, yxbegin_addr=1, ykbegin_addr=0x6001,
                  ytbegin_addr=0x6201, tick_rate_ms=100, select_timeout_ms=10000,
-                 max_connections=0):
+                 max_connections=0, rtu_id=None):
         _require_c104()
         if not isinstance(ip, str) or not ip:
             raise ValueError('ip 必须是非空字符串')
@@ -77,6 +83,8 @@ class IEC104Server:
         if int(max_connections) < 0:
             raise ValueError('max_connections 不能为负数')
         self.ip, self.port = ip, int(port)
+        self.tick_rate_ms = int(tick_rate_ms)
+        self.rtu_id = rtu_id
         self.common_address = int(common_address)
         self.base = {
             'yc': int(ycbegin_addr) or self.DEFAULT_BASE['yc'],
@@ -87,7 +95,7 @@ class IEC104Server:
         for kind, address in self.base.items():
             if not 1 <= address <= 0xFFFFFF:
                 raise ValueError(f'{kind} 起始地址必须在 1..0xffffff')
-        kwargs = dict(ip=ip, port=self.port, tick_rate_ms=int(tick_rate_ms),
+        kwargs = dict(ip=ip, port=self.port, tick_rate_ms=self.tick_rate_ms,
                       select_timeout_ms=int(select_timeout_ms),
                       max_connections=int(max_connections))
         self._server = c104.Server(**kwargs)
@@ -100,6 +108,88 @@ class IEC104Server:
         self._commands = {}
         self._errors = []
         self._lock = threading.RLock()
+
+    @classmethod
+    def from_channel(cls, channel, definition=None, **kwargs):
+        """从 RTU 行和 IEC104 参数行构造服务端，但不启动监听。"""
+        definition = definition or {}
+        def value(row, name, default=None):
+            return field(row, name, default)
+        kwargs.setdefault('rtu_id', value(channel, 'rtu_id'))
+        kwargs.setdefault('common_address', value(definition, 'rtu_addr', 1))
+        for name in ('ycbegin_addr', 'yxbegin_addr', 'ykbegin_addr', 'ytbegin_addr'):
+            if name not in kwargs and value(definition, name) is not None:
+                kwargs[name] = value(definition, name)
+        return cls(**kwargs)
+
+    @classmethod
+    def from_store(cls, store, rtu_id, *, point_map=None, command_handlers=None, **kwargs):
+        """按 RTU、IEC104 参数和 IEC104 四遥辅助表构造服务端。
+
+        ``fes_channel_iec104_point_define`` 是信息体地址、类型标识、上送
+        周期和命令方式的唯一规约映射来源；四遥定义表只提供点号和初值。
+        ``point_map`` 可用于一次性的运行时覆盖，``command_handlers`` 的键
+        为 ``(kind, pnt_no)``。
+        """
+        with store.connection() as connection:
+            connection.execute('BEGIN')
+            rtu = connection.execute(
+                'SELECT * FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,),
+            ).fetchone()
+            if rtu is None:
+                raise ValueError(f'RTU {rtu_id} 不存在')
+            if rtu['channel_type'] != 'iec104':
+                raise ValueError(f'RTU {rtu_id} 不是 IEC104 通道')
+            definitions = [dict(row) for row in connection.execute(
+                'SELECT * FROM fes_channel_iec104_define WHERE rtu_id=? ORDER BY id', (rtu_id,),
+            )]
+            mappings = [dict(row) for row in connection.execute(
+                'SELECT rtu_id, kind, pnt_no, io_address, type_id, report_ms, '
+                'command_mode, qualifier, related_io_address, related_io_autoreturn '
+                'FROM fes_channel_iec104_point_define WHERE rtu_id=? '
+                'ORDER BY kind, pnt_no', (rtu_id,),
+            )]
+            points = []
+            for table, kind in (('fes_yc_define', 'yc'), ('fes_yx_define', 'yx'),
+                                ('fes_yk_define', 'yk'), ('fes_yt_define', 'yt')):
+                points.extend(dict(row, kind=kind) for row in connection.execute(
+                    f'SELECT pnt_no, value FROM {table} WHERE rtu_id=? ORDER BY pnt_no', (rtu_id,),
+                ))
+        if len(definitions) != 1:
+            raise ValueError(f'RTU {rtu_id} 需要唯一 IEC104 通道定义，实际找到 {len(definitions)} 条')
+        mapping_index = {(row['kind'], int(row['pnt_no'])): row for row in mappings}
+        handler_map = command_handlers or {}
+        prepared = []
+        for point in points:
+            key = (point['kind'], int(point['pnt_no']))
+            row = dict(point)
+            mapped = mapping_index.get(key)
+            if mapped:
+                for name in ('io_address', 'type_id', 'report_ms', 'command_mode',
+                             'qualifier', 'related_io_address', 'related_io_autoreturn'):
+                    if mapped.get(name) is not None:
+                        row[name] = mapped[name]
+            override = point_map.get(key) if isinstance(point_map, Mapping) else None
+            if isinstance(override, Mapping):
+                row.update(override)
+            elif override is not None:
+                row['io_address'] = override
+            prepared.append(row)
+        server = cls.from_channel(dict(rtu), definitions[0], **kwargs)
+        for row in prepared:
+            kind, point_no = row['kind'], int(row['pnt_no'])
+            handler = handler_map.get((kind, point_no))
+            server.add_point(
+                kind, point_no,
+                data_type=field(row, 'data_type', field(row, 'type_id')),
+                value=field(row, 'value'), report_ms=int(field(row, 'report_ms', 0) or 0),
+                io_address=field(row, 'io_address'),
+                related_io_address=field(row, 'related_io_address'),
+                related_io_autoreturn=bool(field(row, 'related_io_autoreturn', False)),
+                command_mode=field(row, 'command_mode', 'DIRECT'),
+                command_handler=handler,
+            )
+        return server
 
     @property
     def running(self):
@@ -207,6 +297,7 @@ class IEC104Server:
             raise ValueError('kind 必须是 yc/yx/yk/yt')
         if data_type is None:
             data_type = 1 if kind in ('yx', 'yc', 'yk') else 3
+        data_type = self.IEC_TYPE_SELECTORS.get(kind, {}).get(int(data_type), data_type)
         data_type = int(data_type)
         choices = self.TYPE_NAMES[kind]
         if kind == 'yx':
@@ -236,6 +327,10 @@ class IEC104Server:
 
     @staticmethod
     def _as_value(kind, data_type, value):
+        data_type = IEC104Server.IEC_TYPE_SELECTORS.get(kind, {}).get(
+            int(data_type or (1 if kind in ('yx', 'yc', 'yk') else 3)),
+            int(data_type or (1 if kind in ('yx', 'yc', 'yk') else 3)),
+        )
         if kind == 'yx':
             if int(data_type or 1) == 2:
                 if isinstance(value, c104.Double):
@@ -273,10 +368,16 @@ class IEC104Server:
         return cause
 
     def add_point(self, kind, point_no, *, data_type=None, value=None, report_ms=0,
+                  io_address=None,
                   related_io_address=None, related_io_autoreturn=False,
                   command_mode='DIRECT', command_handler=None):
         """注册一个四遥点；命令点可通过 command_handler 接收遥控/遥调。"""
-        ioa = self.point_address(kind, point_no)
+        ioa = self.point_address(kind, point_no) if io_address is None else int(io_address)
+        if not 1 <= ioa <= 0xFFFFFF:
+            raise ValueError('信息体地址必须在 1..0xffffff')
+        report_ms = int(report_ms or 0)
+        if report_ms < 0 or (report_ms and report_ms % self.tick_rate_ms):
+            raise ValueError('report_ms 必须为 0 或 tick_rate_ms 的正整数倍')
         typ = self._type(kind, data_type)
         mode = command_mode if not isinstance(command_mode, str) else getattr(
             c104.CommandMode, command_mode.upper(), None)
@@ -292,7 +393,7 @@ class IEC104Server:
                 point = old
             else:
                 point = self._station.add_point(
-                    io_address=ioa, type=typ, report_ms=int(report_ms),
+                    io_address=ioa, type=typ, report_ms=report_ms,
                     related_io_address=related_io_address,
                     related_io_autoreturn=bool(related_io_autoreturn),
                     command_mode=mode)
@@ -304,7 +405,10 @@ class IEC104Server:
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ValueError(f'点 {kind}/{point_no} 初值无效: {exc}') from exc
             self._points[(kind, point_no)] = point
-            self._point_types[(kind, point_no)] = (int(data_type) if data_type is not None else None)
+            self._point_types[(kind, point_no)] = (
+                self.IEC_TYPE_SELECTORS.get(kind, {}).get(int(data_type), int(data_type))
+                if data_type is not None else None
+            )
             if command_handler is not None and kind in ('yk', 'yt'):
                 self._handlers[(kind, point_no)] = command_handler
                 point.on_receive(self._make_command_callback(kind, point_no))
@@ -319,8 +423,12 @@ class IEC104Server:
                 raise ValueError('批量点定义缺少 kind')
             result.append(self.add_point(
                 kind, int(field(row, 'pnt_no')),
-                data_type=field(row, 'data_type'), value=field(row, 'value'),
-                report_ms=int(field(row, 'report_ms', 0))))
+                data_type=field(row, 'data_type', field(row, 'type_id')), value=field(row, 'value'),
+                report_ms=int(field(row, 'report_ms', 0)),
+                io_address=field(row, 'io_address'),
+                related_io_address=field(row, 'related_io_address'),
+                related_io_autoreturn=bool(field(row, 'related_io_autoreturn', False)),
+                command_mode=field(row, 'command_mode', 'DIRECT')))
         return result
 
     def _default_command_handler(self, event):
@@ -377,6 +485,24 @@ class IEC104Server:
             raise IEC104ServerError(f'点 {kind}/{point_no} 上送失败')
         return self._plain(point.value)
 
+    def set_value(self, kind, point_no, value, *, cause='SPONTANEOUS', transmit=False):
+        """设置任意四遥点的当前值。
+
+        IEC 104 服务端只能主动发送遥信和遥测监视量。遥控、遥调点的值
+        通常由客户端命令改变，因此它们默认只更新站内值，不发送控制报文。
+        ``transmit=True`` 仅用于需要显式测试底层信息体发送的场景。
+        """
+        if kind not in self.base:
+            raise ValueError('kind 必须是 yc/yx/yk/yt')
+        key = (kind, int(point_no))
+        point = self._points.get(key)
+        if point is None:
+            raise IEC104ServerError(f'点 {kind}/{point_no} 尚未注册')
+        point.value = self._as_value(kind, self._point_types.get(key), value)
+        if transmit and not point.transmit(self._cause(cause)):
+            raise IEC104ServerError(f'点 {kind}/{point_no} 上送失败')
+        return self._plain(point.value)
+
     def transmit_many(self, kind, values, *, cause='SPONTANEOUS'):
         """批量更新同一类型点并用 c104.Batch 一次上送。"""
         if kind not in ('yx', 'yc'):
@@ -396,6 +522,42 @@ class IEC104Server:
         if not self._server.transmit_batch(c104.Batch(self._cause(cause), points)):
             raise IEC104ServerError('IEC104 批量上送失败')
         return True
+
+    def transmit_full(self, values=None, *, cause='INTERROGATED_BY_STATION', transmit=True):
+        """更新并批量发送全站遥信/遥测快照。
+
+        ``values`` 使用 ``{'yx': {1: True}, 'yc': {1: 12.5}}`` 形式；
+        未提供的监视量保留当前值。不同类型标识会自动拆成多个批次，
+        因为 ``c104.Batch`` 要求同一批次使用同一种信息体类型。遥控、
+        遥调点只更新站内当前值，不会伪造一条发往客户端的控制报文。
+        返回本次处理的点数和实际发送的批次数。
+        """
+        incoming = values if isinstance(values, Mapping) else {}
+        groups = {}
+        updated = 0
+        with self._lock:
+            for kind in ('yx', 'yc', 'yk', 'yt'):
+                supplied = incoming.get(kind, {})
+                if supplied is None:
+                    supplied = {}
+                if not isinstance(supplied, Mapping):
+                    raise ValueError(f'{kind} 必须是点号到值的对象')
+                for key, point in self._points.items():
+                    if key[0] != kind:
+                        continue
+                    point_no = key[1]
+                    value = supplied.get(point_no, supplied.get(str(point_no), point.value))
+                    point.value = self._as_value(kind, self._point_types.get(key), value)
+                    updated += 1
+                    if kind in ('yx', 'yc'):
+                        groups.setdefault(point.type, []).append(point)
+        sent_batches = 0
+        for points in groups.values():
+            if points and transmit and not self._server.transmit_batch(c104.Batch(self._cause(cause), points)):
+                raise IEC104ServerError('IEC104 全量上送失败')
+            if points and transmit:
+                sent_batches += 1
+        return {'updated': updated, 'sent_batches': sent_batches}
 
     def signal_initialized(self, cause='LOCAL_POWER_ON'):
         if isinstance(cause, str):

@@ -24,6 +24,16 @@ Web 进程即使由系统 Python 启动，只要项目下存在 `.venv`，进程
 浏览器打开 http://127.0.0.1:8877/，接口文档为 http://127.0.0.1:8877/api-docs。
 默认仅监听本机。此版本没有登录和权限系统；若需要对外提供服务，应通过带身份认证和 HTTPS 的反向代理部署。
 
+## IEC104 客户端接入测试
+
+左侧“IEC104测试服务”页面可以选择 IEC104 RTU，修改监听地址和端口，启动或停止从站，查看客户端连接、APDU 日志、告警和最近收到的遥控/遥调命令。服务从现有 `fes_channel_iec104_define`、`fes_channel_iec104_point_define` 及四遥定义表加载一个 RTU 的站点模型。
+
+页面提供全遥更新、单点增量更新和 Web 模拟遥控/遥调。遥信、遥测在有客户端连接时按 IEC104 自发传送原因主动上送；命令点的真实控制响应由 c104 客户端回调处理。没有 Web 时可用命令行工具：
+
+```powershell
+D:\codex\scada\.venv\Scripts\python.exe -B D:\codex\scada\tools\iec104_server.py --rtu-id 2 --bind-ip 127.0.0.1 --port 2404
+```
+
 可选参数：
 
 ```powershell
@@ -40,7 +50,7 @@ python -B D:\codex\scada\web\server.py --port 8878 --db D:\test\scada.sqlite3 --
 - 业务数据：`D:\codex\scada\db\scada.sqlite3`，首次启动建立空表；不会自动填充示例数据。
 - SQLite 的 WAL/SHM 伴随文件也位于数据库目录。不要在运行期间只复制主文件作为备份；应使用 SQLite backup API 或在停服后备份。
 
-19 张表（含运行进程监控表）使用与 JSON 一致的表名、列名和联合主键。RTU 与通道已经合并到 `fes_rtu_define`；`fes_scdfe_c_define` 的 `id=1` 行记录和控制 scdfe_c 主进程。协议参数表统一使用 `fes_channel_*_define` 命名。额外 `_version` 列用于本服务的乐观并发检查，`_scada_schema` 保存结构指纹。数据库必须使用当前 JSON schema；表结构不一致时直接报错，不做旧表、旧字段或旧名称迁移。
+23 张表（含运行进程监控表和四张规约点映射辅助表）使用与 JSON 一致的表名、列名和联合主键。RTU 与通道已经合并到 `fes_rtu_define`；`fes_scdfe_c_define` 的 `id=1` 行记录和控制 scdfe_c 主进程。协议参数表统一使用 `fes_channel_*_define` 命名，IEC104、BACnet、OPC、CAN 的四遥地址和报文解析定义分别使用 `fes_channel_*_point_define`。额外 `_version` 列用于本服务的乐观并发检查，`_scada_schema` 保存结构指纹。数据库必须使用当前 JSON schema；表结构不一致时直接报错，不做旧表、旧字段或旧名称迁移。
 
 `fes_rtu_define` 还包含 `process_enable`、`process_status`、`process_pid`、`process_start_time`、`process_stop_time`、`process_heartbeat_time`、`process_exit_code` 和 `process_error`。其中 `process_enable` 是 RTU 自动通信标志：只有 `1` 才由 `scdfe_c.py` 自动启动并守护，`0` 时不参与自动通信、不受主程序守护，允许人工 `--rtu-id` 调试。状态码为 0 停止、1 启动中、2 运行、3 停止中、4 处理中、5 错误；时间字段为 Unix 毫秒时间戳。`process_pid` 保存对应通信线程的 native ID，停止后为 `0`。通信线程异常后仍自动恢复，但不再持久化恢复次数或恢复时间。
 
@@ -130,7 +140,7 @@ Web 启动请求遇到另一自动守护实例占用服务器时返回 HTTP 409�
 
 服务支持 Windows 和 POSIX 系统；Web 查询主进程存活状态时使用平台安全的非破坏性进程探测，Windows 不会通过 `os.kill(pid, 0)` 检查进程。
 
-集合查询参数：`q`、`limit`（1–500，默认 25）、`offset`（默认 0）、`sort`（字段英文名）、`order`（asc/desc）；也可用字段名作为等值过滤条件，如 `?rtu_id=7&status=0`。返回 `items,total,limit,offset`。搜索中的 `%`、`_` 按字面值处理，不解释为 SQL 通配符。
+集合查询参数：`q`、`limit`（1–500，默认 25）、`offset`（默认 0）、`sort`（字段英文名）、`order`（asc/desc）和 `fields`（逗号分隔的字段投影）；也可用字段名作为等值过滤条件，如 `?rtu_id=7&status=0`。指定 `fields` 时主键和 `_version` 自动返回，适合列表页减少宽表传输；详情接口仍返回完整记录。返回 `items,total,limit,offset`。搜索中的 `%`、`_` 按字面值处理，不解释为 SQL 通配符。
 
 新增 RTU 时必须同时填写 `channel_id`、`channel_type`；`status` 可选。RTU 表只保存站点、通道标识和运行控制状态，不保存地址、端口等连接字段。`channel_type` 支持 `iec104`、`modbus-rtu`、`modbus-tcp`、`can`、`bacnet`、`opc`、`custom`。通道字段也可通过 `/api/rtus/{rtu_id}/channel` 独立 PATCH；切换规约时如果旧协议参数仍存在，接口会返回 409，要求先删除旧参数。协议参数通过 `/api/rtus/{rtu_id}/channel/parameters` 管理，IEC104、BACnet、OPC 的内部 `id` 由服务端自动分配。数据库必须完整符合现行 JSON schema，缺少通道字段的数据库结构会直接被拒绝。点表新增只需要必填主键及所属 RTU，其他字段可选，未填写则保存 NULL。主键和 `rtu_id` 必须有效，RTU 编号大于 0，点号和 id 大于等于 0；整数在有符号 64 位范围内，浮点数必须有限。未知字段、重复 JSON 字段和非整数主键均被拒绝。
 
