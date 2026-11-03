@@ -21,6 +21,12 @@ else:
 from core.process_registry import PROCESS_TABLE, process_is_alive
 from web.process_control import ProcessController
 from web.iec104_service import IEC104Service, IEC104ServiceError
+from web.protocol_service import (
+    CanService,
+    ModbusRtuService,
+    ModbusTcpService,
+    ProtocolServiceError,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 def public_control_row(row):
@@ -414,6 +420,82 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 raise ApiError(400, f"缺少字段: {exc.args[0]}") from exc
         raise ApiError(404, "IEC104 接口路径不存在", code="not_found")
 
+    def _protocol_control(self, parts, query, method):
+        """Shared lifecycle, point, command and diagnostic API for protocol pages."""
+        services = {
+            "modbus-tcp": self.server.modbus_tcp_service,
+            "modbus-rtu": self.server.modbus_rtu_service,
+            "can": self.server.can_service,
+        }
+        if len(parts) < 3 or parts[:1] != ["api"] or parts[1] not in services:
+            return False
+        slug, service = parts[1], services[parts[1]]
+        if parts == ["api", slug, "status"]:
+            if method != "GET" or query: raise ApiError(405, "状态接口只支持 GET")
+            return self._json(200, {"item": service.status()})
+        if parts == ["api", slug, "config"]:
+            if query: raise ApiError(400, "配置接口不接受查询参数")
+            if method == "GET": return self._json(200, {"item": service.config()})
+            if method == "PATCH": return self._json(200, {"item": service.configure(self._body())})
+            raise ApiError(405, "配置接口只支持 GET 或 PATCH")
+        if parts in (["api", slug, "start"], ["api", slug, "stop"]):
+            if method != "POST" or query: raise ApiError(405, "启停接口只支持 POST")
+            return self._json(200, {"item": service.start() if parts[-1] == "start" else service.stop()})
+        if parts == ["api", slug, "logs"]:
+            if method != "GET": raise ApiError(405, "日志接口只支持 GET")
+            if set(query) - {"limit"}: raise ApiError(400, "未知日志查询参数")
+            return self._json(200, {"items": service.logs(int(query.get("limit", "200")))})
+        if parts == ["api", slug, "alerts"]:
+            if method != "GET": raise ApiError(405, "告警接口只支持 GET")
+            if set(query) - {"limit"}: raise ApiError(400, "未知告警查询参数")
+            return self._json(200, {"items": service.alerts(int(query.get("limit", "100")))})
+        if parts == ["api", slug, "connections"]:
+            if method != "GET" or query: raise ApiError(405, "连接接口只支持 GET")
+            return self._json(200, {"items": service.connections()})
+        if parts == ["api", slug, "poll"]:
+            if method != "POST" or query: raise ApiError(405, "采集接口只支持 POST")
+            return self._json(200, {"item": service.poll()})
+        if len(parts) == 3 and parts[2] == "points":
+            if method == "GET":
+                if set(query) - {"kind"}: raise ApiError(400, "未知点查询参数")
+                return self._json(200, {"items": service.points(query.get("kind"))})
+            if method == "POST": return self._json(201, {"item": service.define_point(self._body())})
+            raise ApiError(405, "点定义接口只支持 GET 或 POST")
+        if len(parts) == 5 and parts[2] == "points":
+            kind = parts[3]
+            try: point_no = int(parts[4])
+            except ValueError as exc: raise ApiError(400, "点号必须是整数") from exc
+            if query: raise ApiError(400, "点定义写操作不接受查询参数")
+            if method == "PATCH": return self._json(200, {"item": service.update_point(kind, point_no, self._body())})
+            if method == "DELETE":
+                service.delete_point(kind, point_no)
+                return self._json(200, {"deleted": True})
+            if method == "GET":
+                item = next((row for row in service.points(kind) if int(row["pnt_no"]) == point_no), None)
+                if item is None: raise ApiError(404, "点定义不存在", code="not_found")
+                return self._json(200, {"item": item})
+            raise ApiError(405, "单点定义只支持 GET、PATCH 或 DELETE")
+        if parts == ["api", slug, "update", "incremental"]:
+            if method != "POST" or query: raise ApiError(405, "增量更新接口只支持 POST")
+            body = self._body()
+            try: return self._json(200, {"item": service.incremental_update(body["kind"], int(body["pnt_no"]), body["value"])})
+            except KeyError as exc: raise ApiError(400, f"缺少字段: {exc.args[0]}") from exc
+        if parts == ["api", slug, "update", "full"]:
+            if method != "POST" or query: raise ApiError(405, "全量更新接口只支持 POST")
+            body = self._body()
+            return self._json(200, {"item": service.full_update(body.get("values", body))})
+        if len(parts) == 5 and parts[2] == "commands":
+            if method != "POST" or query: raise ApiError(405, "命令接口只支持 POST")
+            body = self._body()
+            if "value" not in body: raise ApiError(400, "缺少字段: value")
+            return self._json(200, {"item": service.command(parts[3], int(parts[4]), body["value"])})
+        if slug == "can" and parts == ["api", slug, "frame"]:
+            if method != "POST" or query: raise ApiError(405, "CAN 发帧接口只支持 POST")
+            body = self._body()
+            if "arbitration_id" not in body or "data" not in body: raise ApiError(400, "需要 arbitration_id 和 data")
+            return self._json(200, {"item": service.send_frame(body["arbitration_id"], body["data"], extended=body.get("is_extended_id"))})
+        raise ApiError(404, f"{service.LABEL} 接口路径不存在", code="not_found")
+
     def _list(self, table, query, scope):
         columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
         reserved = {"q", "limit", "offset", "sort", "order", "fields"}
@@ -461,9 +543,17 @@ class ScadaHandler(BaseHTTPRequestHandler):
             return
         if self._iec104_control(parts, query, method):
             return
+        if self._protocol_control(parts, query, method):
+            return
         if method == "GET":
             if not parts:
                 return self._static("index.html")
+            if parts == ["modbus-tcp"]:
+                return self._static("modbus_tcp.html")
+            if parts == ["modbus-rtu"]:
+                return self._static("modbus_rtu.html")
+            if parts == ["can"]:
+                return self._static("can.html")
             if parts == ["api-docs"]:
                 return self._static("api.html")
             if parts == ["favicon.ico"]:
@@ -578,8 +668,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 self._json(error.status, {"error": payload})
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                 LOG.debug("client disconnected while sending API error")
-        except IEC104ServiceError as error:
-            self._json(409, {"error": {"code": "iec104_error", "message": str(error)}})
+        except (IEC104ServiceError, ProtocolServiceError) as error:
+            self._json(409, {"error": {"code": "protocol_service_error", "message": str(error)}})
         except ValueError:
             self._json(400, {"error": {"code": "bad_request", "message": "无效的请求参数"}})
         except sqlite3.OperationalError:
@@ -593,7 +683,10 @@ class ScadaHandler(BaseHTTPRequestHandler):
 
     def _static(self, name):
         allowed = {"index.html": "text/html", "api.html": "text/html",
-                   "app.css": "text/css", "app.js": "application/javascript"}
+                   "app.css": "text/css", "app.js": "application/javascript",
+                   "modbus_tcp.html": "text/html", "modbus_rtu.html": "text/html",
+                   "can.html": "text/html", "protocol.css": "text/css",
+                   "protocol.js": "application/javascript"}
         if name not in allowed or not (STATIC_DIR / name).is_file():
             raise ApiError(404, "资源不存在", code="not_found")
         self._send(200, allowed[name] + "; charset=utf-8", (STATIC_DIR / name).read_bytes())
@@ -607,10 +700,16 @@ class ScadaHTTPServer(ThreadingHTTPServer):
         self.store = ScadaStore(db_path, schema_dir)
         self.process_controller = ProcessController(self.store)
         self.iec104_service = IEC104Service(self.store)
+        self.modbus_tcp_service = ModbusTcpService(self.store)
+        self.modbus_rtu_service = ModbusRtuService(self.store)
+        self.can_service = CanService(self.store)
         super().__init__(address, ScadaHandler)
 
     def server_close(self):
         self.iec104_service.close()
+        self.modbus_tcp_service.close()
+        self.modbus_rtu_service.close()
+        self.can_service.close()
         super().server_close()
 
 
