@@ -47,32 +47,32 @@ class fes_channel_modbus_tcp_define:
 
     remote_port: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 502},
     )
 
     unit_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '默认从站地址', 'eng_name': 'unit_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '默认从站地址', 'eng_name': 'unit_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 1},
     )
 
     connect_timeout: Optional[float] = field(
         default=None,
-        metadata={'chn_name': '连接超时（秒）', 'eng_name': 'connect_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''},
+        metadata={'chn_name': '连接超时（秒）', 'eng_name': 'connect_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 3.0},
     )
 
     response_timeout: Optional[float] = field(
         default=None,
-        metadata={'chn_name': '响应超时（秒）', 'eng_name': 'response_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''},
+        metadata={'chn_name': '响应超时（秒）', 'eng_name': 'response_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 3.0},
     )
 
     retry_count: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '重试次数', 'eng_name': 'retry_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '重试次数', 'eng_name': 'retry_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
 
     keep_alive: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '保持连接', 'eng_name': 'keep_alive', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
+        metadata={'chn_name': '保持连接', 'eng_name': 'keep_alive', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 1},
     )
 
 __all__ = ['fes_channel_modbus_tcp_define']

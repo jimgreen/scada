@@ -1,0 +1,20 @@
+<table_info>
+@ table_id table_name_eng table_name_chn app_type max_record_num down_load is_model module_name
+# 752 fes_scdfe_command_define scdfe_c TCP指令服务定义表 scada 10000 1 0 scada
+</table_info>
+<fes_scdfe_command_define>
+@ column_id column_name_eng column_name_chn data_type data_length is_key app_type display_type menu_name reference_display reference_flag reference_table is_model column_special
+# 1 id 固定编号 LONG 8 1 scada INT '' 0 0 0 0
+# 2 bind_host 监听地址 STRING 1024 0 scada STRING '' 0 0 0 0
+# 3 bind_port 监听端口 LONG 8 0 scada INT '' 0 0 0 0
+# 4 auth_token 认证令牌 STRING 1024 0 scada STRING '' 0 0 0 0
+# 5 process_enable 进程启用 LONG 8 0 scada 单选菜单 '二值判断' 0 0 0 0
+# 6 process_status 进程状态 LONG 8 0 scada INT '' 0 0 0 0
+# 7 process_pid 进程号 LONG 8 0 scada LONG '' 0 0 0 0
+# 8 process_start_time 启动时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0
+# 9 process_stop_time 停止时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0
+# 10 process_heartbeat_time 心跳时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0
+# 11 process_exit_code 退出码 LONG 8 0 scada LONG '' 0 0 0 0
+# 12 process_error 错误信息 STRING 1024 0 scada STRING '' 0 0 0 0
+# 13 log_retention_hours 日志保留小时数 LONG 8 0 scada INT '' 0 0 0 0
+</fes_scdfe_command_define>

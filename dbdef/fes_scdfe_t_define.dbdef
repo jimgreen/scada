@@ -1,0 +1,25 @@
+<table_info>
+@  fes_scdfe_t_define  scdfe_t四遥转发通道定义表  scada  10000  1  0  scada
+</table_info>
+<fes_scdfe_t_define>
+@  column_name_eng  column_name_chn  data_type  is_key  display_type
+#  channel_id  通道编号  int  1  INT
+#  code  英文标识  str  0  STRING
+#  name  中文名称  str  0  STRING
+#  protocol  转发规约  str  0  单选菜单
+#  bind_host  绑定主机  str  0  STRING
+#  bind_port  绑定端口  int  0  INT
+#  common_address  公共地址  int  0  INT
+#  unit_id  默认从站地址  int  0  INT
+#  scan_interval_ms  数据扫描周期（毫秒）  int  0  INT
+#  report_interval_ms  全量上送周期（毫秒）  int  0  INT
+#  log_retention_hours  日志保留小时数  int  0  INT
+#  process_enable  参与自动运行  int  0  单选菜单
+#  process_status  进程状态  int  0  INT
+#  process_pid  进程号  int  0  LONG
+#  process_start_time  启动时间  int  0  带毫秒的DATETIME
+#  process_stop_time  停止时间  int  0  带毫秒的DATETIME
+#  process_heartbeat_time  心跳时间  int  0  带毫秒的DATETIME
+#  process_exit_code  退出码  int  0  LONG
+#  process_error  错误信息  str  0  STRING
+</fes_scdfe_t_define>

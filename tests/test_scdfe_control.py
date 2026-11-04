@@ -18,7 +18,7 @@ from scdfe_c import (
 )
 from scdfe_c import ScdfeSupervisor
 from core.scdfe_control import CONTROL_TABLE, InstanceLock, ensure_control_row, validate_control
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
 
 
 def point_batch(*updates):

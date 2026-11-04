@@ -17,7 +17,7 @@ CONTROL_FIELDS = frozenset({
 })
 CONFIG_FIELDS = CONTROL_FIELDS - {"process_enable"}
 LOG_PATTERN = re.compile(
-    r"(?P<process>scdfe_c-(?:main|db-writer|(?:debug-)?rtu-\d+))-"
+    r"(?P<process>scdfe_c-(?:main|db-writer|command-server|(?:debug-)?rtu-\d+))-"
     r"(?P<hour>\d{8}-\d{2})\.log$"
 )
 LOG_LEVEL_LABELS = {

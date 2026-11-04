@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from tools.remove_device_values import REMOVED, TABLES, migrate
-from web.service import ApiError, ScadaStore
+from scdfe_c.web.service import ApiError, ScadaStore
 
 
 class RemoveDeviceValuesTests(unittest.TestCase):

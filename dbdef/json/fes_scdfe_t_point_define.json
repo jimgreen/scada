@@ -1,0 +1,225 @@
+{
+  "head": {
+    "chn_name": "scdfe_t四遥转发点映射表",
+    "eng_name": "fes_scdfe_t_point_define"
+  },
+  "columns": [
+    {
+      "chn_name": "转发通道",
+      "eng_name": "channel_id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "KEYID类型",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "转发点号",
+      "eng_name": "pnt_no",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "点名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "转发点类型",
+      "eng_name": "kind",
+      "primary_key": true,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "四遥类型",
+      "required": true,
+      "allowed_values": [
+        "yc",
+        "yx",
+        "yk",
+        "yt"
+      ]
+    },
+    {
+      "chn_name": "源点类型",
+      "eng_name": "source_kind",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "四遥类型",
+      "allowed_values": [
+        "yc",
+        "yx",
+        "yk",
+        "yt"
+      ],
+      "required": true
+    },
+    {
+      "chn_name": "源RTU",
+      "eng_name": "source_rtu_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "KEYID类型",
+      "disp_menu": "",
+      "required": true
+    },
+    {
+      "chn_name": "源点号",
+      "eng_name": "source_pnt_no",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "required": true
+    },
+    {
+      "chn_name": "启用",
+      "eng_name": "enabled",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 1
+    },
+    {
+      "chn_name": "IEC信息体地址",
+      "eng_name": "io_address",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "LONG",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "IEC类型标识",
+      "eng_name": "type_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "命令执行方式",
+      "eng_name": "command_mode",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "命令执行方式",
+      "allowed_values": [
+        "DIRECT",
+        "SELECT_AND_EXECUTE"
+      ],
+      "default": "DIRECT"
+    },
+    {
+      "chn_name": "Modbus数据区",
+      "eng_name": "register_area",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "Modbus数据区",
+      "allowed_values": [
+        "coil",
+        "discrete",
+        "holding",
+        "input"
+      ],
+      "default": "holding"
+    },
+    {
+      "chn_name": "Modbus地址",
+      "eng_name": "address",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "数据类型",
+      "eng_name": "data_type",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "Modbus数据类型",
+      "allowed_values": [
+        "bool",
+        "uint16",
+        "int16",
+        "uint32",
+        "int32",
+        "float32",
+        "float64",
+        "uint64",
+        "int64"
+      ],
+      "default": "float32"
+    },
+    {
+      "chn_name": "字节序",
+      "eng_name": "byte_order",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "字节序",
+      "allowed_values": [
+        "big",
+        "little"
+      ],
+      "default": "big"
+    },
+    {
+      "chn_name": "字序",
+      "eng_name": "word_order",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "字序",
+      "allowed_values": [
+        "big",
+        "little"
+      ],
+      "default": "big"
+    },
+    {
+      "chn_name": "比例",
+      "eng_name": "scale",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 1.0
+    },
+    {
+      "chn_name": "偏移",
+      "eng_name": "offset",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 0.0
+    }
+  ],
+  "indexes": [
+    [
+      "source_rtu_id",
+      "source_kind",
+      "source_pnt_no"
+    ],
+    [
+      "channel_id",
+      "kind"
+    ],
+    [
+      "channel_id",
+      "register_area",
+      "address"
+    ]
+  ]
+}

@@ -27,8 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.scdfe_control import InstanceLock
 from tools.benchmark_inputs import DEFAULT_SEED, MeasurementStream
-from web.seed_protocol_test_data import COUNTS, seed_protocol_test_data
-from web.service import ScadaStore
+from scdfe_c.web.seed_protocol_test_data import COUNTS, seed_protocol_test_data
+from scdfe_c.web.service import ScadaStore
 
 
 def load_runtime(source_path, expected_hash):
@@ -56,8 +56,8 @@ def unshared_binding_source(source):
         (b'row = (raw_value, value, quality, now, point_no, rtu_id)',
          b'row = (raw_value, quality, now, value, quality, now, point_no, rtu_id)'),
         # The pipeline uses the queue; keep the direct-write branch correct too.
-        (b'((*state, now) if kind == "yc" else (*state[1:], now))',
-         b'((state[0], state[2], now, state[1], state[2], now) if kind == "yc" else (*state[1:], now))'),
+        (b'(raw_value, engineering_value, quality_value, now)',
+         b'(raw_value, quality_value, now, engineering_value, quality_value, now)'),
     )
     for before, after in replacements:
         if source.count(before) != 1:
@@ -299,8 +299,10 @@ def main():
     parser.add_argument("--profile-writer", action="store_true",
                         help="save writer cProfile data (adds overhead; do not compare timings)")
     baseline = parser.add_mutually_exclusive_group()
-    baseline.add_argument("--baseline-ref", help="Git revision of scdfe_c.py to compare with current source; "
+    baseline.add_argument("--baseline-ref", help="Git revision of scdfe_c/__init__.py to compare with current source; "
                         "freeze both versions and alternate their sequential execution order")
+    baseline.add_argument("--baseline-file", type=Path,
+                          help="Frozen scdfe_c/__init__.py source file to compare with current source")
     baseline.add_argument("--compare-bindings", action="store_true",
                           help="compare separate YC parameters with shared quality/time bindings; same schema and scaling")
     parser.add_argument("--output", type=Path, required=True)
@@ -315,7 +317,8 @@ def main():
         "created_at": datetime.now(timezone.utc).isoformat(),
         "platform": platform.platform(), "python": sys.version,
         "sqlite": sqlite3.sqlite_version,
-        "config": {**vars(args), "output": str(args.output)},
+        "config": {**vars(args), "baseline_file": str(args.baseline_file) if args.baseline_file else None,
+                    "output": str(args.output)},
         "runtimes": {},
         "workload_sha256": hashlib.sha256((repo / "tools/benchmark_inputs.py").read_bytes()).hexdigest(),
         "benchmark_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -329,7 +332,8 @@ def main():
             "YC raw_value=input, value=raw_base+raw_scale*input; fixture base=2, scale=1.1"
         ),
         "baseline_method": ("current source with expanded YC quality/time parameters only"
-                            if args.compare_bindings else "git revision" if args.baseline_ref else "none"),
+                            if args.compare_bindings else "git revision" if args.baseline_ref else
+                            "frozen source file" if args.baseline_file else "none"),
         "scope": ("concurrent threads/spawn writer; no device I/O" if args.pipeline_only else
                   "serial stage microbenchmarks plus concurrent threads/spawn writer; no device I/O"),
         "results": [],
@@ -343,10 +347,15 @@ def main():
             sources = {}
             if args.baseline_ref:
                 sources["before"] = subprocess.check_output(
-                    ["git", "show", f"{args.baseline_ref}:scdfe_c.py"], cwd=repo)
+                    ["git", "show", f"{args.baseline_ref}:scdfe_c/__init__.py"], cwd=repo)
+            elif args.baseline_file:
+                baseline_path = args.baseline_file.resolve()
+                if not baseline_path.is_file():
+                    raise FileNotFoundError(f"baseline source does not exist: {baseline_path}")
+                sources["before"] = baseline_path.read_bytes()
             elif args.compare_bindings:
-                sources["before"] = unshared_binding_source((repo / "scdfe_c.py").read_bytes())
-            sources["after"] = (repo / "scdfe_c.py").read_bytes()
+                sources["before"] = unshared_binding_source((repo / "scdfe_c" / "__init__.py").read_bytes())
+            sources["after"] = (repo / "scdfe_c" / "__init__.py").read_bytes()
             variants = []
             for variant, source in sources.items():
                 snapshot_path = Path(snapshot_dir) / f"{variant}.py"

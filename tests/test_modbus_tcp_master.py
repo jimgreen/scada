@@ -8,8 +8,8 @@ import unittest
 
 from pyModbusTCP.server import DataBank, ModbusServer
 
-from api.modbus_tcp import ModbusError, ModbusTcpMaster
-from web.service import ScadaStore
+from client.modbus_tcp import ModbusError, ModbusTcpMaster
+from scdfe_c.web.service import ScadaStore
 
 
 def point_tables():
@@ -26,11 +26,33 @@ class MasterLoopbackTests(unittest.TestCase):
         self.addCleanup(self.server.stop)
         self.master = ModbusTcpMaster(
             '127.0.0.1', self.server._service.server_address[1], rtu_id=7, timeout=0.5,
+            connect_timeout=0.1,
         )
         self.addCleanup(self.master.close)
         self.master.configure(*point_tables())
         self.master.connect()
         self.bank = bank
+
+    def test_connect_timeout_is_used_only_during_open(self):
+        self.assertEqual(self.master.connect_timeout, 0.1)
+        self.assertEqual(self.master.response_timeout, 0.5)
+        self.assertEqual(self.master.native.timeout, 0.5)
+
+    def test_nonpersistent_connection_reopens_only_after_connect(self):
+        self.master.close()
+        master = ModbusTcpMaster(
+            '127.0.0.1', self.server._service.server_address[1],
+            timeout=0.5, connect_timeout=0.1, keep_alive=False,
+        )
+        self.addCleanup(master.close)
+        with self.assertRaises(ModbusError):
+            master.read_holding_registers(0)
+        master.connect()
+        self.assertEqual(master.read_holding_registers(0), [0])
+        self.assertEqual(master.read_holding_registers(0), [0])
+        master.close()
+        with self.assertRaises(ModbusError):
+            master.read_holding_registers(0)
 
     def test_all_eight_function_codes_over_tcp(self):
         self.bank.set_discrete_inputs(0, [True, False, True])
@@ -127,7 +149,8 @@ class MasterStoreTests(unittest.TestCase):
         self.store.create_row('fes_channel_modbus_define', {'id': 1, 'rtu_id': 7, 'irtuaddr': 9})
         self.store.create_row('fes_channel_modbus_tcp_define', {
             'rtu_id': 7, 'remote_host': '127.0.0.1', 'remote_port': 1503,
-            'unit_id': 5, 'response_timeout': 0.7,
+            'unit_id': 5, 'response_timeout': 0.7, 'retry_count': 2,
+            'connect_timeout': 0.2, 'keep_alive': 0,
         })
 
     def test_loads_more_than_500_points_and_commands_without_writes(self):
@@ -147,6 +170,8 @@ class MasterStoreTests(unittest.TestCase):
         master = ModbusTcpMaster.from_store(self.store, 7)
         self.addCleanup(master.close)
         self.assertEqual((master.host, master.port, master.unit_id), ('127.0.0.1', 1503, 5))
+        self.assertEqual((master.retry_count, master.keep_alive), (2, False))
+        self.assertEqual((master.connect_timeout, master.response_timeout), (0.2, 0.7))
         self.assertEqual(len(master._calls), 5)
         self.assertEqual(len(master._points), 501)
         self.assertEqual(len(master._definitions), 1)

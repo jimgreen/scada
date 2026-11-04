@@ -41,8 +41,8 @@ def main():
         with tempfile.TemporaryDirectory(prefix='scada-prepare-') as directory:
             root = Path(directory)
             sources = {'before': subprocess.check_output(
-                ['git', 'show', f'{args.baseline_ref}:scdfe_c.py'], cwd=repo),
-                'after': (repo / 'scdfe_c.py').read_bytes()}
+                ['git', 'show', f'{args.baseline_ref}:scdfe_c/__init__.py'], cwd=repo),
+                'after': (repo / 'scdfe_c' / '__init__.py').read_bytes()}
             runtimes, hashes = {}, {}
             for variant, source in sources.items():
                 path = root / f'{variant}.py'

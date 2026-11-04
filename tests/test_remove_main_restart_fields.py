@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import gc
 
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
 from tools.remove_main_restart_fields import migrate
 
 

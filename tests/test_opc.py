@@ -9,9 +9,9 @@ import unittest
 
 from asyncua import Server, ua
 
-from api import OpcUaMaster
-from api.opc import OpcError, _LoopThread
-from web.service import ScadaStore
+from client import OpcUaMaster
+from client.opc import OpcError, _LoopThread
+from scdfe_c.web.service import ScadaStore
 
 
 def _tcp_port():

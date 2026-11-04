@@ -4,9 +4,15 @@ import socket
 import tempfile
 import unittest
 
-from api.modbus_tcp import ModbusTcpMaster
-from web.protocol_service import CanService, ModbusTcpService
-from web.service import ScadaStore
+from client.modbus_tcp import ModbusTcpMaster
+from scdfe_s.web.protocol_service import (
+    CanService,
+    ModbusTcpService,
+    ModbusTcpServerService,
+    ModbusRtuServerService,
+    ProtocolServiceError,
+)
+from scdfe_c.web.service import ScadaStore
 
 
 def free_port():
@@ -52,6 +58,18 @@ class ProtocolServiceTests(unittest.TestCase):
         finally:
             service.stop()
         self.assertFalse(service.status()["running"])
+
+    def test_server_services_have_separate_configuration_and_names(self):
+        tcp = ModbusTcpServerService(self.store)
+        rtu = ModbusRtuServerService(self.store)
+        self.assertEqual(tcp.config()["mode"], "server")
+        self.assertEqual(rtu.config()["mode"], "server")
+        self.assertIn("server", tcp.config_path.name)
+        self.assertIn("server", rtu.config_path.name)
+        with self.assertRaises(ProtocolServiceError):
+            tcp.configure({"mode": "master"})
+        with self.assertRaises(ProtocolServiceError):
+            rtu.configure({"mode": "master"})
 
 
 if __name__ == "__main__":

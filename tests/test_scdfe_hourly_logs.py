@@ -11,7 +11,7 @@ from unittest.mock import patch
 import scdfe_c as runtime
 from core.process_registry import PROCESS_TABLE
 from core.scdfe_control import CONTROL_TABLE
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
 
 
 class Clock:

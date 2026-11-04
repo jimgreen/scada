@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCADA · IEC104</title>
+  <link rel="stylesheet" href="/static/protocol.css">
+</head>
+<body>
+  <header><div><h1>IEC 60870-5-104 测试服务</h1><small>服务端监听、四遥更新和客户端命令监控</small></div><nav><a href="/">通信首页</a>　<a href="/api-docs">API 文档</a></nav></header>
+  <main>
+    <div class="toolbar"><div id="message" class="message"></div><div><button id="start" class="primary">启动服务</button> <button id="stop" class="danger">停止服务</button> <button id="refresh">刷新</button> <button id="full-update">全量更新</button></div></div>
+    <section class="status-grid" id="status-grid"></section>
+    <div class="grid">
+      <section class="card"><h2>服务配置</h2><form id="config-form"><label>监听地址<input id="bind-ip" required></label><label>监听端口<input id="port" type="number" min="1" max="65535" required></label><label>RTU 编号<input id="rtu-id" type="number" min="1" placeholder="自动选择"></label><label>最大连接数<input id="max-connections" type="number" min="0" required></label><label>周期（毫秒）<input id="tick-rate" type="number" min="1" required></label><div class="form-actions"><button class="primary">保存配置</button></div></form><pre id="status-json"></pre></section>
+      <section class="card"><h2>四遥点</h2><form id="update-form"><label>类型<select id="kind"><option>yc</option><option>yx</option><option>yk</option><option>yt</option></select></label><label>点号<input id="point" type="number" min="1" value="1" required></label><label>值<input id="value" value="0" required></label><div class="form-actions"><button class="primary">更新点</button></div></form><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>值</th><th>状态</th></tr></thead><tbody id="points"></tbody></table></div><h2>连接</h2><div id="connections" class="log-list"></div><h2>日志</h2><div id="logs" class="log-list"></div></section>
+    </div>
+  </main>
+  <script>
+    const $ = s => document.querySelector(s), esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    async function api(path, options={}) { const r=await fetch(path,{headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const b=await r.json(); if(!r.ok) throw Error(b.error?.message||'请求失败'); return b; }
+    function msg(t,e=false){ $('#message').textContent=t||''; $('#message').className='message'+(e?' error':''); }
+    function render(s,p,l){ $('#status-grid').innerHTML=[['运行状态',s.running?'运行中':'已停止'],['RTU',s.rtu_id||'未选择'],['连接',s.active_connections||0],['点数',s.point_count||0],['错误',s.last_error||'无']].map(([a,b])=>`<div class="metric"><b>${esc(b)}</b><span>${esc(a)}</span></div>`).join(''); $('#status-json').textContent=JSON.stringify(s,null,2); $('#points').innerHTML=(p.items||[]).map(x=>`<tr><td>${esc(x.kind)}</td><td>${esc(x.pnt_no)}</td><td>${esc(x.value)}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="4">暂无点</td></tr>'; $('#connections').innerHTML=(s.connections||[]).map(x=>`<div>[${esc(x.time)}] ${esc(x.ip)}</div>`).join('')||'暂无连接'; $('#logs').innerHTML=(l.items||[]).map(x=>`<div class="${esc(x.level)}">[${esc(x.time)}] ${esc(x.message)}</div>`).join('')||'暂无日志'; $('#start').disabled=!!s.running; $('#stop').disabled=!s.running; }
+    async function load(){try{const [s,p,l]=await Promise.all([api('/api/iec104/status'),api('/api/iec104/points'),api('/api/iec104/logs?limit=100')]); render(s.item,p,l); const c=s.item.config||{}; $('#bind-ip').value=c.bind_ip||''; $('#port').value=c.port||''; $('#rtu-id').value=c.rtu_id??''; $('#max-connections').value=c.max_connections??0; $('#tick-rate').value=c.tick_rate_ms??100; msg('已更新 '+new Date().toLocaleTimeString());}catch(e){msg(e.message,true)}}
+    $('#config-form').onsubmit=async e=>{e.preventDefault();try{await api('/api/iec104/config',{method:'PATCH',body:JSON.stringify({bind_ip:$('#bind-ip').value.trim(),port:Number($('#port').value),rtu_id:$('#rtu-id').value?Number($('#rtu-id').value):null,max_connections:Number($('#max-connections').value),tick_rate_ms:Number($('#tick-rate').value)})});msg('配置已保存');await load()}catch(x){msg(x.message,true)}};
+    $('#start').onclick=async()=>{try{await api('/api/iec104/start',{method:'POST',body:'{}'});msg('服务已启动');await load()}catch(e){msg(e.message,true)}}; $('#stop').onclick=async()=>{try{await api('/api/iec104/stop',{method:'POST',body:'{}'});msg('服务已停止');await load()}catch(e){msg(e.message,true)}}; $('#refresh').onclick=load;
+    $('#update-form').onsubmit=async e=>{e.preventDefault();const k=$('#kind').value;let v=$('#value').value;v=(k==='yx'||k==='yk')?Number(v)!==0:Number(v);try{await api('/api/iec104/update/incremental',{method:'POST',body:JSON.stringify({kind:k,pnt_no:Number($('#point').value),value:v})});msg('点值已更新');await load()}catch(x){msg(x.message,true)}}; $('#full-update').onclick=async()=>{try{await api('/api/iec104/update/full',{method:'POST',body:JSON.stringify({values:{}})});msg('已执行全量更新');await load()}catch(e){msg(e.message,true)}}; load(); setInterval(()=>{if(!document.hidden)load()},5000);
+  </script>
+</body>
+</html>

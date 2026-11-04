@@ -148,5 +148,6 @@
       "disp_type": "单选菜单",
       "disp_menu": "二值判断"
     }
-  ]
+  ],
+  "unique_keys": [["rtu_id", "ifyk", "cnt"]]
 }

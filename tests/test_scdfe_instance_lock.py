@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from pyModbusTCP.server import DataBank, ModbusServer
 
 from core.scdfe_control import CONTROL_TABLE, ServerInstanceLock, ensure_control_row
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
 
 
 ROOT = Path(__file__).resolve().parents[1]

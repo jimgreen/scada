@@ -6,9 +6,9 @@ import base64
 import json
 from unittest.mock import patch
 
-import web.log_query as log_query
+import scdfe_c.web.log_query as log_query
 
-from web.log_query import search_logs
+from scdfe_c.web.log_query import search_logs
 
 
 class LogQueryTests(unittest.TestCase):
@@ -140,6 +140,54 @@ class LogQueryTests(unittest.TestCase):
         result = search_logs(self.root, {"filename": path.relative_to(self.root).as_posix()})
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["items"][0]["filename"], "2026/11/01/10/scdfe_c-db-writer-20261101-10.log")
+
+    def test_selected_file_keeps_scope_and_missing_files_return_no_rows(self):
+        path = self.root / "2026/11/01/10/scdfe_c-rtu-7-20261101-10.log"
+        path.parent.mkdir(parents=True)
+        path.write_text("10:00:00 [日志] selected-file\n", encoding="utf-8")
+        query = {"filename": path.relative_to(self.root).as_posix()}
+        # An unrelated unreadable retention tree must not prevent opening a
+        # known file. No filesystem-wide listing is needed for this scope.
+        with patch.object(Path, "rglob", side_effect=PermissionError("unrelated directory")):
+            self.assertEqual(len(search_logs(self.root, query)["items"]), 1)
+            for filters in ({"process": "scdfe_c-main"}, {"rtu_id": "8"}, {"file_query": "missing"}):
+                self.assertEqual(search_logs(self.root, {**query, **filters})["items"], [])
+            path.unlink()
+            self.assertEqual(search_logs(self.root, query)["scanned_files"], 0)
+
+    def test_selected_symlink_cannot_read_outside_log_root(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "private.log"
+            target.write_text("10:00:00 [日志] private\n", encoding="utf-8")
+            link = self.root / "scdfe_c-main-20261101-10.log"
+            link.unlink()
+            try:
+                link.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            with self.assertRaises(ValueError):
+                search_logs(self.root, {"filename": link.name})
+            self.assertFalse(any("private" in item["text"] for item in search_logs(self.root, {})["items"]))
+
+    def test_clock_cache_does_not_cross_dates_and_invalid_clocks_stay_untyped_in_time(self):
+        for day in (1, 2):
+            path = self.root / f"scdfe_c-rtu-17-202611{day:02d}-10.log"
+            path.write_text("10:00:00 [日志] repeat\n" * 2, encoding="utf-8")
+        items = search_logs(self.root, {"rtu_id": "17"})["items"]
+        self.assertEqual([item["time"] for item in items], [
+            int(datetime(2026, 11, day, 10).astimezone().timestamp() * 1000)
+            for day in (2, 2, 1, 1)
+        ])
+        for hour, lines in (("20261301-10", "10:00:00 [日志] bad-date\n"),
+                            ("20261101-10", "25:00:00 [日志] bad-clock\n" * 2)):
+            path = self.root / f"scdfe_c-rtu-18-{hour}.log"
+            path.write_text(lines, encoding="utf-8")
+            query = {"filename": path.name}
+            rows = search_logs(self.root, query)["items"]
+            self.assertTrue(all(row["level"] == "INFO" and row["time"] is None for row in rows))
+            self.assertEqual(search_logs(self.root, {
+                **query, "start": datetime(2026, 11, 1).astimezone().isoformat(),
+            })["items"], [])
 
     def test_type_uses_header_not_message_text_and_timezone_boundaries_are_exact(self):
         path = self.root / "scdfe_c-rtu-9-20261101-10.log"

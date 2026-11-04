@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from functools import lru_cache
 import os
 import time
 import uuid
@@ -12,6 +13,19 @@ PROCESS_TABLE = "fes_process_define"
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+@lru_cache(maxsize=1)
+def _windows_kernel32():
+    """Configure the Windows process probe once per interpreter."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    return kernel
 
 
 def process_is_alive(pid):
@@ -25,13 +39,7 @@ def process_is_alive(pid):
         except OSError:
             return False
         return True
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.OpenProcess.restype = wintypes.HANDLE
-    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    kernel.GetExitCodeProcess.restype = wintypes.BOOL
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel.CloseHandle.restype = wintypes.BOOL
+    kernel = _windows_kernel32()
     handle = kernel.OpenProcess(0x1000, False, pid)
     if not handle:
         return ctypes.get_last_error() == 5
@@ -44,10 +52,10 @@ def process_is_alive(pid):
 
 def ensure_process(store, key):
     kind, _, target = key.partition(":")
-    if key not in {"main", "writer"} and not (
+    if key not in {"main", "writer", "command-server"} and not (
         kind == "debug" and target.isdecimal() and 0 < int(target) < 2**63 and str(int(target)) == target
     ):
-        raise ValueError("进程标识必须为 main、writer 或 debug:RTU编号")
+        raise ValueError("进程标识必须为 main、writer、command-server 或 debug:RTU编号")
     try:
         return store.get_row(PROCESS_TABLE, [key])
     except Exception as exc:
@@ -57,6 +65,9 @@ def ensure_process(store, key):
         connection.execute(
             f"INSERT OR IGNORE INTO {PROCESS_TABLE} "
             "(process_key, kind, target_rtu, process_enable, include_in_all) VALUES (?,?,?,?,?)",
+            # The writer is enabled by default because it is part of the
+            # normal scdfe_c pipeline. The TCP endpoint is opt-in and uses
+            # its dedicated configuration row as the authoritative flag.
             (key, kind, int(target or 0), int(kind == "writer"), 1),
         )
         connection.commit()

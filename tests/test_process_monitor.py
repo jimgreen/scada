@@ -14,8 +14,8 @@ from pyModbusTCP.server import DataBank, ModbusServer
 from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process, process_is_alive
 from core.scdfe_control import CONTROL_TABLE, ensure_control_row
 from scdfe_c import ScdfeSupervisor
-from web.process_control import ProcessController
-from web.service import ApiError, ScadaStore
+from scdfe_c.web.process_control import ProcessController
+from scdfe_c.web.service import ApiError, ScadaStore
 
 
 class ProcessMonitorTests(unittest.TestCase):

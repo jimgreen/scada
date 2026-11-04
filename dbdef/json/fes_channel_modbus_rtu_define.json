@@ -50,7 +50,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 9600
     },
     {
       "chn_name": "数据位",
@@ -58,7 +59,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 8
     },
     {
       "chn_name": "校验方式",
@@ -66,7 +68,13 @@
       "primary_key": false,
       "data_type": "str",
       "disp_type": "单选菜单",
-      "disp_menu": "MODBUS校验方式"
+      "disp_menu": "MODBUS校验方式",
+      "default": "E",
+      "allowed_values": [
+        "N",
+        "E",
+        "O"
+      ]
     },
     {
       "chn_name": "停止位",
@@ -74,7 +82,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 1
     },
     {
       "chn_name": "默认从站地址",
@@ -82,7 +91,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 1
     },
     {
       "chn_name": "响应超时（秒）",
@@ -90,7 +100,8 @@
       "primary_key": false,
       "data_type": "float",
       "disp_type": "FLOAT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 3.0
     },
     {
       "chn_name": "重试次数",
@@ -98,7 +109,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 0
     }
   ],
   "unique_keys": [

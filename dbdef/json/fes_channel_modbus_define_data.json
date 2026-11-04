@@ -116,5 +116,7 @@
       "disp_type": "UCHAR",
       "disp_menu": ""
     }
-  ]
+  ],
+  "unique_keys": [["rtu_id", "if_yx", "cnt"]],
+  "indexes": [["rtu_id", "call_seq", "id"]]
 }

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCADA WEB 通信规约配置使用说明</title>
+  <style>
+    :root { color-scheme: light; --ink:#1f2937; --muted:#64748b; --line:#dbe3ec; --panel:#fff; --bg:#f4f7fb; --brand:#155eef; --brand-soft:#eaf1ff; --warn:#9a3412; --warn-soft:#fff7ed; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.7 system-ui,-apple-system,"Microsoft YaHei",sans-serif; }
+    .page { max-width:1180px; margin:0 auto; padding:32px 22px 64px; }
+    header { background:linear-gradient(135deg,#1249a3,#2475e8); color:#fff; border-radius:18px; padding:30px 34px; box-shadow:0 10px 26px #1c4b921c; }
+    h1 { margin:0 0 8px; font-size:30px; letter-spacing:.02em; } h2 { margin:34px 0 12px; font-size:23px; color:#123b7a; } h3 { margin:24px 0 8px; font-size:18px; color:#1d4f91; }
+    p { margin:8px 0 12px; } .lead { margin:0; color:#e7efff; font-size:16px; }
+    nav { display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 28px; padding:14px; background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+    nav a { color:var(--brand); text-decoration:none; padding:5px 9px; border-radius:7px; } nav a:hover { background:var(--brand-soft); }
+    section, .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-top:14px; box-shadow:0 2px 7px #26364a08; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; } .card h3 { margin-top:0; }
+    ol { padding-left:24px; } ul { padding-left:22px; } li { margin:4px 0; }
+    code { padding:1px 5px; border-radius:4px; background:#eef2f7; color:#243b64; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.92em; }
+    pre { overflow:auto; padding:13px 15px; border-radius:8px; background:#172033; color:#e8eefb; font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+    table { width:100%; border-collapse:collapse; margin:10px 0 14px; } th,td { text-align:left; vertical-align:top; border-bottom:1px solid var(--line); padding:7px 8px; } th { background:#f3f6fa; color:#334e78; }
+    .note { padding:12px 14px; border-left:4px solid var(--brand); background:var(--brand-soft); border-radius:6px; } .warning { border-left-color:#ea580c; background:var(--warn-soft); color:var(--warn); }
+    .tag { display:inline-block; margin:2px 4px 2px 0; padding:2px 8px; border-radius:999px; background:#edf3ff; color:#174ea6; font-size:13px; }
+    footer { margin-top:30px; color:var(--muted); font-size:13px; }
+    @media (max-width:650px) { .page { padding:16px 10px 40px; } header { padding:22px; } h1 { font-size:24px; } section,.card { padding:16px; } table { display:block; overflow:auto; white-space:nowrap; } }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>SCADA WEB 通信规约配置使用说明</h1>
+    <p class="lead">通过“数据与定义”页面维护 RTU、通道、四遥点和协议辅助表。本文覆盖 IEC104、Modbus-TCP、Modbus-RTU、CAN、OPC UA、BACnet 六类通信需求。</p>
+  </header>
+
+  <nav aria-label="章节导航">
+    <a href="#overview">页面总览</a><a href="#crud">通用增删改</a><a href="#iec104">IEC104</a><a href="#modbus-tcp">Modbus-TCP</a><a href="#modbus-rtu">Modbus-RTU</a><a href="#can">CAN</a><a href="#opc">OPC UA</a><a href="#bacnet">BACnet</a><a href="#faq">常见问题</a>
+  </nav>
+
+  <section id="overview">
+    <h2>一、页面总览</h2>
+    <ol>
+      <li>启动 Web 服务后打开 <code>http://127.0.0.1:8877/</code>。在左侧进入“数据与定义”。</li>
+      <li>顶部 RTU 选择器决定当前四遥、协议参数和辅助表的作用范围；每个 RTU 保持一 RTU 一通道关系。</li>
+      <li>分页标签包含“RTU 与通道、遥测、遥信、遥调、遥控、协议参数、辅助表”。协议参数和辅助表标签会根据当前通道类型显示。</li>
+      <li>列表中的“常用字段、四遥数据、全部字段”用于切换查看；“表结构”可查看字段类型和允许范围。</li>
+    </ol>
+    <div class="note">修改已保存到 SQLite 后，通信线程会按 RTU/通道定义重新加载。正在运行的连接可能在下一个扫描周期应用新参数。</div>
+  </section>
+
+  <section id="crud">
+    <h2>二、通用新增、修改、删除</h2>
+    <div class="grid">
+      <div class="card"><h3>新增 RTU 与通道</h3><ol><li>点击“新建 RTU”。</li><li>填写 <code>rtu_id</code>、名称、<code>channel_id</code> 和 <code>channel_type</code>。</li><li>保存 RTU 后，点击“通道参数”新增对应规约参数。</li></ol></div>
+      <div class="card"><h3>修改</h3><ol><li>在 RTU 与通道页点击“编辑”，或进入相应分页标签。</li><li>修改协议参数、四遥定义或辅助表字段。</li><li>点击保存；主键和所属 RTU 由页面保护，不能在编辑中改动。</li></ol></div>
+      <div class="card"><h3>删除</h3><ol><li>删除 RTU 前，页面先读取删除预览。</li><li>确认框列出通道、协议参数、辅助表和四遥表的实际记录数量。</li><li>确认后在一个事务中级联删除，失败则整体回滚。</li></ol></div>
+    </div>
+    <p>新增、修改、删除遥测、遥信、遥调、遥控的步骤相同：选择 RTU → 进入对应标签 → 点击“新增记录”或行内“编辑/删除”。遥控和遥调还可在行内填写值并点击“下发”。</p>
+    <div class="note warning"><strong>删除提示：</strong>删除 RTU 会同步删除该 RTU 的通道记录、协议参数、协议辅助表、点映射表、遥测、遥信、遥调、遥控及遥调遥控下发信息，操作不可恢复。请核对预览中的数量后再确认。</div>
+  </section>
+
+  <section id="iec104">
+    <h2>三、IEC104</h2><p>将 RTU 的通道类型设置为 <span class="tag">iec104</span>，在“协议参数”中维护 <code>fes_channel_iec104_define</code>，在“辅助表”中维护 <code>fes_channel_iec104_point_define</code>。</p>
+    <h3>通道参数</h3><p><code>remote_host</code>、<code>remote_port</code>、<code>rtu_addr</code>、<code>ycbegin_addr</code>、<code>yxbegin_addr</code>、<code>ykbegin_addr</code>、<code>ytbegin_addr</code>、<code>yc_data_type</code>、<code>yx_data_type</code>、<code>yk_excute_type</code>、<code>yt_excute_type</code>、<code>call_alldata_time</code>、<code>if_autosend_alldata</code>。</p>
+    <h3>点映射</h3><p>每行用 <code>kind</code>（yc/yx/yt/yk）和 <code>pnt_no</code> 对应四遥点，填写 <code>io_address</code>、<code>type_id</code>、<code>report_ms</code>、<code>command_mode</code>、<code>qualifier</code>；有联动需求时填写 <code>related_io_address</code> 与 <code>related_io_autoreturn</code>。</p>
+    <h3>操作</h3><ol><li>新增 RTU，选择 IEC104，保存通道参数。</li><li>在辅助表新增每个点的 IOA 与类型映射。</li><li>修改时只改参数或映射字段并保存；删除行后该点不再解析或下发。</li></ol>
+  </section>
+
+  <section id="modbus-tcp">
+    <h2>四、Modbus-TCP</h2><p>通道类型选择 <span class="tag">modbus-tcp</span>，参数表为 <code>fes_channel_modbus_tcp_define</code>。</p>
+    <h3>连接参数</h3><p><code>remote_host</code>、<code>remote_port</code>、<code>unit_id</code>、<code>connect_timeout</code>、<code>response_timeout</code>、<code>retry_count</code>、<code>keep_alive</code>。</p>
+    <h3>辅助表</h3><p><code>fes_channel_modbus_define</code> 定义通道召唤范围；<code>fes_channel_modbus_define_call</code> 定义召唤顺序；<code>fes_channel_modbus_define_data</code> 定义寄存器、位域、字节序和工程换算；<code>fes_channel_modbus_define_ytyk</code> 定义遥调/遥控写入。</p>
+    <p>召唤功能码使用 <code>1/2/3/4</code>。线圈和离散量单帧最多 2000 点，寄存器单帧最多 125 个。地址、点类型、<code>trans_type</code>、位偏移、字节序和遥调遥控寄存器都在辅助表中维护。</p>
+    <h3>操作</h3><ol><li>新增 RTU 并选择 Modbus-TCP。</li><li>填写网络参数，再按报文组织建立召唤、数据和遥调遥控行。</li><li>修改或删除辅助行后，通信线程按新的轮询计划解析数据。</li></ol>
+  </section>
+
+  <section id="modbus-rtu">
+    <h2>五、Modbus-RTU</h2><p>通道类型选择 <span class="tag">modbus-rtu</span>，参数表为 <code>fes_channel_modbus_rtu_define</code>；召唤、数据和遥调遥控辅助表与 Modbus-TCP 共用。</p>
+    <h3>串口参数</h3><p><code>serial_port</code>、<code>baudrate</code>、<code>bytesize</code>、<code>parity</code>、<code>stopbits</code>、<code>unit_id</code>、<code>response_timeout</code>、<code>retry_count</code>。<code>bytesize</code> 固定为 8，<code>parity</code> 使用 N/E/O，<code>stopbits</code> 使用 1 或 2。</p>
+    <h3>操作</h3><ol><li>新增 RTU，选择 Modbus-RTU 并填写串口参数。</li><li>在“辅助表”中配置功能码、起始地址、数量、位域和字节序。</li><li>在遥调遥控定义中配置写寄存器或线圈；保存后按新定义通信。</li></ol>
+  </section>
+
+  <section id="can">
+    <h2>六、CAN</h2><p>通道类型选择 <span class="tag">can</span>。参数表为 <code>fes_channel_can_define</code>，报文解析表为 <code>fes_channel_can_point_define</code>。</p>
+    <h3>通道参数</h3><p><code>interface</code>、<code>channel</code>、<code>bitrate</code>、<code>data_bitrate</code>、<code>fd</code>、<code>receive_own_messages</code>、<code>receive_timeout</code>、<code>retry_count</code>、<code>is_extended_id</code>。</p>
+    <h3>报文解析</h3><p>按 <code>kind</code>、<code>pnt_no</code> 维护 <code>frame_id</code>、<code>tx_frame_id</code>、<code>response_id</code>、扩展帧/FD 标志、字节和位偏移、位宽、<code>value_type</code>、<code>byte_order</code>、<code>scale</code>、<code>offset</code>、质量码位置与掩码，以及控制报文十六进制数据。</p>
+    <h3>操作</h3><ol><li>新增或修改 CAN 通道参数。</li><li>为每个四遥点新增解析映射，核对帧 ID、位域和字节序。</li><li>删除映射即可停止该点的接收解析或发送。</li></ol>
+  </section>
+
+  <section id="opc">
+    <h2>七、OPC UA</h2><p>通道类型选择 <span class="tag">opc</span>。参数表为 <code>fes_channel_opc_define</code>，点映射表为 <code>fes_channel_opc_point_define</code>。</p>
+    <h3>连接与点</h3><p>维护 <code>opc_interval</code>、<code>opc_user</code>、<code>opc_pwd</code>、<code>opc_domain</code>、<code>opc_name</code>。点行维护 <code>kind</code>、<code>pnt_no</code>、<code>node_id</code>、<code>data_type</code>、<code>value_attribute</code>、<code>quality_attribute</code>、<code>deadband</code>。</p>
+    <p>使用 OPC UA 地址和明确的 NodeId；修改 NodeId 后保存，通信线程会使用新节点。对象类型不使用旧 OPC DA/COM 别名。</p>
+  </section>
+
+  <section id="bacnet">
+    <h2>八、BACnet</h2><p>通道类型选择 <span class="tag">bacnet</span>。参数表为 <code>fes_channel_bacnet_define</code>，点映射表为 <code>fes_channel_bacnet_point_define</code>。</p>
+    <h3>连接与对象</h3><p>维护 <code>bind_ip</code>、<code>bind_port</code>、<code>dev_id</code>、<code>remote_host</code>、<code>remote_port</code>。点行维护 <code>kind</code>、<code>pnt_no</code>、<code>object_type</code>、<code>instance</code>、<code>property_identifier</code>、<code>quality_property</code>、<code>priority</code>、<code>array_index</code>。</p>
+    <p><code>object_type + instance</code> 是对象地址；常用属性是 <code>presentValue</code> 和 <code>statusFlags</code>。新增、编辑、删除步骤与其他协议相同，保存后由后台重新加载对象映射。</p>
+  </section>
+
+  <section id="faq">
+    <h2>九、常见问题</h2>
+    <table><thead><tr><th>现象</th><th>处理</th></tr></thead><tbody>
+      <tr><td>RTU 下拉框显示不全</td><td>点击刷新，页面会重新读取 RTU 列表；顶部选择器用于所有分页。</td></tr>
+      <tr><td>协议参数不存在</td><td>先在“协议参数”标签新增当前通道类型的参数记录。</td></tr>
+      <tr><td>通道类型切换提示冲突</td><td>先删除旧协议参数和不再使用的辅助记录，再保存新的通道类型。</td></tr>
+      <tr><td>保存失败</td><td>查看表结构中的字段类型、允许范围和必填字段；寄存器数量、串口参数等有协议限制。</td></tr>
+      <tr><td>删除 RTU 前提示数量</td><td>核对预览中的表名和记录数。取消确认不会删除任何数据，确认后所有记录在一个事务中处理。</td></tr>
+      <tr><td>通信未立即使用新定义</td><td>检查通信监控和运行日志；后台线程会在重新加载或下一个扫描周期应用配置。</td></tr>
+    </tbody></table>
+  </section>
+  <footer>文档与当前 SCADA WEB schema/API 保持同步；字段以页面“表结构”和当前数据库定义为准。</footer>
+</main>
+</body>
+</html>

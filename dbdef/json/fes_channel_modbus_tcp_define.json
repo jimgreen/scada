@@ -50,7 +50,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 502
     },
     {
       "chn_name": "默认从站地址",
@@ -58,7 +59,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 1
     },
     {
       "chn_name": "连接超时（秒）",
@@ -66,7 +68,8 @@
       "primary_key": false,
       "data_type": "float",
       "disp_type": "FLOAT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 3.0
     },
     {
       "chn_name": "响应超时（秒）",
@@ -74,7 +77,8 @@
       "primary_key": false,
       "data_type": "float",
       "disp_type": "FLOAT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 3.0
     },
     {
       "chn_name": "重试次数",
@@ -82,7 +86,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "default": 0
     },
     {
       "chn_name": "保持连接",
@@ -90,7 +95,8 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "单选菜单",
-      "disp_menu": "二值判断"
+      "disp_menu": "二值判断",
+      "default": 1
     }
   ],
   "unique_keys": [

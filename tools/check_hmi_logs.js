@@ -1,0 +1,115 @@
+async page => {
+  const base = 'http://127.0.0.1:8881', errors = [], passed = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.unroute('**/static/app.js');
+  await page.goto(base + '/?log-regression=' + Date.now() + '#logs');
+  await page.waitForFunction(() => logs.files.length && !logs.loading && !logs.contentLoading);
+  await page.locator('#auto-refresh').uncheck();
+  const checks = await page.evaluate(async () => {
+    const passed = [], check = (ok, name) => { if (!ok) throw Error(name); passed.push(name); };
+    const actual = window.fetch, content = document.querySelector('#scdfe-log-content');
+    const filename = '2026/11/02/10/scdfe_c-rtu-1-20261102-10.log';
+    const entries = Array.from({ length: 200 }, (_, i) => ({ filename, text: '10:00:00 [日志] 测点 ' + i + ' value=' + i, level: 'INFO', time: 1793584800000 }));
+    let payload = { items: entries.slice().reverse(), next_cursor: null, keyword: '', scanned_files: 1, skipped_lines: 0 };
+    const response = (data = payload, status = 200) => new Response(JSON.stringify(data), { status });
+    let requests = 0, responder = () => Promise.resolve(response());
+    window.fetch = (url, options) => String(url).startsWith('/api/scdfe_c/logs/search?')
+      ? (requests++, responder(new URL('http://127.0.0.1' + url).searchParams)) : actual(url, options);
+    try {
+      for (const id of ['log-search','log-level','log-start','log-end','log-process']) document.getElementById(id).value = '';
+      document.querySelector('#log-scope').value = 'file'; document.querySelector('#log-tail').value = '200';
+      document.querySelector('#log-follow').checked = false; logs.selected = filename;
+      await readLog(filename); let nodes = [...content.children];
+      content.scrollTop = 120;
+      const scroll = content.scrollTop, selection = getSelection(), range = document.createRange();
+      range.setStart(content.querySelector('.line-text').firstChild, 0); range.setEnd(content.querySelector('.line-text').firstChild, 8);
+      selection.removeAllRanges(); selection.addRange(range); const selectedText = selection.toString();
+      const previousRequests = requests; await readLog(filename);
+      check(nodes.every((node,i) => node === content.children[i]), '同条件稳定刷新保留全部日志行');
+      check(requests === previousRequests + 1, '稳定刷新仍请求最新后台数据');
+      check(content.scrollTop === scroll, '非跟随刷新保留滚动位置');
+      check(selection.toString() === selectedText, '稳定刷新保留文本选择'); selection.removeAllRanges();
+      let release; responder = () => new Promise(resolve => { release = resolve; });
+      const loading = readLog(filename);
+      check(nodes[0] === content.firstElementChild && document.querySelector('#log-download').disabled, '同条件等待响应时保留正文并禁用导出');
+      check(content.getAttribute('aria-busy') === 'true', '等待响应期间提供忙状态');
+      release(response()); await loading;
+      check(content.getAttribute('aria-busy') === 'false' && !document.querySelector('#log-download').disabled, '响应完成恢复忙状态和导出');
+      document.querySelector('#log-search').value = 'new';
+      const changedQuery = readLog(filename, true);
+      check(content.querySelectorAll('.log-line').length === 0 && !logs.entries.length && logs.meta === null, '新条件等待响应时立即清除旧结果');
+      payload = { ...payload, keyword: 'new', items: entries.slice().reverse().map(entry => ({ ...entry, text: entry.text + ' new' })) };
+      release(response()); await changedQuery;
+      check(content.querySelectorAll('mark').length === 200 && content.scrollTop === 0, '新关键词高亮并从顶部显示');
+      nodes = [...content.children]; payload.items[199] = { ...payload.items[199], text: '<img src=x onerror=alert(1)> & new' };
+      responder = () => Promise.resolve(response()); await readLog(filename);
+      check(nodes[0] !== content.firstElementChild && nodes.slice(1).every((node,i) => node === content.children[i+1]), '一行变化仅替换对应日志行');
+      check(!content.querySelector('img') && content.textContent.includes('<img src=x onerror=alert(1)> & new'), '局部正文更新保持 HTML 转义');
+      nodes = [...content.children]; payload.next_cursor = 'older'; payload.skipped_lines = 1; await readLog(filename);
+      check(nodes.every((node,i) => node === content.children[i]) && !document.querySelector('#log-result-next').disabled && document.querySelector('#log-lines').textContent.includes('超长'), '仅游标和统计变化更新控件且保留正文');
+      payload = { ...payload, items: [], next_cursor: 'older-2' }; await readLog(filename,true,'older',[null]);
+      check(content.textContent.includes('本批无匹配日志') && !document.querySelector('#log-result-prev').disabled && !document.querySelector('#log-result-next').disabled, '空批次与前后游标状态正确');
+      payload.next_cursor = null; await readLog(filename);
+      check(content.textContent.includes('没有匹配的日志') && document.querySelector('#log-download').disabled, '无结果且到起点时正确清空正文和导出');
+      payload = { ...payload, items: entries.slice().reverse(), keyword: '' }; document.querySelector('#log-search').value = ''; await readLog(filename);
+      responder = () => Promise.resolve(response({ error: { message: '<请求失败> &' } },503)); await readLog(filename);
+      check(!logs.entries.length && logs.content === '' && logs.meta === null && logs.resultKey === null && !logContentRender.rows.length, '检索失败清除数据与渲染缓存');
+      check(content.textContent === '<请求失败> &' && !content.querySelector('请求失败') && !document.querySelector('#logs-error').hidden, '检索错误安全显示');
+      check(document.querySelector('#log-download').disabled && document.querySelector('#log-result-next').disabled, '检索失败后禁止导出旧内容或翻页');
+      responder = () => Promise.resolve(response()); await readLog(filename);
+      check(logs.entries.length === 200 && content.querySelectorAll('.log-line').length === 200 && document.querySelector('#logs-error').hidden, '失败后的同条件刷新恢复正常');
+      document.querySelector('#log-start').value = '20:00:00'; document.querySelector('#log-end').value = '10:00:00';
+      const beforeInvalid = requests; await readLog(filename);
+      check(requests === beforeInvalid && content.textContent.includes('开始时间不能晚于') && !logs.entries.length, '无效时段在前端拦截并清除旧结果');
+      document.querySelector('#log-start').value = ''; document.querySelector('#log-end').value = '';
+      const pending = new Map(); responder = params => new Promise(resolve => pending.set(params.get('q'),resolve));
+      document.querySelector('#log-search').value = 'old'; const old = readLog(filename,true);
+      document.querySelector('#log-search').value = 'latest'; const latest = readLog(filename,true);
+      const latestData = { ...payload, items: [{ ...entries[0], text: 'latest' }], keyword: 'latest' };
+      pending.get('latest')(response(latestData)); await latest; const latestNode = content.firstElementChild;
+      pending.get('old')(response({ error: { message: '旧请求失败' } },503)); await old;
+      check(logs.meta.keyword === 'latest' && latestNode === content.firstElementChild && document.querySelector('#logs-error').hidden, '过期失败响应不能覆盖最新结果或错误状态');
+      document.querySelector('#log-search').value = 'old-ok'; const oldOK = readLog(filename,true);
+      document.querySelector('#log-search').value = 'new-ok'; const newOK = readLog(filename,true);
+      pending.get('new-ok')(response({ ...payload, items: [{ ...entries[0], text: 'new-ok' }], keyword:'new-ok' })); await newOK;
+      pending.get('old-ok')(response({ ...payload, items: [{ ...entries[0], text: 'old-ok' }], keyword:'old-ok' })); await oldOK;
+      check(logs.content === 'new-ok' && logs.meta.keyword === 'new-ok', '过期成功响应不能覆盖最新检索');
+      responder = () => Promise.resolve(response()); document.querySelector('#log-search').value = '';
+      document.querySelector('#log-scope').value = 'all'; await readLog(filename,true);
+      check(content.querySelectorAll('.log-source').length === 200 && logs.content.startsWith('[' + filename + '] '), '全部文件范围正确显示来源并构造导出内容');
+      check(logs.content.split('\n')[0].endsWith(entries[0].text) && logs.content.split('\n')[199].endsWith(entries[199].text), '显示与导出保持从早到晚的行顺序');
+      document.querySelector('#log-follow').checked = true; await readLog(filename);
+      check(Math.abs(content.scrollTop - (content.scrollHeight-content.clientHeight)) <= 1, '跟随模式刷新滚动到最新行');
+      document.querySelector('#log-follow').checked = false; content.scrollTop=100; await readLog(filename,true);
+      check(content.scrollTop === 0, '显式筛选在非跟随模式回到顶部');
+      check(logContentRender.rows.length === logs.entries.length, '渲染缓存只保留当前结果批次');
+    } finally { window.fetch=actual; }
+    return passed;
+  });
+  passed.push(...checks);
+  const expectedExport = await page.evaluate(() => logs.content);
+  const downloadReady = page.waitForEvent('download'); await page.locator('#log-download').click();
+  const download = await downloadReady; await download.saveAs('D:/codex/scada/output/playwright/hmi13-export.txt');
+  passed.push('浏览器导出下载成功');
+  await page.goto(base + '/?log-request-regression=' + Date.now() + '#logs');
+  await page.waitForFunction(() => logs.files.length && !logs.loading && !logs.contentLoading);
+  await page.locator('#auto-refresh').uncheck();
+  const counts = await page.evaluate(async () => {
+    const actual=window.fetch, calls=[], wait=async()=>{while(logs.loading||logs.contentLoading)await new Promise(r=>setTimeout(r,5));};
+    window.fetch=(url,options)=>{calls.push(String(url));return actual(url,options);};
+    const counts={};
+    try {
+      openProcessLogs('rtu:1');await wait();counts.open=calls.filter(u=>u.includes('/logs/search?')).length;calls.length=0;
+      document.querySelector('#log-search').value='采集';document.querySelector('#log-search').oninput();document.querySelector('#log-search').onkeydown({key:'Enter'});
+      await new Promise(r=>setTimeout(r,380));await wait();counts.enter=calls.filter(u=>u.includes('/logs/search?')).length;calls.length=0;
+      document.querySelector('#log-search').value='测点';document.querySelector('#log-search').oninput();document.querySelector('#log-apply').click();
+      await new Promise(r=>setTimeout(r,380));await wait();counts.apply=calls.filter(u=>u.includes('/logs/search?')).length;calls.length=0;
+      document.querySelector('#log-search').value='采集';document.querySelector('#log-search').oninput();document.querySelector('#log-level').value='ERROR';document.querySelector('#log-level').onchange();
+      await new Promise(r=>setTimeout(r,380));await wait();counts.level=calls.filter(u=>u.includes('/logs/search?')).length;
+    } finally { window.fetch=actual; }
+    return counts;
+  });
+  for(const [name,count] of Object.entries(counts)){if(count!==1)throw Error(name+' search count='+count);passed.push(name+' 操作只检索一次');}
+  if(errors.length)throw Error(errors.join('\n'));
+  return {passed,count:passed.length,errors,request_counts:counts,export_expected_text:expectedExport,export_path:'output/playwright/hmi13-export.txt'};
+}

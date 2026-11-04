@@ -8,9 +8,9 @@ from uuid import uuid4
 from pathlib import Path
 import tempfile
 
-from api import CanMaster
-from api.can import CanError, CanTimeout
-from web.service import ScadaStore
+from client import CanMaster
+from client.can import CanError, CanTimeout
+from scdfe_c.web.service import ScadaStore
 
 
 class CanMasterTests(unittest.TestCase):
@@ -134,7 +134,7 @@ class CanMasterTests(unittest.TestCase):
 
 class CanMasterConstructionTests(unittest.TestCase):
     def test_channel_constructor_defers_opening_hardware(self):
-        with patch('api.can.can.Bus') as bus:
+        with patch('client.can.can.Bus') as bus:
             master = CanMaster.from_channel({'rtu_id': 7, 'channel': 'PCAN_USBBUS1'},
                                             interface='pcan', bitrate=250000)
             self.assertEqual(master.rtu_id, 7)
@@ -156,7 +156,7 @@ class CanMasterConstructionTests(unittest.TestCase):
                 'rtu_id': 7, 'interface': 'virtual', 'channel': 'configured',
                 'bitrate': 250000, 'fd': 1,
             })
-            with patch('api.can.can.Bus') as bus:
+            with patch('client.can.can.Bus') as bus:
                 master = CanMaster.from_store(store, 7)
                 self.assertFalse(master.connected)
                 self.assertEqual((master.interface, master.channel, master.bitrate),

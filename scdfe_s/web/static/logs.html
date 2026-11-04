@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCADA · 运行日志</title><link rel="stylesheet" href="/static/protocol.css"></head>
+<body data-monitor="logs"><header><div><h1>SCADA 运行日志</h1><small>按服务、类型和关键字筛选</small></div><nav><a href="/">通信测试</a><a href="/channels">通道与测点</a><a href="/processes">进程监控</a><a href="/communication">通信监控</a></nav></header>
+<main><div class="card"><div class="toolbar"><h2>日志记录</h2><button id="refresh" class="primary">刷新</button></div><div class="filterbar"><label>服务<select id="service"><option value="">全部</option></select></label><label>类型<select id="level"><option value="">全部</option><option value="INFO">日志</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label><label class="wide">关键字<input id="keyword" placeholder="输入关键字"></label></div><div id="message" class="message">读取中…</div><div id="log-list" class="log-list"></div></div></main>
+<script src="/static/monitor.js"></script></body></html>

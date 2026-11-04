@@ -84,5 +84,6 @@
       "disp_type": "INT",
       "disp_menu": ""
     }
-  ]
+  ],
+  "unique_keys": [["rtu_id", "call_seq"]]
 }

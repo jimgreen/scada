@@ -47,37 +47,37 @@ class fes_channel_modbus_rtu_define:
 
     baudrate: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '波特率', 'eng_name': 'baudrate', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '波特率', 'eng_name': 'baudrate', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 9600},
     )
 
     bytesize: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '数据位', 'eng_name': 'bytesize', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '数据位', 'eng_name': 'bytesize', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 8},
     )
 
     parity: Optional[str] = field(
         default=None,
-        metadata={'chn_name': '校验方式', 'eng_name': 'parity', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'MODBUS校验方式'},
+        metadata={'chn_name': '校验方式', 'eng_name': 'parity', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'MODBUS校验方式', 'default': 'E', 'allowed_values': ['N', 'E', 'O']},
     )
 
     stopbits: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '停止位', 'eng_name': 'stopbits', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '停止位', 'eng_name': 'stopbits', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 1},
     )
 
     unit_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '默认从站地址', 'eng_name': 'unit_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '默认从站地址', 'eng_name': 'unit_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 1},
     )
 
     response_timeout: Optional[float] = field(
         default=None,
-        metadata={'chn_name': '响应超时（秒）', 'eng_name': 'response_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''},
+        metadata={'chn_name': '响应超时（秒）', 'eng_name': 'response_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 3.0},
     )
 
     retry_count: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '重试次数', 'eng_name': 'retry_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '重试次数', 'eng_name': 'retry_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
 
 __all__ = ['fes_channel_modbus_rtu_define']

@@ -19,8 +19,8 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.scdfe_control import ServerInstanceLock
-from web.seed_protocol_test_data import _base_rtu_code, _point_values, expanded_protocols
-from web.service import SCHEMA_DIR, ScadaStore, SchemaCatalog, quote_identifier
+from scdfe_c.web.seed_protocol_test_data import _base_rtu_code, _point_values, expanded_protocols
+from scdfe_c.web.service import SCHEMA_DIR, ScadaStore, SchemaCatalog, quote_identifier
 
 
 REMOVED = tuple(base + suffix for suffix in ("", "_1", "_2", "_3")

@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.scdfe_control import ServerInstanceLock
-from web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, ScadaStore, quote_identifier
+from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, ScadaStore, quote_identifier
 
 
 RTU_REMOVED = ("rdfid", "st_id", "oper_area", "rtu_104code", "chan_addr", "chan_port")

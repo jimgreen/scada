@@ -3,7 +3,6 @@ from contextlib import redirect_stdout, redirect_stderr
 import io
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -17,7 +16,16 @@ from pyModbusTCP.server import DataBank, ModbusServer
 import scdfe_c as runtime
 from core.scdfe_control import CONTROL_TABLE, ServerInstanceLock, ensure_control_row
 from tests.test_scdfe_c import FakeMaster
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
+
+ROOT = Path(__file__).resolve().parents[1]
+SUBPROCESS_ENV = {
+    **os.environ,
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONPATH": os.pathsep.join(
+        value for value in (str(ROOT), os.environ.get("PYTHONPATH", "")) if value
+    ),
+}
 
 
 class FakeThread:
@@ -305,7 +313,8 @@ assert result == 0 and master.closed
         for sig in (signal.SIGINT, signal.SIGTERM):
             with self.subTest(sig=sig):
                 result = subprocess.run([sys.executable, "-c", source, str(self.store.db_path), str(int(sig))],
-                                        cwd=Path(runtime.__file__).parent, capture_output=True, timeout=15)
+                                        cwd=Path(runtime.__file__).parent, env=SUBPROCESS_ENV,
+                                        capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse(ServerInstanceLock.held(7))
                 self.assertEqual(self.store.get_row("fes_rtu_define", [7])["process_status"], 0)
@@ -317,7 +326,8 @@ assert result == 0 and master.closed
             "assert lock.acquire(); os._exit(0)"
         )
         result = subprocess.run([sys.executable, "-c", source, str(self.store.db_path)],
-                                cwd=Path(runtime.__file__).parent, capture_output=True, timeout=15)
+                                cwd=Path(runtime.__file__).parent, env=SUBPROCESS_ENV,
+                                capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(ServerInstanceLock.held(7))
 
@@ -340,7 +350,7 @@ assert result == 0 and master.closed
         })
         command = [sys.executable, "-m", "scdfe_c", "--db", str(self.store.db_path),
                    "--rtu-id", "7", "--poll-interval", "0.05", "--scan-interval", "0.01"]
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        env = SUBPROCESS_ENV
         process = subprocess.Popen(command, cwd=Path(runtime.__file__).parent, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8")
         try:

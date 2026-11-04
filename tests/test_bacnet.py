@@ -12,9 +12,9 @@ from bacpypes3.local.analog import AnalogValueObject
 from bacpypes3.local.device import DeviceObject
 from bacpypes3.pdu import IPv4Address
 
-from api import BacnetMaster
-from api.bacnet import BacnetError, _LoopThread
-from web.service import ScadaStore
+from client import BacnetMaster
+from client.bacnet import BacnetError, _LoopThread
+from scdfe_c.web.service import ScadaStore
 
 
 def _udp_port():

@@ -10,9 +10,9 @@ from pymodbus import FramerType
 from pymodbus.server import ModbusTcpServer
 from pymodbus.simulator import DataType, SimData, SimDevice
 
-from api import ModbusRtuMaster
-from api.modbus_rtu import ModbusError
-from web.service import ScadaStore
+from client import ModbusRtuMaster
+from client.modbus_rtu import ModbusError
+from scdfe_c.web.service import ScadaStore
 
 
 class RtuSimulator:
@@ -140,7 +140,7 @@ class RtuConfigTests(unittest.TestCase):
                             })
             store.create_row('fes_channel_modbus_rtu_define', {
                 'rtu_id': 7, 'serial_port': 'COM98', 'unit_id': 10,
-                'response_timeout': 0.2,
+                'response_timeout': 0.2, 'retry_count': 2,
             })
             store.create_row('fes_channel_modbus_define', {'id': 1, 'rtu_id': 7, 'irtuaddr': 9})
             store.create_row('fes_channel_modbus_define_call', {
@@ -154,6 +154,7 @@ class RtuConfigTests(unittest.TestCase):
             master = ModbusRtuMaster.from_store(store, 7, baudrate=19200, parity='O', stopbits=2)
             self.addCleanup(master.close)
             self.assertEqual((master.port, master.unit_id), ('COM98', 10))
+            self.assertEqual(master.retry_count, 2)
             self.assertFalse(master.connected)
             self.assertEqual(master.native.comm_params.baudrate, 19200)
             self.assertEqual(master.native.comm_params.parity, 'O')

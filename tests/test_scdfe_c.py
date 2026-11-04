@@ -7,6 +7,7 @@ import os
 import pickle
 from pathlib import Path
 from queue import Full
+import sqlite3
 import tempfile
 import threading
 import time
@@ -23,7 +24,7 @@ from scdfe_c import (
     discover_channels,
 )
 from scdfe_c import _worker_thread_entry
-from web.service import ScadaStore
+from scdfe_c.web.service import ScadaStore
 
 
 @dataclass
@@ -144,6 +145,43 @@ class ScdfeCTest(unittest.TestCase):
         self.assertTrue(master.closed)
         self.assertEqual(self.store.get_row("fes_rtu_define", [7])["status"], 0)
 
+    def test_definition_scan_preserves_read_connection_and_detects_insert_delete(self):
+        connection = self.store.open_connection()
+        self.addCleanup(connection.close)
+        before = definition_signature(self.store, 7, connection)
+        self.assertIs(connection.row_factory, sqlite3.Row)
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(connection.execute(
+            "SELECT rtu_id FROM fes_rtu_define WHERE rtu_id=7",
+        ).fetchone()["rtu_id"], 7)
+        self.store.create_row("fes_yc_define", {
+            "rtu_id": 7, "pnt_no": 2, "name": "新增温度\n含特殊字符\"",
+            "raw_scale": 1.5,
+        })
+        inserted = definition_signature(self.store, 7, connection)
+        self.assertNotEqual(before, inserted)
+        with self.store.connection() as writer:
+            writer.execute("DELETE FROM fes_yc_define WHERE rtu_id=7 AND pnt_no=2")
+        self.assertEqual(before, definition_signature(self.store, 7, connection))
+        self.store.update_row("fes_channel_modbus_tcp_define", [7], {"remote_port": 1503})
+        self.assertNotEqual(before, definition_signature(self.store, 7, connection))
+
+    def test_measurement_objects_keep_numeric_point_conversion_and_isolate_invalid_points(self):
+        queue = CaptureWriterQueue()
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
+                               log_dir=self.root / "logs", writer_queue=queue)
+        self.assertEqual(worker._sync_measurements([
+            Value("yc", "1", 12.5, None),
+            Value("yc", "invalid", 3.0),
+            Value("yx", 1, True, 2),
+        ]), (1, 1))
+        self.assertEqual(worker.stats.errors, 1)
+        self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
+        yc = self.store.get_row("fes_yc_define", [7, 1])
+        yx = self.store.get_row("fes_yx_define", [7, 1])
+        self.assertEqual((yc["raw_value"], yc["raw_status"]), (12.5, 0))
+        self.assertEqual((yx["value"], yx["status"]), (1, 2))
+
     def test_per_process_hourly_log_and_retention_cleanup(self):
         log_dir = self.root / "logs"
         logger = ScdfeLogger(log_dir, process_name="scdfe_c-rtu-7")
@@ -180,9 +218,9 @@ class ScdfeCTest(unittest.TestCase):
                     log_dir=log_dir,
                 )
                 worker.logger.process("channel definition loaded")
-            with patch.object(runtime, "ScadaStore", side_effect=RuntimeError("startup failed")):
+            with patch.object(runtime, "ChannelWorker", side_effect=RuntimeError("startup failed")):
                 _worker_thread_entry(
-                    str(self.store.db_path), str(self.store.catalog.directory),
+                    self.store,
                     {"rtu_id": 7, "channel_id": 71, "channel_type": "modbus-tcp",
                      "name": "测试站"},
                     str(log_dir), 1, 1, threading.Event(),
@@ -381,6 +419,83 @@ class ScdfeCTest(unittest.TestCase):
                 for field in ("refresh_time",):
                     self.assertEqual(yx[field], 123456, field)
 
+    def test_direct_writes_reuse_worker_connection_and_keep_row_results(self):
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
+                               log_dir=self.root / "logs")
+        connection = worker._read_connection()
+        self.addCleanup(worker._close_command_connection)
+        with patch.object(self.store, "open_connection", wraps=self.store.open_connection) as opened:
+            self.assertEqual(worker._write_rows([
+                ("fes_yc_define", 7, 1, {"value": 12.5, "status": 3}),
+                ("fes_yc_define", 7, 999, {"value": 99.0}),
+                ("fes_yc_define", 7, 1, {"status": 4, "value": 13.5}),
+                ("fes_yx_define", 7, 1, {"value": 1}),
+            ]), [True, False, True, True])
+            worker._write_rtu_status(1)
+            worker._write_process_state(process_status=2, process_heartbeat_time=123)
+            self.assertEqual(opened.call_count, 0)
+        self.assertIs(worker._read_connection(), connection)
+        self.assertFalse(connection.in_transaction)
+        yc = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((yc["value"], yc["status"], yc["_version"]), (13.5, 4, 3))
+        rtu = self.store.get_row("fes_rtu_define", [7])
+        self.assertEqual((rtu["status"], rtu["process_status"], rtu["process_heartbeat_time"]),
+                         (1, 2, 123))
+        self.store.update_row("fes_yt_define", [7, 1], {"value": 5.5, "cmd_time": 456})
+        commands = worker._command_rows()
+        self.assertEqual(next(row["value"] for kind, row in commands if kind == "yt"), 5.5)
+
+    def test_failed_direct_write_rolls_back_and_reopens_worker_connection(self):
+        worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
+                               log_dir=self.root / "logs")
+        connection = worker._read_connection()
+        self.addCleanup(worker._close_command_connection)
+        with self.assertRaises(sqlite3.OperationalError):
+            worker._write_rows([
+                ("fes_yc_define", 7, 1, {"value": 12.5}),
+                ("fes_yx_define", 7, 1, {"missing_column": 1}),
+            ])
+        self.assertIsNone(worker._command_connection)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+        row = self.store.get_row("fes_yc_define", [7, 1])
+        self.assertEqual((row["value"], row["_version"]), (0.0, 1))
+        replacement = worker._read_connection()
+        self.assertIsNot(replacement, connection)
+        self.assertTrue(worker._write_row("fes_yc_define", 7, 1, {"value": 25.0}))
+        self.assertFalse(replacement.in_transaction)
+        self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["value"], 25.0)
+
+    def test_direct_commit_failure_rolls_back_and_closes_owned_or_reused_connection(self):
+        for reused in (False, True):
+            with self.subTest(reused=reused):
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
+                                       log_dir=self.root / "logs")
+                real_connection = self.store.open_connection()
+
+                class FailedCommit:
+                    def __getattr__(self, name):
+                        return getattr(real_connection, name)
+
+                    def commit(self):
+                        raise sqlite3.OperationalError("injected commit failure")
+
+                connection = FailedCommit()
+                if reused:
+                    worker._command_connection = connection
+                try:
+                    with patch.object(self.store, "open_connection", return_value=connection):
+                        with self.assertRaisesRegex(sqlite3.OperationalError, "injected commit failure"):
+                            worker._write_row("fes_yc_define", 7, 1, {"value": 99.0})
+                    self.assertIsNone(worker._command_connection)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        real_connection.execute("SELECT 1")
+                    row = self.store.get_row("fes_yc_define", [7, 1])
+                    self.assertEqual((row["value"], row["_version"]), (0.0, 1))
+                finally:
+                    real_connection.close()
+                    worker._close_command_connection()
+
     def test_scaling_reload_and_heartbeat_preserve_raw_sample(self):
         for queued in (False, True):
             with self.subTest(queued=queued):
@@ -469,6 +584,60 @@ class ScdfeCTest(unittest.TestCase):
         yx_group = next(g for g in queue.messages[0]["groups"] if g["table"] == "fes_yx_define")
         self.assertEqual(set(yx_group["value_names"]), {"refresh_time"})
 
+    def test_heartbeat_boundary_and_changed_points_keep_independent_sample_times(self):
+        self.store.create_row("fes_yc_define", {"rtu_id": 7, "pnt_no": 2, "name": "第二测点"})
+        for queued in (False, True):
+            with self.subTest(queued=queued):
+                queue = CaptureWriterQueue() if queued else None
+                worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
+                                       log_dir=self.root / "logs", writer_queue=queue,
+                                       measurement_heartbeat_interval=10)
+                cycles = [
+                    (100, 1000, 10.0, 3, (2, 1)),
+                    (109.99, 2000, 11.0, 4, (1, 0)),
+                    (110, 3000, 11.0, 4, (1, 1)),
+                    (120, 4000, 11.0, 4, (2, 1)),
+                ]
+                for tick, stamp, value, quality, expected in cycles:
+                    values = [Value("yc", 1, value, quality), Value("yc", 2, 20.0, 7),
+                              Value("yx", 1, True, 8)]
+                    with patch("scdfe_c.time.monotonic", return_value=tick), \
+                            patch("scdfe_c._now_ms", return_value=stamp):
+                        self.assertEqual(worker._sync_measurements(iter(values)), expected)
+                    if queue is not None:
+                        self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
+                        queue.messages.clear()
+                for number, value, quality, raw_time in ((1, 11.0, 4, 2000), (2, 20.0, 7, 1000)):
+                    row = self.store.get_row("fes_yc_define", [7, number])
+                    self.assertEqual((row["raw_value"], row["raw_status"], row["raw_time"],
+                                      row["refresh_time"]), (value, quality, raw_time, 4000))
+
+    def test_quality_fast_path_preserves_bool_subclasses_and_fallback_values(self):
+        from enum import IntEnum
+        from types import SimpleNamespace
+
+        class Quality(IntEnum):
+            INVALID = 128
+
+        class IntegerQuality(int):
+            pass
+
+        cases = [(None, 0), (True, 1), (False, 0), (Quality.INVALID, 128),
+                 (IntegerQuality(7), 7), (SimpleNamespace(value=16), 16),
+                 ("8", 8), (object(), 0)]
+        for queued in (False, True):
+            for quality, expected in cases:
+                with self.subTest(queued=queued, quality=quality):
+                    queue = CaptureWriterQueue() if queued else None
+                    worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
+                                           log_dir=self.root / "logs", writer_queue=queue)
+                    self.assertEqual(worker._sync_measurements([Value("yc", 1, 12.5, quality)]), (1, 0))
+                    if queue is not None:
+                        self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
+                    row = self.store.get_row("fes_yc_define", [7, 1])
+                    self.assertEqual((row["raw_status"], row["status"]), (expected, expected))
+                    self.assertEqual(worker.stats.errors, 0)
+
     def test_bad_measurement_does_not_block_other_points_in_same_sample(self):
         queue = CaptureWriterQueue()
         worker = ChannelWorker(self.store, ChannelSpec(7, 70, "custom"),
@@ -497,16 +666,46 @@ class ScdfeCTest(unittest.TestCase):
         self.assertIsNotNone(changed)
         self.assertEqual(changed[0][1]["value"], 1)
 
-    def test_worker_entry_catches_unexpected_thread_exception(self):
-        # A bad schema path fails during thread-local store construction.  The
-        # entry point must log and return instead of raising into the scheduler
-        # or terminating unrelated communication threads.
-        _worker_thread_entry(
-            str(self.store.db_path), str(self.root / "missing-schema"),
-            {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
-             "name": "测试站"},
-            str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
+    def test_unchanged_command_poll_does_not_open_a_write_transaction(self):
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "modbus-tcp", "测试站"),
+            log_dir=self.root / "logs",
         )
+        self.addCleanup(worker._close_command_connection)
+        self.assertIsNotNone(worker._command_rows())
+        worker._sync_commands()
+        trace = []
+        worker._command_connection.set_trace_callback(trace.append)
+
+        self.assertIsNone(worker._command_rows())
+        self.assertFalse(any(statement in {"BEGIN", "COMMIT", "ROLLBACK"} for statement in trace))
+
+        self.store.update_row("fes_yk_define", [7, 1], {"value": 1, "cmd_time": 123})
+        self.assertIsNotNone(worker._command_rows())
+        self.assertIn("BEGIN", trace)
+        self.assertIn("COMMIT", trace)
+
+    def test_shared_store_keeps_thread_connections_independent(self):
+        first = ChannelWorker(self.store, ChannelSpec(7, 70, "modbus-tcp"),
+                              log_dir=self.root / "logs")
+        second = ChannelWorker(self.store, ChannelSpec(7, 70, "modbus-tcp"),
+                               log_dir=self.root / "logs")
+        self.addCleanup(first._close_command_connection)
+        self.addCleanup(second._close_command_connection)
+        self.assertIsNot(first._read_connection(), second._read_connection())
+        self.assertIs(first.store, second.store)
+        self.assertEqual(first._command_rows(), second._command_rows())
+
+    def test_worker_entry_catches_unexpected_thread_exception(self):
+        # A worker construction failure must be contained by the thread entry;
+        # the supervisor's shared, already-validated store remains usable.
+        with patch.object(runtime, "ChannelWorker", side_effect=RuntimeError("worker failed")):
+            _worker_thread_entry(
+                self.store,
+                {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
+                 "name": "测试站"},
+                str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
+            )
         self.assertTrue((self.root / "logs").exists())
 
     def test_one_failed_communication_thread_does_not_stop_another(self):
@@ -514,12 +713,13 @@ class ScdfeCTest(unittest.TestCase):
         healthy_started = threading.Event()
 
         def broken():
-            _worker_thread_entry(
-                str(self.store.db_path), str(self.root / "missing-schema"),
-                {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
-                 "name": "失败通道"},
-                str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
-            )
+            with patch.object(runtime, "ChannelWorker", side_effect=RuntimeError("broken worker")):
+                _worker_thread_entry(
+                    self.store,
+                    {"rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
+                     "name": "失败通道"},
+                    str(self.root / "logs"), 0.0, 0.1, threading.Event(), None,
+                )
 
         def healthy():
             healthy_started.set()

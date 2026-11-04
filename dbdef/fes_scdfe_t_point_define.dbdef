@@ -1,0 +1,24 @@
+<table_info>
+@  fes_scdfe_t_point_define  scdfe_t四遥转发点映射表  scada  10000  1  0  scada
+</table_info>
+<fes_scdfe_t_point_define>
+@  column_name_eng  column_name_chn  data_type  is_key  display_type
+#  channel_id  转发通道  int  1  KEYID类型
+#  pnt_no  转发点号  int  1  INT
+#  name  点名称  str  0  STRING
+#  kind  转发点类型  str  1  单选菜单
+#  source_kind  源点类型  str  0  单选菜单
+#  source_rtu_id  源RTU  int  0  KEYID类型
+#  source_pnt_no  源点号  int  0  INT
+#  enabled  启用  int  0  单选菜单
+#  io_address  IEC信息体地址  int  0  LONG
+#  type_id  IEC类型标识  int  0  INT
+#  command_mode  命令执行方式  str  0  单选菜单
+#  register_area  Modbus数据区  str  0  单选菜单
+#  address  Modbus地址  int  0  INT
+#  data_type  数据类型  str  0  单选菜单
+#  byte_order  字节序  str  0  单选菜单
+#  word_order  字序  str  0  单选菜单
+#  scale  比例  float  0  FLOAT
+#  offset  偏移  float  0  FLOAT
+</fes_scdfe_t_point_define>

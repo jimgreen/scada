@@ -4,9 +4,9 @@ import tempfile
 import time
 import unittest
 
-from api import IEC104Master
-from web.iec104_service import IEC104Service
-from web.service import ScadaStore
+from client import IEC104Master
+from scdfe_s.web.iec104_service import IEC104Service
+from scdfe_c.web.service import ScadaStore
 
 
 class IEC104ServiceTests(unittest.TestCase):

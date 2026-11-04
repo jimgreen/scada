@@ -11,7 +11,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scdfe_c import ChannelSpec, ChannelWorker, _apply_batch_updates, definition_signature
-from web.service import ScadaStore, quote_identifier
+from scdfe_c.web.service import ScadaStore, quote_identifier
 from tools.benchmark_inputs import MeasurementStream
 
 

@@ -1,0 +1,678 @@
+"""Modbus TCP 主站；协议通信交给 pyModbusTCP。
+
+参考 scdfe_c/CRtuModbusTcpEx.cpp 的召唤、数据解释、遥调遥控字段。
+地址使用线上零基地址，例如文档 40001 通常传 0；不会自动减 40001。
+本文件的私有协议层为 TCP/RTU 共用的应用层点表适配，不实现协议帧。
+"""
+from collections.abc import Callable, Mapping
+from copy import deepcopy
+from datetime import datetime, timezone
+from functools import lru_cache
+import math
+import struct
+import threading
+from typing import NamedTuple
+
+__all__ = ['ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point']
+
+
+class ModbusError(RuntimeError):
+    """通信失败或设备异常；写失败不代表设备一定没有执行，不自动重发。"""
+
+    def __init__(self, message, *, exception_code=None):
+        super().__init__(message)
+        self.exception_code = exception_code
+
+
+class ModbusValue(NamedTuple):
+    """一次采集的不可变点快照；按名称读取字段。"""
+
+    rtu_id: int | None
+    call_seq: int
+    point_no: int
+    kind: str
+    value: int | float | bool
+    received_at: datetime
+
+
+def field(row, name, default=None):
+    """同时接受 dict 和 dbdef/def 下生成的数据类；None 按缺省处理。"""
+    value = row.get(name) if isinstance(row, Mapping) else getattr(row, name, None)
+    return default if value is None else value
+
+
+def integer(value, name, lo, hi):
+    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+        raise ValueError(f'{name} 必须是 {lo}..{hi} 的整数，实际为 {value!r}')
+    return value
+
+
+def boolean(value):
+    if not isinstance(value, (bool, int)) or value not in (0, 1):
+        raise ValueError('开关值必须是 bool 或 0/1')
+    return bool(value)
+
+
+def _order4(raw, seq):
+    # 与旧代码 Change4ByteDataSeq 一致：输入/输出为 Windows 小端内存字节。
+    permutations = ((0, 1, 2, 3), (2, 3, 0, 1), (1, 0, 3, 2), (3, 2, 1, 0))
+    integer(seq, 'fourbytedata_byteseq', 0, 3)
+    return bytes(raw[i] for i in permutations[seq])
+
+
+_POINT_SIZES = (0, 2, 2, 4, 4, 4, 2, 1, 2, 2, 8, 8)
+
+
+@lru_cache(maxsize=512)
+def _register_decoder(typ, little, order, offset, mask, reverse):
+    """共享不可变解码器；参数来自已校验点表，不捕获可变配置。"""
+    if typ == 6:
+        index = 0 if little else 1
+
+        def read_byte(raw, start):
+            return raw[start + index]
+        return read_byte
+    if typ in (8, 9):
+        unpack = struct.Struct('<H' if little else '>H').unpack_from
+        if typ == 8:
+            def read_bit(raw, start):
+                return bool((unpack(raw, start)[0] >> offset) & 1) ^ reverse
+            return read_bit
+
+        def read_bits(raw, start):
+            return (unpack(raw, start)[0] >> offset) & mask
+        return read_bits
+    if typ in (3, 4, 5):
+        unpack = struct.Struct(('>' if order == 3 else '<') + {3: 'i', 4: 'I', 5: 'f'}[typ]).unpack_from
+        if order == 1:
+            def read_swapped_words(raw, start):
+                return unpack(bytes((raw[start + 2], raw[start + 3], raw[start], raw[start + 1])))[0]
+            return read_swapped_words
+        if order == 2:
+            def read_swapped_bytes(raw, start):
+                return unpack(bytes((raw[start + 1], raw[start], raw[start + 3], raw[start + 2])))[0]
+            return read_swapped_bytes
+    else:
+        fmt = {1: 'h', 2: 'H', 7: 'b', 10: 'q', 11: 'Q'}[typ]
+        unpack = struct.Struct(('<' if little and typ in (1, 2) else '>') + fmt).unpack_from
+
+    def read_number(raw, start):
+        return unpack(raw, start)[0]
+    return read_number
+
+
+@lru_cache(maxsize=125)
+def _register_packer(count):
+    return struct.Struct(f'>{count}H').pack
+
+
+def _point_decoder(row, available_bytes):
+    """先验证报文宽度，再校验解码参数；供单点 API 和采集计划共用。"""
+    typ = integer(field(row, 'trans_type'), 'trans_type', 1, 11)
+    size = _POINT_SIZES[typ]
+    if available_bytes < size:
+        raise ValueError(f'点 {field(row, "cnt")} 数据不足：需要 {size} 字节，得到 {available_bytes}')
+    little = field(row, 'twobytedata_byteseq', 0) > 0
+    order = offset = mask = 0
+    reverse = False
+    if typ in (3, 4, 5):
+        order = integer(field(row, 'fourbytedata_byteseq', 0), 'fourbytedata_byteseq', 0, 3)
+    elif typ in (8, 9):
+        offset = integer(field(row, 'offset_bit', 0), 'offset_bit', 0, 15)
+        width = 1 if typ == 8 else integer(field(row, 'all_bit'), 'all_bit', 1, 16 - offset)
+        mask = (1 << width) - 1
+        if typ == 8:
+            reverse = bool(field(row, 'if_reverse', 0))
+    return _register_decoder(typ, little, order, offset, mask, reverse)
+
+
+def decode_point(raw: bytes, row):
+    """解析单点寄存器数据，支持 trans_type=1..11 和现有字节序编号。
+
+    1/2=int16/uint16, 3/4=int32/uint32, 5=float32, 6=byte,
+    7=int8, 8=bit, 9=bits, 10/11=int64/uint64。
+    四字节编号 0/1/2/3 对应通常线上标记 DCBA/BADC/CDAB/ABCD。
+    """
+    return _point_decoder(row, len(raw))(raw, 0)
+
+
+class _ModbusOperations:
+    """共用的读写/点表 API；子类 _invoke 调用第三方 TCP 或串口库。"""
+
+    def _init_operations(self, unit_id, rtu_id, retry_count=0):
+        self.unit_id = integer(unit_id, 'unit_id', 1, 247)
+        self.rtu_id = rtu_id
+        self.retry_count = integer(retry_count, 'retry_count', 0, 10)
+        self._lock = threading.RLock()
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def _unit(self, unit_id):
+        return self.unit_id if unit_id is None else integer(unit_id, 'unit_id', 1, 247)
+
+    @staticmethod
+    def _range(address, count, limit):
+        integer(address, 'address', 0, 65535)
+        integer(count, 'count', 1, limit)
+        if address + count > 65536:
+            raise ValueError('地址范围超过 65535')
+
+    def read(self, function_code, address, count=1, *, unit_id=None):
+        """功能码 1/2 返回 bool 列表，3/4 返回 uint16 列表。"""
+        names = {1: 'read_coils', 2: 'read_discrete_inputs',
+                 3: 'read_holding_registers', 4: 'read_input_registers'}
+        if function_code not in names:
+            raise ValueError('读取功能码必须是 1/2/3/4')
+        self._range(address, count, 2000 if function_code < 3 else 125)
+        return self._invoke(names[function_code], address, count, self._unit(unit_id))
+
+    def read_coils(self, address, count=1, *, unit_id=None):
+        return self.read(1, address, count, unit_id=unit_id)
+
+    def read_discrete_inputs(self, address, count=1, *, unit_id=None):
+        return self.read(2, address, count, unit_id=unit_id)
+
+    def read_holding_registers(self, address, count=1, *, unit_id=None):
+        return self.read(3, address, count, unit_id=unit_id)
+
+    def read_input_registers(self, address, count=1, *, unit_id=None):
+        return self.read(4, address, count, unit_id=unit_id)
+
+    def write_single_coil(self, address, value, *, unit_id=None):
+        self._range(address, 1, 1)
+        return self._invoke('write_single_coil', address, boolean(value), self._unit(unit_id))
+
+    def write_single_register(self, address, value, *, unit_id=None):
+        self._range(address, 1, 1)
+        integer(value, 'value', 0, 65535)
+        return self._invoke('write_single_register', address, value, self._unit(unit_id))
+
+    def write_multiple_coils(self, address, values, *, unit_id=None):
+        values = [boolean(v) for v in values]
+        self._range(address, len(values), 1968)
+        return self._invoke('write_multiple_coils', address, values, self._unit(unit_id))
+
+    def write_multiple_registers(self, address, values, *, unit_id=None):
+        values = [integer(v, 'register', 0, 65535) for v in values]
+        self._range(address, len(values), 123)
+        return self._invoke('write_multiple_registers', address, values, self._unit(unit_id))
+
+    def _check_definition(self, row, is_yk):
+        if self.rtu_id is not None and field(row, 'rtu_id') != self.rtu_id:
+            raise ValueError('命令所属 RTU 与客户端不一致')
+        if field(row, 'ifyk', int(is_yk)) != int(is_yk):
+            raise ValueError('ifyk 与命令类型不一致')
+
+    def _write_yt_definition(self, definition, value):
+        """按 fes_channel_modbus_define_ytyk 下发设点，支持类型 1..5。"""
+        self._check_definition(definition, False)
+        typ = integer(field(definition, 'ytyk_type'), 'ytyk_type', 1, 5)
+        factor = field(definition, 'multi_para', 1.0)
+        value = float(value) * (factor if abs(factor) > 1e-7 else 1.0)
+        if not math.isfinite(value):
+            raise ValueError('设点值必须有限')
+        fmt = {1: 'h', 2: 'H', 3: 'i', 4: 'I', 5: 'f'}[typ]
+        try:
+            if typ <= 2:
+                raw = struct.pack(('<' if field(definition, 'twobytedata_byteseq', 0) > 0 else '>') + fmt, int(value))
+            else:
+                raw = _order4(struct.pack('<' + fmt, value if typ == 5 else int(value)),
+                              field(definition, 'fourbytedata_byteseq', 0))
+        except (struct.error, OverflowError) as exc:
+            raise ValueError('设点值超出配置的数据类型范围') from exc
+        words = [int.from_bytes(raw[i:i+2], 'big') for i in range(0, len(raw), 2)]
+        fc = field(definition, 'icode', 0) or (6 if len(words) == 1 else 16)
+        return self._write_words(definition, fc, words)
+
+    def _write_words(self, row, fc, words):
+        kwargs = dict(unit_id=field(row, 'irtuaddr', self.unit_id))
+        if fc == 6 and len(words) == 1:
+            return self.write_single_register(field(row, 'reg_addr'), words[0], **kwargs)
+        if fc == 16:
+            return self.write_multiple_registers(field(row, 'reg_addr'), words, **kwargs)
+        raise ValueError('寄存器命令只支持 06（单寄存器）或 16（多寄存器）')
+
+    def _write_yk_definition(self, definition, close, *, current_value=None):
+        """标准 05 线圈或 06/16 寄存器遥控；特殊位控制显式传入当前寄存器值。
+
+        current_value 的新鲜度由调用者保证；跨设备读改写不具备原子性。
+        不支持旧设备在 05 中携带非 FF00/0000 的私有编码。
+        """
+        self._check_definition(definition, True)
+        on = boolean(close) ^ bool(field(definition, 'ifreverse', 0))
+        fc = field(definition, 'icode', 0) or 5
+        typ = field(definition, 'ytyk_type', 6)
+        if fc == 5:
+            if typ == 7:
+                raise ValueError('特殊位控制必须明确配置功能码 06 或 16')
+            return self.write_single_coil(field(definition, 'reg_addr'), on,
+                                          unit_id=field(definition, 'irtuaddr', self.unit_id))
+        little = field(definition, 'twobytedata_byteseq', 0) > 0
+        if typ == 7:
+            bit = integer(field(definition, 'special_yk_bit'), 'special_yk_bit', 0, 15)
+            value = integer(current_value, 'current_value', 0, 65535)
+            value = (value | (1 << bit)) if on else (value & ~(1 << bit))
+        elif typ == 6:
+            bit = integer(field(definition, 'special_yk_bit', 0), 'special_yk_bit', 0, 15)
+            if field(definition, 'send_ff_replace_01', 0):
+                value = 0xFF if on else 0
+            else:
+                value = (1 << bit) if on else 0
+        elif typ in (1, 2):
+            value = 0xFF00 if on else 0
+        else:
+            raise ValueError('遥控只支持 ytyk_type=1/2/6/7')
+        raw = value.to_bytes(2, 'little' if little else 'big')
+        return self._write_words(definition, fc, [int.from_bytes(raw, 'big')])
+
+
+class _ModbusTcpTransport(_ModbusOperations):
+    """每个连接串行请求；重试次数由通道参数控制；可使用 with。"""
+
+    def __init__(self, host, port=502, *, unit_id=1, timeout=3.0,
+                 connect_timeout=None, rtu_id=None, retry_count=0, keep_alive=True):
+        from pyModbusTCP.client import ModbusClient
+        self._init_operations(unit_id, rtu_id, retry_count)
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError('host 必须是非空字符串')
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError('timeout 必须是 > 0 的有限数')
+        if connect_timeout is None:
+            connect_timeout = timeout
+        if (isinstance(connect_timeout, bool)
+                or not isinstance(connect_timeout, (int, float))
+                or not math.isfinite(connect_timeout) or connect_timeout <= 0):
+            raise ValueError('connect_timeout 必须是 > 0 的有限数')
+        self.host, self.port = host.strip(), integer(port, 'port', 1, 65535)
+        self.response_timeout = float(timeout)
+        self.connect_timeout = float(connect_timeout)
+        if not isinstance(keep_alive, (bool, int)) or keep_alive not in (0, 1):
+            raise ValueError('keep_alive 必须是 bool 或 0/1')
+        self.keep_alive = bool(keep_alive)
+        self.native = ModbusClient(host=self.host, port=self.port, unit_id=unit_id,
+                                   timeout=self.response_timeout, auto_open=False,
+                                   auto_close=not self.keep_alive)
+        # auto_close=True intentionally closes after each request.  Keep this
+        # marker separate from native.is_open so the next request can reopen
+        # the connection, while a caller that never called connect() still
+        # receives the same explicit lifecycle error as the other adapters.
+        self._session_started = False
+        self._manual_close = False
+
+    @property
+    def connected(self):
+        return self.native.is_open
+
+    def connect(self):
+        with self._lock:
+            opened = self._open_native()
+            if not opened:
+                raise ModbusError(f'TCP 连接失败 {self.host}:{self.port}: {self.native.last_error_as_txt}')
+            self._session_started = True
+            self._manual_close = False
+        return self
+
+    def close(self):
+        with self._lock:
+            self.native.close()
+            self._manual_close = True
+
+    def _open_native(self):
+        """Open with the connection timeout, then restore response timeout."""
+        previous_timeout = self.native.timeout
+        # ModbusClient.timeout's public setter closes an open socket.  Change
+        # its backing value for the connect attempt, then restore both the
+        # backing value and the live socket timeout without touching the socket
+        # lifecycle a second time.
+        self.native._timeout = self.connect_timeout
+        try:
+            try:
+                return self.native.open()
+            except OSError as exc:
+                raise ModbusError(f'TCP 连接失败 {self.host}:{self.port}: {exc}') from exc
+        finally:
+            self.native._timeout = previous_timeout
+            if self.native.is_open:
+                self.native._sock.settimeout(previous_timeout)
+
+    def _invoke(self, name, address, argument, unit_id):
+        with self._lock:
+            if not self.connected:
+                if not self.keep_alive and self._session_started and not self._manual_close:
+                    if not self._open_native():
+                        raise ModbusError(f'TCP 连接失败 {self.host}:{self.port}: {self.native.last_error_as_txt}')
+                else:
+                    raise ModbusError('未连接，请先 connect() 或使用 with')
+            self.native.unit_id = unit_id
+            last_error = None
+            attempts = self.retry_count + 1 if name.startswith('read_') else 1
+            for attempt in range(attempts):
+                try:
+                    result = getattr(self.native, name)(address, argument)
+                    if result is not None and result is not False:
+                        return result
+                    last_error = ModbusError(
+                        f'{name} 失败: {self.native.last_error_as_txt}; '
+                        f'{self.native.last_except_as_txt}',
+                        exception_code=self.native.last_except or None)
+                except OSError as exc:
+                    last_error = ModbusError(f'{name} 失败: {exc}')
+                if attempt < attempts - 1 and not self.connected:
+                    if not self._open_native():
+                        break
+            raise last_error or ModbusError(f'{name} 失败')
+
+
+class _ModbusMasterOperations:
+    """TCP/RTU 主站共用的配置、采集和按点号控制；不创建传输连接。"""
+
+    # ``from_store`` is on the worker construction path.  Keep the database
+    # projection beside the loader so a schema-only/UI column cannot silently
+    # become part of every communication worker's configuration snapshot.
+    _STORE_PROJECTIONS = {
+        "fes_channel_modbus_define":
+            "rtu_id,irtuaddr",
+        "fes_channel_modbus_define_call":
+            "rtu_id,irtuaddr,call_seq,iplace,inum,icode",
+        "fes_channel_modbus_define_data":
+            "rtu_id,call_seq,if_yx,cnt,trans_type,reg_addr,offset_bit,all_bit,"
+            "if_reverse,twobytedata_byteseq,fourbytedata_byteseq",
+        "fes_channel_modbus_define_ytyk":
+            "rtu_id,ifyk,cnt,irtuaddr,reg_addr,icode,ytyk_type,ifreverse,"
+            "twobytedata_byteseq,fourbytedata_byteseq,multi_para,special_yk_yccnt,"
+            "special_yk_bit,send_ff_replace_01",
+        "fes_channel_modbus_tcp_define":
+            "rtu_id,remote_host,remote_port,unit_id,connect_timeout,"
+            "response_timeout,retry_count,keep_alive",
+        "fes_channel_modbus_rtu_define":
+            "rtu_id,serial_port,baudrate,bytesize,parity,stopbits,unit_id,"
+            "response_timeout,retry_count",
+    }
+
+    def _init_master(self, calls, points, definitions):
+        if self.rtu_id is not None:
+            integer(self.rtu_id, 'rtu_id', 1, 2**63 - 1)
+        self._calls = []
+        self._points = []
+        self._definitions = []
+        self.configure(calls or (), points or (), definitions or ())
+
+    @classmethod
+    def from_store(cls, store, rtu_id, *, unit_id=None, **kwargs):
+        """从 ``ScadaStore`` 读取通道、召唤、数据点和遥控遥调配置。
+
+        Modbus 专用参数表保存 TCP 目标、从站号和点表；每个召唤行自己的 ``irtuaddr``
+        仍优先于默认值。
+        """
+        integer(rtu_id, 'rtu_id', 1, 2**63 - 1)
+        # 同一只读事务加载完整配置，避免分页截断或跨表读取不同版本。
+        with store.connection() as connection:
+            connection.execute('BEGIN')
+            rtu = connection.execute(
+                'SELECT rtu_id, channel_type FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,),
+            ).fetchone()
+            if rtu is None:
+                raise ValueError(f'RTU {rtu_id} 不存在')
+            channel_type = rtu['channel_type']
+            if channel_type != cls.CHANNEL_TYPE:
+                raise ValueError(f'RTU {rtu_id} 不是 {cls.PROTOCOL_NAME} 通道 {cls.CHANNEL_TYPE}')
+            tables = {}
+            for table in ('fes_channel_modbus_define',
+                          'fes_channel_modbus_define_call', 'fes_channel_modbus_define_data',
+                          'fes_channel_modbus_define_ytyk'):
+                order_by = {
+                    'fes_channel_modbus_define': 'id',
+                    'fes_channel_modbus_define_call': 'call_seq, id',
+                    'fes_channel_modbus_define_data': 'call_seq, id',
+                    'fes_channel_modbus_define_ytyk': 'id',
+                }[table]
+                tables[table] = [dict(row) for row in connection.execute(
+                    f'SELECT {cls._STORE_PROJECTIONS[table]} FROM {table} '
+                    f'WHERE rtu_id=? ORDER BY {order_by}', (rtu_id,),
+                )]
+            rows = [dict(row) for row in connection.execute(
+                f'SELECT {cls._STORE_PROJECTIONS[cls.PARAMETER_TABLE]} '
+                f'FROM {cls.PARAMETER_TABLE} WHERE rtu_id=? LIMIT 2', (rtu_id,),
+            )]
+            if len(rows) > 1:
+                raise ValueError(f'RTU {rtu_id} 需要唯一 {cls.PARAMETER_TABLE} 参数定义，实际找到 {len(rows)} 条')
+            parameter = rows[0] if rows else None
+        channel = {'rtu_id': rtu_id}
+        address_name = 'remote_host' if cls.CHANNEL_TYPE == 'modbus-tcp' else 'serial_port'
+        if parameter:
+            address = field(parameter, address_name)
+            if address:
+                channel[address_name] = address
+            port = field(parameter, 'remote_port')
+            if port is not None:
+                channel['remote_port'] = port
+            if unit_id is None and field(parameter, 'unit_id') is not None:
+                unit_id = field(parameter, 'unit_id')
+            for name in ('baudrate', 'bytesize', 'parity', 'stopbits'):
+                if field(parameter, name) is not None and name not in kwargs:
+                    kwargs[name] = field(parameter, name)
+            if field(parameter, 'retry_count') is not None and 'retry_count' not in kwargs:
+                kwargs['retry_count'] = field(parameter, 'retry_count')
+            if cls.CHANNEL_TYPE == 'modbus-tcp' and field(parameter, 'keep_alive') is not None and 'keep_alive' not in kwargs:
+                kwargs['keep_alive'] = field(parameter, 'keep_alive')
+            if cls.CHANNEL_TYPE == 'modbus-tcp' and field(parameter, 'connect_timeout') is not None and 'connect_timeout' not in kwargs:
+                kwargs['connect_timeout'] = field(parameter, 'connect_timeout')
+            if field(parameter, 'response_timeout') is not None and 'timeout' not in kwargs:
+                kwargs['timeout'] = field(parameter, 'response_timeout')
+        if not field(channel, address_name):
+            raise ValueError(f'RTU {rtu_id} 尚未配置 {address_name}')
+        modbus_channels = tables['fes_channel_modbus_define']
+        if unit_id is None and len(modbus_channels) > 1:
+            raise ValueError('存在多个 Modbus 从站定义，请指定 unit_id')
+        if unit_id is None and len(modbus_channels) == 1:
+            unit_id = field(modbus_channels[0], 'irtuaddr', 1)
+        calls = tables['fes_channel_modbus_define_call']
+        points = tables['fes_channel_modbus_define_data']
+        definitions = tables['fes_channel_modbus_define_ytyk']
+        if not calls and points:
+            raise ValueError(f'RTU {rtu_id} 有数据点但没有召唤定义')
+        if unit_id is None:
+            return cls.from_channel(
+                channel, rtu_id=rtu_id, calls=calls, points=points,
+                definitions=definitions, **kwargs,
+            )
+        return cls.from_channel(
+            channel, rtu_id=rtu_id, unit_id=unit_id,
+            calls=calls, points=points, definitions=definitions, **kwargs,
+        )
+
+    def _scoped_rows(self, rows):
+        rows = list(rows)
+        if self.rtu_id is not None:
+            rows = [row for row in rows if field(row, 'rtu_id') == self.rtu_id]
+        return rows
+
+    def configure(self, calls, points, definitions=()):
+        """复制并校验配置；支持 dict/dataclass，失败时保留上一份配置。"""
+        calls, points, definitions = [deepcopy(self._scoped_rows(rows))
+                                      for rows in (calls, points, definitions)]
+        plan = self._build_poll_plan(calls, points)
+        ids = {field(row, 'rtu_id') for row in calls + points + definitions}
+        if len(ids) > 1:
+            raise ValueError('一个主站只配置一个 RTU；请指定 rtu_id 过滤点表')
+        command_index = {}
+        for row in definitions:
+            key = (integer(field(row, 'ifyk'), 'ifyk', 0, 1),
+                   integer(field(row, 'cnt'), 'cnt', 0, 2**31 - 1))
+            self._unit(field(row, 'irtuaddr'))
+            self._range(field(row, 'reg_addr'), 1, 1)
+            if key in command_index:
+                raise ValueError(f'重复遥控/遥调定义: {key}')
+            command_index[key] = row
+        with self._lock:
+            self._calls, self._points, self._definitions = calls, points, definitions
+            self._poll_plan = plan
+            self._command_index = command_index
+        return self
+
+    def _build_poll_plan(self, calls, points):
+        """一次关联并校验所有点，生成按召唤顺序执行的只读计划。"""
+        call_by_seq = {}
+        for call in calls:
+            seq = integer(field(call, 'call_seq'), 'call_seq', 0, 2**31 - 1)
+            if seq in call_by_seq:
+                raise ValueError(f'重复 call_seq={seq}')
+            address = field(call, 'iplace')
+            count = field(call, 'inum')
+            fc = field(call, 'icode')
+            if fc not in (1, 2, 3, 4):
+                raise ValueError(f'不支持召唤功能码 {fc}')
+            integer(fc, 'icode', 1, 4)
+            self._unit(field(call, 'irtuaddr'))
+            _ModbusOperations._range(address, count, 2000 if fc < 3 else 125)
+            # Keep None as a default-unit reference; read() resolves the
+            # current unit_id, just as it does for explicit read requests.
+            call_by_seq[seq] = (field(call, 'rtu_id'), address, count, fc,
+                                field(call, 'irtuaddr'), [])
+        point_keys = set()
+        for point in points:
+            seq = integer(field(point, 'call_seq'), 'call_seq', 0, 2**31 - 1)
+            if seq not in call_by_seq:
+                raise ValueError(f'数据点没有对应召唤行: call_seq={seq}')
+            _, address, count, fc, _, matched = call_by_seq[seq]
+            number = integer(field(point, 'cnt'), 'cnt', 0, 2**31 - 1)
+            key = (bool(field(point, 'if_yx', fc < 3)), number)
+            if key in point_keys:
+                raise ValueError(f'重复遥测/遥信点号: {key}')
+            point_keys.add(key)
+            reg_addr = field(point, 'reg_addr')
+            integer(reg_addr, 'reg_addr', address, address + count - 1)
+            offset = reg_addr - address
+            if fc >= 3:
+                decoder = _point_decoder(point, (count - offset) * 2)
+                offset *= 2
+            else:
+                if field(point, 'trans_type', 8) != 8:
+                    raise ValueError('线圈/离散输入点只支持 trans_type=8；reg_addr 是位地址')
+                decoder = bool(field(point, 'if_reverse', 0))
+            matched.append((number, offset, 'yx' if key[0] else 'yc', decoder))
+        ids = {field(row, 'rtu_id') for row in [*calls, *points]}
+        if len(ids) > 1:
+            raise ValueError('一个主站只采集一个 RTU；请指定 rtu_id 过滤点表')
+        return tuple((rtu_id, seq, address, count, fc, unit, tuple(matched))
+                     for seq, (rtu_id, address, count, fc, unit, matched)
+                     in sorted(call_by_seq.items()))
+
+    def _execute_poll_plan(self, plan):
+        result = []
+        for rtu_id, seq, address, count, fc, unit, matched in plan:
+            values = self.read(fc, address, count, unit_id=unit)
+            if len(values) < count:
+                raise ModbusError(f'召唤 {seq} 响应数量错误：至少需要 {count}，得到 {len(values)}')
+            raw = _register_packer(count)(*values[:count]) if fc >= 3 else b''
+            now = datetime.now(timezone.utc)
+            for number, offset, kind, decoder in matched:
+                value = (decoder(raw, offset) if fc >= 3 else bool(values[offset]) ^ decoder)
+                result.append(ModbusValue(rtu_id, seq, number, kind,
+                                          bool(value) if kind == 'yx' else value, now))
+        return result
+
+    def collect_once(self, calls=None, points=None):
+        """采集一轮已配置点表；返回 ``ModbusValue`` 列表。"""
+        with self._lock:
+            if calls is None and points is None:
+                plan = self._poll_plan
+            else:
+                calls = self._scoped_rows(self._calls if calls is None else calls)
+                points = self._scoped_rows(self._points if points is None else points)
+                plan = self._build_poll_plan(calls, points)
+            if not plan:
+                raise ValueError('尚未配置本 RTU 的 Modbus 召唤行')
+            return self._execute_poll_plan(plan)
+
+    def poll_loop(self, callback: Callable[[list[ModbusValue]], object], *,
+                  interval=1.0, stop_event=None, max_cycles=None):
+        """每轮完成后等待 interval 秒，直到事件、次数或异常终止。
+
+        回调在主站调用线程内执行，收到的列表属于本轮快照。回调异常会原样
+        抛出并停止循环；通信异常同样不会被吞掉，避免把旧值误当成新值。
+        ``stop_event`` 使用 ``threading.Event`` 或兼容 is_set()/wait() 的对象。
+        等待间隔可以立即停止；进行中的请求仍受 timeout 限制。
+        """
+        if not callable(callback):
+            raise TypeError('callback 必须可调用')
+        if (isinstance(interval, bool) or not isinstance(interval, (int, float))
+                or not math.isfinite(interval) or interval < 0):
+            raise ValueError('interval 必须是非负有限数')
+        if max_cycles is not None:
+            integer(max_cycles, 'max_cycles', 1, 2**31 - 1)
+        if stop_event is not None and not all(
+                callable(getattr(stop_event, name, None)) for name in ('is_set', 'wait')):
+            raise TypeError('stop_event 必须提供 is_set()/wait()')
+        event = stop_event if stop_event is not None else threading.Event()
+        cycles = 0
+        while not event.is_set():
+            callback(self.collect_once())
+            cycles += 1
+            if max_cycles is not None and cycles >= max_cycles:
+                break
+            event.wait(interval)
+        return cycles
+
+    def _point_definition(self, point_no, definitions, is_yk):
+        integer(point_no, 'point_no', 0, 2**31 - 1)
+        if definitions is None:
+            row = self._command_index.get((is_yk, point_no))
+            if row is None or (self.rtu_id is not None and field(row, 'rtu_id') != self.rtu_id):
+                raise ValueError(f'点号 {point_no} 没有唯一的 Modbus 命令定义')
+            return row
+        scoped = self._scoped_rows(definitions)
+        if len({field(row, 'rtu_id') for row in scoped}) > 1:
+            raise ValueError('多个 RTU 的命令定义需要指定 rtu_id')
+        matches = [row for row in scoped
+                   if field(row, 'cnt') == point_no and field(row, 'ifyk') == is_yk]
+        if len(matches) != 1:
+            raise ValueError(f'点号 {point_no} 没有唯一的 Modbus 命令定义')
+        return matches[0]
+
+    def send_yk_point(self, point_no, close, definitions=None, *, current_value=None):
+        """按点号选择遥控定义并下发，返回底层写操作结果。"""
+        with self._lock:
+            return self._write_yk_definition(self._point_definition(point_no, definitions, 1), close,
+                                             current_value=current_value)
+
+    def send_yt_point(self, point_no, value, definitions=None):
+        """按点号选择遥调定义并下发，返回底层写操作结果。"""
+        with self._lock:
+            return self._write_yt_definition(self._point_definition(point_no, definitions, 0), value)
+
+
+class ModbusTcpMaster(_ModbusMasterOperations, _ModbusTcpTransport):
+    """基于 pyModbusTCP 的 SCADA 主站，配置采集及遥控遥调由共用层提供。
+
+    calls/points/definitions 分别对应 fes_channel_modbus_define_call/data/ytyk。
+    collect_once 返回 ModbusValue，poll_loop 在调用线程中执行回调。
+    """
+
+    CHANNEL_TYPE = 'modbus-tcp'
+    PROTOCOL_NAME = 'Modbus TCP'
+    PARAMETER_TABLE = 'fes_channel_modbus_tcp_define'
+
+    def __init__(self, host, port=502, *, unit_id=1, timeout=3.0,
+                 connect_timeout=None, rtu_id=None, retry_count=0, keep_alive=True,
+                 calls=None, points=None, definitions=None):
+        super().__init__(host, port, unit_id=unit_id, timeout=timeout,
+                         connect_timeout=connect_timeout, rtu_id=rtu_id,
+                         retry_count=retry_count, keep_alive=keep_alive)
+        self._init_master(calls, points, definitions)
+
+    @classmethod
+    def from_channel(cls, channel, **kwargs):
+        """协议参数中的远端主机/端口决定 TCP 目标。"""
+        kwargs.setdefault('rtu_id', field(channel, 'rtu_id'))
+        kwargs.setdefault('unit_id', field(channel, 'irtuaddr', 1))
+        host = field(channel, 'remote_host')
+        if not host:
+            raise ValueError('Modbus TCP 参数需要 remote_host')
+        return cls(host, field(channel, 'remote_port', 502), **kwargs)
