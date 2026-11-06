@@ -4,7 +4,8 @@
   const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const names = {yc:"遥测",yx:"遥信",yk:"遥控",yt:"遥调"};
   let selected = null, selectedPoint = null, offset = 0, limit = 100, total = 0, requestId = 0;
-  let pointScope = "", channelsRequest = 0;
+  let pointScope = "", channelsRequest = 0, channelRows = [];
+  const keyValue = raw => Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
   const versionHeaders = version => version == null ? {} : {"If-Match":String(version)};
   async function api(path, options) {
     const response = await fetch(path, {...options, headers:{"Content-Type":"application/json", ...options?.headers}});
@@ -20,7 +21,16 @@
   async function loadChannels() {
     const request = ++channelsRequest;
     try {
-      const data = await api("/api/channels?limit=500"), rows = data.items || [];
+      const rows = [];
+      const fields = $("#channels") ? "rtu_id,channel_id,channel_type,code,name,process_enable" : "rtu_id,channel_type,name,code";
+      for (;;) {
+        const page = await api("/api/channels?limit=500&fields=" + fields + (rows.length ? "&offset=" + rows.length : ""));
+        if (request !== channelsRequest) return;
+        const items = page.items || [];
+        rows.push(...items);
+        if (!items.length || rows.length >= (page.total ?? rows.length)) break;
+      }
+      channelRows = rows;
       if (request !== channelsRequest) return;
       if ($("#channels")) {
         $("#channels").innerHTML = rows.map(r => `<tr><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || r.code || "")}</td>${window.PacketRecordingChannels.cell(r.channel_id)}<td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="7">暂无通道</td></tr>';
@@ -29,8 +39,8 @@
       }
       if ($("#point-rtu")) {
         const previous = selected?.rtu_id;
-        const requested = previous ?? Number(new URLSearchParams(location.search).get("rtu_id"));
-        selected = rows.find(r => Number(r.rtu_id) === Number(requested)) || rows[0] || null;
+        const requested = previous ?? new URLSearchParams(location.search).get("rtu_id");
+        selected = (requested ? rows.find(r => String(r.rtu_id) === String(requested)) : rows[0]) || null;
         $("#point-rtu").innerHTML = '<option value="">请选择通道</option>' + rows.map(r => `<option value="${esc(r.rtu_id)}">${esc(r.rtu_id)} · ${esc(r.name || r.code || r.channel_type)}</option>`).join("");
         $("#point-rtu").value = selected?.rtu_id || "";
         if (previous !== selected?.rtu_id) { selectedPoint = null; offset = 0; }
@@ -53,7 +63,7 @@
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
     }
     try {
-      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}`) : {items:[],total:0};
+      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=pnt_no,code,name,value`) : {items:[],total:0};
       if (request !== requestId || rtu !== selected?.rtu_id) return;
       total = data.total || 0;
       if (offset > 0 && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / limit) * limit); return loadPoints(); }
@@ -74,8 +84,8 @@
     $("#point-value").value = point.value == null ? 0 : point.value;
     showEditor("#point-editor");
   }
-  const channelBody = () => ({rtu_id:Number($("#rtu_id").value),channel_id:Number($("#channel_id").value),channel_type:$("#channel_type").value,code:$("#code").value,name:$("#name").value,process_enable:Number($("#process_enable").value)});
-  const pointBody = () => ({pnt_no:Number($("#point-no").value),code:$("#point-code").value,name:$("#point-name").value,value:Number($("#point-value").value)});
+  const channelBody = () => ({rtu_id:keyValue($("#rtu_id").value),channel_id:keyValue($("#channel_id").value),channel_type:$("#channel_type").value,code:$("#code").value,name:$("#name").value,process_enable:Number($("#process_enable").value)});
+  const pointBody = () => ({pnt_no:keyValue($("#point-no").value),code:$("#point-code").value,name:$("#point-name").value,value:Number($("#point-value").value)});
   if ($("#channel-form")) $("#channel-form").onsubmit = async event => {
     event.preventDefault();
     try { await api("/api/channels", {method:"POST",body:JSON.stringify(channelBody())}); await loadChannels(); notice("#channel-message", "通道已新增"); }
@@ -118,7 +128,7 @@
     } catch (error) { notice("#point-message", error.message, true); }
   };
   if ($("#point-rtu")) $("#point-rtu").onchange = () => {
-    selected = $("#point-rtu").value ? {rtu_id:Number($("#point-rtu").value)} : null;
+    selected = channelRows.find(row => String(row.rtu_id) === $("#point-rtu").value) || null;
     selectedPoint = null; offset = 0; $("#point-form").reset();
     const url = new URL(location.href); if (selected) url.searchParams.set("rtu_id", selected.rtu_id); else url.searchParams.delete("rtu_id");
     history.replaceState(null, "", url); loadPoints();
@@ -135,7 +145,7 @@
       if (edit) fillChannel(JSON.parse(edit.dataset.edit));
       if (del && confirm("确定删除该通道及其四遥点？")) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; await loadChannels(); }
       if (pointEdit) fillPoint(JSON.parse(pointEdit.dataset.pointEdit));
-      if (pointDelete && selected && Number(pointDelete.dataset.owner) === selected.rtu_id && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints(); }
+      if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints(); }
     } catch (error) { notice($("#points") ? "#point-message" : "#channel-message", error.message, true); }
   });
   loadChannels();

@@ -131,7 +131,7 @@ async function clickData(selector,dataset) {
 const context = {document,fetch:request,console,setTimeout,clearTimeout,
   setInterval:() => 0,clearInterval(){},prompt:() => input.prompt ?? '1',
   confirm:() => true,window:{},Event:class{},URLSearchParams,
-  location:{search:'?rtu_id=101'}};
+  location:{search:input.search || '?rtu_id=101'}};
 vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.script});
 (async () => {
   await settle();
@@ -155,6 +155,10 @@ vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.
     set({'point-name':'JS point edited','point-value':9.5});
     await node('update-point').onclick(); await settle();
     observed={pointMessage:node('point-message').textContent};
+  } else if(input.scenario === 'point-selection') {
+    observed.owner=node('point-rtu').value;
+    observed.choices=node('point-rtu').innerHTML;
+    observed.points=node('points').innerHTML;
   } else if(input.scenario === 'simulation') {
     observed.checkedBefore=fields.get('simulation').checked;
     fields.get('serial_port').value='COM_CHANGED';
@@ -241,6 +245,20 @@ class ReviewSWebTests(unittest.TestCase):
                     self.assertEqual(status, 200, src)
                     self.assertIn("javascript", asset_headers["Content-Type"])
                     self.assertTrue(content.strip())
+
+    def test_point_link_after_first_page_selects_exact_64bit_rtu(self):
+        left, right = 2**53, 2**53+1
+        with self.httpd.store.connection() as con:
+            con.executemany("INSERT INTO fes_rtu_define(rtu_id,channel_id,channel_type) VALUES(?,?,'modbus-tcp')",
+                            [(n,n) for n in [*range(1,501),left,right]])
+            con.executemany("INSERT INTO fes_yc_define(rtu_id,pnt_no,name) VALUES(?,1,?)",
+                            [(left,'first-RTU'),(right,'second-RTU')])
+            con.commit()
+        result=self.run_js("channels.js", "points.html", scenario="point-selection",
+                           search=f"?rtu_id={right}", baseUrl=f"http://127.0.0.1:{self.httpd.server_port}")
+        self.assertEqual(result["observed"]["owner"],str(right))
+        self.assertIn("second-RTU",result["observed"]["points"])
+        self.assertNotIn("first-RTU",result["observed"]["points"])
 
     def test_real_channel_form_create_and_edit_requests_are_accepted(self):
         result = self.run_js("channels.js", "channels.html", scenario="channels",

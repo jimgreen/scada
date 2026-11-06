@@ -20,6 +20,7 @@ import json
 import math
 import os
 from pathlib import Path
+
 import secrets
 import socket
 import socketserver
@@ -28,6 +29,7 @@ import threading
 import time
 from typing import Any
 
+from core.network_limits import LISTEN_BACKLOG
 from core.process_registry import PROCESS_TABLE, ProcessLease
 from core.scdfe_control import InstanceLock, ensure_control_row, log_directory
 from . import ScdfeLogger
@@ -99,6 +101,7 @@ def _validate_request(payload: Mapping[str, Any]) -> tuple[str, int, str, int, A
 class _CommandTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
 
     def __init__(self, address, owner: "CommandServer"):
         self.owner = owner

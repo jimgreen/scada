@@ -61,9 +61,10 @@ function protocolForm(form) {
     if (node.type === "checkbox") node.checked = value === true || Number(value) === 1;
     else node.value = value ?? "";
   }
+  const keyValue = raw => Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
   function fieldValue(name, node) {
     if (node.type === "checkbox") return node.checked ? 1 : 0;
-    if (name === "rtu_id" && node.value === "") return null;
+    if (name === "rtu_id") return node.value === "" ? null : keyValue(node.value);
     if (node.type === "number" || booleanFields.has(name)) return Number(node.value);
     return node.value;
   }
@@ -124,7 +125,7 @@ function protocolForm(form) {
         if ((kind === "yx" || kind === "yk") && numeric !== 0 && numeric !== 1) throw new Error("遥信/遥控值只能为 0 或 1");
         const value = kind === "yx" || kind === "yk" ? numeric === 1 : numeric;
         const path = command ? `/api/${cfg.slug}/commands/${kind}/${point}` : `/api/${cfg.slug}/update/incremental`;
-        const body = command ? {value} : {kind, pnt_no:Number(point), value};
+        const body = command ? {value} : {kind, pnt_no:keyValue(point), value};
         await api(path, {method:"POST", body:JSON.stringify(body)});
         await load();
         message(command ? "指令已发送" : "点值已更新");
@@ -134,7 +135,7 @@ function protocolForm(form) {
       }
     } catch(err) { message(err.message, true); }
   };
-  $("#add-point").onsubmit = async (e) => { e.preventDefault(); const kind = $("#new-kind").value; const pnt_no = Number($("#new-point").value); const name = $("#new-name").value; try { await api(`/api/${cfg.slug}/points`, {method:"POST", body:JSON.stringify({kind, pnt_no, name, value:0, status:0})}); message("点定义已新增"); e.target.reset(); await load(); } catch(err) { message(err.message, true); } };
+  $("#add-point").onsubmit = async (e) => { e.preventDefault(); const kind = $("#new-kind").value; const pnt_no = keyValue($("#new-point").value); const name = $("#new-name").value; try { await api(`/api/${cfg.slug}/points`, {method:"POST", body:JSON.stringify({kind, pnt_no, name, value:0, status:0})}); message("点定义已新增"); e.target.reset(); await load(); } catch(err) { message(err.message, true); } };
   $("#frame-form")?.addEventListener("submit", async e => { e.preventDefault(); try { const body = {arbitration_id:Number($("#frame-id").value), data:$("#frame-data").value, is_extended_id:Number($("#frame-ext").value)}; await api(`/api/${cfg.slug}/frame`, {method:"POST", body:JSON.stringify(body)}); message("CAN 帧已发送"); await load(); } catch(err) { message(err.message, true); } });
   load(); setInterval(() => { if (!document.hidden) load(true); }, 5000);
 })();

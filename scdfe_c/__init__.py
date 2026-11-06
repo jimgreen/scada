@@ -2461,6 +2461,17 @@ class ScdfeSupervisor:
         return True
 
     def run(self, *, max_scans: int | None = None) -> None:
+        # Keep the WAL and prepared statements warm between control reads,
+        # discovery and heartbeat writes. Never share an idle handle via fork.
+        if self.context.get_start_method() != "spawn":
+            return self._run(max_scans=max_scans)
+        self.store.connection_pool_size = 1
+        try:
+            self._run(max_scans=max_scans)
+        finally:
+            self.store.close()
+
+    def _run(self, *, max_scans: int | None) -> None:
         self._process_lease = ProcessLease(self.store, "main", self.launch_token)
         failure = ""
         try:

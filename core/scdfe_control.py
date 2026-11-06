@@ -107,8 +107,10 @@ class InstanceLock:
         self.stream = None
 
     def acquire(self):
-        stream = self.path.open("a+b")
-        initially_empty = stream.tell() == 0
+        return self._acquire_stream(self.path.open("a+b"), initialize=True)
+
+    def _acquire_stream(self, stream, *, initialize):
+        initially_empty = initialize and stream.tell() == 0
         stream.seek(0)
         try:
             if os.name == "nt":
@@ -145,7 +147,13 @@ class InstanceLock:
     @classmethod
     def held(cls, db_path, role="main"):
         lock = cls(db_path, role)
-        if not lock.acquire():
+        # A probe must not create an ownership file for every idle channel.
+        # If a file exists, test the OS lock itself, even for an empty file.
+        try:
+            stream = lock.path.open("r+b")
+        except FileNotFoundError:
+            return False
+        if not lock._acquire_stream(stream, initialize=False):
             return True
         lock.release()
         return False

@@ -1,0 +1,346 @@
+{
+  "before": {
+    "supervisor": {
+      "operations": 80,
+      "opens": 248,
+      "median_ms": 17.2464,
+      "idle_after_shutdown": 0
+    },
+    "s_web": {
+      "stations_full": {
+        "bytes": 202120,
+        "median_ms": 22.658
+      },
+      "stations_view": {
+        "bytes": 48728,
+        "median_ms": 15.14
+      },
+      "points_full": {
+        "bytes": 416120,
+        "median_ms": 31.452
+      },
+      "points_view": {
+        "bytes": 49120,
+        "median_ms": 20.371
+      }
+    },
+    "logs": {
+      "tail": {
+        "bytes": 65536,
+        "median_ms": 0.981,
+        "rows": 3,
+        "digest": "6eb86ab2aa6da695b80393c08d1465a6653c1f7d5b208c4990eb6dd1e030c129"
+      },
+      "rare": {
+        "bytes": 1438890,
+        "median_ms": 57.269,
+        "rows": 1,
+        "digest": "f3b5b41d2694ec83945f02ad6cfb4db80b7b4f4b86305b3ffe36126079f9db2e"
+      },
+      "many": {
+        "bytes": 65536,
+        "median_ms": 3.415,
+        "rows": 1000,
+        "digest": "1517ca34ab26eefc8cbf4b863b45520e1010e51fbd6036649e0e433c85d1fea8"
+      }
+    }
+  },
+  "first_after": {
+    "supervisor": {
+      "operations": 80,
+      "opens": 1,
+      "median_ms": 0.0501,
+      "idle_after_shutdown": 0
+    },
+    "s_web": {
+      "stations_full": {
+        "bytes": 202120,
+        "median_ms": 25.001
+      },
+      "stations_view": {
+        "bytes": 48728,
+        "median_ms": 4.119
+      },
+      "points_full": {
+        "bytes": 416120,
+        "median_ms": 29.686
+      },
+      "points_view": {
+        "bytes": 49120,
+        "median_ms": 3.723
+      }
+    },
+    "logs": {
+      "tail": {
+        "bytes": 4096,
+        "median_ms": 0.9,
+        "rows": 3,
+        "digest": "6eb86ab2aa6da695b80393c08d1465a6653c1f7d5b208c4990eb6dd1e030c129"
+      },
+      "rare": {
+        "bytes": 1438890,
+        "median_ms": 25.708,
+        "rows": 1,
+        "digest": "f3b5b41d2694ec83945f02ad6cfb4db80b7b4f4b86305b3ffe36126079f9db2e"
+      },
+      "many": {
+        "bytes": 65536,
+        "median_ms": 3.37,
+        "rows": 1000,
+        "digest": "1517ca34ab26eefc8cbf4b863b45520e1010e51fbd6036649e0e433c85d1fea8"
+      }
+    }
+  },
+  "monitor_before": {
+    "n": 500,
+    "active": 1,
+    "lease_files": 500,
+    "first_ms": 193.81,
+    "repeat_median_ms": 107.89
+  },
+  "monitor_after": {
+    "n": 500,
+    "active": 1,
+    "lease_files": 1,
+    "first_ms": 76.26,
+    "repeat_median_ms": 73.84
+  },
+  "final_benchmark": {
+    "supervisor": {
+      "operations": 80,
+      "opens": 1,
+      "median_ms": 0.0449,
+      "idle_after_shutdown": 0
+    },
+    "s_web": {
+      "stations_full": {
+        "bytes": 202120,
+        "median_ms": 31.011
+      },
+      "stations_view": {
+        "bytes": 48728,
+        "median_ms": 4.068
+      },
+      "points_full": {
+        "bytes": 416120,
+        "median_ms": 23.39
+      },
+      "points_view": {
+        "bytes": 49120,
+        "median_ms": 15.289
+      }
+    },
+    "logs": {
+      "tail": {
+        "bytes": 4096,
+        "median_ms": 0.693,
+        "rows": 3,
+        "digest": "6eb86ab2aa6da695b80393c08d1465a6653c1f7d5b208c4990eb6dd1e030c129"
+      },
+      "rare": {
+        "bytes": 1438890,
+        "median_ms": 23.955,
+        "rows": 1,
+        "digest": "f3b5b41d2694ec83945f02ad6cfb4db80b7b4f4b86305b3ffe36126079f9db2e"
+      },
+      "many": {
+        "bytes": 65536,
+        "median_ms": 2.548,
+        "rows": 1000,
+        "digest": "1517ca34ab26eefc8cbf4b863b45520e1010e51fbd6036649e0e433c85d1fea8"
+      }
+    },
+    "monitor": {
+      "n": 500,
+      "active": 1,
+      "lease_files": 1,
+      "first_ms": 72.03,
+      "repeat_median_ms": 81.23
+    }
+  },
+  "original_logs_before": {
+    "8877": {
+      "file": "2026/11/05/11/scdfe_c-rtu-90002-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 65536,
+      "digest": "d5b67b87aba241b5768d56b97894c90ee649aefaeb02e3304294bbe6ab86335f"
+    },
+    "8878": {
+      "file": "2026/11/05/11/scdfe_s-modbus-tcp-server-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 65536,
+      "digest": "f3ff1da2ebe0e6ea937eb796f7c8aa374fcf32cbc35f094f998932f061038488"
+    },
+    "8879": {
+      "file": "2026/11/05/11/scdfe_t-channel-1-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 16761,
+      "digest": "29484014da9f539db3bfeb9bdadb99396b10ab804f44e43c6492fea94ed3f159"
+    }
+  },
+  "original_logs_after": {
+    "8877": {
+      "file": "2026/11/05/11/scdfe_c-rtu-90002-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 4096,
+      "digest": "d5b67b87aba241b5768d56b97894c90ee649aefaeb02e3304294bbe6ab86335f"
+    },
+    "8878": {
+      "file": "2026/11/05/11/scdfe_s-modbus-tcp-server-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 4096,
+      "digest": "f3ff1da2ebe0e6ea937eb796f7c8aa374fcf32cbc35f094f998932f061038488"
+    },
+    "8879": {
+      "file": "2026/11/05/11/scdfe_t-channel-1-20261105-11.log",
+      "rows": 3,
+      "scanned_bytes": 4096,
+      "digest": "29484014da9f539db3bfeb9bdadb99396b10ab804f44e43c6492fea94ed3f159"
+    }
+  },
+  "original": {
+    "original_health_bursts": {
+      "8877": {
+        "n": 48,
+        "p95_ms": 18.76
+      },
+      "8878": {
+        "n": 48,
+        "p95_ms": 17.32
+      },
+      "8879": {
+        "n": 48,
+        "p95_ms": 21.29
+      }
+    },
+    "healthy_ports": [
+      8877,
+      8878,
+      8879
+    ],
+    "worker_pid": 17736,
+    "iec104_port": 2404,
+    "wire_samples": {
+      "yc/1": [
+        42.0,
+        0
+      ],
+      "yx/1": [
+        false,
+        0
+      ]
+    },
+    "business_tables": 28,
+    "schema_identical": true,
+    "integrity": "ok",
+    "foreign_key_errors": 0,
+    "plans": [
+      "SEARCH fes_yc_define USING PRIMARY KEY (rtu_id=? AND pnt_no>? AND pnt_no<?)",
+      "SEARCH fes_scdfe_t_point_define USING INDEX sqlite_autoindex_fes_scdfe_t_point_define_1 (channel_id=?)"
+    ],
+    "packet_enabled": false,
+    "filtered": {
+      "RX": 5,
+      "TX": 5
+    },
+    "read_requests": 84
+  },
+  "independent": {
+    "S_wire": {
+      "count": 1810,
+      "seconds": 74.31,
+      "max_ms": 16.0
+    },
+    "S_sqlite": {
+      "count": 1055,
+      "seconds": 74.34,
+      "max_ms": 0
+    },
+    "T_reconnect": {
+      "count": 179,
+      "seconds": 74.59,
+      "max_ms": 32.0
+    },
+    "CST_log_pages": {
+      "count": 49,
+      "seconds": 75.78,
+      "max_ms": 63.0,
+      "matched_lines": 294,
+      "distinct_hour_directories": 2
+    }
+  },
+  "acquisition_logs_ui": {
+    "success": true,
+    "seconds": 480.42,
+    "counts": {
+      "t_http": 1975,
+      "c_http": 2140,
+      "s_http": 1070,
+      "log_direction_checks": 3052,
+      "gi_10": 127,
+      "gi_11": 127,
+      "wire_10": 633,
+      "wire_100": 633,
+      "wire_1": 633,
+      "wire_11": 633,
+      "c_samples": 1266,
+      "commands": 14,
+      "setpoints": 14,
+      "generations": 633
+    },
+    "maxima": {
+      "publication_to_verified_seconds": 0.915
+    },
+    "errors": [],
+    "cleanup": "complete"
+  },
+  "including_ownership": {
+    "success": true,
+    "seconds": 180.67,
+    "counts": {
+      "t_http": 760,
+      "c_http": 808,
+      "s_http": 404,
+      "gi_10": 48,
+      "gi_11": 48,
+      "log_direction_checks": 1162,
+      "wire_100": 237,
+      "wire_1": 237,
+      "wire_11": 237,
+      "wire_10": 237,
+      "c_samples": 474,
+      "commands": 6,
+      "setpoints": 6,
+      "generations": 237
+    },
+    "maxima": {
+      "publication_to_verified_seconds": 0.873
+    },
+    "errors": [],
+    "cleanup": "complete"
+  },
+  "browser": {
+    "s_projected": {
+      "stations": 63,
+      "points": 100,
+      "rtu": "2",
+      "point": 1,
+      "channelToggles": 62,
+      "pageErrors": 0
+    },
+    "original": {
+      "cRtuSwitch": true,
+      "sRowAndPort": true,
+      "tRxTx": true,
+      "pageErrors": 0
+    }
+  },
+  "full_regression": {
+    "tests": 480,
+    "passed": 479,
+    "skipped": 1,
+    "failures": 0,
+    "seconds": 239.419,
+    "skip": "WinError 1314: symlink creation unavailable"
+  }
+}

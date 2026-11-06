@@ -166,6 +166,8 @@ class ScdfeControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "scada.sqlite3"
             first = InstanceLock(path)
+            self.assertFalse(InstanceLock.held(path))
+            self.assertFalse(first.path.exists(), "probing an idle channel must not create its lock")
             second = InstanceLock(path)
             self.assertTrue(first.acquire())
             try:
@@ -174,6 +176,29 @@ class ScdfeControlTests(unittest.TestCase):
                 first.release()
             self.assertTrue(second.acquire())
             second.release()
+
+    def test_failed_supervisor_scan_closes_connection_and_sees_external_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "scada.sqlite3"
+            supervisor = ScdfeSupervisor(db)
+            used = []
+            def scan():
+                with supervisor.store.connection() as con:
+                    used.append(con)
+                    con.execute("BEGIN")
+                    con.execute("SELECT scan_interval_ms FROM fes_scdfe_c_define").fetchone()
+                external = sqlite3.connect(db)
+                try:
+                    external.execute("UPDATE fes_scdfe_c_define SET scan_interval_ms=7654 WHERE id=1")
+                    external.commit()
+                finally:
+                    external.close()
+                self.assertEqual(supervisor._control()["scan_interval_ms"], 7654)
+                raise RuntimeError("injected scan failure")
+            with patch.object(supervisor, "reconcile", side_effect=scan), self.assertRaisesRegex(RuntimeError, "injected"):
+                supervisor.run(max_scans=1)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                used[0].execute("SELECT 1")
 
     def test_dedicated_batch_writer_commits_updates_and_flushes_on_stop(self):
         with tempfile.TemporaryDirectory() as directory:

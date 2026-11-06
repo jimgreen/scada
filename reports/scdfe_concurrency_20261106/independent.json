@@ -1,0 +1,24 @@
+{
+  "S_wire": {
+    "count": 45583,
+    "seconds": 1868.55,
+    "max_ms": 31.0
+  },
+  "S_sqlite": {
+    "count": 26518,
+    "seconds": 1868.58,
+    "max_ms": 16.0
+  },
+  "T_reconnect": {
+    "count": 4506,
+    "seconds": 1868.76,
+    "max_ms": 140.0
+  },
+  "CST_log_pages": {
+    "count": 1212,
+    "seconds": 1868.66,
+    "max_ms": 78.0,
+    "matched_lines": 7272,
+    "distinct_hour_directories": 4
+  }
+}

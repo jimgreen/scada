@@ -138,6 +138,16 @@ class LogQueryTests(unittest.TestCase):
         self.assertIn("关键字告警", second["items"][0]["text"])
         self.assertIn("newly appended", search_logs(self.root, query)["items"][0]["text"])
 
+    def test_channel_search_accepts_whitespace_and_resumes_before_a_long_packet(self):
+        name = "scdfe_s-modbus-tcp-server-20261106-10.log"
+        lines = [f"10:00:00 [报文] 报文 RX 通道={owner}\tStraße {i} " + "aa " * 2000
+                 for i, owner in enumerate((10, 1, 10, 1, 10))]
+        (self.root / name).write_bytes(("\r\n".join(lines) + "\r\n").encode())
+        query = dict(filename=name, channel_id="1", direction="RX", q="STRASSE", limit="1")
+        first = search_logs(self.root, query, family="s")
+        second = search_logs(self.root, {**query, "cursor": first["next_cursor"]}, family="s")
+        self.assertEqual([r["text"] for page in (first, second) for r in page["items"]], [lines[3], lines[1]])
+
     def test_scan_budget_utf8_and_oversized_lines_resume_without_missing_older_rows(self):
         path = self.root / "scdfe_c-rtu-7-20261031-10.log"
         expected = [f"10:00:{n:02d} [日志] 中文目标 {n}" for n in range(20)]

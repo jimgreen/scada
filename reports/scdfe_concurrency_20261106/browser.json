@@ -1,0 +1,45 @@
+{
+  "identity_before": {
+    "s": {
+      "selected": "1",
+      "names": "暂无测点",
+      "options": 501
+    },
+    "t": {
+      "selected": "9007199254740992",
+      "names": "遥测\t1\t9007199254740992\t1\tendpoint-0\t0\tholding / 0\t是\t\n编辑\n删除",
+      "options": 3
+    }
+  },
+  "identity_after": {
+    "s": {
+      "selected": "9007199254740993",
+      "names": "遥测\t1\t\tendpoint-1\t82\t编辑 删除",
+      "options": 508
+    },
+    "t": {
+      "selected": "9007199254740993",
+      "names": "遥测\t1\t9007199254740993\t1\tendpoint-1\t0\tholding / 0\t是\t\n编辑\n删除",
+      "options": 3
+    }
+  },
+  "identity_edits": {
+    "c": {
+      "selected": "9007199254740993"
+    },
+    "s": {
+      "first_after_edit": "endpoint-0",
+      "second_after_edit": "identity-S"
+    },
+    "t": {
+      "first_after_edit": "endpoint-0",
+      "second_after_edit": "identity-T"
+    }
+  },
+  "original_ports": {
+    "cRtuSwitch": true,
+    "sRowAndPort": true,
+    "tRxTx": true,
+    "pageErrors": 0
+  }
+}

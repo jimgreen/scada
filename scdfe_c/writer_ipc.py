@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+
 import queue
 import secrets
 import socket
@@ -29,6 +30,8 @@ import threading
 import time
 import uuid
 from typing import Any
+
+from core.network_limits import LISTEN_BACKLOG
 
 
 MAX_LINE = 64 * 1024
@@ -84,6 +87,7 @@ def _command_json(raw):
 class _ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
 
 
 class _RequestHandler(socketserver.StreamRequestHandler):

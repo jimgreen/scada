@@ -1,0 +1,227 @@
+{
+  "date": "2026-11-06",
+  "base_commit": "e7a92e9",
+  "seconds": 2100.49,
+  "counts": {
+    "t_http": 8653,
+    "c_http": 9368,
+    "s_http": 4684,
+    "gi_10": 553,
+    "gi_11": 553,
+    "log_direction_checks": 13440,
+    "wire_100": 2763,
+    "wire_1": 2763,
+    "wire_11": 2763,
+    "wire_10": 2763,
+    "c_samples": 5526,
+    "commands": 60,
+    "setpoints": 60,
+    "generations": 2763
+  },
+  "maximums": {
+    "publication_to_verified_seconds": 0.917
+  },
+  "independent_readers": {
+    "S_wire": {
+      "count": 45583,
+      "seconds": 1868.55,
+      "max_ms": 31.0
+    },
+    "S_sqlite": {
+      "count": 26518,
+      "seconds": 1868.58,
+      "max_ms": 16.0
+    },
+    "T_reconnect": {
+      "count": 4506,
+      "seconds": 1868.76,
+      "max_ms": 140.0
+    },
+    "CST_log_pages": {
+      "count": 1212,
+      "seconds": 1868.66,
+      "max_ms": 78.0,
+      "matched_lines": 7272,
+      "distinct_hour_directories": 4
+    }
+  },
+  "burst": {
+    "C": {
+      "before_errors": 20,
+      "after_errors": 0,
+      "per_version": 144,
+      "before_p95_ms": 2063.61,
+      "after_p95_ms": 28.06
+    },
+    "S": {
+      "before_errors": 22,
+      "after_errors": 0,
+      "per_version": 144,
+      "before_p95_ms": 2054.39,
+      "after_p95_ms": 29.09
+    },
+    "T": {
+      "before_errors": 36,
+      "after_errors": 0,
+      "per_version": 144,
+      "before_p95_ms": 2064.96,
+      "after_p95_ms": 27.31
+    },
+    "writer": {
+      "before_errors": 0,
+      "after_errors": 0,
+      "per_version": 144,
+      "before_p95_ms": 1085.14,
+      "after_p95_ms": 63.57
+    },
+    "command": {
+      "before_errors": 28,
+      "after_errors": 0,
+      "per_version": 144,
+      "before_p95_ms": 2087.98,
+      "after_p95_ms": 105.05
+    }
+  },
+  "fault_injection": {
+    "seconds": 240,
+    "threads": {
+      "writer0": {
+        "count": 6332,
+        "p95_ms": 22.39
+      },
+      "writer1": {
+        "count": 6341,
+        "p95_ms": 21.79
+      },
+      "writer2": {
+        "count": 6351,
+        "p95_ms": 20.73
+      },
+      "bad": {
+        "count": 1030,
+        "p95_ms": 27.0
+      },
+      "wire": {
+        "count": 18644,
+        "p95_ms": 1.0
+      },
+      "sql": {
+        "count": 19199,
+        "p95_ms": 0.27
+      },
+      "web": {
+        "count": 9512,
+        "p95_ms": 22.26
+      }
+    }
+  },
+  "resources": {
+    "samples": 35,
+    "pids": 8,
+    "max_wal_bytes": 4136512,
+    "final_wal_bytes": 4136512
+  },
+  "browser": {
+    "iterations": 35,
+    "seconds": 909.79,
+    "identity_before": {
+      "s": {
+        "selected": "1",
+        "names": "暂无测点",
+        "options": 501
+      },
+      "t": {
+        "selected": "9007199254740992",
+        "names": "遥测\t1\t9007199254740992\t1\tendpoint-0\t0\tholding / 0\t是\t\n编辑\n删除",
+        "options": 3
+      }
+    },
+    "identity_after": {
+      "s": {
+        "selected": "9007199254740993",
+        "names": "遥测\t1\t\tendpoint-1\t82\t编辑 删除",
+        "options": 508
+      },
+      "t": {
+        "selected": "9007199254740993",
+        "names": "遥测\t1\t9007199254740993\t1\tendpoint-1\t0\tholding / 0\t是\t\n编辑\n删除",
+        "options": 3
+      }
+    },
+    "identity_edits": {
+      "c": {
+        "selected": "9007199254740993"
+      },
+      "s": {
+        "first_after_edit": "endpoint-0",
+        "second_after_edit": "identity-S"
+      },
+      "t": {
+        "first_after_edit": "endpoint-0",
+        "second_after_edit": "identity-T"
+      }
+    },
+    "original_ports": {
+      "cRtuSwitch": true,
+      "sRowAndPort": true,
+      "tRxTx": true,
+      "pageErrors": 0
+    }
+  },
+  "regression": {
+    "ran": 478,
+    "passed": 477,
+    "skipped": 1,
+    "failed": 0,
+    "seconds": 230.946,
+    "skip_reason": "Windows WinError 1314: symlink creation unavailable"
+  },
+  "original": {
+    "original_health_bursts": {
+      "8877": {
+        "n": 48,
+        "p95_ms": 34.86
+      },
+      "8878": {
+        "n": 48,
+        "p95_ms": 36.31
+      },
+      "8879": {
+        "n": 48,
+        "p95_ms": 34.77
+      }
+    },
+    "healthy_ports": [
+      8877,
+      8878,
+      8879
+    ],
+    "worker_pid": 17736,
+    "iec104_port": 2404,
+    "wire_samples": {
+      "yc/1": [
+        42.0,
+        0
+      ],
+      "yx/1": [
+        false,
+        0
+      ]
+    },
+    "business_tables": 28,
+    "schema_identical": true,
+    "integrity": "ok",
+    "foreign_key_errors": 0,
+    "plans": [
+      "SEARCH fes_yc_define USING PRIMARY KEY (rtu_id=? AND pnt_no>? AND pnt_no<?)",
+      "SEARCH fes_scdfe_t_point_define USING INDEX sqlite_autoindex_fes_scdfe_t_point_define_1 (channel_id=?)"
+    ],
+    "packet_enabled": false,
+    "filtered": {
+      "RX": 5,
+      "TX": 5
+    },
+    "read_requests": 84
+  },
+  "isolated_cleanup": "complete"
+}

@@ -1,0 +1,288 @@
+{
+  "success": true,
+  "seconds": 180.67,
+  "minutes_requested": 3.0,
+  "counts": {
+    "t_http": 760,
+    "c_http": 808,
+    "s_http": 404,
+    "gi_10": 48,
+    "gi_11": 48,
+    "log_direction_checks": 1162,
+    "wire_100": 237,
+    "wire_1": 237,
+    "wire_11": 237,
+    "wire_10": 237,
+    "c_samples": 474,
+    "commands": 6,
+    "setpoints": 6,
+    "generations": 237
+  },
+  "maxima": {
+    "publication_to_verified_seconds": 0.873
+  },
+  "errors": [],
+  "resources": [
+    {
+      "elapsed": 0.28,
+      "counts": {
+        "t_http": 22,
+        "c_http": 8,
+        "s_http": 4,
+        "gi_10": 1,
+        "gi_11": 1,
+        "log_direction_checks": 14,
+        "wire_100": 1,
+        "wire_1": 1,
+        "wire_11": 1,
+        "wire_10": 1,
+        "c_samples": 2,
+        "commands": 1,
+        "setpoints": 1,
+        "generations": 1
+      },
+      "resources": [
+        {
+          "Id": 14028,
+          "PrivateMemorySize64": 67829760,
+          "WorkingSet64": 84344832,
+          "HandleCount": 434,
+          "Threads": 21
+        },
+        {
+          "Id": 23348,
+          "PrivateMemorySize64": 60149760,
+          "WorkingSet64": 75907072,
+          "HandleCount": 634,
+          "Threads": 7
+        },
+        {
+          "Id": 27304,
+          "PrivateMemorySize64": 54448128,
+          "WorkingSet64": 69312512,
+          "HandleCount": 203,
+          "Threads": 6
+        },
+        {
+          "Id": 31884,
+          "PrivateMemorySize64": 54616064,
+          "WorkingSet64": 69382144,
+          "HandleCount": 243,
+          "Threads": 8
+        },
+        {
+          "Id": 41416,
+          "PrivateMemorySize64": 54603776,
+          "WorkingSet64": 69480448,
+          "HandleCount": 203,
+          "Threads": 6
+        },
+        {
+          "Id": 44888,
+          "PrivateMemorySize64": 60305408,
+          "WorkingSet64": 75972608,
+          "HandleCount": 634,
+          "Threads": 7
+        },
+        {
+          "Id": 44896,
+          "PrivateMemorySize64": 16896000,
+          "WorkingSet64": 28454912,
+          "HandleCount": 180,
+          "Threads": 5
+        },
+        {
+          "Id": 48492,
+          "PrivateMemorySize64": 16240640,
+          "WorkingSet64": 27222016,
+          "HandleCount": 156,
+          "Threads": 5
+        }
+      ],
+      "wal_bytes": 1454392
+    },
+    {
+      "elapsed": 60.61,
+      "counts": {
+        "t_http": 265,
+        "c_http": 274,
+        "s_http": 137,
+        "gi_10": 16,
+        "gi_11": 16,
+        "log_direction_checks": 392,
+        "wire_100": 80,
+        "wire_1": 80,
+        "wire_11": 80,
+        "wire_10": 80,
+        "c_samples": 160,
+        "commands": 2,
+        "setpoints": 2,
+        "generations": 80
+      },
+      "resources": [
+        {
+          "Id": 14028,
+          "PrivateMemorySize64": 68235264,
+          "WorkingSet64": 84963328,
+          "HandleCount": 434,
+          "Threads": 20
+        },
+        {
+          "Id": 23348,
+          "PrivateMemorySize64": 60108800,
+          "WorkingSet64": 75898880,
+          "HandleCount": 633,
+          "Threads": 6
+        },
+        {
+          "Id": 27304,
+          "PrivateMemorySize64": 54337536,
+          "WorkingSet64": 69263360,
+          "HandleCount": 203,
+          "Threads": 3
+        },
+        {
+          "Id": 31884,
+          "PrivateMemorySize64": 54566912,
+          "WorkingSet64": 69419008,
+          "HandleCount": 247,
+          "Threads": 7
+        },
+        {
+          "Id": 41416,
+          "PrivateMemorySize64": 54480896,
+          "WorkingSet64": 69423104,
+          "HandleCount": 203,
+          "Threads": 3
+        },
+        {
+          "Id": 44888,
+          "PrivateMemorySize64": 60268544,
+          "WorkingSet64": 75968512,
+          "HandleCount": 633,
+          "Threads": 6
+        },
+        {
+          "Id": 44896,
+          "PrivateMemorySize64": 16896000,
+          "WorkingSet64": 28438528,
+          "HandleCount": 180,
+          "Threads": 2
+        },
+        {
+          "Id": 48492,
+          "PrivateMemorySize64": 16109568,
+          "WorkingSet64": 27066368,
+          "HandleCount": 156,
+          "Threads": 2
+        }
+      ],
+      "wal_bytes": 4120032
+    },
+    {
+      "elapsed": 120.83,
+      "counts": {
+        "t_http": 517,
+        "c_http": 544,
+        "s_http": 272,
+        "gi_10": 32,
+        "gi_11": 32,
+        "log_direction_checks": 784,
+        "wire_100": 159,
+        "wire_1": 159,
+        "wire_11": 159,
+        "wire_10": 159,
+        "c_samples": 318,
+        "commands": 4,
+        "setpoints": 4,
+        "generations": 159
+      },
+      "resources": [
+        {
+          "Id": 14028,
+          "PrivateMemorySize64": 68452352,
+          "WorkingSet64": 85295104,
+          "HandleCount": 435,
+          "Threads": 20
+        },
+        {
+          "Id": 23348,
+          "PrivateMemorySize64": 60108800,
+          "WorkingSet64": 75898880,
+          "HandleCount": 633,
+          "Threads": 6
+        },
+        {
+          "Id": 27304,
+          "PrivateMemorySize64": 54337536,
+          "WorkingSet64": 69283840,
+          "HandleCount": 203,
+          "Threads": 3
+        },
+        {
+          "Id": 31884,
+          "PrivateMemorySize64": 54562816,
+          "WorkingSet64": 69410816,
+          "HandleCount": 245,
+          "Threads": 7
+        },
+        {
+          "Id": 41416,
+          "PrivateMemorySize64": 54480896,
+          "WorkingSet64": 69431296,
+          "HandleCount": 203,
+          "Threads": 3
+        },
+        {
+          "Id": 44888,
+          "PrivateMemorySize64": 60280832,
+          "WorkingSet64": 75980800,
+          "HandleCount": 633,
+          "Threads": 6
+        },
+        {
+          "Id": 44896,
+          "PrivateMemorySize64": 16896000,
+          "WorkingSet64": 28495872,
+          "HandleCount": 180,
+          "Threads": 2
+        },
+        {
+          "Id": 48492,
+          "PrivateMemorySize64": 16109568,
+          "WorkingSet64": 27131904,
+          "HandleCount": 156,
+          "Threads": 2
+        }
+      ],
+      "wal_bytes": 4136512
+    }
+  ],
+  "files": [
+    "source/logs/2026/11/06/22/scdfe_s-bacnet-server-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-can-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-can-server-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-iec104-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-modbus-rtu-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-modbus-rtu-server-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-modbus-tcp-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-modbus-tcp-server-20261106-22.log",
+    "source/logs/2026/11/06/22/scdfe_s-opc-server-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_c-command-server-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_c-db-writer-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_c-main-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_c-rtu-37101-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_c-rtu-37102-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_t-channel-1-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_t-channel-10-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_t-channel-100-20261106-22.log",
+    "system/logs/2026/11/06/22/scdfe_t-channel-11-20261106-22.log"
+  ],
+  "t_pids": {
+    "1": 41416,
+    "10": 44888,
+    "11": 23348,
+    "100": 27304
+  },
+  "cleanup": "complete"
+}

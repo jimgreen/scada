@@ -133,7 +133,7 @@ def _decode(cursor, fingerprint, pattern=LOG_PATTERN):
         raise ValueError("检索游标无效或筛选条件已改变，请重新筛选") from exc
 
 
-def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None):
+def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None, initial_chunk=None):
     """Yield whole lines with the byte offset needed to resume before them.
 
     Oversized lines are discarded without retaining unbounded strings. Reading
@@ -144,9 +144,11 @@ def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None):
         max_line_bytes = MAX_LINE_BYTES
     buffer = b""
     oversized = discard
+    chunk = min(initial_chunk or CHUNK_SIZE, CHUNK_SIZE)
     while position > 0 or buffer:
         if position:
-            length = min(CHUNK_SIZE, position, budget[0])
+            length = min(chunk, position, budget[0])
+            chunk = min(CHUNK_SIZE, chunk * 2)
             position -= length
             stream.seek(position)
             buffer = stream.read(length) + buffer
@@ -257,7 +259,7 @@ def search_logs(directory, query, *, family="c"):
     # These exact byte sequences are necessary (but not sufficient) for a
     # match. Keep Unicode casefold and header parsing for every candidate.
     if channel is not None:
-        required = f"通道={channel} ".encode()
+        required = f"通道={channel}".encode()  # the delimiter may be any whitespace
     elif direction:
         required = direction.encode('ascii')
     elif level:
@@ -289,11 +291,14 @@ def search_logs(directory, query, *, family="c"):
                 # without stale timezone data or unbounded cross-file state.
                 timestamps = {}
                 boundary = offset
-                for raw, boundary, discard in _reverse_lines(stream, offset, budget, discard):
+                # Small live previews usually need only the tail of the file.
+                # Sparse filters grow to normal scan blocks after the first reads.
+                for raw, boundary, discard in _reverse_lines(
+                        stream, offset, budget, discard, initial_chunk=4096 if limit <= 32 else None):
                     if raw is None:
                         skipped += 1
-                    elif raw and (required is None or required in raw):
-                        line = raw.decode("utf-8", "replace")
+                    line = raw.decode("utf-8", "replace") if raw and (required is None or required in raw) else None
+                    if line is not None and (not needle or needle in line.casefold()):
                         header = HEADER.match(line)
                         header_level = LOG_LEVEL_CODES[header[2]] if header else ""
                         packet = (PACKET.match(line, header.end()) if (record or direction or channel is not None)
@@ -309,8 +314,7 @@ def search_logs(directory, query, *, family="c"):
                         if ((channel is None or (owner and owner[1] == channel))
                                 and (not level or header_level == level)
                                 and (not record or is_packet == (record == "packet"))
-                                and (not direction or (packet and packet[1] == direction))
-                                and (not needle or needle in line.casefold())):
+                                and (not direction or (packet and packet[1] == direction))):
                             stamp = None
                             if header and file_date is not None:
                                 clock = header[1]

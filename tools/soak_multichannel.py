@@ -57,10 +57,13 @@ def run(minutes,out):
                     ('c','/api/scdfe_c/logs/search',f'scdfe_c-rtu-{fixture.RTUS[1]}',False),
                     ('s','/api/log-files/search','scdfe_s-modbus-tcp-server',True),
                     ('t','/api/log-files/search','scdfe_t-channel-1',True),
+                    ('t','/api/log-files/search','scdfe_t-channel-10',True),
+                    ('t','/api/log-files/search','scdfe_t-channel-11',False),
                     ('t','/api/log-files/search','scdfe_t-channel-100',False)):
                     for d in ('RX','TX'):
                         q=f'?record=packet&direction={d}&process={proc}&limit=3'
                         if f=='s':q+=f'&channel_id={fixture.SOURCE+1000}'
+                        if f=='t':q+=f'&channel_id={proc.rsplit("-",1)[1]}'
                         result=api(f,path+q)['items']
                         assert bool(result)==on,(proc,d,len(result))
                         assert all(Path(row['filename']).name.startswith(proc+'-') and ('报文 '+d+' ') in row['text'] for row in result)
@@ -158,7 +161,13 @@ def run(minutes,out):
                         assert not reply.isError()
                         fixture.handled(fixture.RTUS[index],'yk',int(desired))
                         assert source.read_coils(2+index,count=1,device_id=1).bits[0] == desired
-                        count('commands');next_command=now+35
+                        count('commands')
+                        raw=8+(counts['commands']%100)
+                        assert not clients[1].write_register(10,raw,device_id=1).isError()
+                        engineering=2*raw+10
+                        fixture.handled(fixture.RTUS[0],'yt',engineering)
+                        assert source.read_holding_registers(4,count=1,device_id=1).registers==[engineering]
+                        count('setpoints');next_command=now+35
                     count('generations');elapsed('publication_to_verified_seconds',time.perf_counter()-tick)
                     if now>=next_sample:
                         wal=Path(str(db)+'-wal')

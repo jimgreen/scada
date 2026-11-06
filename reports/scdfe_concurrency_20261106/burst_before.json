@@ -1,0 +1,58 @@
+{
+  "C": {
+    "requests": 144,
+    "errors": 20,
+    "examples": [
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))"
+    ],
+    "p50_ms": 1046.42,
+    "p95_ms": 2063.61,
+    "max_ms": 2071.65
+  },
+  "S": {
+    "requests": 144,
+    "errors": 22,
+    "examples": [
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))"
+    ],
+    "p50_ms": 1033.47,
+    "p95_ms": 2054.39,
+    "max_ms": 2064.29
+  },
+  "T": {
+    "requests": 144,
+    "errors": 36,
+    "examples": [
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))",
+      "URLError(ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None))"
+    ],
+    "p50_ms": 1543.72,
+    "p95_ms": 2064.96,
+    "max_ms": 2067.29
+  },
+  "writer": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 47.37,
+    "p95_ms": 1085.14,
+    "max_ms": 1587.59
+  },
+  "command": {
+    "requests": 144,
+    "errors": 28,
+    "examples": [
+      "ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None)",
+      "ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None)",
+      "ConnectionRefusedError(10061, 'No connection could be made because the target machine actively refused it', None, 10061, None)"
+    ],
+    "p50_ms": 1082.91,
+    "p95_ms": 2087.98,
+    "max_ms": 2114.27
+  }
+}

@@ -31,6 +31,7 @@ from scdfe_s.web.protocol_service import (
     OpcServerService,
 )
 
+from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
@@ -651,6 +652,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
 class ScadaHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

@@ -1,6 +1,7 @@
 (function () {
   "use strict";
   const $ = s => document.querySelector(s);
+  const keyValue = raw => Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   async function api(path, options = {}) {
     const response = await fetch(path, {headers:{"Content-Type":"application/json", ...(options.headers || {})}, ...options});
@@ -67,7 +68,7 @@
     try {
       await form.save(() => api("/api/iec104/config", {method:"PATCH", body:JSON.stringify({
         bind_ip:$("#bind-ip").value.trim(), port:Number($("#port").value),
-        rtu_id:$("#rtu-id").value ? Number($("#rtu-id").value) : null,
+        rtu_id:$("#rtu-id").value ? keyValue($("#rtu-id").value) : null,
         max_connections:Number($("#max-connections").value), tick_rate_ms:Number($("#tick-rate").value),
       })}));
       await load();
@@ -89,7 +90,7 @@
       if (!input.trim() || !Number.isFinite(numeric)) throw new Error("请输入有限数字");
       if ((kind === "yx" || kind === "yk") && numeric !== 0 && numeric !== 1) throw new Error("遥信/遥控值只能为 0 或 1");
       const value = kind === "yx" || kind === "yk" ? numeric === 1 : numeric;
-      await api("/api/iec104/update/incremental", {method:"POST", body:JSON.stringify({kind,pnt_no:Number($("#point").value),value})});
+      await api("/api/iec104/update/incremental", {method:"POST", body:JSON.stringify({kind,pnt_no:keyValue($("#point").value),value})});
       await load();
       message("点值已更新");
     } catch (error) { message(error.message,true); }

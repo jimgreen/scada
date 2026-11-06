@@ -1,0 +1,42 @@
+{
+  "C": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 19.31,
+    "p95_ms": 28.06,
+    "max_ms": 32.77
+  },
+  "S": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 18.92,
+    "p95_ms": 29.09,
+    "max_ms": 31.83
+  },
+  "T": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 17.43,
+    "p95_ms": 27.31,
+    "max_ms": 30.4
+  },
+  "writer": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 42.07,
+    "p95_ms": 63.57,
+    "max_ms": 65.19
+  },
+  "command": {
+    "requests": 144,
+    "errors": 0,
+    "examples": [],
+    "p50_ms": 74.38,
+    "p95_ms": 105.05,
+    "max_ms": 111.69
+  }
+}

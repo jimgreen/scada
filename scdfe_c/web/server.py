@@ -19,6 +19,7 @@ else:
     from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
+from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from scdfe_c.web.process_control import ProcessController
 
@@ -508,6 +509,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
 class ScadaHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

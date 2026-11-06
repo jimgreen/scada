@@ -16,6 +16,7 @@ if __package__ in (None, ""):
 
 from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
+from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
@@ -256,6 +257,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
 class TransHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
