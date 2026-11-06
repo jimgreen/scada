@@ -179,7 +179,7 @@ class _OpcUaProtocol(PacketTrace):
         "rtu_id,opc_user,opc_pwd,opc_domain,opc_name"
     )
     _STORE_POINT_QUERY = """
-        SELECT p.rtu_id, p.kind, p.pnt_no, m.node_id, m.data_type, m.value_attribute,
+        SELECT p.rtu_id, p.kind, p.pnt_no, m.rtu_id AS mapping_owner, m.node_id, m.data_type, m.value_attribute,
                m.quality_attribute, m.deadband
         FROM (
             SELECT rtu_id, 'yc' AS kind, pnt_no FROM fes_yc_define WHERE rtu_id=?
@@ -238,7 +238,7 @@ class _OpcUaProtocol(PacketTrace):
         return cls(endpoint, **{k: v for k, v in kwargs.items() if v is not None})
 
     @classmethod
-    def from_store(cls, store, rtu_id: int, *, point_map=None, **kwargs):
+    def from_store(cls, store, rtu_id: int, *, point_map=None, default_unmapped=False, **kwargs):
         with store.connection() as connection:
             connection.execute("BEGIN")
             rtu = connection.execute(
@@ -258,6 +258,11 @@ class _OpcUaProtocol(PacketTrace):
                 cls._STORE_POINT_QUERY, (rtu_id, rtu_id, rtu_id, rtu_id, rtu_id))]
         if len(definitions) != 1:
             raise ValueError(f"RTU {rtu_id} 需要唯一 OPC 通道定义，实际找到 {len(definitions)} 条")
+        for row in rows:
+            # Only a missing mapping uses the runtime default; invalid explicit
+            # mappings remain errors. Points and addresses came from one snapshot.
+            if row.pop("mapping_owner") is None and default_unmapped:
+                row["node_id"] = f"ns=2;s={row['kind'].upper()}_{row['pnt_no']:03d}"
         if point_map:
             for row in rows:
                 key = (row["kind"], row.get("pnt_no"))

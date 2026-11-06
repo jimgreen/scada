@@ -387,10 +387,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if len(parts) in (3, 4) and parts[:2] == ["api", "tables"] and (len(parts) == 3 or parts[3] == "schema"):
                 return self._json(200, {"schema": self.store.catalog.public(parts[2])})
             if parts == ["api", "overview"]:
-                if set(query) - {"rtu_id"}:
-                    raise ApiError(400, "未知查询参数")
+                if set(query) - {"rtu_id", "view"} or query.get("view", "full") not in {"full", "summary"}:
+                    raise ApiError(400, "未知概览查询参数")
                 rid = self.store._key_values("fes_rtu_define", query["rtu_id"])["rtu_id"] if "rtu_id" in query else None
-                return self._json(200, self.store.overview(rid))
+                return self._json(200, self.store.overview(rid, summary=query.get("view") == "summary"))
             channel_endpoint = self._channel_endpoint(parts)
             if channel_endpoint is not None:
                 rtu_id, section = channel_endpoint

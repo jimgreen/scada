@@ -1,0 +1,166 @@
+{
+  "baseline": "cf9528869694279af82cc02ca4d97758571b00bd",
+  "database_counts": {
+    "fes_rtu_define": 63,
+    "fes_yc_define": 60002,
+    "fes_yx_define": 60002,
+    "fes_yt_define": 12002,
+    "fes_yk_define": 12002
+  },
+  "timings": {
+    "dashboard": {
+      "before_ms": 2.4065,
+      "after_ms": 1.2604,
+      "reduction_pct": 47.6,
+      "selects_before": 2,
+      "selects_after": 1
+    },
+    "bacnet": {
+      "before_ms": 17.2005,
+      "after_ms": 11.2847,
+      "reduction_pct": 34.4,
+      "selects_before": 8,
+      "selects_after": 3
+    },
+    "opc": {
+      "before_ms": 18.6316,
+      "after_ms": 11.7246,
+      "reduction_pct": 37.1,
+      "selects_before": 8,
+      "selects_after": 3
+    },
+    "rtu_write": {
+      "before_ms": 0.0667,
+      "after_ms": 0.0426,
+      "reduction_pct": 36.1,
+      "selects_before": 2,
+      "selects_after": 1
+    },
+    "tail_1": {
+      "before_ms": 4.6964,
+      "after_ms": 0.3257,
+      "reduction_pct": 93.1,
+      "selects_before": 0,
+      "selects_after": 0
+    },
+    "tail_200": {
+      "before_ms": 4.8526,
+      "after_ms": 0.3048,
+      "reduction_pct": 93.7,
+      "selects_before": 0,
+      "selects_after": 0
+    },
+    "tail_5000": {
+      "before_ms": 5.0406,
+      "after_ms": 1.0239,
+      "reduction_pct": 79.7,
+      "selects_before": 0,
+      "selects_after": 0
+    },
+    "write_2000_packets": {
+      "before_ms": 31.0368,
+      "after_ms": 24.4021,
+      "reduction_pct": 21.4
+    }
+  },
+  "unchanged_content_hashes": {
+    "bacnet_points": [
+      2400,
+      "8006a54fdb1087bb70f3fcbbde24c6c8167a2b6987fe81fc7c2a90115ac152f6"
+    ],
+    "opc_points": [
+      2400,
+      "aabde71903b4ad2c852c79001184bc93a666ad8ad705a28bbfbca4d0591f739f"
+    ],
+    "tail_1_digest": "2246d2c6e94fc9040a6a71c5a662434ab7f8c5bc10e8370aa0002426d7265b30",
+    "tail_200_digest": "36621cd34ccd5e42f374493e4ed602128a27d5d53feadcf6a273297852dd9120",
+    "tail_5000_digest": "43190f5b1a51879f5b912fb8a4e52b1b0c90a9c15e552dba091531c9a03b63ac"
+  },
+  "index_plans": {
+    "fes_channel_modbus_define_call": {
+      "existing": [
+        "SEARCH fes_channel_modbus_define_call USING COVERING INDEX fes_modbus_define_call_rtu (rtu_id=?)"
+      ],
+      "without_legacy_index": [
+        "SEARCH fes_channel_modbus_define_call USING COVERING INDEX fes_channel_modbus_define_call_uq_1_rtu_id_call_seq (rtu_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "fes_channel_modbus_define_data": {
+      "existing": [
+        "SEARCH fes_channel_modbus_define_data USING COVERING INDEX fes_modbus_define_data_rtu (rtu_id=?)"
+      ],
+      "without_legacy_index": [
+        "SEARCH fes_channel_modbus_define_data USING COVERING INDEX fes_channel_modbus_define_data_idx_1_rtu_id_call_seq_id (rtu_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    "fes_channel_modbus_define_ytyk": {
+      "existing": [
+        "SEARCH fes_channel_modbus_define_ytyk USING COVERING INDEX fes_modbus_define_ytyk_rtu (rtu_id=?)"
+      ],
+      "without_legacy_index": [
+        "SEARCH fes_channel_modbus_define_ytyk USING COVERING INDEX fes_channel_modbus_define_ytyk_uq_1_rtu_id_ifyk_cnt (rtu_id=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    }
+  },
+  "runtime_verification": {
+    "db_tables_compared": 28,
+    "schema_changes": [
+      "_scada_defver_fes_channel_bacnet_define_upd",
+      "_scada_defver_fes_channel_iec104_define_upd",
+      "_scada_defver_fes_channel_modbus_define_call_upd",
+      "_scada_defver_fes_channel_modbus_define_data_upd",
+      "_scada_defver_fes_channel_modbus_define_upd",
+      "_scada_defver_fes_channel_modbus_define_ytyk_upd",
+      "_scada_defver_fes_channel_opc_define_upd"
+    ],
+    "healthy_ports": [
+      8877,
+      8878,
+      8879
+    ],
+    "T_pid": 15476,
+    "database": "D:\\codex\\scada\\db\\scada.sqlite3",
+    "original_counts": {
+      "fes_rtu_define": 63,
+      "fes_yc_define": 60002,
+      "fes_yx_define": 60002,
+      "fes_yt_define": 12002,
+      "fes_yk_define": 12002
+    },
+    "all_table_count": 26,
+    "http_requests": 60,
+    "log_tail_rows": 1,
+    "filtered_rx": 5,
+    "integrity": "ok",
+    "foreign_key_errors": 0
+  },
+  "ui_fixture": {
+    "stations": "571",
+    "target": "91507",
+    "rows": 1,
+    "value": 908.5,
+    "packets": "TX only",
+    "js_errors": []
+  },
+  "ui_original": {
+    "port": 8877,
+    "summary_tables": 5,
+    "rtus": 63,
+    "selected": [
+      2,
+      3
+    ],
+    "log_filter": "PACKET",
+    "errors": []
+  },
+  "regression": {
+    "tests": 469,
+    "passed": 468,
+    "skipped": 1,
+    "seconds": 236.674,
+    "skip_reason": "Windows symlink creation privilege unavailable"
+  }
+}

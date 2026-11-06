@@ -480,6 +480,16 @@ class ScadaStore:
                 f'AFTER DELETE ON {table} BEGIN {bump("OLD")} END'
             )
             if static_columns:
+                # Auxiliary rows keyed by id can be reassigned through the Web API.
+                # Both workers must reload the mapping from the committed generation.
+                movable = any(c['eng_name'] == 'rtu_id' and not c['primary_key'] for c in columns)
+                if movable:
+                    static_columns.append('rtu_id')
+                old_owner = (
+                    'INSERT INTO _scada_rtu_version(rtu_id, definition_version) '
+                    'SELECT OLD.rtu_id, 1 WHERE OLD.rtu_id IS NOT NEW.rtu_id '
+                    'ON CONFLICT(rtu_id) DO UPDATE SET definition_version=definition_version+1;'
+                ) if movable else ''
                 update_columns = ', '.join(quote_identifier(column) for column in static_columns)
                 changed = ' OR '.join(
                     f'OLD.{quote_identifier(column)} IS NOT NEW.{quote_identifier(column)}'
@@ -489,7 +499,7 @@ class ScadaStore:
                 sql = (
                     f'CREATE TRIGGER {quote_identifier(trigger_name)} '
                     f'AFTER UPDATE OF {update_columns} ON {table} '
-                    f'WHEN {changed} BEGIN {bump("NEW")} END'
+                    f'WHEN {changed} BEGIN {old_owner}{bump("NEW")} END'
                 )
                 existing = connection.execute(
                     "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
@@ -1104,10 +1114,9 @@ class ScadaStore:
 
     def _apply_update(self, connection, change, if_match=None):
         table, key, values, sql, params = change
-        # Four-remote point rows have field-level checks only. A successful
-        # conditional write proves existence/version without reading the old
-        # wide row. Missing/stale rows still report the usual 404/409.
-        if table in {'fes_yc_define', 'fes_yx_define', 'fes_yk_define', 'fes_yt_define'}:
+        # Only the Modbus/trans validators merge changed fields with the old
+        # row. Other schemas can enforce existence/version in the UPDATE.
+        if not table.startswith('fes_channel_modbus_') and table not in {'fes_scdfe_t_define', 'fes_scdfe_t_point_define'}:
             if if_match is not None:
                 sql += ' AND _version=?'
                 params = [*params, if_match]
@@ -1171,10 +1180,8 @@ class ScadaStore:
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, "记录仍被其他表引用，不能删除", details=str(exc), code="conflict") from exc
 
-    def overview(self, rtu_id=None):
-        if rtu_id is not None:
-            self.get_row('fes_rtu_define', [rtu_id])
-        names = self.catalog.names()
+    def overview(self, rtu_id=None, *, summary=False):
+        names = ('fes_rtu_define', 'fes_yc_define', 'fes_yx_define', 'fes_yt_define', 'fes_yk_define') if summary else self.catalog.names()
         count_queries = []
         count_params = []
         for name in names:
@@ -1191,22 +1198,21 @@ class ScadaStore:
                 count_params.append(rtu_id)
         with self.connection() as connection:
             connection.execute('BEGIN')
+            if rtu_id is not None and connection.execute(
+                    'SELECT 1 FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,)).fetchone() is None:
+                raise ApiError(404, '记录不存在', code='not_found')
             count_rows = connection.execute(
                 ' UNION ALL '.join(count_queries), count_params,
             ).fetchall()
-            channel_rows = connection.execute(
-                'SELECT channel_type FROM fes_rtu_define '
-                'ORDER BY "rtu_id" ASC LIMIT 500'
+            channel_rows = () if summary else connection.execute(
+                "SELECT COALESCE(NULLIF(channel_type, ''), 'custom'), COUNT(*) "
+                "FROM fes_rtu_define GROUP BY 1"
             ).fetchall()
         counts = {row['table_name']: int(row['row_count']) for row in count_rows}
-        channel_types = {}
-        for row in channel_rows:
-            channel_type = row['channel_type'] or 'custom'
-            channel_types[channel_type] = channel_types.get(channel_type, 0) + 1
-        return {
-            'counts': counts, 'rtu_id': rtu_id, 'database': str(self.db_path),
-            'channel_types': channel_types,
-        }
+        result = {'counts': counts, 'rtu_id': rtu_id, 'database': str(self.db_path)}
+        if not summary:
+            result['channel_types'] = dict(channel_rows)
+        return result
 
     def channel_parameter_table(self, channel_type):
         return CHANNEL_PARAMETER_TABLES.get(channel_type)

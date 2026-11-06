@@ -20,7 +20,7 @@ import argparse
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
@@ -277,16 +277,15 @@ class ScdfeLogger:
     def _emit_lines(self, category, messages, *, level="INFO", raw_hex=False):
         if category not in LOG_CATEGORIES:
             raise ValueError(f"未知日志类别: {category}")
-        now = datetime.now(timezone.utc).astimezone()
-        # The hour and date are already present in the filename. Keep each
-        # line compact and readable; log search reconstructs the full local
-        # timestamp from the filename hour plus this clock time.
-        stamp = now.strftime("%H:%M:%S")
         label = LOG_LEVEL_LABELS.get(level)
         if label is None:
             raise ValueError(f"未知日志级别: {level}")
-        hour_key = (now.year, now.month, now.day, now.hour)
         with self._write_lock:
+            # Only the local wall clock is persisted. Sample under the lock so
+            # a queued callback cannot reopen the previous hour after rotation.
+            now = datetime.now()
+            stamp = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
+            hour_key = (now.year, now.month, now.day, now.hour)
             if hour_key != self._hour_key:
                 self._close_stream()
                 directory = self.directory / now.strftime("%Y/%m/%d/%H")
@@ -432,19 +431,28 @@ class ScdfeLogger:
         # Read only the bounded tail; refreshing a large hourly file must not
         # allocate/read its entire contents on each Web request.
         with path.open("rb") as stream:
-            size = stream.seek(0, os.SEEK_END)
-            start = max(0, size - 2_000_000)
-            stream.seek(start)
-            data = stream.read(2_000_000)
+            stat = os.fstat(stream.fileno())
+            start = stat.st_size
+            floor = max(0, start - 2_000_000)
+            chunks = []
+            newline_count = 0
+            while start > floor and newline_count <= tail:
+                length = min(16_384, start - floor)
+                start -= length
+                stream.seek(start)
+                chunk = stream.read(length)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+            data = b"".join(reversed(chunks))
         if start:
             # The first chunk can start inside a UTF-8 code point/log line.
             data = data.partition(b"\n")[2]
-        text = data.decode("utf-8", "replace")
-        lines = text.splitlines()[-tail:]
+        all_lines = data.decode("utf-8", "replace").splitlines()
+        lines = all_lines[-tail:]
         item = {"name": path.relative_to(root).as_posix(), "process": match.group("process"),
-                "hour": match.group("hour"), "size": path.stat().st_size,
-                "modified_at": int(path.stat().st_mtime * 1000), "content": "\n".join(lines),
-                "line_count": len(lines), "truncated": bool(start or len(text.splitlines()) > tail)}
+                "hour": match.group("hour"), "size": stat.st_size,
+                "modified_at": int(stat.st_mtime * 1000), "content": "\n".join(lines),
+                "line_count": len(lines), "truncated": bool(start or len(all_lines) > tail)}
         process_match = re.fullmatch(
             r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)",
             match.group("process"),
@@ -1106,65 +1114,6 @@ def discover_channels(store: ScadaStore) -> list[ChannelSpec]:
     return result
 
 
-def _default_point_map(store: ScadaStore, spec: ChannelSpec) -> dict[tuple[str, int], Any]:
-    """Load protocol-specific point mappings from the auxiliary tables.
-
-    The deterministic fallback remains useful for an unseeded installation,
-    but a row in the protocol table always wins and is what production
-    ``scdfe_c`` uses for four遥 registration and frame/node parsing.
-    """
-    mapped: dict[tuple[str, int], Any] = {}
-    # ``from_store`` loads protocol mapping rows in the same configuration
-    # transaction and makes them authoritative.  This helper only supplies
-    # deterministic defaults for points that have no auxiliary mapping, so
-    # reading the wide mapping and four遥 rows here duplicated work and opened
-    # two extra SQLite connections before every worker build.  Keep one narrow
-    # read transaction and never fetch unused runtime columns.
-    mapping_projection = {
-        "bacnet": (
-            "fes_channel_bacnet_point_define",
-            "kind,pnt_no,object_type,instance,property_identifier,"
-            "quality_property,priority,array_index",
-        ),
-        "opc": (
-            "fes_channel_opc_point_define",
-            "kind,pnt_no,node_id,data_type,value_attribute,"
-            "quality_attribute,deadband",
-        ),
-    }
-    if spec.channel_type not in mapping_projection:
-        return mapped
-    with store.connection() as connection:
-        connection.execute("BEGIN")
-        table, projection = mapping_projection[spec.channel_type]
-        for row in connection.execute(
-            f"SELECT {projection} FROM {quote_identifier(table)} "
-            "WHERE rtu_id=? ORDER BY kind,pnt_no",
-            (spec.rtu_id,),
-        ):
-            mapped[(row["kind"], int(row["pnt_no"]))] = dict(row)
-        for table, kind in (("fes_yc_define", "yc"), ("fes_yx_define", "yx"),
-                            ("fes_yk_define", "yk"), ("fes_yt_define", "yt")):
-            for row in connection.execute(
-                f"SELECT pnt_no FROM {quote_identifier(table)} WHERE rtu_id=? ORDER BY pnt_no",
-                (spec.rtu_id,),
-            ):
-                number = int(row["pnt_no"])
-                if spec.channel_type == "bacnet":
-                    mapped.setdefault((kind, number), {
-                        "object_type": {
-                            "yc": "analog-value", "yx": "binary-input",
-                            "yk": "binary-output", "yt": "analog-output",
-                        }[kind],
-                        "instance": number,
-                    })
-                elif spec.channel_type == "opc":
-                    mapped.setdefault((kind, number), {
-                        "node_id": f"ns=2;s={kind.upper()}_{number:03d}"
-                    })
-    return mapped
-
-
 def build_master(store: ScadaStore, spec: ChannelSpec):
     """按通道类型构造一个协议主站，但不连接设备。"""
     from client import (BacnetMaster, CanMaster, IEC104Master, ModbusRtuMaster,
@@ -1179,10 +1128,9 @@ def build_master(store: ScadaStore, spec: ChannelSpec):
         "opc": OpcUaMaster,
     }
     cls = classes[spec.channel_type]
-    kwargs: dict[str, Any] = {}
     if spec.channel_type in {"bacnet", "opc"}:
-        kwargs["point_map"] = _default_point_map(store, spec)
-    return cls.from_store(store, spec.rtu_id, **kwargs)
+        return cls.from_store(store, spec.rtu_id, default_unmapped=True)
+    return cls.from_store(store, spec.rtu_id)
 
 
 def _measurement(item: Any) -> tuple[str | None, int | None, Any, Any]:

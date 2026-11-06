@@ -512,7 +512,7 @@ function pathFor(ctx, row = null) {
 }
 
 async function refreshSummary() {
-  const data = await api("/api/overview");
+  const data = await api("/api/overview?view=summary");
   const names = [
     ["fes_rtu_define", "RTU/通道"],
     ["fes_yc_define", "遥测"],
@@ -532,9 +532,19 @@ async function refreshSummary() {
     .join("");
   $("#database-path").textContent = data.database;
 }
+let rtuOptionsRequest = 0;
 async function loadRtuOptions() {
-  const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name,code,channel_type");
-  const options = data.items
+  const request = ++rtuOptionsRequest;
+  const items = new Map();
+  for (let offset = 0; ; ) {
+    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name,code&offset=" + offset);
+    if (request !== rtuOptionsRequest) return;
+    for (const row of data.items) items.set(row.rtu_id, row);
+    offset += data.items.length;
+    if (!data.items.length || offset >= data.total) break;
+  }
+  const rows = Array.from(items.values());
+  const options = rows
     .map(
       (row) =>
         '<option value="' +
@@ -549,10 +559,10 @@ async function loadRtuOptions() {
   // inputs that still accept a numeric RTU value.
   const filter = $("#rtu-filter");
   filter.innerHTML = '<option value="">全部 RTU</option>' + options;
-  filter.value = data.items.some((row) => String(row.rtu_id) === state.rtu)
+  filter.value = rows.some((row) => String(row.rtu_id) === state.rtu)
     ? state.rtu
     : "";
-  $("#rtu-options").innerHTML = data.items
+  $("#rtu-options").innerHTML = rows
     .map(
       (row) =>
         '<option value="' +

@@ -176,7 +176,7 @@ class _BacnetProtocol(PacketTrace):
         "rtu_id,bind_ip,bind_port,dev_id,remote_host,remote_port"
     )
     _STORE_POINT_QUERY = """
-        SELECT p.rtu_id, p.kind, p.pnt_no, m.object_type, m.instance,
+        SELECT p.rtu_id, p.kind, p.pnt_no, m.rtu_id AS mapping_owner, m.object_type, m.instance,
                m.property_identifier, m.quality_property, m.priority, m.array_index
         FROM (
             SELECT rtu_id, 'yc' AS kind, pnt_no FROM fes_yc_define WHERE rtu_id=?
@@ -231,7 +231,7 @@ class _BacnetProtocol(PacketTrace):
         return cls(remote, remote_port=remote_port, **kwargs)
 
     @classmethod
-    def from_store(cls, store, rtu_id: int, *, point_map=None, **kwargs):
+    def from_store(cls, store, rtu_id: int, *, point_map=None, default_unmapped=False, **kwargs):
         with store.connection() as connection:
             connection.execute("BEGIN")
             rtu = connection.execute(
@@ -251,6 +251,13 @@ class _BacnetProtocol(PacketTrace):
                 cls._STORE_POINT_QUERY, (rtu_id, rtu_id, rtu_id, rtu_id, rtu_id))]
         if len(definition_rows) != 1:
             raise ValueError(f"RTU {rtu_id} 需要唯一 BACnet 通道定义，实际找到 {len(definition_rows)} 条")
+        for row in rows:
+            # Only a missing mapping uses the runtime default; invalid explicit
+            # mappings remain errors. Points and addresses came from one snapshot.
+            if row.pop("mapping_owner") is None and default_unmapped:
+                row["object_type"] = {"yc": "analog-value", "yx": "binary-input",
+                                      "yk": "binary-output", "yt": "analog-output"}[row["kind"]]
+                row["instance"] = row["pnt_no"]
         if point_map:
             for row in rows:
                 key = (row["kind"], row.get("pnt_no"))

@@ -94,9 +94,9 @@ async page => {
  await page.screenshot({path:'output/playwright/hmi-round11/logs-after.png'});
  check(errors.length===0,'浏览器无脚本异常');
  // Slow or failed supplementary data must not block the main page.
- await page.route('**/api/overview',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'测试概览失败'}})}));
+ await page.route('**/api/overview?view=summary',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'测试概览失败'}})}));
  await page.goto(base+'/?regression=summary-error#rtus');await page.waitForFunction(()=>state.items.length>0&&!state.loading);
- check((await page.locator('#toast').textContent()).includes('测试概览失败'),'概览失败时主表仍可操作并显示错误');await page.unroute('**/api/overview');
+ check((await page.locator('#toast').textContent()).includes('测试概览失败'),'概览失败时主表仍可操作并显示错误');await page.unroute('**/api/overview?view=summary');
  await page.goto(base+'/?regression=final#rtus');await page.waitForFunction(()=>state.items.length>0&&!state.loading);await page.locator('#auto-refresh').uncheck();
  for(const width of [1440,1024,390]){await page.setViewportSize({width,height:900});check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'页面无整体横向溢出 '+width);}
  await page.setViewportSize({width:1440,height:900});await page.screenshot({path:'output/playwright/hmi-round11/rtus-after.png'});
