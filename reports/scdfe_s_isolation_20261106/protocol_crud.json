@@ -1,0 +1,44 @@
+[
+  {
+    "protocol": "iec104",
+    "rtu": 37201,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  },
+  {
+    "protocol": "modbus-tcp",
+    "rtu": 37202,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  },
+  {
+    "protocol": "modbus-rtu",
+    "rtu": 37203,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  },
+  {
+    "protocol": "can",
+    "rtu": 37204,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  },
+  {
+    "protocol": "bacnet",
+    "rtu": 37205,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  },
+  {
+    "protocol": "opc",
+    "rtu": 37206,
+    "parameter_crud": true,
+    "mapping_crud": true,
+    "local_point_preserved": true
+  }
+]

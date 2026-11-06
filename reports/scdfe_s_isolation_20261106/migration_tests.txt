@@ -1,0 +1,8 @@
+test_copy_is_one_time_and_does_not_copy_live_process_or_command_state (tests.test_scdfe_s_database.SimulatorDatabaseTests.test_copy_is_one_time_and_does_not_copy_live_process_or_command_state) ... ok
+test_unbound_station_is_reported_and_orphan_points_are_not_discarded (tests.test_scdfe_s_database.SimulatorDatabaseTests.test_unbound_station_is_reported_and_orphan_points_are_not_discarded) ... ok
+test_wrong_database_is_rejected_in_both_directions (tests.test_scdfe_s_database.SimulatorDatabaseTests.test_wrong_database_is_rejected_in_both_directions) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.080s
+
+OK

@@ -83,7 +83,7 @@ class RecoveryTests(unittest.TestCase):
         for name,data in [('iec104_server_config.json',{'port':99999}),
                           ('modbus_tcp_service_config.json',{'remote_port':99999})]:
             (self.db.parent/name).write_text(json.dumps(data))
-        web=make_server('127.0.0.1',0,db_path=self.db)
+        web=make_server('127.0.0.1',0,db_path=self.db.with_name('scdfe_s.sqlite3'))
         self.addCleanup(web.server_close)
         for svc in (web.iec104_service,web.modbus_tcp_service):
             self.assertFalse(svc.running)

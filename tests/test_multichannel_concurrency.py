@@ -80,7 +80,7 @@ class ChannelConcurrencyTests(unittest.TestCase):
     def test_four_live_forwarders_parallel_writes_reads_and_channel_logs(self):
         webs = {}
         for f, factory in zip('cst',(cweb,sweb,tweb)):
-            srv = factory('127.0.0.1',0,db_path=self.db)
+            srv = factory('127.0.0.1',0,db_path=self.db.with_name('scdfe_s.sqlite3') if f=='s' else self.db)
             thread = threading.Thread(target=srv.serve_forever,daemon=True)
             thread.start()
             self.addCleanup(srv.server_close)
@@ -104,6 +104,8 @@ class ChannelConcurrencyTests(unittest.TestCase):
             rid=1000+cid
             api('c','rtus','POST',dict(rtu_id=rid,channel_id=cid,channel_type='iec104'),accept=(201,))
             api('c',f'rtus/{rid}/points/yc','POST',dict(pnt_no=1,value=cid),accept=(201,))
+            api('s','channels','POST',dict(rtu_id=rid,channel_id=cid,channel_type='iec104'),accept=(201,))
+            api('s',f'channels/{rid}/points/yc','POST',dict(pnt_no=1,value=0),accept=(201,))
             with socket.socket() as probe:
                 probe.bind(('127.0.0.1',0))
                 port=probe.getsockname()[1]
@@ -151,21 +153,23 @@ class ChannelConcurrencyTests(unittest.TestCase):
             def write_read(cid):
                 barrier.wait(3)
                 rid=1000+cid
-                f,path=('c',f'rtus/{rid}/points/yc/1') if cid in (1,100) else ('s',f'channels/{rid}/points/yc/1')
+                path=f'rtus/{rid}/points/yc/1'
                 for seq in range(1,4):
-                    row=api(f,path)[1]['item']
+                    row=api('c',path)[1]['item']
                     value=100*cid+seq
-                    api(f,path,'PATCH',dict(value=value),{'If-Match':str(row['_version'])})
+                    api('s',f'channels/{rid}/points/yc/1','PATCH',dict(value=-value))
+                    api('c',path,'PATCH',dict(value=value),{'If-Match':str(row['_version'])})
                     see(cid,value)
             list(pool.map(write_read,cids))
-            # Two Web front ends race on one actual version: exactly one commits.
+            # Two clients race on the same C row: exactly one commits.
             version=api('c','rtus/1001/points/yc/1')[1]['item']['_version']
             race=threading.Barrier(2)
             def contender(f):
                 race.wait(3)
-                path='rtus/1001/points/yc/1' if f=='c' else 'channels/1001/points/yc/1'
-                return api(f,path,'PATCH',dict(value=700 if f=='c' else 800),{'If-Match':str(version)},(200,409))[0]
-            statuses=list(pool.map(contender,'cs'))
+                path='rtus/1001/points/yc/1'
+                return api('c',path,'PATCH',dict(value=f),{'If-Match':str(version)},(200,409))[0]
+            statuses=list(pool.map(contender,(700,800)))
+            self.assertEqual(api('s','channels/1001/points/yc/1')[1]['item']['value'],-103)
             self.assertEqual(sorted(statuses),[200,409])
             see(1,700 if statuses[0]==200 else 800)
             for cid in cids:

@@ -24,7 +24,7 @@ def probe(n, rounds):
         db = Path(stack.enter_context(TemporaryDirectory())) / "scada.sqlite3"
         calls = {}
         for name, factory in [('C', c_web), ('S', s_web), ('T', t_web)]:
-            web = stack.enter_context(factory(port=0, db_path=db))
+            web = stack.enter_context(factory(port=0, db_path=db.with_name("scdfe_s.sqlite3") if name == "S" else db))
             if name == 'C':
                 store = web.store
             Thread(target=web.serve_forever, daemon=True).start()

@@ -14,6 +14,7 @@ from scdfe_c import ChannelWorker, ChannelSpec
 from scdfe_c.web.service import ScadaStore
 from scdfe_c.web.server import make_server as c_web
 from scdfe_s.web.server import make_server as s_web
+from scdfe_s.database import SimulatorStore
 from scdfe_t.web.server import make_server as t_web
 from scdfe_t import TransRuntime
 
@@ -24,6 +25,8 @@ class PacketRecordingTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root=Path(temp.name)
         self.store=ScadaStore(self.root/'db.sqlite3')
+        self.sim = SimulatorStore(self.root/'scdfe_s.sqlite3')
+        self.addCleanup(self.sim.close)
 
     def test_default_off_persistence_external_change_and_invalid_configuration(self):
         switch=PacketLogSwitch(self.store.db_path,'c')
@@ -61,10 +64,11 @@ class PacketRecordingTests(unittest.TestCase):
         for cid in (107, 108):
             self.store.create_row('fes_rtu_define', {'rtu_id': cid-100, 'channel_id': cid,
                                   'channel_type': 'modbus-tcp', 'name': f'Test {cid}'})
+            self.sim.create_row('fes_rtu_define', {'rtu_id': cid-100, 'channel_id': cid, 'channel_type': 'modbus-tcp'})
             self.store.create_row('fes_scdfe_t_define', {'channel_id': cid, 'protocol': 'modbus-tcp'})
         for family, factory in [('c', c_web), ('s', s_web), ('t', t_web)]:
             with self.subTest(family=family):
-                web = factory('127.0.0.1', 0, db_path=self.store.db_path)
+                web = factory('127.0.0.1', 0, db_path=self.sim.db_path if family == 's' else self.store.db_path)
                 thread = threading.Thread(target=web.serve_forever, daemon=True)
                 thread.start()
                 def api(path='', method='GET', body=None, status=200):
@@ -86,7 +90,7 @@ class PacketRecordingTests(unittest.TestCase):
                         owners = [TransRuntime(self.store.db_path, channel_id=cid) for cid in (107,108)]
                         def emit(i, marker): owners[i].logger.packet('TX', b'\x01', marker)
                     else:
-                        owner = ServiceFileLog(self.store, 'channel-test')
+                        owner = ServiceFileLog(self.sim, 'channel-test')
                         def emit(i, marker): owner.write('PACKET', marker, channel_id=107+i)
                     def contents():
                         return ''.join(p.read_text(encoding='utf-8') for p in (self.root/'logs').rglob(f'scdfe_{family}-*.log'))
@@ -169,7 +173,7 @@ class PacketRecordingTests(unittest.TestCase):
     def test_three_apis_switch_existing_loggers_without_removing_history(self):
         worker=ChannelWorker(self.store,ChannelSpec(7,7,'modbus-tcp','test'),log_dir=self.root/'logs')
         trans=TransRuntime(self.store.db_path,channel_id=7)
-        service=ServiceFileLog(self.store,'modbus-tcp-server')
+        service=ServiceFileLog(self.sim,'modbus-tcp-server')
         writers={
             'c':lambda marker:worker.logger.packet('RX',marker.encode(),'test'),
             's':lambda marker:service.write('PACKET','报文 RX '+marker),
@@ -178,7 +182,7 @@ class PacketRecordingTests(unittest.TestCase):
         normals={'c':worker.logger.normal,'s':lambda text:service.write('INFO',text),'t':trans.logger.normal}
         for family,factory in [('c',c_web),('s',s_web),('t',t_web)]:
             with self.subTest(family=family):
-                web=factory('127.0.0.1',0,db_path=self.store.db_path)
+                web=factory('127.0.0.1',0,db_path=self.sim.db_path if family == 's' else self.store.db_path)
                 thread=threading.Thread(target=web.serve_forever,daemon=True);thread.start()
                 def api(method='GET',body=None,status=200):
                     req=Request(f'http://127.0.0.1:{web.server_port}/api/packet-recording',method=method,
@@ -199,7 +203,7 @@ class PacketRecordingTests(unittest.TestCase):
                     writers[family]('enabled')
                     saved=''.join(p.read_text(encoding='utf-8') for p in paths)
                     self.assertIn('[报文]',saved)
-                    self.assertTrue(PacketLogSwitch(self.store.db_path,family).enabled())
+                    self.assertTrue(PacketLogSwitch(self.sim.db_path if family=='s' else self.store.db_path,family).enabled())
                     api('PUT',{'enabled':'false'},400)
                     self.assertTrue(api()['enabled'])
                     self.assertFalse(api('PUT',{'enabled':False})['enabled'])
@@ -208,7 +212,7 @@ class PacketRecordingTests(unittest.TestCase):
                     normals[family]('ordinary-after')
                     self.assertIn('ordinary-after',''.join(p.read_text(encoding='utf-8') for p in paths))
                     for other in {'c','s','t'}-{family}:
-                        self.assertFalse(packet_log_switch(self.store.db_path,other).enabled(refresh=True))
+                        self.assertFalse(packet_log_switch(self.sim.db_path if other=='s' else self.store.db_path,other).enabled(refresh=True))
                 finally:
                     web.shutdown();thread.join(5);web.server_close()
 

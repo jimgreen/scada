@@ -34,8 +34,10 @@ def free_port():
 
 
 class ThreeWebInteractionTests(unittest.TestCase):
-    SOURCE = 37100
+    SOURCE = 37101  # Same RTU, channel and point numbers as C, in a different database.
     RTUS = (37101, 37102)
+    WEB_HOST = "127.0.0.1"
+    WEB_PORTS = {}  # An acceptance runner may assign fixed ports for a maintenance window.
 
     def setUp(self):
         if ServerInstanceLock.held():
@@ -49,10 +51,10 @@ class ThreeWebInteractionTests(unittest.TestCase):
         self.addCleanup(self._cleanup)
         for name, factory, database in (
             ("c", c_web, self.root / "system" / "scada.sqlite3"),
-            ("s", s_web, self.root / "source" / "scada.sqlite3"),
+            ("s", s_web, self.root / "source" / "scdfe_s.sqlite3"),
             ("t", t_web, self.root / "system" / "scada.sqlite3"),
         ):
-            web = self.webs[name] = factory("127.0.0.1", 0, db_path=database)
+            web = self.webs[name] = factory(self.WEB_HOST, self.WEB_PORTS.get(name, 0), db_path=database)
             thread = threading.Thread(target=web.serve_forever, daemon=True)
             thread.start()
             self.threads.append(thread)
@@ -62,7 +64,7 @@ class ThreeWebInteractionTests(unittest.TestCase):
 
     def api(self, name, path, method="GET", body=None, *, status=200, headers=None):
         request = Request(
-            f"http://127.0.0.1:{self.webs[name].server_port}{path}", method=method,
+            f"http://{self.WEB_HOST}:{self.webs[name].server_port}{path}", method=method,
             data=None if body is None else json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json", **(headers or {})},
         )
@@ -230,6 +232,36 @@ class ThreeWebInteractionTests(unittest.TestCase):
         self.clients.append(client)
         self.wait_for(client.connect, label=f"listener {port}")
         return client
+
+    def test_same_number_crud_is_independent_for_all_four_point_types(self):
+        cdb = self.api("c", "/api/health")["database"]
+        self.assertEqual(cdb, self.api("t", "/api/health")["database"])
+        self.assertNotEqual(cdb, self.api("s", "/api/health")["database"])
+        kinds = ("yc", "yx", "yk", "yt")
+        rtu = {"rtu_id": self.SOURCE, "channel_id": self.SOURCE+1000, "channel_type": "modbus-tcp"}
+        base = f"/api/rtus/{self.SOURCE}"
+        other = f"/api/channels/{self.SOURCE}"
+        self.api("c", "/api/rtus", "POST", dict(rtu, name="C"), status=201)
+        before = {}
+        for kind in kinds:
+            before[kind] = self.api("c", base+"/points/"+kind, "POST",
+                                    dict(pnt_no=1,name="C-"+kind,value=0),status=201)["item"]
+        before_rtu = self.api("c", base)["item"]
+        self.api("s", other, status=404)
+        self.api("s", "/api/channels", "POST", dict(rtu, name="S"), status=201)
+        self.api("s", other, "PATCH", {"name": "S-edit"})
+        for kind in kinds:
+            points = other+"/points/"+kind
+            self.api("s", points, "POST", dict(pnt_no=1,name="S",value=0), status=201)
+            self.api("s", points+"/1", "PATCH", dict(name="S-edit",value=1))
+            self.assertEqual(self.api("c", base+"/points/"+kind+"/1")["item"],before[kind])
+            self.api("s", points+"/1", "DELETE")
+            self.api("s", points, "POST", dict(pnt_no=1,name="S-again"), status=201)
+        self.api("s", other, "DELETE")
+        self.api("s", other, status=404)
+        self.assertEqual(self.api("c", base)["item"],before_rtu)
+        for kind in kinds:
+            self.assertEqual(self.api("c", base+"/points/"+kind+"/1")["item"],before[kind])
 
     def test_all_three_webs_acquisition_forwarding_commands_and_restart(self):
         for family in ('c','s','t'):

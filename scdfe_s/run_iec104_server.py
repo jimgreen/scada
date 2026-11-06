@@ -14,7 +14,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from server.iec104_server import IEC104Server
-from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
+from scdfe_c.web.service import SCHEMA_DIR
+from scdfe_s.database import DEFAULT_DB, SimulatorStore
 
 
 def main() -> None:
@@ -27,7 +28,7 @@ def main() -> None:
     parser.add_argument("--tick-rate-ms", type=int, default=100)
     parser.add_argument("--max-connections", type=int, default=0)
     args = parser.parse_args()
-    store = ScadaStore(args.db, args.schema_dir)
+    store = SimulatorStore(args.db, args.schema_dir)
     server = IEC104Server.from_store(store, args.rtu_id, ip=args.bind_ip, port=args.port,
                                      tick_rate_ms=args.tick_rate_ms,
                                      max_connections=args.max_connections)

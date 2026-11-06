@@ -179,8 +179,9 @@ def run(minutes,out):
                 stop.set();observer.result()
         seconds=time.perf_counter()-start
         assert not failures and seconds>=minutes*60,failures
-        for dbdir in ('source','system'):
-            with closing(sqlite3.connect(fixture.root/dbdir/'scada.sqlite3')) as con:
+        for family in ('s','c'):
+            database = fixture.webs[family].store.db_path
+            with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as con:
                 assert con.execute('pragma integrity_check').fetchone()==('ok',)
                 assert not con.execute('pragma foreign_key_check').fetchall()
         files=sorted(p.relative_to(fixture.root).as_posix() for p in fixture.root.rglob('*.log'))

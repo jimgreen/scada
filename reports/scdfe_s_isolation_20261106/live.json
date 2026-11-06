@@ -1,0 +1,40 @@
+{
+  "c": {
+    "status": "ok",
+    "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+  },
+  "s": {
+    "status": "ok",
+    "service": "scdfe_s",
+    "database_role": "simulator",
+    "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+  },
+  "t": {
+    "status": "ok",
+    "service": "scdfe_t",
+    "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+  },
+  "counts": {
+    "s": 62,
+    "c": 63
+  },
+  "live_s_read": {
+    "port": 1502,
+    "unit": 3,
+    "fc": 3,
+    "registers": [
+      0,
+      0
+    ]
+  },
+  "s_restored_stopped": true,
+  "live_t_read": {
+    "port": 2404,
+    "ca": 1,
+    "yc1": 42.0,
+    "c_yc1": 42.0
+  },
+  "original_t_worker_preserved": true,
+  "matching_migrated_rows": 288346,
+  "matching_tables": 19
+}

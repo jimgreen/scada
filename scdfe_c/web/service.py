@@ -7,7 +7,7 @@ number of idle connections; other callers use short-lived connections.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -177,6 +177,19 @@ class SchemaCatalog:
 
 
 class ScadaStore:
+    # SQLite header identity. C/T databases use 0; the simulator has
+    # the same schema but a different owner and must never be opened as C/T.
+    application_id = 0
+
+    def _check_database_role(self, connection):
+        actual = connection.execute("PRAGMA application_id").fetchone()[0]
+        if actual == self.application_id:
+            return
+        if self.application_id and actual == 0 and not connection.execute(
+                "SELECT 1 FROM sqlite_master LIMIT 1").fetchone():
+            return  # An empty file may be claimed by S in the schema transaction.
+        raise ValueError(f"数据库用途不匹配：{self.db_path}；scdfe_s 必须使用独立数据库，不能与 C/T 共用")
+
     def __init__(self, db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DIR,
                  *, connection_pool_size: int = 0):
         if type(connection_pool_size) is not int or not 0 <= connection_pool_size <= 64:
@@ -188,6 +201,10 @@ class ScadaStore:
         self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.catalog = SchemaCatalog(schema_dir)
+        if self.db_path.exists() and self.db_path.stat().st_size:
+            # Reject a database with the wrong role before enabling WAL.
+            with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro", uri=True)) as existing:
+                self._check_database_role(existing)
         try:
             self._initialise()
         except BaseException:
@@ -302,6 +319,9 @@ class ScadaStore:
             try:
                 with self.connection() as connection:
                     connection.execute("BEGIN IMMEDIATE")
+                    self._check_database_role(connection)
+                    if self.application_id and connection.execute("PRAGMA application_id").fetchone()[0] == 0:
+                        connection.execute(f"PRAGMA application_id={self.application_id}")
                     connection.execute(
                         "CREATE TABLE IF NOT EXISTS _scada_schema (table_name TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)"
                     )
@@ -312,7 +332,7 @@ class ScadaStore:
                         )
                     }
                     if actual_tables.intersection({'_scada_command_version', '_scada_definition_version'}):
-                        raise RuntimeError('旧版数据库需要显式迁移：python -m tools.simplify_schema --db <数据库> --apply')
+                        raise RuntimeError('数据库表结构不符合要求，需要显式迁移：python -m tools.simplify_schema --db <数据库> --apply')
                     connection.execute(RTU_VERSION_DDL)
                     unexpected_tables = actual_tables - expected_tables - {'_scada_schema', '_scada_rtu_version'}
                     if unexpected_tables:

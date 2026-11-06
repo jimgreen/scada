@@ -6,5 +6,5 @@
 <section class="card"><h2>主站测试</h2><p><code>/api/modbus-tcp/*</code>、<code>/api/modbus-rtu/*</code>、<code>/api/can/*</code> 提供配置、启停、采集和点值更新；CAN 另有 <code>POST /api/can/frame</code>，请求体为 <code>{"arbitration_id":291,"data":"01 02 03"}</code>。</p></section>
 <section class="card"><h2>服务端测试</h2><p><code>/api/iec104/*</code>、<code>/api/modbus-tcp-server/*</code>、<code>/api/modbus-rtu-server/*</code>、<code>/api/can-server/*</code>、<code>/api/bacnet-server/*</code>、<code>/api/opc-server/*</code> 用于服务端配置和生命周期测试。</p></section>
 <section class="card"><h2>IEC104 四遥</h2><p><code>POST /api/iec104/update/incremental</code> 请求体为 <code>{"kind":"yc","pnt_no":1,"value":220.5}</code>；<code>POST /api/iec104/update/full</code> 可执行全量更新；<code>POST /api/iec104/commands/{yk|yt}/{pnt_no}</code> 可模拟遥控遥调。</p></section>
-<section class="card"><h2>数据库点定义</h2><p><code>GET/POST /api/iec104/points</code> 及 <code>PATCH/DELETE /api/iec104/points/{kind}/{pnt_no}</code> 管理 IEC104 测试点。其他协议点通过各自服务的 <code>points</code> 接口管理。数据库模型复用当前 SCADA SQLite 和协议辅助表。</p></section>
+<section class="card"><h2>数据库点定义</h2><p><code>GET/POST /api/iec104/points</code> 及 <code>PATCH/DELETE /api/iec104/points/{kind}/{pnt_no}</code> 管理 IEC104 测试点。其他协议点通过各自服务的 <code>points</code> 接口管理。使用 S 专库的四遥表和规约辅助表；同号 C 记录不受影响。</p></section>
 </main></body></html>

@@ -14,9 +14,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
-else:
-    from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
+
+from scdfe_c.web.service import ApiError, SCHEMA_DIR, KIND_TABLES
+from scdfe_s.database import DEFAULT_DB, SimulatorStore
 
 from scdfe_s.web.iec104_service import IEC104Service, IEC104ServiceError
 from scdfe_s.web.protocol_service import (
@@ -508,7 +508,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if parts[:1] == ["static"]:
                 return self._static("/".join(parts[1:]))
             if parts == ["api", "health"]:
-                return self._json(200, {"status": "ok", "database": str(self.store.db_path)})
+                return self._json(200, {"status": "ok", "service": "scdfe_s", "database_role": "simulator", "database": str(self.store.db_path)})
             if len(parts) == 4 and parts[:2] == ["api", "rtus"] and parts[3] == "delete-preview":
                 if query:
                     raise ApiError(400, "删除预览接口不接受查询参数")
@@ -657,7 +657,7 @@ class ScadaHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
         self._resources = ExitStack()
-        self.store = ScadaStore(db_path, schema_dir, connection_pool_size=4)
+        self.store = SimulatorStore(db_path, schema_dir, connection_pool_size=4)
         self._resources.callback(self.store.close)
         try:
             history = ServiceFileLog.startup_catalog(self.store.db_path.parent / "logs")

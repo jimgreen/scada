@@ -5,7 +5,6 @@ import tempfile
 import threading
 import unittest
 
-from scdfe_c.web.service import ScadaStore
 from scdfe_s.web.server import make_server
 
 
@@ -13,8 +12,8 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "scada.sqlite3"
-        self.store = ScadaStore(self.db)
         self.httpd = make_server("127.0.0.1", 0, db_path=self.db)
+        self.store = self.httpd.store
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
 

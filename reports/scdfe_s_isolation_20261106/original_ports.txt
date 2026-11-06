@@ -1,0 +1,21 @@
+Real Web attachment: 127.0.0.2 {'c': 8877, 's': 8878, 't': 8879}
+test_all_three_webs_acquisition_forwarding_commands_and_restart (tests.test_scdfe_full_interaction.ThreeWebInteractionTests.test_all_three_webs_acquisition_forwarding_commands_and_restart) ... ModbusDeviceContext, ModbusSequentialDataBlock, ModbusSparseDataBlock are deprecated and will be removed in v4.
+Please convert to SimData/SimDevice.
+Please read https://pymodbus.readthedocs.io/en/dev/source/upgrade_40.html#convert-to-simdata-simdevice
+ModbusServerContext is deprecated and will be removed in v4.
+Please convert to SimData/SimDevice.
+Please read https://pymodbus.readthedocs.io/en/dev/source/upgrade_40.html#convert-to-simdata-simdevice
+ModbusDeviceContext, ModbusSequentialDataBlock, ModbusSparseDataBlock are deprecated and will be removed in v4.
+Please convert to SimData/SimDevice.
+Please read https://pymodbus.readthedocs.io/en/dev/source/upgrade_40.html#convert-to-simdata-simdevice
+ModbusServerContext is deprecated and will be removed in v4.
+Please convert to SimData/SimDevice.
+Please read https://pymodbus.readthedocs.io/en/dev/source/upgrade_40.html#convert-to-simdata-simdevice
+{"acceptance": "three-web-modbus", "source_database_isolated": true, "rtus": 2, "stable_read_seconds": 3.3, "stable_reads": 65, "stable_read_failures": 0, "same_tcp_socket": true, "yc_yx_changes_propagated": true, "same_source_point_yk_routing": true, "yt_scale_2_offset_10_raw8_engineering26": true, "s_mapped_master_poll_and_commands": true, "c_http_and_tcp_commands": true, "independent_command_restart": true, "complete_start_stop_cycles": 2, "all_runtime_processes_stopped": true}
+ok
+test_same_number_crud_is_independent_for_all_four_point_types (tests.test_scdfe_full_interaction.ThreeWebInteractionTests.test_same_number_crud_is_independent_for_all_four_point_types) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 78.760s
+
+OK

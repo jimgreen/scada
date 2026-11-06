@@ -21,7 +21,7 @@ class RequestBoundaryTests(unittest.TestCase):
         self.db = Path(temp.name) / 'scada.sqlite3'
         self.servers = {}
         for family, factory in (('c', c_server), ('s', s_server), ('t', t_server)):
-            web = factory('127.0.0.1', 0, db_path=self.db)
+            web = factory('127.0.0.1', 0, db_path=self.db.with_name('scdfe_s.sqlite3') if family == 's' else self.db)
             thread = threading.Thread(target=web.serve_forever, daemon=True)
             thread.start()
             self.addCleanup(lambda w=web,t=thread: (w.shutdown(),w.server_close(),t.join(3)))
@@ -63,11 +63,11 @@ class RequestBoundaryTests(unittest.TestCase):
                     status, _ = self.request(web,'PUT','/api/packet-recording',
                                              f'Content-Length: {len(payload)}\r\n'+suffix,payload)
                     self.assertEqual(status,expected)
-                    self.assertFalse(PacketLogSwitch(self.db,family).enabled())
+                    self.assertFalse(PacketLogSwitch(web.store.db_path if family == "s" else self.db,family).enabled())
             with self.subTest(family=family,case='short'):
                 status,_=self.request(web,'PUT','/api/packet-recording',f'Content-Length: {len(payload)+10}\r\n',payload,half_close=True)
                 self.assertEqual(status,400)
-                self.assertFalse(PacketLogSwitch(self.db,family).enabled())
+                self.assertFalse(PacketLogSwitch(web.store.db_path if family == "s" else self.db,family).enabled())
 
     def test_health_head_matches_get_without_response_body(self):
         for family, web in self.servers.items():

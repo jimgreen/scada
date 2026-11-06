@@ -1,0 +1,28 @@
+{
+  "production_browser": {
+    "uiKinds": [
+      "yc",
+      "yx",
+      "yk",
+      "yt"
+    ],
+    "cSameRtuBeforeAfter": true,
+    "cVersion": 5,
+    "cleaned": true,
+    "port": 8878
+  },
+  "html": {
+    "verified": "2026-11-07",
+    "operations": 21,
+    "protocols": 6,
+    "illustrated_crud": 24,
+    "images": 45,
+    "anchors": 58,
+    "desktop": 1280,
+    "mobile": 390,
+    "printed_figures": 45,
+    "zoomed": 45,
+    "external_resources": 0,
+    "page_errors": 0
+  }
+}

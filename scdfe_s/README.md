@@ -22,6 +22,18 @@ Web 服务只有一个站点，不同规约和角色使用独立页面；命令�
 - IEC104 四遥页同时显示点号、信息体地址和类型标识。自动刷新更新监控值，保留尚未提交的配置字段；保存过程中继续输入的新值也保留为草稿。
 - 在项目根目录使用项目虚拟环境运行 `python -m tools.soak_multichannel --minutes 30 --output output/soak_new`。输出目录必须是新目录。测试使用临时数据库、本机真实 TCP 连接和动态端口，并启动独立采集及转发进程。主采集服务使用主机互斥锁，请与占用该锁的服务或测试错开运行。逐分钟进度写入 `events.jsonl`，完成并清理后生成 `result.json`。
 
+## 独立数据库
+
+S 的 Web、IEC 104、Modbus TCP/RTU 和 CAN 命令行默认使用 `db/scdfe_s.sqlite3`。C 与 T 仍用 `db/scada.sqlite3`。两库可以复用 RTU 号、通道号和四遥点号；S 的增删改不会更新 C 的定义。两端交换值依靠实际规约连接。对照三个端口的 `/api/health`，S 还会显示 `database_role: simulator`。显式传入业务库会拒绝启动；C/T 也不能把 S 专库当成业务库。
+
+直接启动 S 会创建空专库。若要使用业务库中的通道和测点作为测试起点，在目标文件尚不存在时执行：
+
+```text
+python -m scdfe_s.migrate --source db/scada.sqlite3 --destination db/scdfe_s.sqlite3
+```
+
+工具从源库的只读快照复制 RTU、四遥定义及其显示值、规约参数和映射，不复制进程状态、待执行命令或 T 转发配置。未配置通道且没有关联数据的 RTU 会列在报告中；若有子记录则中止，目标文件已存在时拒绝覆盖。此后两库独立维护，不会同步定义。S 的规约配置和日志位于专库旁；报文保存策略按 S 库文件名持久化。
+
 ## Web 服务
 
 IEC104 的增量更新、全量更新与模拟指令先校验显式点并写入数据库，再更新站内值、向已连接客户端上送。全量更新中，一个点写入失败会回滚整批，不会发送这批值。如果数据库已经提交而网络发布失败，页面错误会明确区分这两种结果。
@@ -53,7 +65,7 @@ python -m scdfe_s.web.server --host 127.0.0.1 --port 8878
 - `/modbus-rtu`、`/modbus-rtu-server`：Modbus RTU 主站、服务端；
 - `/can`、`/can-server`：CAN 主站、服务端；
 - `/bacnet-server`、`/opc-server`：BACnet/IP、OPC UA 服务端。
-- `/channels`：多 RTU 通道列表及通道内 YC/YX/YK/YT 测点定义的增删改查；
+- `/channels`：S 专库中的通道管理；`/points`：按 RTU 管理 YC/YX/YK/YT 点；
 - `/processes`：各协议测试服务的独立启停和状态监控；
 - `/communication`：连接数、测点数、通信状态和错误监控；
 - `/logs`：按服务、日志类型和关键字查看运行日志。

@@ -1,0 +1,41 @@
+test_each_protocol_station_has_ten_rtu_replicas (scdfe_c.web.test_protocol_seed_data.ProtocolSeedTests.test_each_protocol_station_has_ten_rtu_replicas) ... ok
+test_repeat_does_not_modify_or_create_backup (scdfe_c.web.test_protocol_seed_data.ProtocolSeedTests.test_repeat_does_not_modify_or_create_backup) ... ok
+test_all_four_types_scoped_crud_and_persistence (scdfe_c.web.test_server.WebTests.test_all_four_types_scoped_crud_and_persistence) ... ok
+test_bad_json_content_type_methods_and_unexpected_paths (scdfe_c.web.test_server.WebTests.test_bad_json_content_type_methods_and_unexpected_paths) ... ok
+test_catalog_and_empty_application (scdfe_c.web.test_server.WebTests.test_catalog_and_empty_application) ... ok
+test_channel_route_rejects_duplicate_and_unknown_fields (scdfe_c.web.test_server.WebTests.test_channel_route_rejects_duplicate_and_unknown_fields) ... ok
+test_child_runtime_prefers_project_virtual_environment (scdfe_c.web.test_server.WebTests.test_child_runtime_prefers_project_virtual_environment) ... ok
+test_command_server_configuration_route (scdfe_c.web.test_server.WebTests.test_command_server_configuration_route) ... ok
+test_control_routes_write_exactly_one_http_response (scdfe_c.web.test_server.WebTests.test_control_routes_write_exactly_one_http_response) ... ok
+test_dedicated_channel_maintenance_and_id_allocation (scdfe_c.web.test_server.WebTests.test_dedicated_channel_maintenance_and_id_allocation) ... ok
+test_every_schema_crud_including_four_part_key (scdfe_c.web.test_server.WebTests.test_every_schema_crud_including_four_part_key) ... ok
+test_filtered_rtu_channels_and_invalid_update_relation (scdfe_c.web.test_server.WebTests.test_filtered_rtu_channels_and_invalid_update_relation) ... ok
+test_id_protocol_parameter_tables_allocate_internal_id (scdfe_c.web.test_server.WebTests.test_id_protocol_parameter_tables_allocate_internal_id) ... ok
+test_list_field_projection_keeps_keys_and_version (scdfe_c.web.test_server.WebTests.test_list_field_projection_keeps_keys_and_version) ... ok
+test_log_search_combines_keyword_time_type_and_cursor (scdfe_c.web.test_server.WebTests.test_log_search_combines_keyword_time_type_and_cursor) ... ok
+test_main_and_writer_hourly_files_can_be_listed_and_searched (scdfe_c.web.test_server.WebTests.test_main_and_writer_hourly_files_can_be_listed_and_searched) ... ok
+test_nested_log_files_can_be_listed_read_and_searched (scdfe_c.web.test_server.WebTests.test_nested_log_files_can_be_listed_read_and_searched) ... ok
+test_one_channel_per_rtu_and_protocol_parameter_endpoint (scdfe_c.web.test_server.WebTests.test_one_channel_per_rtu_and_protocol_parameter_endpoint) ... ok
+test_origin_guard_and_static_traversal (scdfe_c.web.test_server.WebTests.test_origin_guard_and_static_traversal) ... ok
+test_pagination_search_order_and_unknown_fields (scdfe_c.web.test_server.WebTests.test_pagination_search_order_and_unknown_fields) ... ok
+test_process_launch_options_are_platform_specific (scdfe_c.web.test_server.WebTests.test_process_launch_options_are_platform_specific) ... ok
+test_process_probe_is_non_destructive (scdfe_c.web.test_server.WebTests.test_process_probe_is_non_destructive) ... ok
+test_process_probe_posix_branch_uses_kill_zero (scdfe_c.web.test_server.WebTests.test_process_probe_posix_branch_uses_kill_zero) ... ok
+test_process_routes_and_runtime_tables_are_read_only (scdfe_c.web.test_server.WebTests.test_process_routes_and_runtime_tables_are_read_only) ... ok
+test_readonly_route_returns_json_even_when_post_body_arrives_separately (scdfe_c.web.test_server.WebTests.test_readonly_route_returns_json_even_when_post_body_arrives_separately) ... ok
+test_relations_duplicate_keys_and_immutable_primary_key (scdfe_c.web.test_server.WebTests.test_relations_duplicate_keys_and_immutable_primary_key) ... ok
+test_removed_channel_routes_and_legacy_table_names_are_not_aliases (scdfe_c.web.test_server.WebTests.test_removed_channel_routes_and_legacy_table_names_are_not_aliases) ... ok
+test_removed_device_fields_are_absent_and_rejected (scdfe_c.web.test_server.WebTests.test_removed_device_fields_are_absent_and_rejected) ... ok
+test_row_change_does_not_modify_schema_files (scdfe_c.web.test_server.WebTests.test_row_change_does_not_modify_schema_files) ... ok
+test_scdfe_control_status_and_log_routes (scdfe_c.web.test_server.WebTests.test_scdfe_control_status_and_log_routes) ... ok
+test_scdfe_http_rejects_server_owner_without_changing_control (scdfe_c.web.test_server.WebTests.test_scdfe_http_rejects_server_owner_without_changing_control) ... ok
+test_scdfe_http_start_and_cooperative_stop (scdfe_c.web.test_server.WebTests.test_scdfe_http_start_and_cooperative_stop) ... ok
+test_scdfe_status_pagination_and_filters_include_all_rtus (scdfe_c.web.test_server.WebTests.test_scdfe_status_pagination_and_filters_include_all_rtus) ... ok
+test_scope_cannot_be_overridden_and_null_can_clear (scdfe_c.web.test_server.WebTests.test_scope_cannot_be_overridden_and_null_can_clear) ... ok
+test_validation_scope_and_large_integer_round_trip (scdfe_c.web.test_server.WebTests.test_validation_scope_and_large_integer_round_trip) ... ok
+test_versions_and_concurrent_create (scdfe_c.web.test_server.WebTests.test_versions_and_concurrent_create) ... ok
+
+----------------------------------------------------------------------
+Ran 36 tests in 51.923s
+
+OK

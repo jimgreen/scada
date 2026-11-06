@@ -19,7 +19,12 @@ def verify(run):
     root=Path(meta['root']);assert root.name.startswith('scada-three-web-')
     def get(f, path):
         with urlopen(f"http://127.0.0.1:{meta['web'][f]}/api/{path}",timeout=4) as r:return json.load(r)
-    src=get('s','modbus-tcp-server/config')['item']['listen_port']
+    config=get('s','modbus-tcp-server/config')['item']
+    src=config['listen_port']
+    rid=config['rtu_id']
+    cid_s=get('s',f'channels/{rid}')['item']['channel_id']
+    s_db=Path(get('s','health')['database']).resolve()
+    assert s_db.is_relative_to(root.resolve())
     forward={r['channel_id']:r['bind_port'] for r in get('t','trans/channels')['items']}
     def repeat(fn,interval):
         n=0;maximum=0;start=monotonic()
@@ -33,9 +38,9 @@ def verify(run):
                 assert not r.isError() and r.registers[1]-r.registers[0]==29000,r
             return repeat(probe,.04)
     def db_reader():
-        with closing(sqlite3.connect((root/'source/scada.sqlite3').as_uri()+'?mode=ro',uri=True)) as con:
+        with closing(sqlite3.connect(s_db.as_uri()+'?mode=ro',uri=True)) as con:
             def probe(_):
-                rows=list(con.execute('select pnt_no,value from fes_yc_define where rtu_id=37100 and pnt_no in (1,2) order by pnt_no'))
+                rows=list(con.execute('select pnt_no,value from fes_yc_define where rtu_id=? and pnt_no in (1,2) order by pnt_no',(rid,)))
                 assert len(rows)==2 and rows[1][1]-rows[0][1]==29000,rows
             return repeat(probe,.07)
     def reconnect():
@@ -55,7 +60,7 @@ def verify(run):
             file=max(logroot.rglob(proc+'-*.log'),key=lambda f:f.name)
             path='scdfe_c/logs/search' if family=='c' else 'log-files/search'
             params=dict(filename=file.relative_to(logroot).as_posix(),process=proc,record='packet',direction=d,limit=3)
-            if family=='s':params['channel_id']=38100
+            if family=='s':params['channel_id']=cid_s
             if family=='t':params['channel_id']=1
             data=get(family,path+'?'+urlencode(params))
             if len(data['items'])<3 or not data['next_cursor']:return  # a newly rotated file

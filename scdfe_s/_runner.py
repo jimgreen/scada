@@ -15,7 +15,8 @@ import sys
 import threading
 from typing import Any, Callable
 
-from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
+from scdfe_c.web.service import SCHEMA_DIR
+from scdfe_s.database import DEFAULT_DB, SimulatorStore
 from scdfe_s.web.protocol_service import (
     CanServerService,
     CanService,
@@ -129,7 +130,7 @@ def run_service(
     if args.max_cycles is not None and args.max_cycles <= 0:
         raise ProtocolServiceError("--max-cycles 必须为正整数")
 
-    store = ScadaStore(args.db, args.schema_dir)
+    store = SimulatorStore(args.db, args.schema_dir)
     service = service_factory(store)
     stop_event = threading.Event()
     previous = _install_stop_handlers(stop_event)
