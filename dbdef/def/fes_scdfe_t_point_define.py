@@ -17,8 +17,6 @@ class fes_scdfe_t_point_define:
 
     kind: Optional[str] = field(default=None, metadata={'chn_name': '转发点类型', 'eng_name': 'kind', 'primary_key': True, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': '四遥类型', 'required': True, 'allowed_values': ['yc', 'yx', 'yk', 'yt']})
 
-    source_kind: Optional[str] = field(default=None, metadata={'chn_name': '源点类型', 'eng_name': 'source_kind', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': '四遥类型', 'allowed_values': ['yc', 'yx', 'yk', 'yt'], 'required': True})
-
     source_rtu_id: Optional[int] = field(default=None, metadata={'chn_name': '源RTU', 'eng_name': 'source_rtu_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True})
 
     source_pnt_no: Optional[int] = field(default=None, metadata={'chn_name': '源点号', 'eng_name': 'source_pnt_no', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'required': True})

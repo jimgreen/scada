@@ -25,6 +25,7 @@ LOG_LEVEL_LABELS = {
     "WARNING": "警告",
     "ERROR": "错误",
     "PROCESS": "进程",
+    "PACKET": "报文",
 }
 LOG_LEVEL_CODES = {label: code for code, label in LOG_LEVEL_LABELS.items()}
 LOG_WRITER_PID = re.compile(r"写库\s*pid\s*=\s*\d+\b", re.IGNORECASE)
@@ -35,7 +36,9 @@ def sanitize_log_message(message):
     """Keep runtime identity fields out of persisted log content."""
     value = LOG_WRITER_PID.sub("", str(message))
     value = LOG_IDENTITY.sub("", value)
-    return re.sub(r"[ \t]{2,}", " ", value).strip()
+    # A protocol error or peer-supplied detail is one record. Preserve the
+    # words of multiline messages without allowing a forged second header.
+    return re.sub(r"[ \t]{2,}", " ", " ".join(value.splitlines())).strip()
 
 
 def validate_control(values):
@@ -76,17 +79,24 @@ def ensure_control_row(store):
     except Exception as exc:
         if getattr(exc, "code", None) != "not_found":
             raise
-        return store.create_row(CONTROL_TABLE, {
-            "id": 1, "process_enable": 1,
-            "process_status": 0, "process_pid": 0, "process_start_time": 0,
-            "process_stop_time": 0,
-            "process_heartbeat_time": 0, "process_exit_code": 0,
-            "process_error": "",
-            "log_dir": "logs", "log_retention_hours": 720,
-            "scan_interval_ms": 2000, "poll_interval_ms": 1000,
-            "retry_interval_ms": 5000,
-            "worker_start_delay_ms": 250,
-        })
+        try:
+            return store.create_row(CONTROL_TABLE, {
+                "id": 1, "process_enable": 1,
+                "process_status": 0, "process_pid": 0, "process_start_time": 0,
+                "process_stop_time": 0,
+                "process_heartbeat_time": 0, "process_exit_code": 0,
+                "process_error": "",
+                "log_dir": "logs", "log_retention_hours": 720,
+                "scan_interval_ms": 2000, "poll_interval_ms": 1000,
+                "retry_interval_ms": 5000,
+                "worker_start_delay_ms": 250,
+            })
+        except Exception as conflict:
+            if getattr(conflict, "code", None) != "conflict":
+                raise
+            # A concurrent monitor/runtime may have created the singleton
+            # after the initial read. Its settings must win unchanged.
+            return store.get_row(CONTROL_TABLE, [1])
 
 
 class InstanceLock:
@@ -98,9 +108,7 @@ class InstanceLock:
 
     def acquire(self):
         stream = self.path.open("a+b")
-        if stream.tell() == 0:
-            stream.write(b"\0")
-            stream.flush()
+        initially_empty = stream.tell() == 0
         stream.seek(0)
         try:
             if os.name == "nt":
@@ -112,6 +120,16 @@ class InstanceLock:
         except OSError:
             stream.close()
             return False
+        # Windows byte-range locks can cover a byte beyond EOF. Initialize
+        # that byte only while holding the lock: a concurrent first opener
+        # must not flush a write into another process's locked range.
+        try:
+            if initially_empty and stream.seek(0, os.SEEK_END) == 0:
+                stream.write(b"\0")
+                stream.flush()
+        except BaseException:
+            stream.close()
+            raise
         self.stream = stream
         return True
 

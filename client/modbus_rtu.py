@@ -12,6 +12,7 @@ __all__ = ['ModbusRtuMaster', 'ModbusError']
 
 class _ModbusRtuTransport(_ModbusOperations):
     """同步 RTU 主站，一条串口总线使用一个实例，通过 unit_id 访问各从站。"""
+    PACKET_PROTOCOL = "Modbus-RTU"
 
     def __init__(self, port, *, baudrate=9600, bytesize=8, parity='E', stopbits=1,
                  unit_id=1, timeout=3.0, rtu_id=None, retry_count=0):
@@ -27,9 +28,10 @@ class _ModbusRtuTransport(_ModbusOperations):
                 or not math.isfinite(timeout) or timeout <= 0):
             raise ValueError('timeout 必须是 > 0 的有限数')
         self.port = port
+        self._packet_endpoint = f"serial={port}"
         self.native = ModbusSerialClient(port, framer=FramerType.RTU, baudrate=baudrate,
                                          bytesize=bytesize, parity=parity, stopbits=stopbits,
-                                         timeout=timeout, retries=0)
+                                         timeout=timeout, retries=0, trace_packet=self._trace_packet)
 
     @property
     def connected(self):

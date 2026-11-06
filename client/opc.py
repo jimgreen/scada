@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import asyncio
 import threading
 from typing import Any
+from core.packet_trace import PacketTrace, trace_stream_protocol
 
 __all__ = [
     "OpcUaMaster",
@@ -37,7 +38,7 @@ except ImportError as exc:  # pragma: no cover - dependency check
 
 
 def _field(row: Any, name: str, default=None):
-    value = row.get(name) if isinstance(row, Mapping) else getattr(row, name, None)
+    value = row.get(name) if type(row) is dict or isinstance(row, Mapping) else getattr(row, name, None)
     return default if value is None else value
 
 
@@ -163,7 +164,7 @@ def _require_opcua():
         raise OpcError("缺少依赖 asyncua，请执行: python -m pip install -r requirements.txt") from _OPCUA_IMPORT_ERROR
 
 
-class _OpcUaProtocol:
+class _OpcUaProtocol(PacketTrace):
     """Synchronous OPC UA client.
 
     ``endpoint`` must be an OPC UA URL.  Use ``opc.tcp://host:port`` for a
@@ -194,6 +195,8 @@ class _OpcUaProtocol:
         ORDER BY CASE p.kind WHEN 'yc' THEN 1 WHEN 'yx' THEN 2
                              WHEN 'yk' THEN 3 ELSE 4 END, p.pnt_no
     """
+
+    PACKET_PROTOCOL = "OPC-UA"
 
     def __init__(self, endpoint: str, *, username: str | None = None,
                  password: str | None = None, domain: str | None = None,
@@ -275,6 +278,8 @@ class _OpcUaProtocol:
     async def _connect_backend(self):
         self._read_limit = self.read_batch_size
         self._client = _UaClient(self.endpoint, timeout=self.timeout)
+        factory = self._client.uaclient._make_protocol
+        self._client.uaclient._make_protocol = lambda: trace_stream_protocol(factory(), self._packet)
         if self.username is not None:
             self._client.set_user(self.username)
         if self.password is not None:
@@ -380,14 +385,11 @@ class _OpcUaProtocol:
             return []
         if not self.connected:
             raise OpcError("未连接，请先 connect() 或使用 with")
-        result = []
-        for start in range(0, len(node_ids), self.read_batch_size):
-            chunk = node_ids[start:start + self.read_batch_size]
-            # Each native request has its own timeout. The outer guard also
-            # allows devices that require splitting this chunk into single reads.
-            result.extend(self._loop_thread.call(
-                self._read_many_backend, chunk, timeout=self.timeout * len(chunk) + 1.0))
-        return result
+        # The coroutine already splits native requests and learns device
+        # limits. Submit the whole collection once instead of waking the
+        # event-loop thread and blocking this thread for every native batch.
+        return self._loop_thread.call(
+            self._read_many_backend, node_ids, timeout=self.timeout * len(node_ids) + 1.0)
 
     async def _write_backend(self, node_id, value):
         node = self._client.get_node(node_id)

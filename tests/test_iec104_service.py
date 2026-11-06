@@ -43,7 +43,9 @@ class IEC104ServiceTests(unittest.TestCase):
     def test_full_and_incremental_updates_without_client(self):
         self.assertEqual(self.service.incremental_update("yc", 1, 221.5)["value"], 221.5)
         result = self.service.full_update({"yx": {"1": False}, "yc": {"1": 222.0}})
-        self.assertEqual(result["requested"], 2)
+        self.assertEqual((result["requested"],result["persisted"]), (2,2))
+        self.assertEqual(self.store.get_row("fes_yc_define", [1,1])["value"], 222.0)
+        self.assertEqual(self.store.get_row("fes_yx_define", [1,1])["value"], 0)
         self.assertEqual(self.service.status()["point_count"], 4)
 
     def test_client_interrogation_spontaneous_update_and_command(self):
@@ -58,7 +60,11 @@ class IEC104ServiceTests(unittest.TestCase):
         time.sleep(0.1)
         self.assertEqual(client.value("yc", 1).value, 220.0)
         self.service.incremental_update("yc", 1, 223.0)
-        time.sleep(0.1)
+        # A native 100 ms dispatch tick can fall just after a fixed sleep.
+        # Observe the one spontaneous send; do not issue another interrogation.
+        deadline = time.monotonic() + 2
+        while client.value("yc", 1).value != 223.0 and time.monotonic() < deadline:
+            time.sleep(.01)
         self.assertEqual(client.value("yc", 1).value, 223.0)
         client.send_yk_point(1, True)
         time.sleep(0.1)

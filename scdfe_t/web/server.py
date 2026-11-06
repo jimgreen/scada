@@ -16,6 +16,9 @@ if __package__ in (None, ""):
 
 from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
+from core.web_request import RequestBodyMixin
+from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
+from core.web_logs import log_browser
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scdfe_t.web")
@@ -31,16 +34,7 @@ def _safe(value):
     return value
 
 
-def _strict_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"重复 JSON 字段: {key}")
-        result[key] = value
-    return result
-
-
-class TransHandler(BaseHTTPRequestHandler):
+class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     server_version = "ScdfeTWeb/1.0"
 
     @property
@@ -73,27 +67,6 @@ class TransHandler(BaseHTTPRequestHandler):
             headers["ETag"] = '"' + str(item["_version"]) + '"'
         data = json.dumps(_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         self._send(status, "application/json; charset=utf-8", data, headers)
-
-    def _body(self):
-        if self.headers.get("Transfer-Encoding"):
-            raise ApiError(400, "不支持分块请求体")
-        if self.headers.get_content_type() != "application/json":
-            raise ApiError(415, "请使用 Content-Type: application/json")
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError as exc:
-            raise ApiError(400, "无效的 Content-Length") from exc
-        if length < 0 or length > 2_000_000:
-            raise ApiError(413, "请求体长度必须在 0 到 2000000 字节之间")
-        try:
-            raw = self.rfile.read(length)
-            body = json.loads(raw.decode("utf-8"), object_pairs_hook=_strict_object,
-                              parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise ApiError(400, "请求体必须是有效 UTF-8 JSON 对象") from exc
-        if not isinstance(body, dict):
-            raise ApiError(400, "请求体必须是 JSON 对象")
-        return body
 
     def _if_match(self):
         value = self.headers.get("If-Match")
@@ -128,6 +101,13 @@ class TransHandler(BaseHTTPRequestHandler):
         return {"item": self.service.store.catalog.public(table)}
 
     def _api(self, method, parts, query):
+        from core.packet_logging import handle_packet_recording
+        if handle_packet_recording(self, parts, query, method, self.service.store, 't'):
+            return
+        if parts in (["api", "log-files"], ["api", "log-files", "search"]):
+            if method != "GET":
+                raise ApiError(405, "日志文件接口只支持 GET")
+            return self._json(200, log_browser(self.service.db_path.parent / "logs", "t", len(parts) == 3, query))
         if parts == ["api", "health"]:
             if method != "GET":
                 raise ApiError(405, "只支持 GET")
@@ -190,7 +170,12 @@ class TransHandler(BaseHTTPRequestHandler):
             raise ApiError(404, "路径不存在", code="not_found")
         if len(tail) == 3:
             if method == "GET":
-                return self._json(200, {"items": self.service.points(cid)})
+                if set(query) - {"kind", "limit", "offset"}:
+                    raise ApiError(400, "未知点映射查询参数")
+                return self._json(200, self.service.point_page(
+                    cid, kind=query.get("kind"), limit=int(query.get("limit", "100")),
+                    offset=int(query.get("offset", "0")),
+                ))
             if method == "POST":
                 return self._json(201, {"item": self.service.create_point(cid, self._body())})
             raise ApiError(405, "点映射集合只支持 GET/POST")
@@ -215,11 +200,16 @@ class TransHandler(BaseHTTPRequestHandler):
         name = "index.html" if not parts else "/".join(parts)
         if parts and parts[0] == "static":
             name = "/".join(parts[1:])
+        if name in ASSETS:
+            return self._send(200, ASSETS[name], (ASSET_DIR / name).read_bytes())
         allowed = {
             "index.html": "text/html; charset=utf-8", "static/index.html": "text/html; charset=utf-8",
             "communication.html": "text/html; charset=utf-8", "static/communication.html": "text/html; charset=utf-8",
             "processes.html": "text/html; charset=utf-8", "static/processes.html": "text/html; charset=utf-8",
             "logs.html": "text/html; charset=utf-8", "static/logs.html": "text/html; charset=utf-8",
+            "channels.html": "text/html; charset=utf-8", "static/channels.html": "text/html; charset=utf-8",
+            "points.html": "text/html; charset=utf-8", "static/points.html": "text/html; charset=utf-8",
+            "communication.js": "application/javascript; charset=utf-8", "static/communication.js": "application/javascript; charset=utf-8",
             "app.css": "text/css; charset=utf-8", "static/app.css": "text/css; charset=utf-8",
             "app.js": "application/javascript; charset=utf-8", "static/app.js": "application/javascript; charset=utf-8",
             "processes.js": "application/javascript; charset=utf-8", "static/processes.js": "application/javascript; charset=utf-8",
@@ -229,17 +219,23 @@ class TransHandler(BaseHTTPRequestHandler):
         path = STATIC_DIR / (name.removeprefix("static/") if name.startswith("static/") else name)
         if key not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        self._send(200, allowed[key], path.read_bytes())
+        data = path.read_bytes()
+        if name.endswith(".html"):
+            data = render_workbench(data, "t", path.name)
+        self._send(200, allowed[key], data)
 
     def _handle(self):
         try:
+            self._prepare_request()
             parts, query = self._parts()
+            if parts == ["favicon.ico"] and self.command in {"GET", "HEAD"}:
+                return self._send(204, "image/x-icon", b"")
             if parts and parts[0] == "api":
-                return self._api(self.command, parts, query)
+                return self._api("GET" if self.command == "HEAD" else self.command, parts, query)
             if self.command in {"GET", "HEAD"}:
                 return self._static(parts)
             raise ApiError(405, "只支持 GET/HEAD")
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             return
         except ApiError as error:
             self._json(error.status, {"error": {"code": error.code, "message": error.message,
@@ -253,7 +249,7 @@ class TransHandler(BaseHTTPRequestHandler):
             LOG.exception("unhandled request error")
             self._json(500, {"error": {"code": "internal_error", "message": "服务器内部错误，请查看服务日志"}})
 
-    do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = _handle
+    do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
 
 
 class TransHTTPServer(ThreadingHTTPServer):
@@ -261,8 +257,18 @@ class TransHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self.trans_store = TransStore(db_path, schema_dir)
-        super().__init__(address, TransHandler)
+        self.trans_store = TransStore(db_path, schema_dir, connection_pool_size=4)
+        try:
+            super().__init__(address, TransHandler)
+        except BaseException:
+            self.trans_store.store.close()
+            raise
+
+    def server_close(self):
+        try:
+            self.trans_store.store.close()
+        finally:
+            super().server_close()
 
 
 def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

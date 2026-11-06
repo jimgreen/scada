@@ -36,6 +36,9 @@ def _free_port():
 class ScdfeTTestBase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        # Cleanups run in reverse order after tearDown: close the clients and
+        # servers registered below before removing their active log directory.
+        self.addCleanup(self.temp.cleanup)
         self.db = Path(self.temp.name) / "scada.sqlite3"
         self.store = ScadaStore(self.db)
         self.store.create_row("fes_rtu_define", {
@@ -55,9 +58,6 @@ class ScdfeTTestBase(unittest.TestCase):
             "rtu_id": 1, "pnt_no": 1, "code": "YT1", "name": "设定", "value": 5.0,
         })
 
-    def tearDown(self):
-        self.temp.cleanup()
-
     def add_channel(self, protocol, port):
         self.store.create_row("fes_scdfe_t_define", {
             "channel_id": 1, "code": "TRANS1", "name": "转发1", "protocol": protocol,
@@ -75,7 +75,7 @@ class ScdfeTTestBase(unittest.TestCase):
         for kind, (pnt_no, ioa, type_id, area, address, dtype) in maps.items():
             self.store.create_row("fes_scdfe_t_point_define", {
                 "channel_id": 1, "pnt_no": pnt_no, "name": kind, "kind": kind,
-                "source_kind": kind, "source_rtu_id": 1, "source_pnt_no": 1,
+                "source_rtu_id": 1, "source_pnt_no": 1,
                 "enabled": 1, "io_address": ioa, "type_id": type_id,
                 "register_area": area, "address": address, "data_type": dtype,
             })

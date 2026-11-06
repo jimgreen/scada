@@ -1,0 +1,243 @@
+{
+  "c": [
+    {
+      "route": "/",
+      "type": "text/html",
+      "bytes": 20086
+    },
+    {
+      "route": "/static/app.js",
+      "type": "application/javascript",
+      "bytes": 97659
+    },
+    {
+      "route": "/static/packet-recording.js",
+      "type": "application/javascript",
+      "bytes": 8886
+    },
+    {
+      "route": "/api-docs",
+      "type": "text/html",
+      "bytes": 2595
+    },
+    {
+      "route": "/static/app.css",
+      "type": "text/css",
+      "bytes": 28947
+    }
+  ],
+  "s": [
+    {
+      "route": "/",
+      "type": "text/html",
+      "bytes": 4224
+    },
+    {
+      "route": "/static/index.js",
+      "type": "application/javascript",
+      "bytes": 418
+    },
+    {
+      "route": "/opc-server",
+      "type": "text/html",
+      "bytes": 4631
+    },
+    {
+      "route": "/static/protocol.js",
+      "type": "application/javascript",
+      "bytes": 7795
+    },
+    {
+      "route": "/bacnet-server",
+      "type": "text/html",
+      "bytes": 4610
+    },
+    {
+      "route": "/can-server",
+      "type": "text/html",
+      "bytes": 5160
+    },
+    {
+      "route": "/can",
+      "type": "text/html",
+      "bytes": 5479
+    },
+    {
+      "route": "/modbus-rtu-server",
+      "type": "text/html",
+      "bytes": 4973
+    },
+    {
+      "route": "/modbus-rtu",
+      "type": "text/html",
+      "bytes": 4972
+    },
+    {
+      "route": "/modbus-tcp-server",
+      "type": "text/html",
+      "bytes": 4492
+    },
+    {
+      "route": "/modbus-tcp",
+      "type": "text/html",
+      "bytes": 5035
+    },
+    {
+      "route": "/iec104",
+      "type": "text/html",
+      "bytes": 4463
+    },
+    {
+      "route": "/static/iec104.js",
+      "type": "application/javascript",
+      "bytes": 4379
+    },
+    {
+      "route": "/points",
+      "type": "text/html",
+      "bytes": 4651
+    },
+    {
+      "route": "/static/channels.js",
+      "type": "application/javascript",
+      "bytes": 10488
+    },
+    {
+      "route": "/channels",
+      "type": "text/html",
+      "bytes": 4158
+    },
+    {
+      "route": "/static/packet-recording.js",
+      "type": "application/javascript",
+      "bytes": 8886
+    },
+    {
+      "route": "/logs",
+      "type": "text/html",
+      "bytes": 7055
+    },
+    {
+      "route": "/communication",
+      "type": "text/html",
+      "bytes": 3023
+    },
+    {
+      "route": "/static/monitor.js",
+      "type": "application/javascript",
+      "bytes": 5222
+    },
+    {
+      "route": "/processes",
+      "type": "text/html",
+      "bytes": 3164
+    },
+    {
+      "route": "/api-docs",
+      "type": "text/html",
+      "bytes": 4290
+    },
+    {
+      "route": "/static/workbench.js",
+      "type": "application/javascript",
+      "bytes": 810
+    },
+    {
+      "route": "/static/workbench.css",
+      "type": "text/css",
+      "bytes": 8176
+    },
+    {
+      "route": "/static/protocol.css",
+      "type": "text/css",
+      "bytes": 4055
+    },
+    {
+      "route": "/static/log-browser.js",
+      "type": "application/javascript",
+      "bytes": 15195
+    },
+    {
+      "route": "/static/log-browser.css",
+      "type": "text/css",
+      "bytes": 6995
+    }
+  ],
+  "t": [
+    {
+      "route": "/",
+      "type": "text/html",
+      "bytes": 2573
+    },
+    {
+      "route": "/static/communication.js",
+      "type": "application/javascript",
+      "bytes": 2041
+    },
+    {
+      "route": "/points.html",
+      "type": "text/html",
+      "bytes": 3488
+    },
+    {
+      "route": "/static/app.js",
+      "type": "application/javascript",
+      "bytes": 17758
+    },
+    {
+      "route": "/channels.html",
+      "type": "text/html",
+      "bytes": 3121
+    },
+    {
+      "route": "/static/packet-recording.js",
+      "type": "application/javascript",
+      "bytes": 8886
+    },
+    {
+      "route": "/logs.html",
+      "type": "text/html",
+      "bytes": 5880
+    },
+    {
+      "route": "/communication.html",
+      "type": "text/html",
+      "bytes": 2573
+    },
+    {
+      "route": "/processes.html",
+      "type": "text/html",
+      "bytes": 2234
+    },
+    {
+      "route": "/static/processes.js",
+      "type": "application/javascript",
+      "bytes": 2549
+    },
+    {
+      "route": "/static/workbench.js",
+      "type": "application/javascript",
+      "bytes": 810
+    },
+    {
+      "route": "/static/workbench.css",
+      "type": "text/css",
+      "bytes": 8176
+    },
+    {
+      "route": "/static/app.css",
+      "type": "text/css",
+      "bytes": 3785
+    },
+    {
+      "route": "/static/log-browser.js",
+      "type": "application/javascript",
+      "bytes": 15195
+    },
+    {
+      "route": "/static/log-browser.css",
+      "type": "text/css",
+      "bytes": 6995
+    }
+  ]
+}

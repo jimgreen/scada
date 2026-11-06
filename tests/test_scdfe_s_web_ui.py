@@ -40,8 +40,9 @@ class ScdfeSWebUiTests(unittest.TestCase):
 
     def test_independent_pages_and_static_assets_are_available(self):
         for path in (
-            "/", "/channels", "/communication", "/processes", "/logs",
+            "/", "/channels", "/points", "/communication", "/processes", "/logs",
             "/static/channels.js", "/static/monitor.js",
+            "/static/workbench.css", "/static/workbench.js",
         ):
             status, payload = self.call("GET", path)
             self.assertEqual(status, 200, path)

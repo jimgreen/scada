@@ -1,6 +1,58 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCADA · 运行日志</title><link rel="stylesheet" href="/static/protocol.css"></head>
-<body data-monitor="logs"><header><div><h1>SCADA 运行日志</h1><small>按服务、类型和关键字筛选</small></div><nav><a href="/">通信测试</a><a href="/channels">通道与测点</a><a href="/processes">进程监控</a><a href="/communication">通信监控</a></nav></header>
-<main><div class="card"><div class="toolbar"><h2>日志记录</h2><button id="refresh" class="primary">刷新</button></div><div class="filterbar"><label>服务<select id="service"><option value="">全部</option></select></label><label>类型<select id="level"><option value="">全部</option><option value="INFO">日志</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label><label class="wide">关键字<input id="keyword" placeholder="输入关键字"></label></div><div id="message" class="message">读取中…</div><div id="log-list" class="log-list"></div></div></main>
-<script src="/static/monitor.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>scdfe_s · 运行日志</title>
+<link rel="stylesheet" href="/static/log-browser.css">
+<script defer src="/static/log-browser.js"></script>
+<script defer src="/static/packet-recording.js"></script>
+</head>
+<body data-log-module="s">
+<header></header>
+<main>
+<section class="log-browser" aria-label="日志文件浏览器">
+  <div class="lb-toolbar">
+    <label for="packet-recording-channel">报文保存范围</label><select id="packet-recording-channel" disabled><option value="">默认设置（未单独设置的通道）</option></select>
+    <label class="lb-check"><input id="packet-recording" type="checkbox" disabled>保存报文（调试）</label>
+    <button id="packet-recording-reset" type="button" disabled>恢复使用默认设置</button>
+    <span id="packet-recording-status" role="status">读取报文保存设置…</span>
+  </div>
+  <div class="lb-toolbar">
+    <label>协议服务<select id="lb-process"><option value="">全部服务</option></select></label>
+    <label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
+    <button id="lb-refresh" class="primary">刷新日志</button>
+    <label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label>
+    <span id="lb-status" role="status" aria-live="polite">读取中…</span>
+  </div>
+  <div class="lb-workspace">
+    <aside class="lb-files" aria-label="日志文件目录">
+      <div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div>
+      <div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div>
+      <div class="lb-file-pager"><button id="lb-files-prev" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" aria-label="下一页文件">下一页</button></div>
+    </aside>
+    <section class="lb-reader" aria-label="日志内容">
+      <div class="lb-reader-head"><div><strong id="lb-name">请选择日志文件</strong><small id="lb-meta">从左侧目录选择文件，或检索全部文件</small></div><button id="lb-export" disabled>导出本批</button></div>
+      <div class="lb-reader-tools">
+        <label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label>
+        <label>记录<select id="lb-record"><option value="">全部记录</option><option value="packet">仅报文</option><option value="runtime">仅运行日志</option></select></label>
+        <label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label>
+        <label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label>
+        <label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道" title="按报文保存时的通道号筛选；未标记通道的历史报文仅在不过滤时显示"></label>
+        <label class="lb-keyword">关键字<input id="lb-keyword" type="search" maxlength="256" placeholder="协议、HEX 或报文内容"></label>
+      </div>
+      <div class="lb-reader-tools lb-time-tools">
+        <label>开始<input id="lb-start" type="datetime-local" step="1"></label>
+        <label>结束<input id="lb-end" type="datetime-local" step="1"></label>
+        <button id="lb-clear">清除筛选</button>
+        <label>每批<select id="lb-limit"><option value="200">200 条</option><option value="1000" selected>1000 条</option><option value="5000">5000 条</option></select></label>
+        <label class="lb-check"><input id="lb-wrap" type="checkbox" checked>自动换行</label>
+      </div>
+      <div id="lb-content" class="lb-content lb-wrap" tabindex="0" aria-label="日志文本"><div class="lb-empty">读取中…</div></div>
+      <div class="lb-reader-foot"><span id="lb-result" role="status"></span><div><button id="lb-newer" disabled>较新一批</button><button id="lb-older" disabled>较早一批</button></div></div>
+    </section>
+  </div>
+  <div id="lb-directory" class="lb-directory"></div>
+</section>
+</main>
+</body>
+</html>

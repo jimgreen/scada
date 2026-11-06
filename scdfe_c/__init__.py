@@ -45,6 +45,7 @@ from core.scdfe_control import (
     ensure_control_row,
     log_directory,
 )
+from core.log_paths import log_entries
 from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
 from .web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
 from .writer_ipc import (
@@ -83,6 +84,7 @@ RTU_AUTO_COMMUNICATION_ON = 1
 RTU_AUTO_COMMUNICATION_OFF = 0
 LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
+BATCH_WRITER_DRAIN = "__scdfe_c_batch_writer_drain__"
 BATCH_WRITER_INTERVAL = 0.1
 BATCH_WRITER_MAX_BATCH = 500
 BATCH_WRITER_WAL_AUTOCHECKPOINT = 10000
@@ -232,17 +234,47 @@ class ScdfeLogger:
     RTU 编号，例如 ``2026/10/29/18/scdfe_c-rtu-7-20261029-18.log``。RTU 和通道编号
     由文件名与数据库定义关联，不再写入每条日志正文。日志类型使用中文标签，且不再
     按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
-    日期和小时由文件名提供。每条记录打开、追加并关闭文件，
-    避免在线程和写库进程间共享 logging handler；主调度线程按小时数定期清理旧文件。
+    日期和小时由文件名提供。普通调用追加后关闭文件；通信线程在 session 中复用
+    本线程日志文件，每条记录仍立即 flush，退出时关闭。文件不在进程间共享。
+    主调度线程按小时数定期清理旧文件。
     """
 
-    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False):
+    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False, packet_switch=None):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.console = console
         self.process_name = process_name
+        self.packet_switch = packet_switch
+        self._write_lock = threading.Lock()
+        self._hour_key = None
+        self._path = None
+        self._stream = None
+        self._stream_identity = None
+        self._sessions = 0
+
+    def _close_stream(self):
+        stream, self._stream = self._stream, None
+        self._stream_identity = None
+        if stream is not None:
+            stream.close()
+
+    @contextmanager
+    def session(self):
+        """Reuse the handle while a worker runs; every write remains visible."""
+        with self._write_lock:
+            self._sessions += 1
+        try:
+            yield self
+        finally:
+            with self._write_lock:
+                self._sessions -= 1
+                if not self._sessions:
+                    self._close_stream()
 
     def emit(self, category: str, message: str, *, level: str = "INFO") -> None:
+        self._emit_lines(category, (message,), level=level)
+
+    def _emit_lines(self, category, messages, *, level="INFO", raw_hex=False):
         if category not in LOG_CATEGORIES:
             raise ValueError(f"未知日志类别: {category}")
         now = datetime.now(timezone.utc).astimezone()
@@ -253,22 +285,67 @@ class ScdfeLogger:
         label = LOG_LEVEL_LABELS.get(level)
         if label is None:
             raise ValueError(f"未知日志级别: {level}")
-        line = f"{stamp} [{label}] {sanitize_log_message(message)}\n"
-        hour = now.strftime("%Y%m%d-%H")
-        # Partition the log root by calendar year/month/day/hour. This keeps
-        # long-retention deployments from putting every process file in one
-        # directory while preserving one file per process and hour.
-        hour_directory = self.directory / now.strftime("%Y/%m/%d/%H")
-        hour_directory.mkdir(parents=True, exist_ok=True)
-        path = hour_directory / f"{self.process_name}-{hour}.log"
-        with path.open("a", encoding="utf-8", newline="") as stream:
-            stream.write(line)
-            stream.flush()
-        if self.console:
-            print(line, end="", flush=True)
+        hour_key = (now.year, now.month, now.day, now.hour)
+        with self._write_lock:
+            if hour_key != self._hour_key:
+                self._close_stream()
+                directory = self.directory / now.strftime("%Y/%m/%d/%H")
+                if not directory.resolve().is_relative_to(self.directory):
+                    raise OSError("日志文件超出日志目录")
+                directory.mkdir(parents=True, exist_ok=True)
+                self._path = directory / f"{self.process_name}-{now:%Y%m%d-%H}.log"
+                self._hour_key = hour_key
+            if self._stream is not None and os.name != 'nt':
+                # Preserve external rotation/removal semantics, including on
+                # POSIX where an open file can be unlinked or replaced. Windows
+                # append handles deny deletion/rename until closed: checking
+                # their path identity for every packet adds expensive I/O.
+                try:
+                    stat = self._path.stat()
+                    identity = (stat.st_dev, stat.st_ino)
+                except FileNotFoundError:
+                    identity = None
+                if identity != self._stream_identity:
+                    self._close_stream()
+            try:
+                if self._stream is None:
+                    if not self._path.resolve().is_relative_to(self.directory):
+                        raise OSError("日志文件超出日志目录")
+                    try:
+                        self._stream = self._path.open("a", encoding="utf-8", newline="")
+                    except FileNotFoundError:
+                        self._path.parent.mkdir(parents=True, exist_ok=True)
+                        self._stream = self._path.open("a", encoding="utf-8", newline="")
+                    stat = os.fstat(self._stream.fileno())
+                    self._stream_identity = (stat.st_dev, stat.st_ino)
+                for message in messages:
+                    if raw_hex:
+                        # packet_lines generates the suffix solely from bytes.hex;
+                        # identity/whitespace cleanup only needs the metadata.
+                        prefix, _, hex_data = message.rpartition(' HEX=')
+                        message = sanitize_log_message(prefix) + ' HEX=' + hex_data
+                    else:
+                        message = sanitize_log_message(message)
+                    line = f"{stamp} [{label}] {message}\n"
+                    self._stream.write(line)
+                    if self.console:
+                        print(line, end="", flush=True)
+                self._stream.flush()
+            except Exception:
+                self._close_stream()
+                raise
+            finally:
+                if not self._sessions:
+                    self._close_stream()
 
     def normal(self, message: str) -> None:
         self.emit("normal", message)
+
+    def packet(self, direction, data, detail="") -> None:
+        if self.packet_switch is not None and not self.packet_switch.enabled():
+            return
+        from core.packet_trace import packet_lines
+        self._emit_lines("normal", packet_lines(direction, data, detail), level="PACKET", raw_hex=True)
 
     def alarm(self, message: str) -> None:
         self.emit("alarm", message, level="WARNING")
@@ -290,12 +367,13 @@ class ScdfeLogger:
             return []
         cutoff = (time.time() if now is None else now) - retention_hours * 3600
         removed: list[Path] = []
-        for path in root.rglob("*.log"):
-            match = LOG_FILE_RE.fullmatch(path.name)
+        for entry, _ in log_entries(root, "scdfe_c-"):
+            path = Path(entry.path)
+            match = LOG_FILE_RE.fullmatch(entry.name)
             if not match or (process_name is not None and match.group("process") != process_name):
                 continue
             try:
-                if path.is_file() and path.stat().st_mtime < cutoff:
+                if entry.stat(follow_symlinks=False).st_mtime < cutoff and path.resolve().is_relative_to(root):
                     path.unlink()
                     removed.append(path)
             except OSError:
@@ -314,42 +392,21 @@ class ScdfeLogger:
         # frequently by the Web monitor, so walk it with ``os.scandir`` and
         # reuse each directory entry's cached metadata.  ``follow_symlinks``
         # stays disabled to preserve the endpoint's symlink boundary.
-        stack: list[tuple[str, str]] = [(os.fspath(root), "")]
-        while stack:
-            current, relative_base = stack.pop()
+        for entry, relative_name in log_entries(root, "scdfe_c-"):
+            match = LOG_FILE_RE.fullmatch(entry.name)
+            if match is None:
+                continue
             try:
-                entries = os.scandir(current)
+                stat = entry.stat(follow_symlinks=False)
             except OSError:
                 continue
-            with entries:
-                for entry in entries:
-                    try:
-                        if entry.is_symlink():
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append((entry.path, relative_base + entry.name + "/"))
-                            continue
-                        if not entry.name.startswith("scdfe_c-") or not entry.name.endswith(".log"):
-                            continue
-                        match = LOG_FILE_RE.fullmatch(entry.name)
-                        if not match or not entry.is_file(follow_symlinks=False):
-                            continue
-                        stat = entry.stat(follow_symlinks=False)
-                    except OSError:
-                        # A concurrent retention cleanup or rotation can remove
-                        # an entry between scandir and stat; skip it safely.
-                        continue
-                    relative_name = relative_base + entry.name
-                    item = {"name": relative_name, "process": match.group("process"),
-                            "hour": match.group("hour"), "size": stat.st_size,
-                            "modified_at": int(stat.st_mtime * 1000)}
-                    process_match = re.fullmatch(
-                        r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)",
-                        match.group("process"),
-                    )
-                    if process_match is not None:
-                        item["rtu_id"] = int(process_match.group("rtu_id"))
-                    items.append(item)
+            item = {"name": relative_name, "process": match.group("process"),
+                    "hour": match.group("hour"), "size": stat.st_size,
+                    "modified_at": int(stat.st_mtime * 1000)}
+            process_match = re.fullmatch(r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)", match.group("process"))
+            if process_match is not None:
+                item["rtu_id"] = int(process_match.group("rtu_id"))
+            items.append(item)
         return sorted(items, key=lambda item: (item["modified_at"], item["name"]), reverse=True)
 
     @classmethod
@@ -743,6 +800,7 @@ def _batch_writer_entry(
     batch_interval: float = BATCH_WRITER_INTERVAL,
     max_batch: int = BATCH_WRITER_MAX_BATCH,
     ready: Any | None = None,
+    drain_ack: Any | None = None,
 ) -> None:
     """Dedicated SQLite writer process for all communication-worker updates."""
     logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer")
@@ -829,6 +887,21 @@ def _batch_writer_entry(
                 message = queue.get(timeout=batch_interval)
             except Empty:
                 if not flush_pending():
+                    raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
+                continue
+            if (isinstance(message, tuple) and len(message) == 2
+                    and message[0] == BATCH_WRITER_DRAIN):
+                # A barrier travels through the same FIFO as producer writes.
+                # Acknowledge only after every preceding batch has committed.
+                # The shared generation lets timed-out callers distinguish a
+                # late acknowledgement from the next drain request.
+                try:
+                    flush_ok = flush_pending()
+                    if flush_ok and drain_ack is not None:
+                        drain_ack.value = message[1]
+                finally:
+                    queue.task_done()
+                if not flush_ok:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 continue
             if message == BATCH_WRITER_STOP:
@@ -979,7 +1052,7 @@ def definition_version_token(
     active = connection or store.open_connection()
     try:
         row = active.execute(
-            "SELECT version FROM _scada_definition_version WHERE rtu_id=?",
+            "SELECT definition_version FROM _scada_rtu_version WHERE rtu_id=?",
             (rtu_id,),
         ).fetchone()
         # ScadaStore creates the internal table and backfills rows during
@@ -1001,7 +1074,7 @@ def command_version_token(
     active = connection or store.open_connection()
     try:
         row = active.execute(
-            "SELECT version FROM _scada_command_version WHERE rtu_id=?",
+            "SELECT command_version FROM _scada_rtu_version WHERE rtu_id=?",
             (rtu_id,),
         ).fetchone()
         return 0 if row is None else int(row[0])
@@ -1179,7 +1252,10 @@ class ChannelWorker:
         self.master_factory = master_factory or build_master
         self.stop_event = stop_event or threading.Event()
         self.writer_queue = writer_queue
-        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id))
+        from core.packet_logging import packet_log_switch
+        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
+                                 packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
+                                 if store is not None else None)
         self.stats = WorkerStats()
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
@@ -1408,18 +1484,33 @@ class ChannelWorker:
                         quality_value = int(getattr(quality, "value", quality or 0))
                     except (TypeError, ValueError):
                         quality_value = 0
+                cache_key = (kind, point_no)
+                previous = candidate_cache.get(cache_key)
+                if previous is None:
+                    previous = cached_state(cache_key)
                 if kind == "yc":
                     raw_value = float(value)
                     base, scale = scaling.get(point_no, (0.0, 1.0))
                     engineering_value = float(base) + float(scale) * raw_value
                     if not math.isfinite(raw_value) or not math.isfinite(engineering_value):
                         raise ValueError(f"YC {point_no} 原始值或工程值不是有限数")
+                elif value is None:
+                    # IEC104 double-point intermediate/indeterminate states
+                    # have no Boolean value. Preserve the last business value
+                    # and publish invalid quality instead of inventing OFF.
+                    quality_value |= 128
+                    if previous is not None:
+                        raw_value, engineering_value = previous[:2]
+                    else:
+                        row = self._read_connection().execute(
+                            "SELECT value FROM fes_yx_define WHERE rtu_id=? AND pnt_no=?",
+                            (self.spec.rtu_id, point_no),
+                        ).fetchone()
+                        if row is None:
+                            continue
+                        raw_value = engineering_value = row["value"]
                 else:
                     raw_value = engineering_value = int(bool(value))
-                cache_key = (kind, point_no)
-                previous = candidate_cache.get(cache_key)
-                if previous is None:
-                    previous = cached_state(cache_key)
                 # Avoid allocating a three-item slice for every stable or
                 # changed point in the common polling path.
                 value_changed = (
@@ -1586,6 +1677,10 @@ class ChannelWorker:
         return self.stop_event.is_set()
 
     def run(self, *, max_cycles: int | None = None) -> WorkerStats:
+        with self.logger.session():
+            return self._run(max_cycles=max_cycles)
+
+    def _run(self, *, max_cycles: int | None = None) -> WorkerStats:
         """运行采集循环；连接失败会告警并按 retry_interval 重试。
 
         This method never lets a channel exception escape to the supervisor's
@@ -1608,11 +1703,17 @@ class ChannelWorker:
         try:
             while not self._stop_requested():
                 try:
-                    self._last_signature = definition_version_token(
+                    current_signature = definition_version_token(
                         self.store, self.spec.rtu_id, self._read_connection(),
                     )
+                    if self._last_signature is not None and current_signature != self._last_signature:
+                        self.logger.process("重连前检测到定义变化，退出并请求重载")
+                        return self.stats
+                    self._last_signature = current_signature
                     self._load_yc_scaling()
                     self._master = self.master_factory(self.store, self.spec)
+                    if hasattr(self._master, "set_packet_handler"):
+                        self._master.set_packet_handler(self.logger.packet)
                     self._master.connect()
                     self._measurement_cache.clear()
                     self._write_rtu_status(1)
@@ -1815,7 +1916,9 @@ def run_channel_debug(
             with store.connection() as connection:
                 control = connection.execute(f"SELECT * FROM {CONTROL_TABLE} WHERE id=1").fetchone()
             log_dir = log_directory(store, control) if control is not None else store.db_path.parent / "logs"
-        logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True), console=True)
+        from core.packet_logging import packet_log_switch
+        logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True), console=True,
+                             packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id))
         stop_event = stop_event or threading.Event()
         stats = WorkerStats()
         logger.process(f"独立调试启动 规约={spec.channel_type} "
@@ -1924,6 +2027,8 @@ class ScdfeSupervisor:
         self._writer_queue: Any | None = None
         self._writer_process: mp.Process | None = None
         self._writer_stop_sent = False
+        self._writer_drain_ack: Any | None = None
+        self._writer_drain_generation = 0
         self._reload_pending = False
         self._last_worker_start = 0.0
         self._scan_count = 0
@@ -1956,12 +2061,15 @@ class ScdfeSupervisor:
             return
         queue = self.context.JoinableQueue(maxsize=10000)
         ready = self.context.Event()
+        drain_ack = self.context.Value("Q", 0)
         self._writer_queue = queue
+        self._writer_drain_ack = drain_ack
+        self._writer_drain_generation = 0
         self._writer_stop_sent = False
         process = self.context.Process(
             target=_batch_writer_entry,
             args=(str(self.db_path), str(self.schema_dir), str(self.log_dir),
-                  queue, self.writer_batch_interval, self.writer_max_batch, ready),
+                  queue, self.writer_batch_interval, self.writer_max_batch, ready, drain_ack),
             name="scdfe-c-db-writer",
         )
         process.daemon = True
@@ -1969,6 +2077,7 @@ class ScdfeSupervisor:
             process.start()
         except Exception:
             self._writer_queue = None
+            self._writer_drain_ack = None
             try:
                 queue.close()
                 queue.join_thread()
@@ -2013,38 +2122,39 @@ class ScdfeSupervisor:
         queue = self._writer_queue
         if queue is None:
             return True
-        # JoinableQueue.join() is the only public way to wait for all
-        # task_done() acknowledgements, but it has no timeout.  Run that
-        # public operation in a short-lived daemon waiter and observe it from
-        # this process.  Do not inspect CPython's private unfinished-task
-        # semaphore: its implementation differs across Python/platform builds.
+        process, ack = self._writer_process, self._writer_drain_ack
+        if process is None or not process.is_alive() or ack is None:
+            return False
+        # Do not create an unbounded queue.join waiter: a failed writer can
+        # never wake it. A FIFO barrier and shared acknowledgement provide a
+        # bounded wait using public multiprocessing APIs on Windows and Unix.
         wait_seconds = timeout if timeout is not None else max(1.0, self.retry_interval * 2)
         if wait_seconds <= 0:
             return False
-        completed = threading.Event()
-
-        def wait_for_queue() -> None:
-            try:
-                queue.join()
-            finally:
-                completed.set()
-
-        waiter = threading.Thread(
-            target=wait_for_queue,
-            name="scdfe-c-db-writer-drain",
-            daemon=True,
-        )
-        waiter.start()
         deadline = time.monotonic() + wait_seconds
-        while not completed.wait(min(0.05, max(0.0, deadline - time.monotonic()))):
-            if self._writer_process is not None and not self._writer_process.is_alive():
-                # A dead writer cannot acknowledge the remaining messages. The
-                # supervisor will discard this queue and recreate it; return
-                # promptly instead of waiting for a task that can never finish.
+        self._writer_drain_generation += 1
+        generation = self._writer_drain_generation
+        try:
+            queue.put((BATCH_WRITER_DRAIN, generation), timeout=wait_seconds)
+        except (Full, OSError, ValueError):
+            return False
+        ack_lock = ack.get_lock()
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            # A terminated writer can leave a multiprocessing lock held.
+            # Never use the synchronized .value getter's unbounded acquire.
+            if ack_lock.acquire(timeout=min(0.01, remaining)):
+                try:
+                    if ack.get_obj().value >= generation:
+                        return True
+                finally:
+                    ack_lock.release()
+            if not process.is_alive():
                 return False
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return False
-        return True
+            time.sleep(min(0.01, remaining))
 
     def _stop_writer(self) -> bool:
         process, queue = self._writer_process, self._writer_queue
@@ -2064,6 +2174,7 @@ class ScdfeSupervisor:
         process.join(timeout=0)
         self._writer_process = None
         self._writer_queue = None
+        self._writer_drain_ack = None
         try:
             if process.exitcode:
                 queue.cancel_join_thread()
@@ -2363,7 +2474,11 @@ class ScdfeSupervisor:
                         lease = None  # Ownership transfers to the managed worker.
                         started += 1
                     continue
-                if not managed.thread.is_alive():
+                if managed.spec != spec:
+                    stopped_ok = self._stop_worker(key, reason="RTU 通道配置已修改，重新加载")
+                    if stopped_ok and self._start_worker(spec):
+                        reloaded += 1
+                elif not managed.thread.is_alive():
                     stopped_ok = self._stop_worker(key, reason="通信线程已退出", unexpected=True)
                     if stopped_ok and self._start_worker(spec, recovering=True):
                         started += 1

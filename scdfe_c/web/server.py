@@ -19,6 +19,7 @@ else:
     from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
+from core.web_request import RequestBodyMixin
 from scdfe_c.web.process_control import ProcessController
 
 
@@ -41,16 +42,7 @@ def browser_safe(value):
     return value
 
 
-def strict_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"重复 JSON 字段: {key}")
-        result[key] = value
-    return result
-
-
-class ScadaHandler(BaseHTTPRequestHandler):
+class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     server_version = "ScadaWeb/1.0"
 
     def setup(self):
@@ -87,44 +79,6 @@ class ScadaHandler(BaseHTTPRequestHandler):
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
         data = json.dumps(browser_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         self._send(status, "application/json; charset=utf-8", data, headers)
-
-    def _body(self):
-        if self.headers.get("Transfer-Encoding"):
-            raise ApiError(400, "不支持分块请求体")
-        if self.headers.get_content_type() != "application/json":
-            raise ApiError(415, "请使用 Content-Type: application/json")
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError as exc:
-            raise ApiError(400, "无效的 Content-Length") from exc
-        if length < 0 or length > 2_000_000:
-            raise ApiError(413, "请求体长度必须在 0 到 2000000 字节之间")
-        def invalid_constant(value):
-            raise ValueError(f"非法 JSON 数字: {value}")
-        try:
-            raw = self.rfile.read(length)
-            if len(raw) != length:
-                raise ValueError("请求体不完整")
-            body = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
-                              parse_constant=invalid_constant)
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise ApiError(400, "请求体必须是有效 UTF-8 JSON 对象") from exc
-        if not isinstance(body, dict):
-            raise ApiError(400, "请求体必须是 JSON 对象")
-        return body
-
-    def _request_guard(self):
-        host = self.headers.get("Host", "")
-        hostname = urlsplit("//" + host).hostname
-        if self.server.server_address[0] in {"127.0.0.1", "::1"}:
-            if hostname not in {"127.0.0.1", "localhost", "::1"}:
-                raise ApiError(403, "Host 不被允许", code="forbidden")
-        if self.command not in {"GET", "HEAD"}:
-            if self.headers.get("Sec-Fetch-Site") == "cross-site":
-                raise ApiError(403, "请求来源不被允许", code="forbidden")
-            origin = self.headers.get("Origin")
-            if origin and origin != "http://" + host:
-                raise ApiError(403, "请求来源不被允许", code="forbidden")
 
     def _if_match(self):
         value = self.headers.get("If-Match")
@@ -385,9 +339,12 @@ class ScadaHandler(BaseHTTPRequestHandler):
                                     order=query.get("order", "asc"), fields=fields)
 
     def _dispatch(self):
-        self._request_guard()
+        from core.packet_logging import handle_packet_recording
+        self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if handle_packet_recording(self, parts, query, method, self.store, 'c'):
+            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -405,7 +362,9 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 operation = self.server.process_controller.submit(self._body())
                 return self._json(202, {"operation": operation})
             raise ApiError(405, "进程接口支持 GET /api/processes 和 POST /api/processes/control")
-        if self._scdfe_control(parts, query, method):
+        # False means unhandled; a handled route returns _json()'s None after
+        # writing its response. Do not fall through and append a second 404.
+        if self._scdfe_control(parts, query, method) is not False:
             return
         if method == "GET":
             if not parts:
@@ -536,6 +495,10 @@ class ScadaHandler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _handle
 
     def _static(self, name):
+        if name == 'packet-recording.js':
+            from core.web_workbench import ASSET_DIR
+            return self._send(200, 'application/javascript; charset=utf-8',
+                              (ASSET_DIR / name).read_bytes())
         allowed = {"index.html": "text/html", "api.html": "text/html",
                    "app.css": "text/css", "app.js": "application/javascript"}
         if name not in allowed or not (STATIC_DIR / name).is_file():
@@ -548,12 +511,19 @@ class ScadaHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self.store = ScadaStore(db_path, schema_dir)
-        self.process_controller = ProcessController(self.store)
-        super().__init__(address, ScadaHandler)
+        self.store = ScadaStore(db_path, schema_dir, connection_pool_size=4)
+        try:
+            self.process_controller = ProcessController(self.store)
+            super().__init__(address, ScadaHandler)
+        except BaseException:
+            self.store.close()
+            raise
 
     def server_close(self):
-        super().server_close()
+        try:
+            super().server_close()
+        finally:
+            self.store.close()
 
 
 def make_server(host="127.0.0.1", port=8877, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

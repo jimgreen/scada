@@ -45,21 +45,6 @@
       ]
     },
     {
-      "chn_name": "源点类型",
-      "eng_name": "source_kind",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "单选菜单",
-      "disp_menu": "四遥类型",
-      "allowed_values": [
-        "yc",
-        "yx",
-        "yk",
-        "yt"
-      ],
-      "required": true
-    },
-    {
       "chn_name": "源RTU",
       "eng_name": "source_rtu_id",
       "primary_key": false,
@@ -209,7 +194,7 @@
   "indexes": [
     [
       "source_rtu_id",
-      "source_kind",
+      "kind",
       "source_pnt_no"
     ],
     [

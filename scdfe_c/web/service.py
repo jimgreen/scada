@@ -2,8 +2,8 @@
 
 The service deliberately keeps the JSON definitions authoritative.  SQLite is
 used for durable rows in ``D:\\codex\\scada\\db\\scada.sqlite3`` by default;
-each operation opens its own short-lived connection so multiple web workers
-can safely use the same database file.
+each operation owns an exclusive connection. Web servers may retain a bounded
+number of idle connections; other callers use short-lived connections.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import time
 from typing import Any, Iterator
 
@@ -27,8 +28,9 @@ KIND_TABLES = {
     "yt": "fes_yt_define",
     "yk": "fes_yk_define",
 }
-_DEFINITION_VERSION_TABLE = '_scada_definition_version'
-_COMMAND_VERSION_TABLE = '_scada_command_version'
+RTU_VERSION_DDL = ('CREATE TABLE IF NOT EXISTS _scada_rtu_version ('
+                   'rtu_id INTEGER PRIMARY KEY CHECK (rtu_id > 0), '
+                   'definition_version INTEGER NOT NULL DEFAULT 0, command_version INTEGER NOT NULL DEFAULT 0)')
 # Runtime columns are deliberately excluded from the definition version.  A
 # communication worker updates these fields continuously and those writes must
 # never cause a protocol reconnect/reload.
@@ -175,11 +177,22 @@ class SchemaCatalog:
 
 
 class ScadaStore:
-    def __init__(self, db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DIR):
+    def __init__(self, db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DIR,
+                 *, connection_pool_size: int = 0):
+        if type(connection_pool_size) is not int or not 0 <= connection_pool_size <= 64:
+            raise ValueError('connection_pool_size 必须在 0..64 之间')
+        self.connection_pool_size = connection_pool_size
+        self._connection_pool = []
+        self._pool_lock = threading.Lock()
+        self._pool_closed = False
         self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.catalog = SchemaCatalog(schema_dir)
-        self._initialise()
+        try:
+            self._initialise()
+        except BaseException:
+            self.close()
+            raise
 
     def open_connection(self) -> sqlite3.Connection:
         """Open a configured SQLite connection owned by the caller.
@@ -189,22 +202,67 @@ class ScadaStore:
         connection and close it when their thread exits, avoiding repeated
         PRAGMA and connection setup work on every command poll.
         """
-        connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        return self._open_connection()
+
+    def _open_connection(self, *, check_same_thread=True):
+        connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None,
+                                     check_same_thread=check_same_thread)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=NORMAL")
-        connection.execute("PRAGMA busy_timeout=30000")
-        connection.execute("PRAGMA mmap_size=1073741824")
-        connection.execute("PRAGMA temp_store=MEMORY")
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute("PRAGMA busy_timeout=30000")
+            connection.execute("PRAGMA mmap_size=1073741824")
+            connection.execute("PRAGMA temp_store=MEMORY")
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = self.open_connection()
+        if not self.connection_pool_size:
+            connection = self.open_connection()
+            try:
+                yield connection
+            finally:
+                connection.close()
+            return
+        with self._pool_lock:
+            connection = self._connection_pool.pop() if self._connection_pool else None
+        if connection is None:
+            connection = self._open_connection(check_same_thread=False)
         try:
             yield connection
         finally:
+            retained = False
+            try:
+                # Closing the old per-call connection rolled back implicitly.
+                # Do so explicitly before reuse, including read snapshots and
+                # exception paths, so no transaction crosses request boundaries.
+                connection.rollback()
+                connection.row_factory = sqlite3.Row
+                with self._pool_lock:
+                    if not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
+                        self._connection_pool.append(connection)
+                        retained = True
+            except sqlite3.Error:
+                pass  # A damaged/explicitly closed connection is never pooled.
+            finally:
+                if not retained:
+                    connection.close()
+
+    def close(self):
+        """Drain idle handles; in-flight leases close when returned.
+
+        Late shutdown callbacks can still use short-lived connections, but
+        cannot repopulate the pool after server_close().
+        """
+        with self._pool_lock:
+            self._pool_closed = True
+            connections, self._connection_pool = self._connection_pool, []
+        for connection in connections:
             connection.close()
 
     @staticmethod
@@ -247,25 +305,16 @@ class ScadaStore:
                     connection.execute(
                         "CREATE TABLE IF NOT EXISTS _scada_schema (table_name TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)"
                     )
-                    connection.execute(
-                        f"CREATE TABLE IF NOT EXISTS {quote_identifier(_DEFINITION_VERSION_TABLE)} ("
-                        "rtu_id INTEGER PRIMARY KEY CHECK (rtu_id > 0), "
-                        "version INTEGER NOT NULL DEFAULT 0)"
-                    )
-                    connection.execute(
-                        f"CREATE TABLE IF NOT EXISTS {quote_identifier(_COMMAND_VERSION_TABLE)} ("
-                        "rtu_id INTEGER PRIMARY KEY CHECK (rtu_id > 0), "
-                        "version INTEGER NOT NULL DEFAULT 0)"
-                    )
                     expected_tables = set(self.catalog.names())
                     actual_tables = {
                         row[0] for row in connection.execute(
                             "SELECT name FROM sqlite_master WHERE type='table'"
                         )
                     }
-                    unexpected_tables = actual_tables - expected_tables - {
-                        '_scada_schema', _DEFINITION_VERSION_TABLE, _COMMAND_VERSION_TABLE,
-                    }
+                    if actual_tables.intersection({'_scada_command_version', '_scada_definition_version'}):
+                        raise RuntimeError('旧版数据库需要显式迁移：python -m tools.simplify_schema --db <数据库> --apply')
+                    connection.execute(RTU_VERSION_DDL)
+                    unexpected_tables = actual_tables - expected_tables - {'_scada_schema', '_scada_rtu_version'}
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -295,6 +344,7 @@ class ScadaStore:
                                 parts.append('FOREIGN KEY (rtu_id) REFERENCES fes_rtu_define(rtu_id) ON DELETE RESTRICT ON UPDATE RESTRICT')
                             connection.execute(
                                 f"CREATE TABLE {quote_identifier(name)} ({', '.join(parts)})"
+                                + (" WITHOUT ROWID" if name in KIND_TABLES.values() else "")
                             )
                             self._ensure_indexes(connection, name, payload)
                             connection.execute(
@@ -316,15 +366,10 @@ class ScadaStore:
                                     '请重新初始化数据库'
                                 )
                             self._ensure_indexes(connection, name, payload)
-                    self._ensure_definition_version_triggers(connection)
+                    self._ensure_definition_version_triggers(connection, self.catalog)
                     self._ensure_command_version_triggers(connection)
                     connection.execute(
-                        f'INSERT OR IGNORE INTO {quote_identifier(_DEFINITION_VERSION_TABLE)}(rtu_id, version) '
-                        'SELECT rtu_id, 0 FROM fes_rtu_define'
-                    )
-                    connection.execute(
-                        f'INSERT OR IGNORE INTO {quote_identifier(_COMMAND_VERSION_TABLE)}(rtu_id, version) '
-                        'SELECT rtu_id, 0 FROM fes_rtu_define'
+                        'INSERT OR IGNORE INTO _scada_rtu_version(rtu_id) SELECT rtu_id FROM fes_rtu_define'
                     )
                     metadata_tables = {
                         row[0] for row in connection.execute(
@@ -399,7 +444,8 @@ class ScadaStore:
                 + ', '.join(quote_identifier(key) for key in keys) + ')'
             )
 
-    def _ensure_definition_version_triggers(self, connection) -> None:
+    @staticmethod
+    def _ensure_definition_version_triggers(connection, catalog) -> None:
         """Maintain a cheap per-RTU version for static definition changes.
 
         Definition fingerprints used to serialize every static cell from every
@@ -408,16 +454,14 @@ class ScadaStore:
         one indexed lookup.  Runtime value/quality/heartbeat fields are
         excluded so normal acquisition never asks a protocol to reconnect.
         """
-        version_table = quote_identifier(_DEFINITION_VERSION_TABLE)
-
         def bump(alias: str) -> str:
             return (
-                f'INSERT INTO {version_table}(rtu_id, version) VALUES ({alias}.rtu_id, 1) '
-                'ON CONFLICT(rtu_id) DO UPDATE SET version=version+1;'
+                f'INSERT INTO _scada_rtu_version(rtu_id, definition_version) VALUES ({alias}.rtu_id, 1) '
+                'ON CONFLICT(rtu_id) DO UPDATE SET definition_version=definition_version+1;'
             )
 
-        for name in self.catalog.names():
-            columns = self.schema(name)['columns']
+        for name in catalog.names():
+            columns = catalog.get(name)['columns']
             if not any(column['eng_name'] == 'rtu_id' for column in columns):
                 continue
             static_columns = [
@@ -437,12 +481,28 @@ class ScadaStore:
             )
             if static_columns:
                 update_columns = ', '.join(quote_identifier(column) for column in static_columns)
-                connection.execute(
-                    f'CREATE TRIGGER IF NOT EXISTS {quote_identifier(trigger_prefix + "_upd")} '
-                    f'AFTER UPDATE OF {update_columns} ON {table} BEGIN {bump("NEW")} END'
+                changed = ' OR '.join(
+                    f'OLD.{quote_identifier(column)} IS NOT NEW.{quote_identifier(column)}'
+                    for column in static_columns
                 )
+                trigger_name = trigger_prefix + '_upd'
+                sql = (
+                    f'CREATE TRIGGER {quote_identifier(trigger_name)} '
+                    f'AFTER UPDATE OF {update_columns} ON {table} '
+                    f'WHEN {changed} BEGIN {bump("NEW")} END'
+                )
+                existing = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+                    (trigger_name,),
+                ).fetchone()
+                # Upgrade only this owned trigger, inside the initialization
+                # transaction. Reopening an unchanged schema performs no DDL.
+                if existing is None or existing[0] != sql:
+                    connection.execute(f'DROP TRIGGER IF EXISTS {quote_identifier(trigger_name)}')
+                    connection.execute(sql)
 
-    def _ensure_command_version_triggers(self, connection) -> None:
+    @staticmethod
+    def _ensure_command_version_triggers(connection) -> None:
         """Maintain one cheap command-change token per RTU.
 
         Polling the command tables used to aggregate ``_version`` for every
@@ -451,12 +511,10 @@ class ScadaStore:
         materialised the same command rows.  These triggers advance a compact
         token only when command input changes or rows are added/removed.
         """
-        version_table = quote_identifier(_COMMAND_VERSION_TABLE)
-
         def bump(alias: str) -> str:
             return (
-                f'INSERT INTO {version_table}(rtu_id, version) VALUES ({alias}.rtu_id, 1) '
-                'ON CONFLICT(rtu_id) DO UPDATE SET version=version+1;'
+                f'INSERT INTO _scada_rtu_version(rtu_id, command_version) VALUES ({alias}.rtu_id, 1) '
+                'ON CONFLICT(rtu_id) DO UPDATE SET command_version=command_version+1;'
             )
 
         for table_name in ('fes_yk_define', 'fes_yt_define'):
@@ -532,8 +590,8 @@ class ScadaStore:
                 raise ApiError(400, f'{name} 必须在 50 到 60000 之间')
             if name == 'bind_port' and not 0 <= number <= 65535:
                 raise ApiError(400, '字段 bind_port 必须在 0 到 65535 之间')
-            if name in {'common_address', 'unit_id'} and not 1 <= number <= 247:
-                raise ApiError(400, f'字段 {name} 必须在 1 到 247 之间')
+            if name == 'common_address' and not 1 <= number <= 65534:
+                raise ApiError(400, 'IEC104 公共地址必须在 1 到 65534 之间')
             if name == 'remote_port' and not 1 <= number <= 65535:
                 raise ApiError(400, '字段 remote_port 必须在 1 到 65535 之间')
             if name in {'keep_alive', 'if_yx', 'if_reverse', 'ifyk', 'ifreverse',
@@ -671,10 +729,6 @@ class ScadaStore:
             return
         if 'kind' in values and values['kind'] not in POINT_KINDS:
             raise ApiError(400, '转发点类型必须是 yc、yx、yk 或 yt')
-        if 'source_kind' in values and values['source_kind'] not in POINT_KINDS:
-            raise ApiError(400, '源点类型必须是 yc、yx、yk 或 yt')
-        if values.get('kind') is not None and values.get('source_kind') is not None and values['kind'] != values['source_kind']:
-            raise ApiError(400, '转发点类型必须与源点类型一致')
         if 'enabled' in values and values['enabled'] not in {0, 1}:
             raise ApiError(400, 'enabled 必须是 0 或 1')
         if 'address' in values and not 0 <= values['address'] <= 65535:
@@ -684,7 +738,8 @@ class ScadaStore:
         if 'scale' in values and values['scale'] == 0:
             raise ApiError(400, '比例不能为 0')
 
-    def _normalise(self, table: str, values: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
+    def _normalise(self, table: str, values: dict[str, Any], *, partial: bool = False,
+                   validate_row: bool = True, generated_key: str | None = None) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
         if not isinstance(values, dict):
             raise ApiError(400, "请求体必须是 JSON 对象")
@@ -700,12 +755,15 @@ class ScadaStore:
                     values[name], column,
                     required=column["primary_key"] or name == 'rtu_id' or column.get('required', False),
                 )
+            elif name == generated_key:
+                continue
             elif not partial and (column["primary_key"] or name == 'rtu_id' or column.get('required', False)):
                 raise ApiError(400, f"缺少必填字段: {name}")
             elif not partial and 'default' in column:
                 result[name] = self._coerce(column['default'], column)
-        self._validate_modbus_row(canonical, result, partial=partial)
-        self._validate_trans_row(canonical, result, partial=partial)
+        if validate_row:
+            self._validate_modbus_row(canonical, result, partial=partial)
+            self._validate_trans_row(canonical, result, partial=partial)
         return result
 
     def _key_values(self, table: str, raw: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
@@ -818,15 +876,22 @@ class ScadaStore:
             raise ApiError(400, "order 只能是 asc 或 desc")
         with self.connection() as connection:
             connection.execute('BEGIN')
-            total = connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(canonical)}{predicate}", params).fetchone()[0]
             ordering = ', '.join(f'{quote_identifier(name)} {order.upper()}' for name in [sort] + [k for k in primary_keys if k != sort])
             projection = ', '.join([quote_identifier('_version'), *(
                 quote_identifier(column["eng_name"]) for column in selected_columns
             )])
             rows = connection.execute(
                 f"SELECT {projection} FROM {quote_identifier(canonical)}{predicate} ORDER BY {ordering} LIMIT ? OFFSET ?",
-                [*params, limit, offset],
+                [*params, limit + 1, offset],
             ).fetchall()
+            # A short final page already gives the exact count. A full page
+            # with a successor, or an empty page beyond the end, still needs
+            # COUNT from this same read snapshot.
+            if len(rows) > limit or (offset and not rows):
+                total = connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(canonical)}{predicate}", params).fetchone()[0]
+                rows = rows[:limit]
+            else:
+                total = offset + len(rows)
         return {"items": self._public_rows(rows, selected_columns), "total": int(total), "limit": limit, "offset": offset}
 
     def get_row(self, table: str, key: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
@@ -839,9 +904,16 @@ class ScadaStore:
             raise ApiError(404, "记录不存在", code="not_found")
         return self._public_row(row, columns)
 
-    def create_row(self, table: str, values: dict[str, Any]) -> dict[str, Any]:
+    def create_row(self, table: str, values: dict[str, Any], *, allocate_key=False) -> dict[str, Any]:
         canonical, columns, primary_keys = self._table_parts(table)
-        normalised = self._normalise(table, values)
+        # Only designated channel endpoints can omit a single SQLite INTEGER
+        # PRIMARY KEY. Generic table CRUD continues to require explicit keys.
+        generated = primary_keys[0] if allocate_key else None
+        if generated and (len(primary_keys) != 1 or generated in values or
+                          canonical not in (set(CHANNEL_PARAMETER_TABLES.values()) | {'fes_scdfe_t_define'}) or
+                          generated not in {'channel_id', 'id'}):
+            raise ValueError("不支持自动分配该主键")
+        normalised = self._normalise(table, values, generated_key=generated)
         names = [c["eng_name"] for c in columns]
         insert_names = [name for name in names if name in normalised]
         placeholders = ", ".join("?" for _ in insert_names)
@@ -849,7 +921,9 @@ class ScadaStore:
         try:
             with self.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                connection.execute(sql, [normalised[n] for n in insert_names])
+                cursor = connection.execute(sql, [normalised[n] for n in insert_names])
+                if generated:
+                    normalised[generated] = cursor.lastrowid
                 row = self._read(connection, table, [normalised[n] for n in primary_keys])
                 connection.commit()
                 return row
@@ -946,11 +1020,7 @@ class ScadaStore:
                 # removed.  Drop both internal tokens so recreating the same
                 # RTU starts from a clean definition/command generation.
                 connection.execute(
-                    f'DELETE FROM {quote_identifier(_DEFINITION_VERSION_TABLE)} WHERE rtu_id=?',
-                    (keys['rtu_id'],),
-                )
-                connection.execute(
-                    f'DELETE FROM {quote_identifier(_COMMAND_VERSION_TABLE)} WHERE rtu_id=?',
+                    'DELETE FROM _scada_rtu_version WHERE rtu_id=?',
                     (keys['rtu_id'],),
                 )
                 deleted_rows['fes_rtu_define'] = 1
@@ -1017,10 +1087,10 @@ class ScadaStore:
             connection.commit()
         return item
 
-    def update_row(self, table: str, key: str | list[Any] | tuple[Any, ...], values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
+    def _prepare_update(self, table, key, values):
         canonical, columns, primary_keys = self._table_parts(table)
         keys = self._key_values(table, key)
-        normalised = self._normalise(table, values, partial=True)
+        normalised = self._normalise(table, values, partial=True, validate_row=False)
         if set(normalised).intersection(primary_keys):
             raise ApiError(400, "主键字段不能修改")
         if not normalised:
@@ -1029,13 +1099,51 @@ class ScadaStore:
         predicate = " AND ".join(f"{quote_identifier(name)}=?" for name in primary_keys)
         params = [normalised[n] for n in normalised]
         params.extend(keys.values())
+        sql = f"UPDATE {quote_identifier(canonical)} SET {assignments}, _version=_version+1 WHERE {predicate}"
+        return canonical, key, normalised, sql, params
+
+    def _apply_update(self, connection, change, if_match=None):
+        table, key, values, sql, params = change
+        # Four-remote point rows have field-level checks only. A successful
+        # conditional write proves existence/version without reading the old
+        # wide row. Missing/stale rows still report the usual 404/409.
+        if table in {'fes_yc_define', 'fes_yx_define', 'fes_yk_define', 'fes_yt_define'}:
+            if if_match is not None:
+                sql += ' AND _version=?'
+                params = [*params, if_match]
+            if connection.execute(sql, params).rowcount == 0:
+                self._check_version(self._read(connection, table, key), if_match)
+                raise ApiError(409, '更新未写入', code='conflict')
+            return
+        current = self._read(connection, table, key)
+        self._check_version(current, if_match)
+        # Validate partial edits against the full row under the write lock.
+        merged = {**current, **values}
+        self._validate_modbus_row(table, merged, partial=False)
+        self._validate_trans_row(table, merged, partial=False)
+        connection.execute(sql, params)
+
+    def update_rows(self, updates):
+        """Apply internal validated updates atomically; return their count."""
+        changes = [self._prepare_update(*item) for item in updates]
+        if not changes:
+            return 0
+        try:
+            with self.connection() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                for change in changes:
+                    self._apply_update(connection, change)
+                connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ApiError(409, '引用的 RTU 不存在或数据违反约束', code='conflict') from exc
+        return len(changes)
+
+    def update_row(self, table: str, key: str | list[Any] | tuple[Any, ...], values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
+        change = self._prepare_update(table, key, values)
         try:
             with self.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                self._check_version(self._read(connection, table, key), if_match)
-                connection.execute(
-                    f"UPDATE {quote_identifier(canonical)} SET {assignments}, _version=_version+1 WHERE {predicate}", params
-                )
+                self._apply_update(connection, change, if_match)
                 row = self._read(connection, table, key)
                 connection.commit()
                 return row
@@ -1156,38 +1264,9 @@ class ScadaStore:
         body = dict(values)
         body["rtu_id"] = rtu_id
         primary_keys = self.catalog.public(table)["primary_keys"]
-        # Three protocol tables use a synthetic id primary key.  Generate it
-        # in the same IMMEDIATE transaction as the insert to avoid duplicate
-        # ids when two operators submit at once.
         if primary_keys == ["id"] and "id" in body:
             raise ApiError(400, "协议参数的 id 由服务端自动分配，不能提交", code="immutable_primary_key")
-        if primary_keys == ["id"]:
-            canonical, columns, _ = self._table_parts(table)
-            # Validate all supplied values while intentionally omitting the
-            # synthetic primary key that this method allocates below.
-            normalised = self._normalise(table, body, partial=True)
-            names = [c["eng_name"] for c in columns if c["eng_name"] in normalised]
-            try:
-                with self.connection() as connection:
-                    connection.execute("BEGIN IMMEDIATE")
-                    current = connection.execute(
-                        f"SELECT COALESCE(MAX(id), 0) + 1 FROM {quote_identifier(canonical)}"
-                    ).fetchone()[0]
-                    normalised["id"] = int(current)
-                    names = [c["eng_name"] for c in columns if c["eng_name"] in normalised]
-                    placeholders = ", ".join("?" for _ in names)
-                    connection.execute(
-                        f"INSERT INTO {quote_identifier(canonical)} "
-                        f"({', '.join(quote_identifier(n) for n in names)}) "
-                        f"VALUES ({placeholders})",
-                        [normalised[n] for n in names],
-                    )
-                    row = self._read(connection, table, [normalised[key] for key in primary_keys])
-                    connection.commit()
-                    return row
-            except sqlite3.IntegrityError as exc:
-                raise ApiError(409, "协议参数已存在或数据违反约束", code="conflict") from exc
-        return self.create_row(table, body)
+        return self.create_row(table, body, allocate_key=primary_keys == ["id"])
 
     def channel_for_rtu(self, rtu_id):
         canonical, columns, _ = self._table_parts('fes_rtu_define')

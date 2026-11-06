@@ -1,12 +1,5 @@
-<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_t · 通信监控</title><link rel="stylesheet" href="/static/app.css"></head>
-<body>
-<header><div><h1>scdfe_t 四遥转发</h1><p>通信通道与测点配置</p></div><span id="connection" class="status">连接中…</span></header>
-<main>
-<nav class="top-nav"><a class="active" href="/communication.html">通信监控</a><a href="/processes.html">进程监控</a><a href="/logs.html">运行日志</a></nav>
-<section class="toolbar"><button id="new-channel" class="primary">新建通道</button><button id="refresh">刷新</button><label>当前通道<select id="selected-channel"><option value="">请选择</option></select></label><span id="summary" class="muted"></span><span id="toast" role="status"></span></section>
-<section class="split"><div class="panel"><div class="panel-head"><h2>转发通道</h2><span id="channel-count" class="muted"></span></div><div class="table-wrap"><table><thead><tr><th>编号</th><th>名称</th><th>规约</th><th>状态</th><th>PID</th><th>操作</th></tr></thead><tbody id="channels"></tbody></table></div></div><div class="panel"><div class="panel-head"><h2>通道详情</h2><button id="edit-channel">编辑</button></div><dl id="channel-detail"><dt>通道</dt><dd>未选择</dd></dl></div></section>
-<section class="panel points-panel"><div class="panel-head"><h2>四遥测点映射</h2><div class="actions"><select id="kind-filter"><option value="">全部类型</option><option value="yc">遥测</option><option value="yx">遥信</option><option value="yk">遥控</option><option value="yt">遥调</option></select><button id="new-point" class="primary">新增测点</button></div></div><div class="table-wrap"><table><thead><tr><th>类型</th><th>转发点号</th><th>源 RTU</th><th>源点号</th><th>名称</th><th>IEC IOA</th><th>Modbus 区/地址</th><th>启用</th><th>操作</th></tr></thead><tbody id="points"></tbody></table></div></section>
-</main>
-<dialog id="editor"><form method="dialog" id="editor-form"><div class="dialog-head"><h2 id="editor-title">编辑</h2><button type="button" id="close-editor" aria-label="关闭">×</button></div><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error"></p><div class="dialog-actions"><button type="button" id="cancel-editor">取消</button><button type="submit" class="primary">保存</button></div></form></dialog>
-<script src="/static/app.js"></script></body></html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_t · 通信监控</title><link rel="stylesheet" href="/static/app.css"></head>
+<body><header><h1>通信监控</h1></header><main>
+<section class="status-grid communication-summary" aria-label="通道状态"><div class="panel"><h2>转发通道</h2><strong id="channel-total">—</strong></div><div class="panel"><h2>正在运行</h2><strong id="channel-running">—</strong></div><div class="panel"><h2>通道异常</h2><strong id="channel-errors">—</strong></div></section>
+<section class="panel"><div class="panel-head"><h2>通信状态</h2><div class="actions"><span id="message" class="muted" role="status"></span><button id="refresh">刷新</button></div></div><div class="table-wrap"><table><thead><tr><th>通道</th><th>规约</th><th>监听地址</th><th>状态</th><th>扫描周期</th><th>心跳</th><th>错误</th><th>查看</th></tr></thead><tbody id="communication-rows"></tbody></table></div></section>
+</main><script src="/static/communication.js"></script></body></html>

@@ -11,6 +11,7 @@ import struct
 import threading
 import time
 from typing import NamedTuple
+from core.packet_trace import PacketTrace
 
 try:
     import can
@@ -80,8 +81,9 @@ def _count(value, name):
     return value
 
 
-class _CanTransport:
+class _CanTransport(PacketTrace):
     """同步 CAN/CAN-FD 传输；由公开的 ``CanMaster`` 组合使用。"""
+    PACKET_PROTOCOL = "CAN"
 
     def __init__(self, *, interface='virtual', channel=None, bitrate=500000,
                  data_bitrate=None, fd=False, receive_own_messages=False,
@@ -119,6 +121,12 @@ class _CanTransport:
     def _reopen(self):
         try:
             self.bus = can.Bus(**self._bus_options)
+            send = self.bus.send
+            def traced_send(message, *args, **kwargs):
+                result = send(message, *args, **kwargs)
+                self._trace_can("TX", message)
+                return result
+            self.bus.send = traced_send
         except Exception as exc:
             raise CanError(f'打开 CAN 总线失败: {exc}') from exc
 
@@ -173,6 +181,8 @@ class _CanTransport:
             message = self.bus.recv(timeout)
         except Exception as exc:
             raise CanError(f'接收 CAN 帧失败: {exc}') from exc
+        if message is not None:
+            self._trace_can("RX", message)
         return None if message is None else CanFrame.from_message(message)
 
     def receive(self, *, timeout=1.0, count=None):
@@ -217,7 +227,11 @@ class _CanTransport:
             raise CanError('CAN 总线未打开')
         message = self.message(arbitration_id, data, **kwargs)
         try:
-            return self.bus.send_periodic(message, period, duration=duration)
+            # When tracing, use python-can's thread scheduler so our bus.send
+            # wrapper observes every successful send, including periodic ones.
+            trace_options = ({"modifier_callback": lambda msg: None}
+                             if getattr(self, "_packet_handler", None) is not None else {})
+            return self.bus.send_periodic(message, period, duration=duration, **trace_options)
         except Exception as exc:
             raise CanError(f'启动周期发送失败: {exc}') from exc
 

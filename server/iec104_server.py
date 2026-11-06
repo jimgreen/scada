@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import threading
 
+from core.iec104_values import binary_command_value, double_to_binary
+from core.packet_trace import PacketTrace
+
 try:
     import c104
 except ImportError as exc:  # pragma: no cover - dependency check path
@@ -36,7 +39,7 @@ def _require_c104():
 
 @dataclass(frozen=True)
 class IEC104Command:
-    """已收到的遥控/遥调命令快照。"""
+    """已收到的业务命令快照；单双点遥控均为 False/True。"""
 
     kind: str
     point_no: int
@@ -58,7 +61,7 @@ def attr_value(obj, name):
     return value() if callable(value) else value
 
 
-class IEC104Server:
+class IEC104Server(PacketTrace):
     """单站 IEC104 服务端。
 
     ``start`` 才会打开监听 socket；构造和点表注册不会绑定端口，便于在启动
@@ -280,6 +283,12 @@ class IEC104Server:
                 on_send(data)
             self._server.on_send_raw(send)
 
+    def set_packet_handler(self, handler):
+        super().set_packet_handler(handler)
+        self.PACKET_PROTOCOL = "IEC104 APDU"
+        self.set_raw_handlers(on_receive=lambda data: self._packet("RX", data),
+                              on_send=lambda data: self._packet("TX", data))
+
     def set_clock_sync_handler(self, handler):
         """设置对时回调；返回 False 或 FAILURE 会拒绝对时。"""
         if not callable(handler):
@@ -336,7 +345,9 @@ class IEC104Server:
         if isinstance(value, (bool, int, float, str, bytes)) or value is None:
             return value
         name = value.__class__.__name__
-        if name in {'Int16', 'UInt16', 'UInt5', 'UInt7', 'Int7', 'Double'}:
+        if name == 'Double':
+            return double_to_binary(value)
+        if name in {'Int16', 'UInt16', 'UInt5', 'UInt7', 'Int7'}:
             return int(value)
         if name == 'NormalizedFloat':
             return float(value)
@@ -365,9 +376,10 @@ class IEC104Server:
             if typ == 3:
                 return c104.NormalizedFloat(float(value))
         if kind == 'yk':
+            value = binary_command_value(value)
             if int(data_type or 1) == 2:
-                return value if isinstance(value, c104.Double) else (c104.Double.ON if int(value) else c104.Double.OFF)
-            return bool(value)
+                return c104.Double.ON if value else c104.Double.OFF
+            return value
         if kind == 'yt':
             typ = int(data_type or 3)
             if typ == 1:
@@ -457,8 +469,11 @@ class IEC104Server:
         def callback(point: c104.Point, previous_info: c104.Information,
                      message: c104.IncomingMessage) -> c104.ResponseState:
             try:
+                value = self._plain(point.value)
+                if kind == 'yk':
+                    value = binary_command_value(value)
                 event = IEC104Command(
-                    kind=kind, point_no=point_no, value=self._plain(point.value),
+                    kind=kind, point_no=point_no, value=value,
                     selected=bool(attr_value(message, 'is_select_command')),
                     cause=attr_value(message, 'cot'),
                     originator_address=int(attr_value(message, 'originator_address')),
@@ -487,29 +502,38 @@ class IEC104Server:
         self._handlers[key] = handler
         self._points[key].on_receive(self._make_command_callback(*key))
 
+    def set_monitor_report_interval(self, milliseconds):
+        """Change native periodic YC/YX reports without replacing the station."""
+        period = int(milliseconds)
+        if period <= 0:
+            raise ValueError('周期上送间隔必须为正整数')
+        period = ((period + self.tick_rate_ms - 1) // self.tick_rate_ms) * self.tick_rate_ms
+        with self._lock:
+            for (kind, _), point in self._points.items():
+                if kind in ('yc', 'yx'):
+                    point.report_ms = period
+        return period
+
     def command(self, kind, point_no):
         return self._commands.get((kind, int(point_no)))
 
-    def update(self, kind, point_no, value, *, cause='SPONTANEOUS', transmit=True):
+    def update(self, kind, point_no, value, *, cause='SPONTANEOUS', transmit=True,
+               quality=None):
         """更新并主动上送遥信/遥测；命令点只允许通过客户端命令改变。"""
         if kind not in ('yx', 'yc'):
             raise ValueError('服务端 update 只允许 yx/yc，yk/yt 应由客户端下发')
-        key = (kind, int(point_no))
-        point = self._points.get(key)
-        if point is None:
-            raise IEC104ServerError(f'点 {kind}/{point_no} 尚未注册')
-        data_type = self._point_types.get(key)
-        point.value = self._as_value(kind, data_type, value)
-        if transmit and not point.transmit(self._cause(cause)):
-            raise IEC104ServerError(f'点 {kind}/{point_no} 上送失败')
-        return self._plain(point.value)
+        return self.set_value(kind, point_no, value, cause=cause,
+                              transmit=transmit, quality=quality)
 
-    def set_value(self, kind, point_no, value, *, cause='SPONTANEOUS', transmit=False):
+    def set_value(self, kind, point_no, value, *, cause='SPONTANEOUS', transmit=False,
+                  quality=None):
         """设置任意四遥点的当前值。
 
         IEC 104 服务端只能主动发送遥信和遥测监视量。遥控、遥调点的值
         通常由客户端命令改变，因此它们默认只更新站内值，不发送控制报文。
         ``transmit=True`` 仅用于需要显式测试底层信息体发送的场景。
+        ``quality`` 可为质量位整数或 c104.Quality；仅适用于 yc/yx，省略时
+        保留现有质量。质量和业务值在上送前一起更新，支持仅质量变化的报告。
         """
         if kind not in self.base:
             raise ValueError('kind 必须是 yc/yx/yk/yt')
@@ -517,10 +541,28 @@ class IEC104Server:
         point = self._points.get(key)
         if point is None:
             raise IEC104ServerError(f'点 {kind}/{point_no} 尚未注册')
+        if quality is not None:
+            if kind not in ('yc', 'yx'):
+                raise ValueError('只有 yc/yx 监视量支持质量标志')
+            quality = c104.Quality(quality)
         point.value = self._as_value(kind, self._point_types.get(key), value)
+        if quality is not None:
+            point.quality = quality
         if transmit and not point.transmit(self._cause(cause)):
             raise IEC104ServerError(f'点 {kind}/{point_no} 上送失败')
         return self._plain(point.value)
+
+    def prepare_value(self, kind, point_no, value):
+        """Return the station's business value without changing it or sending an ASDU."""
+        key = (kind, int(point_no))
+        if key not in self._points:
+            raise IEC104ServerError(f'点 {kind}/{point_no} 尚未注册')
+        native = self._as_value(kind, self._point_types[key], value)
+        # c104 stores short floating-point information in single precision.
+        # Return exactly what a later native snapshot will expose.
+        if isinstance(native, float):
+            native = c104.ShortInfo(native).value
+        return self._plain(native)
 
     def transmit_many(self, kind, values, *, cause='SPONTANEOUS'):
         """批量更新同一类型点并用 c104.Batch 一次上送。"""
@@ -551,23 +593,27 @@ class IEC104Server:
         遥调点只更新站内当前值，不会伪造一条发往客户端的控制报文。
         返回本次处理的点数和实际发送的批次数。
         """
-        incoming = values if isinstance(values, Mapping) else {}
+        incoming = {} if values is None else values
+        if not isinstance(incoming, Mapping):
+            raise ValueError('values 必须是点值对象')
         groups = {}
-        updated = 0
         with self._lock:
-            for kind in ('yx', 'yc', 'yk', 'yt'):
-                supplied = incoming.get(kind, {})
-                if supplied is None:
-                    supplied = {}
+            prepared = {}
+            for kind, supplied in incoming.items():
+                if kind not in self.base:
+                    raise ValueError(f'未知四遥类型: {kind}')
                 if not isinstance(supplied, Mapping):
                     raise ValueError(f'{kind} 必须是点号到值的对象')
-                for key, point in self._points.items():
-                    if key[0] != kind:
-                        continue
-                    point_no = key[1]
-                    value = supplied.get(point_no, supplied.get(str(point_no), point.value))
-                    point.value = self._as_value(kind, self._point_types.get(key), value)
-                    updated += 1
+                for no, value in supplied.items():
+                    key = (kind, int(no))
+                    if key not in self._points or key in prepared:
+                        raise IEC104ServerError(f'无效或重复的点 {kind}/{no}')
+                    prepared[key] = self._as_value(kind, self._point_types[key], value)
+            for key, native in prepared.items():
+                self._points[key].value = native
+            updated = len(self._points)
+            if transmit:
+                for (kind, _), point in self._points.items():
                     if kind in ('yx', 'yc'):
                         groups.setdefault(point.type, []).append(point)
         sent_batches = 0
@@ -584,6 +630,11 @@ class IEC104Server:
         if cause is None:
             raise ValueError('cause 必须是 c104.Coi 或其名称')
         self._station.signal_initialized(cause)
+
+    @property
+    def point_count(self):
+        with self._lock:
+            return len(self._points)
 
     def snapshot(self):
         with self._lock:

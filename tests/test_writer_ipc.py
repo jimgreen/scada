@@ -84,9 +84,14 @@ class WriterIpcTests(unittest.TestCase):
             process.start()
             try:
                 self.assertTrue(ready.wait(8))
-                item = WriterClient(db).submit_command(1, "yk", 1, 1)
+                client = WriterClient(db)
+                item = client.submit_command(1, "yk", 1, 1, request_id="stable")
                 self.assertEqual(item["value"], 1)
-                self.assertEqual(store.get_row("fes_yk_define", [1, 1])["value"], 1)
+                self.assertEqual(client.submit_command(1,"yk",1,1,request_id="stable"), item)
+                with self.assertRaises(WriterRequestError) as conflict:
+                    client.submit_command(1,"yk",1,0,request_id="stable")
+                self.assertEqual(conflict.exception.code, "request_id_conflict")
+                self.assertEqual(store.get_row("fes_yk_define", [1,1])["_version"], item["_version"])
                 queue.put(BATCH_WRITER_STOP)
                 queue.join()
                 process.join(8)

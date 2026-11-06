@@ -1,0 +1,66 @@
+{
+  "database": {
+    "integrity": "ok",
+    "foreign_key_errors": 0,
+    "same_schema": true,
+    "tables_compared": 28,
+    "rows_per_table": {
+      "_scada_schema": 26,
+      "fes_channel_bacnet_define": 10,
+      "fes_channel_iec104_define": 10,
+      "fes_channel_modbus_define": 22,
+      "fes_channel_modbus_define_call": 184,
+      "fes_channel_modbus_define_data": 40004,
+      "fes_channel_modbus_define_ytyk": 8004,
+      "fes_channel_opc_define": 10,
+      "fes_rtu_define": 63,
+      "fes_ytyk_check_define": 0,
+      "fes_ytyk_message": 0,
+      "fes_channel_can_define": 10,
+      "fes_channel_modbus_rtu_define": 10,
+      "fes_channel_modbus_tcp_define": 12,
+      "fes_scdfe_c_define": 1,
+      "fes_process_define": 3,
+      "fes_channel_bacnet_point_define": 24000,
+      "fes_channel_can_point_define": 24000,
+      "fes_channel_iec104_point_define": 24000,
+      "fes_channel_opc_point_define": 24000,
+      "fes_scdfe_t_define": 1,
+      "fes_scdfe_t_point_define": 4,
+      "fes_scdfe_command_define": 1,
+      "_scada_rtu_version": 63,
+      "fes_yc_define": 60002,
+      "fes_yx_define": 60002,
+      "fes_yt_define": 12002,
+      "fes_yk_define": 12002
+    },
+    "excepted_fields": "Only runtime fields and _version on fes_scdfe_t_define (process_enable compared)"
+  },
+  "services": {
+    "c": {
+      "port": 8877,
+      "health": "ok",
+      "policies": 62,
+      "recording": false
+    },
+    "s": {
+      "port": 8878,
+      "health": "ok",
+      "policies": 62,
+      "recording": false
+    },
+    "t": {
+      "port": 8879,
+      "health": "ok",
+      "policies": 1,
+      "recording": false
+    }
+  },
+  "stopped_c_roles": [
+    "main",
+    "writer",
+    "command-server"
+  ],
+  "stopped_s_simulators": 9,
+  "t_channel_1_pid": 57944
+}

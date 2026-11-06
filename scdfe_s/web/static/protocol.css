@@ -27,5 +27,11 @@ pre { white-space:pre-wrap; overflow:auto; max-height:270px; background:#1d3442;
 .filterbar .wide { flex:3 1 280px; }
 .protocol-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:15px; }
 .protocol-grid .card { margin:0; }
+.protocol-card { display:flex; flex-direction:column; gap:10px; min-height:170px; }
+.protocol-card h2 { margin:0; }
+.protocol-card p { margin:0; color:#627b88; line-height:1.6; font-size:13px; }
+.protocol-card nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; }
+.protocol-card nav a { border:1px solid #b7cbd2; border-radius:5px; padding:7px 10px; background:#fff; }
+.protocol-card nav a.primary { background:#087f8c; color:#fff; border-color:#087f8c; }
 nav a { margin-left:10px; }
 @media(max-width:900px){ .grid { grid-template-columns:1fr; } .status-grid { grid-template-columns:repeat(2,1fr); } }

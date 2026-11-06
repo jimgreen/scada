@@ -221,12 +221,20 @@ class IEC104ServerTests(unittest.TestCase):
             ])
             client.connect(timeout=3)
             self.assertTrue(client.general_interrogation())
-            time.sleep(0.1)
-            values = {(item.kind, item.point_no): item.value for item in client.collect_once()}
-            self.assertEqual(values, {('yx', 1): True, ('yc', 1): 12.5})
+            def wait_for_snapshot(yc):
+                # Native c104 delivers callbacks asynchronously. Observe the
+                # one original transmission; polling the local cache sends no APDU.
+                expected = {('yx', 1): True, ('yc', 1): yc}
+                deadline = time.monotonic() + 2
+                while True:
+                    values = {(v.kind, v.point_no): v.value for v in client.collect_once()}
+                    if values == expected or time.monotonic() >= deadline:
+                        break
+                    time.sleep(.01)
+                self.assertEqual(values, expected)
+            wait_for_snapshot(12.5)
             server.update('yc', 1, 15.0)
-            time.sleep(0.1)
-            self.assertEqual(client.value('yc', 1).value, 15.0)
+            wait_for_snapshot(15.0)
         finally:
             client.close()
             server.stop()
@@ -284,7 +292,7 @@ class CanAdapterTests(unittest.TestCase):
 
 class DependencyTests(unittest.TestCase):
     def test_pinned_dependencies_are_installed(self):
-        self.assertEqual(importlib.metadata.version('c104'), '2.2.1')
+        self.assertEqual(importlib.metadata.version('c104'), '2.2.1+scada.1')
         self.assertEqual(importlib.metadata.version('pyModbusTCP'), '0.3.1')
         self.assertEqual(importlib.metadata.version('pymodbus'), '3.16.1')
         self.assertEqual(importlib.metadata.version('python-can'), '4.6.1')

@@ -15,6 +15,10 @@ import time
 from typing import Any
 
 from server.iec104_server import IEC104Command, IEC104Server
+from functools import partial
+from core.packet_trace import service_packet_recorder
+from core.service_log import ServiceFileLog
+from scdfe_s.web.configuration import apply_config, write_config
 
 
 class IEC104ServiceError(RuntimeError):
@@ -44,33 +48,41 @@ class IEC104Service:
     ALERT_LIMIT = 200
     CONNECTION_LIMIT = 100
 
-    def __init__(self, store, *, config_path: Path | str | None = None):
+    def __init__(self, store, *, config_path: Path | str | None = None, startup_catalog=None):
         self.store = store
         self.config_path = Path(config_path) if config_path else store.db_path.with_name(
             "iec104_server_config.json"
         )
         self._lock = threading.RLock()
+        self._log_lock = threading.RLock()
+        self._packet_sink = service_packet_recorder(self._record, None, None)
         self._server: IEC104Server | None = None
+        self._config_error = None
         self._config = self._load_config()
-        self._logs: deque[dict[str, Any]] = deque(maxlen=self.LOG_LIMIT)
+        self._file_log = ServiceFileLog(store, "iec104", startup_catalog=startup_catalog)
+        self._logs: deque[dict[str, Any]] = deque(self._file_log.recent(self.LOG_LIMIT), maxlen=self.LOG_LIMIT)
         self._alerts: deque[dict[str, Any]] = deque(maxlen=self.ALERT_LIMIT)
         self._connections: deque[dict[str, Any]] = deque(maxlen=self.CONNECTION_LIMIT)
         self._started_at: int | None = None
         self._stopped_at: int | None = None
-        self._last_error: str | None = None
+        self._last_error: str | None = self._config_error
+        if self._config_error:
+            self._record("ERROR", self._config_error, alert=True)
         self._record("INFO", "服务管理器已就绪")
 
     def _load_config(self) -> dict[str, Any]:
         config = dict(self.DEFAULT_CONFIG)
         try:
             payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                config.update(payload)
+            if not isinstance(payload, dict):
+                raise ValueError("配置必须是对象")
+            config.update(payload)
+            return self._validate_config(config)
         except FileNotFoundError:
             pass
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            self._safe_boot_log(f"读取配置失败，使用默认配置: {exc}")
-        return self._validate_config(config)
+        except (OSError, TypeError, ValueError, OverflowError, RecursionError, IEC104ServiceError) as exc:
+            self._config_error = f"读取配置失败，使用默认配置，保留原文件: {exc}"
+        return self._validate_config(self.DEFAULT_CONFIG)
 
     @staticmethod
     def _validate_config(values: dict[str, Any]) -> dict[str, Any]:
@@ -111,19 +123,13 @@ class IEC104Service:
             "max_connections": max_connections,
         }
 
-    def _safe_boot_log(self, message: str) -> None:
-        # 配置文件损坏时仍允许对象构造完成，正式日志队列尚未建立。
-        try:
-            self._logs.append({"time": _iso_now(), "level": "ERROR", "message": message})
-        except AttributeError:
-            pass
-
-    def _record(self, level: str, message: str, *, alert: bool = False, details: Any = None) -> None:
+    def _record(self, level: str, message: str, *, alert: bool = False, details: Any = None, channel_id=None) -> None:
         item = {"time": _iso_now(), "level": level, "message": str(message)}
         if details is not None:
             item["details"] = details
-        with self._lock:
+        with self._log_lock:
             self._logs.append(item)
+            self._file_log.write(level, message, channel_id=channel_id)
             if alert:
                 self._alerts.append({**item, "acknowledged": False})
 
@@ -137,13 +143,8 @@ class IEC104Service:
         server = self.server
         return bool(server and server.running)
 
-    def _persist_config(self) -> None:
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(self._config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        temporary.replace(self.config_path)
+    def _persist_config(self, config) -> None:
+        write_config(self.config_path, config)
 
     def _default_rtu_id(self) -> int | None:
         with self.store.connection() as connection:
@@ -153,16 +154,18 @@ class IEC104Service:
         return int(row[0]) if row else None
 
     def _effective_config(self) -> dict[str, Any]:
-        config = dict(self._config)
-        if config.get("rtu_id") is None:
-            config["rtu_id"] = self._default_rtu_id()
-        return config
+        with self._lock:
+            config = dict(self._config)
+            if self._server is not None:
+                config["rtu_id"] = self._server.rtu_id
+            elif config.get("rtu_id") is None:
+                config["rtu_id"] = self._default_rtu_id()
+            return config
 
     def config(self) -> dict[str, Any]:
         with self._lock:
             config = dict(self._config)
-        effective = self._effective_config()
-        config["effective_rtu_id"] = effective.get("rtu_id")
+            config["effective_rtu_id"] = self._effective_config()["rtu_id"]
         return config
 
     def _build_server(self) -> IEC104Server:
@@ -170,6 +173,9 @@ class IEC104Service:
         if config.get("rtu_id") is None:
             raise IEC104ServiceError("没有可用的 IEC104 RTU，请先在数据与定义中配置通道")
         rtu_id = int(config["rtu_id"])
+        from core.packet_logging import rtu_channel_id
+        sink = service_packet_recorder(self._record, rtu_id, rtu_channel_id(self.store, rtu_id))
+        self._packet_sink = sink
         with self.store.connection() as connection:
             rows = []
             for table, kind in (("fes_yk_define", "yk"), ("fes_yt_define", "yt")):
@@ -179,7 +185,9 @@ class IEC104Service:
                         f"SELECT pnt_no FROM {table} WHERE rtu_id=? ORDER BY pnt_no", (rtu_id,)
                     )
                 )
-        handlers = {(kind, point_no): self._on_command for kind, point_no in rows}
+        def command(event):
+            return self._on_command(event, rtu_id)
+        handlers = {(kind, point_no): command for kind, point_no in rows}
         server = IEC104Server.from_store(
             self.store,
             rtu_id,
@@ -191,11 +199,14 @@ class IEC104Service:
             command_handlers=handlers,
         )
         server.set_connect_handler(self._on_connect)
-        server.set_raw_handlers(on_receive=self._on_receive_raw, on_send=self._on_send_raw)
+        server.set_raw_handlers(on_receive=partial(sink, 'RX', detail='IEC104 APDU'),
+                                on_send=partial(sink, 'TX', detail='IEC104 APDU'))
         return server
 
     def start(self) -> dict[str, Any]:
         with self._lock:
+            if self._config_error:
+                raise IEC104ServiceError("请先保存有效配置: " + self._config_error)
             if self._server and self._server.running:
                 return self.status()
             try:
@@ -245,32 +256,38 @@ class IEC104Service:
             updated = dict(self._config)
             updated.update(values)
             updated = self._validate_config(updated)
-            was_running = bool(self._server and self._server.running)
-            if was_running:
-                self.stop()
-            self._config = updated
-            try:
-                self._persist_config()
-            except OSError as exc:
-                self._record("ERROR", f"保存 IEC104 配置失败: {exc}", alert=True)
-                raise IEC104ServiceError(str(exc)) from exc
-            self._record("INFO", f"IEC104 配置已更新: {updated}")
-            if was_running:
-                return self.start()
-            return self.status()
+            return apply_config(self, self._config, updated, self._adopt_config, IEC104ServiceError,
+                                active=self._server is not None)
 
-    def _row_for_point(self, kind: str, point_no: int) -> tuple[str, list[int]]:
+    def _adopt_config(self, config):
+        self._config = config
+
+    def _row_for_point(self, kind: str, point_no: int, rtu_id=None) -> tuple[str, list[int]]:
         tables = {"yc": "fes_yc_define", "yx": "fes_yx_define", "yk": "fes_yk_define", "yt": "fes_yt_define"}
         if kind not in tables:
             raise IEC104ServiceError("kind 必须是 yc、yx、yk 或 yt")
-        config = self._effective_config()
-        if config.get("rtu_id") is None:
+        if rtu_id is None:
+            rtu_id = self._effective_config().get('rtu_id')
+        if rtu_id is None:
             raise IEC104ServiceError("没有配置 IEC104 RTU")
-        return tables[kind], [int(config["rtu_id"]), int(point_no)]
+        return tables[kind], [int(rtu_id), int(point_no)]
 
     def _persist_point(self, kind: str, point_no: int, value: Any) -> dict[str, Any]:
-        table, key = self._row_for_point(kind, point_no)
+        return self.store.update_row(*self._point_update(kind, point_no, value))
+
+    def _point_update(self, kind, point_no, value, rtu_id=None):
+        table, key = self._row_for_point(kind, point_no, rtu_id)
         now = _now_ms()
+        if value is None and kind in {"yx", "yk"}:
+            if kind == "yk":
+                raise IEC104ServiceError("中间态或不确定双点状态不能作为遥控命令")
+            # An unknown double-point monitoring state is not an OFF update.
+            # Keep the last business value and explicitly invalidate quality.
+            values = {"status": 128, "refresh_time": now}
+            columns = {c["eng_name"] for c in self.store.schema(table)["columns"]}
+            if "raw_status" in columns:
+                values.update(raw_status=128, raw_time=now)
+            return table, key, values
         if kind in {"yx", "yk"}:
             value = int(bool(value))
         elif kind in {"yc", "yt"}:
@@ -280,7 +297,7 @@ class IEC104Service:
             values["raw_value"] = value
             values["raw_time"] = now
             values["raw_status"] = 0
-        return self.store.update_row(table, key, values)
+        return table, key, values
 
     @staticmethod
     def _updates(payload: Any) -> list[tuple[str, int, Any]]:
@@ -292,13 +309,17 @@ class IEC104Service:
                 raise IEC104ServiceError(f"未知四遥类型: {kind}")
             if not isinstance(values, dict):
                 raise IEC104ServiceError(f"{kind} 必须是点号到值的对象")
+            seen = set()
             for point_no, value in values.items():
                 try:
                     point = int(point_no)
                 except (TypeError, ValueError) as exc:
                     raise IEC104ServiceError(f"{kind} 点号必须是整数") from exc
-                if point < 1:
+                if isinstance(point_no, (bool, float)) or point < 1:
                     raise IEC104ServiceError("点号必须是正整数")
+                if point in seen:
+                    raise IEC104ServiceError(f"{kind} 重复点号 {point}")
+                seen.add(point)
                 result.append((kind, point, value))
         return result
 
@@ -308,17 +329,24 @@ class IEC104Service:
             if server is None or not server.running:
                 raise IEC104ServiceError("IEC104 服务未启动")
             try:
+                actual = server.prepare_value(kind, point_no, value)
+                item = self.store.update_row(*self._point_update(kind, int(point_no), actual, server.rtu_id))
+            except Exception as exc:
+                self._last_error = str(exc)
+                self._record("ERROR", f"增量更新 {kind}/{point_no} 未写入: {exc}", alert=True)
+                raise IEC104ServiceError(str(exc)) from exc
+            try:
                 if kind in {"yc", "yx"}:
                     sent = bool(server.active_connection_count)
                     actual = server.update(kind, int(point_no), value, transmit=sent)
                 else:
                     actual = server.set_value(kind, int(point_no), value)
                     sent = False
-                item = self._persist_point(kind, int(point_no), actual)
             except Exception as exc:
                 self._last_error = str(exc)
-                self._record("ERROR", f"增量更新 {kind}/{point_no} 失败: {exc}", alert=True)
-                raise IEC104ServiceError(str(exc)) from exc
+                message = f"点值已写入，IEC104 发布失败: {exc}"
+                self._record("ERROR", message, alert=True)
+                raise IEC104ServiceError(message) from exc
             self._record("INFO", f"增量更新 {kind}/{point_no}={actual} ({'已上送' if sent else '站内值'})")
             return {"kind": kind, "pnt_no": int(point_no), "value": actual, "sent": sent, "item": item}
 
@@ -327,22 +355,27 @@ class IEC104Service:
             server = self._server
             if server is None or not server.running:
                 raise IEC104ServiceError("IEC104 服务未启动")
-            updates = self._updates(values or {})
+            updates = self._updates({} if values is None else values)
             try:
                 supplied = {kind: {} for kind in ("yc", "yx", "yk", "yt")}
                 for kind, point_no, value in updates:
                     supplied[kind][point_no] = value
-                result = server.transmit_full(supplied, transmit=bool(server.active_connection_count))
-                persisted = []
-                for kind, point_no, value in updates:
-                    actual = server.snapshot()[(kind, point_no)]
-                    persisted.append(self._persist_point(kind, point_no, actual))
+                persisted = self.store.update_rows(
+                    self._point_update(kind, no, server.prepare_value(kind, no, value), server.rtu_id)
+                    for kind, no, value in updates)
             except Exception as exc:
                 self._last_error = str(exc)
                 self._record("ERROR", f"全量更新失败: {exc}", alert=True)
                 raise IEC104ServiceError(str(exc)) from exc
+            try:
+                result = server.transmit_full(supplied, transmit=bool(server.active_connection_count))
+            except Exception as exc:
+                self._last_error = str(exc)
+                message = f"数据库更新已完成，IEC104 发布失败: {exc}"
+                self._record("ERROR", message, alert=True)
+                raise IEC104ServiceError(message) from exc
             self._record("INFO", f"全量更新完成: {len(updates)} 个显式点，{result['sent_batches']} 个上送批次")
-            return {**result, "requested": len(updates), "persisted": len(persisted)}
+            return {**result, "requested": len(updates), "persisted": persisted}
 
     def simulate_command(self, kind: str, point_no: int, value: Any) -> dict[str, Any]:
         if kind not in {"yk", "yt"}:
@@ -352,36 +385,36 @@ class IEC104Service:
             if server is None:
                 raise IEC104ServiceError("IEC104 服务未启动")
             try:
-                actual = server.set_value(kind, int(point_no), value)
-                item = self._persist_point(kind, int(point_no), actual)
+                actual = server.prepare_value(kind, point_no, value)
+                item = self.store.update_row(*self._point_update(kind, int(point_no), actual, server.rtu_id))
             except Exception as exc:
                 raise IEC104ServiceError(str(exc)) from exc
+            try:
+                server.set_value(kind, int(point_no), value)
+            except Exception as exc:
+                raise IEC104ServiceError(f"点值已写入，IEC104 站内值更新失败: {exc}") from exc
             self._record("WARNING", f"Web 模拟{kind}指令 {point_no}={actual}，未发送控制报文")
             return {"kind": kind, "pnt_no": int(point_no), "value": actual, "sent": False, "item": item}
 
     def _on_connect(self, ip: str) -> bool:
         item = {"ip": ip, "time": _iso_now(), "accepted": True}
-        with self._lock:
+        with self._log_lock:
             self._connections.appendleft(item)
         self._record("INFO", f"IEC104 客户端接入: {ip}")
         return True
 
     def _on_receive_raw(self, data: bytes) -> None:
-        self._record("DEBUG", f"RX APDU {bytes(data).hex(' ')}")
+        self._packet_sink("RX", data, "IEC104 APDU")
 
     def _on_send_raw(self, data: bytes) -> None:
-        self._record("DEBUG", f"TX APDU {bytes(data).hex(' ')}")
+        self._packet_sink("TX", data, "IEC104 APDU")
 
-    def _on_command(self, event: IEC104Command) -> bool:
+    def _on_command(self, event: IEC104Command, rtu_id=None) -> bool:
         value = event.value
         try:
-            item = self._persist_point(event.kind, event.point_no, value)
-            now = _now_ms()
-            table, key = self._row_for_point(event.kind, event.point_no)
-            # The command callback has already passed c104's select/execute
-            # validation. Keep the command completion timestamp for the Web
-            # page and the existing scdfe_c command monitor.
-            item = self.store.update_row(table, key, {"cmd_handle_time": now, "status": 0})
+            table, key, fields = self._point_update(event.kind, event.point_no, value, rtu_id)
+            fields["cmd_handle_time"] = fields["refresh_time"]
+            item = self.store.update_row(table, key, fields)
             self._record(
                 "INFO",
                 f"收到{event.kind}命令 点号={event.point_no} 值={value} "
@@ -398,6 +431,8 @@ class IEC104Service:
         with self._lock:
             server = self._server
             config = self.config()
+            with self._log_lock:
+                connections = list(self._connections)
             return {
                 "running": bool(server and server.running),
                 "config": config,
@@ -405,11 +440,11 @@ class IEC104Service:
                 "common_address": getattr(server, "common_address", None) if server else None,
                 "open_connections": int(server.open_connection_count) if server else 0,
                 "active_connections": int(server.active_connection_count) if server else 0,
-                "point_count": len(server.snapshot()) if server else 0,
+                "point_count": server.point_count if server else 0,
                 "started_at": self._started_at,
                 "stopped_at": self._stopped_at,
                 "last_error": self._last_error,
-                "connections": list(self._connections),
+                "connections": connections,
             }
 
     def points(self, kind: str | None = None) -> list[dict[str, Any]]:
@@ -508,10 +543,10 @@ class IEC104Service:
         return result
 
     def logs(self, limit: int = 200) -> list[dict[str, Any]]:
-        with self._lock:
+        with self._log_lock:
             return list(self._logs)[-max(1, min(int(limit), self.LOG_LIMIT)):][::-1]
 
     def alerts(self, limit: int = 100) -> list[dict[str, Any]]:
-        with self._lock:
+        with self._log_lock:
             return list(self._alerts)[-max(1, min(int(limit), self.ALERT_LIMIT)):][::-1]
 

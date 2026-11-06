@@ -39,6 +39,12 @@ class LogQueryTests(unittest.TestCase):
         self.assertIn("关键字错误", result["items"][0]["text"])
         self.assertFalse(result["has_more"])
 
+    def test_wide_time_bounds_do_not_require_platform_localtime_support(self):
+        result = search_logs(self.root, {
+            'start': '0001-01-01T00:00:00Z', 'end': '9999-12-31T23:59:59Z',
+        })
+        self.assertEqual(len(result['items']), 8)
+
     def test_cursor_paginates_earlier_matching_lines(self):
         first = search_logs(self.root, {"q": "关键字", "limit": "1", "process": "scdfe_c-main"})
         self.assertEqual(len(first["items"]), 1)
@@ -66,10 +72,12 @@ class LogQueryTests(unittest.TestCase):
             "11:00:00 [日志] 中文日志\n"
             "11:01:00 [警告] 中文警告\n"
             "11:02:00 [错误] 中文错误\n"
-            "11:03:00 [进程] 中文进程\n",
+            "11:03:00 [进程] 中文进程\n"
+            "11:04:00 [报文] 报文 RX HEX=68 04\n",
             encoding="utf-8",
         )
-        for code, label in (("INFO", "日志"), ("WARNING", "警告"), ("ERROR", "错误"), ("PROCESS", "进程")):
+        for code, label in (("INFO", "日志"), ("WARNING", "警告"), ("ERROR", "错误"),
+                            ("PROCESS", "进程"), ("PACKET", "报文")):
             with self.subTest(level=code):
                 result = search_logs(self.root, {"filename": path.name, "level": code})
                 self.assertEqual(len(result["items"]), 1)
@@ -82,6 +90,23 @@ class LogQueryTests(unittest.TestCase):
         path.write_text("11:00:00 [INFO] old type\n2026-11-01T11:00:00+08:00 [日志] old clock\n",
                         encoding="utf-8")
         self.assertEqual(search_logs(self.root, {"filename": path.name, "level": "INFO"})["items"], [])
+
+    def test_packet_filters_do_not_reclassify_error_and_warning_headers(self):
+        path = self.root / "scdfe_c-rtu-9-20261101-11.log"
+        path.write_text("11:00:00 [日志] 报文 RX IEC104 HEX=68 04\n"
+                        "11:01:00 [报文] 报文 TX IEC104 HEX=68 05\n"
+                        "11:02:00 [错误] 报文 RX 解析失败\n"
+                        "11:03:00 [警告] 报文 TX 发送超时\n", encoding="utf-8")
+        query = {"filename": path.name}
+        packets = search_logs(self.root, {**query, "record": "packet"})["items"]
+        self.assertEqual(len(packets), 2)
+        self.assertTrue(all(row["level"] in {"INFO", "PACKET"} for row in packets))
+        runtime = search_logs(self.root, {**query, "record": "runtime"})["items"]
+        self.assertEqual({row["level"] for row in runtime}, {"ERROR", "WARNING"})
+        for direction in ("RX", "TX"):
+            rows = search_logs(self.root, {**query, "direction": direction})["items"]
+            self.assertEqual(len(rows), 1)
+            self.assertIn("HEX=", rows[0]["text"])
 
     def test_truncated_and_rotated_file_cursor_is_rejected(self):
         first = search_logs(self.root, {"q": "关键字", "limit": "1"})
@@ -210,6 +235,24 @@ class LogQueryTests(unittest.TestCase):
         for query in ({"cursor": "not-base64"}, {"cursor": first["next_cursor"], "level": "INFO"}):
             with self.assertRaises(ValueError):
                 search_logs(self.root, query)
+
+    def test_time_filter_skips_other_days_before_spending_scan_budget(self):
+        old = self.root / "scdfe_c-rtu-9-20261101-10.log"
+        # Preserve the existing parser contract: the body provides the clock,
+        # so only the filename's date can safely prune an entire file.
+        old.write_text("23:59:59 [报文] 报文 RX target HEX=68 04\n", encoding="utf-8")
+        recent = self.root / "scdfe_c-rtu-9-20261102-00.log"
+        recent.write_text("00:00:00 [日志] unrelated\n" * 1000, encoding="utf-8")
+        instant = datetime(2026, 11, 1, 23, 59, 59).astimezone()
+        with patch.object(log_query, "MAX_SCAN_BYTES", 256):
+            result = search_logs(self.root, {
+                "process": "scdfe_c-rtu-9", "start": instant.astimezone(timezone.utc).isoformat(),
+                "end": instant.isoformat(), "record": "packet",
+            })
+        self.assertEqual(len(result["items"]), 1)
+        self.assertIn("target", result["items"][0]["text"])
+        self.assertEqual(result["scanned_files"], 1)
+        self.assertFalse(result["has_more"])
 
     def test_match_before_old_tail_and_scan_window_remains_reachable(self):
         path = self.root / "scdfe_c-rtu-11-20261101-10.log"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,8 +31,12 @@ from scdfe_s.web.protocol_service import (
     OpcServerService,
 )
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+from core.web_request import RequestBodyMixin
+from core.service_log import ServiceFileLog
+from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
+from core.web_logs import log_browser
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scada.web")
 
 
@@ -46,16 +51,7 @@ def browser_safe(value):
     return value
 
 
-def strict_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"重复 JSON 字段: {key}")
-        result[key] = value
-    return result
-
-
-class ScadaHandler(BaseHTTPRequestHandler):
+class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     server_version = "ScadaWeb/1.0"
 
     def setup(self):
@@ -92,44 +88,6 @@ class ScadaHandler(BaseHTTPRequestHandler):
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
         data = json.dumps(browser_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         self._send(status, "application/json; charset=utf-8", data, headers)
-
-    def _body(self):
-        if self.headers.get("Transfer-Encoding"):
-            raise ApiError(400, "不支持分块请求体")
-        if self.headers.get_content_type() != "application/json":
-            raise ApiError(415, "请使用 Content-Type: application/json")
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError as exc:
-            raise ApiError(400, "无效的 Content-Length") from exc
-        if length < 0 or length > 2_000_000:
-            raise ApiError(413, "请求体长度必须在 0 到 2000000 字节之间")
-        def invalid_constant(value):
-            raise ValueError(f"非法 JSON 数字: {value}")
-        try:
-            raw = self.rfile.read(length)
-            if len(raw) != length:
-                raise ValueError("请求体不完整")
-            body = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
-                              parse_constant=invalid_constant)
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise ApiError(400, "请求体必须是有效 UTF-8 JSON 对象") from exc
-        if not isinstance(body, dict):
-            raise ApiError(400, "请求体必须是 JSON 对象")
-        return body
-
-    def _request_guard(self):
-        host = self.headers.get("Host", "")
-        hostname = urlsplit("//" + host).hostname
-        if self.server.server_address[0] in {"127.0.0.1", "::1"}:
-            if hostname not in {"127.0.0.1", "localhost", "::1"}:
-                raise ApiError(403, "Host 不被允许", code="forbidden")
-        if self.command not in {"GET", "HEAD"}:
-            if self.headers.get("Sec-Fetch-Site") == "cross-site":
-                raise ApiError(403, "请求来源不被允许", code="forbidden")
-            origin = self.headers.get("Origin")
-            if origin and origin != "http://" + host:
-                raise ApiError(403, "请求来源不被允许", code="forbidden")
 
     def _if_match(self):
         value = self.headers.get("If-Match")
@@ -484,9 +442,12 @@ class ScadaHandler(BaseHTTPRequestHandler):
                                     order=query.get("order", "asc"), fields=fields)
 
     def _dispatch(self):
-        self._request_guard()
+        from core.packet_logging import handle_packet_recording
+        self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if handle_packet_recording(self, parts, query, method, self.store, 's'):
+            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -495,11 +456,17 @@ class ScadaHandler(BaseHTTPRequestHandler):
             item = self.store.submit_command(self._rtu_id(parts[2]), parts[4], parts[5],
                                              self._body(), self._if_match())
             return self._json(202, {'item': item, 'command_status': 'pending'})
-        if self._monitor_control(parts, query, method):
+        if parts in (["api", "log-files"], ["api", "log-files", "search"]):
+            if method != "GET":
+                raise ApiError(405, "日志文件接口只支持 GET")
+            return self._json(200, log_browser(self.store.db_path.parent / "logs", "s", len(parts) == 3, query))
+        # Handled routes return None after writing JSON; only False means
+        # that dispatch should continue to the next route family.
+        if self._monitor_control(parts, query, method) is not False:
             return
-        if self._iec104_control(parts, query, method):
+        if self._iec104_control(parts, query, method) is not False:
             return
-        if self._protocol_control(parts, query, method):
+        if self._protocol_control(parts, query, method) is not False:
             return
         if method == "GET":
             if not parts:
@@ -532,6 +499,8 @@ class ScadaHandler(BaseHTTPRequestHandler):
                 return self._static("logs.html")
             if parts in (["channels"], ["channels.html"]):
                 return self._static("channels.html")
+            if parts in (["points"], ["points.html"]):
+                return self._static("points.html")
             if parts == ["favicon.ico"]:
                 return self._send(204, "image/x-icon", b"")
             if parts[:1] == ["static"]:
@@ -634,7 +603,7 @@ class ScadaHandler(BaseHTTPRequestHandler):
     def _handle(self):
         try:
             self._dispatch()
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
             LOG.debug("client disconnected")
         except ApiError as error:
             payload = {"code": error.code, "message": error.message}
@@ -658,19 +627,25 @@ class ScadaHandler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _handle
 
     def _static(self, name):
+        if name in ASSETS:
+            return self._send(200, ASSETS[name], (ASSET_DIR / name).read_bytes())
         allowed = {"index.html": "text/html", "iec104.html": "text/html", "api.html": "text/html",
                    "processes.html": "text/html", "communication.html": "text/html", "logs.html": "text/html",
-                   "channels.html": "text/html",
+                   "channels.html": "text/html", "points.html": "text/html",
                    "modbus_tcp.html": "text/html", "modbus_tcp_server.html": "text/html",
                    "modbus_rtu.html": "text/html", "modbus_rtu_server.html": "text/html",
                    "can.html": "text/html", "can_server.html": "text/html",
                    "opc_server.html": "text/html", "bacnet_server.html": "text/html",
                    "protocol.css": "text/css",
                    "protocol.js": "application/javascript", "monitor.js": "application/javascript",
+                   "iec104.js": "application/javascript", "index.js": "application/javascript",
                    "channels.js": "application/javascript"}
         if name not in allowed or not (STATIC_DIR / name).is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        self._send(200, allowed[name] + "; charset=utf-8", (STATIC_DIR / name).read_bytes())
+        data = (STATIC_DIR / name).read_bytes()
+        if name.endswith(".html"):
+            data = render_workbench(data, "s", name)
+        self._send(200, allowed[name] + "; charset=utf-8", data)
 
 
 class ScadaHTTPServer(ThreadingHTTPServer):
@@ -678,29 +653,29 @@ class ScadaHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self.store = ScadaStore(db_path, schema_dir)
-        self.iec104_service = IEC104Service(self.store)
-        self.modbus_tcp_service = ModbusTcpService(self.store)
-        self.modbus_tcp_server_service = ModbusTcpServerService(self.store)
-        self.modbus_rtu_service = ModbusRtuService(self.store)
-        self.modbus_rtu_server_service = ModbusRtuServerService(self.store)
-        self.can_service = CanService(self.store)
-        self.can_server_service = CanServerService(self.store)
-        self.opc_server_service = OpcServerService(self.store)
-        self.bacnet_server_service = BacnetServerService(self.store)
-        super().__init__(address, ScadaHandler)
+        self._resources = ExitStack()
+        self.store = ScadaStore(db_path, schema_dir, connection_pool_size=4)
+        self._resources.callback(self.store.close)
+        try:
+            history = ServiceFileLog.startup_catalog(self.store.db_path.parent / "logs")
+            for attr, cls in [('iec104_service', IEC104Service), ('modbus_tcp_service', ModbusTcpService),
+                              ('modbus_tcp_server_service', ModbusTcpServerService), ('modbus_rtu_service', ModbusRtuService),
+                              ('modbus_rtu_server_service', ModbusRtuServerService), ('can_service', CanService),
+                              ('can_server_service', CanServerService), ('opc_server_service', OpcServerService),
+                              ('bacnet_server_service', BacnetServerService)]:
+                service = cls(self.store, startup_catalog=history)
+                setattr(self, attr, service)
+                self._resources.callback(service.close)
+            super().__init__(address, ScadaHandler)
+        except BaseException:
+            self._resources.close()
+            raise
 
     def server_close(self):
-        self.iec104_service.close()
-        self.modbus_tcp_service.close()
-        self.modbus_tcp_server_service.close()
-        self.modbus_rtu_service.close()
-        self.modbus_rtu_server_service.close()
-        self.can_service.close()
-        self.can_server_service.close()
-        self.opc_server_service.close()
-        self.bacnet_server_service.close()
-        super().server_close()
+        try:
+            self._resources.close()
+        finally:
+            super().server_close()
 
 
 def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

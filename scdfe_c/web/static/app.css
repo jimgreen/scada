@@ -451,6 +451,16 @@ small,
 .filterbar input[type="search"] {
   width: 235px;
 }
+#packet-recording-channel { max-width: min(360px, 65vw); }
+.packet-policy { min-width:136px; display:grid; gap:4px; font-size:12px; }
+.packet-policy .packet-policy-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; margin:0; cursor:pointer; }
+.packet-policy input[type="checkbox"] { width:15px; height:15px; margin:0; accent-color:#087f8c; }
+.packet-policy strong { font-weight:600; color:#627b88; }
+.packet-policy.is-enabled strong { color:#087f8c; }
+.packet-policy-meta { display:flex; align-items:center; gap:8px; color:#718694; font-size:11px; }
+.packet-policy .packet-policy-meta button { padding:2px 5px; border:1px solid #d5dfe7; border-radius:4px; background:white; color:#526b79; font-size:11px; }
+.packet-policy .packet-policy-error { color:#b3261e; white-space:normal; max-width:210px; font-size:11px; }
+.packet-policy-error:empty { display:none; }
 .data-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -621,6 +631,9 @@ th.sticky-actions {
   background: #f3f6f9;
   z-index: 3;
 }
+/* The RTU row has eight actions. Pinning that entire column on the right
+   covers the packet switch on narrow workbenches. Scroll it with the data. */
+.rtu-table .sticky-actions { right: auto; }
 td:first-child,
 th:first-child {
   position: sticky;
@@ -1077,6 +1090,9 @@ tbody tr:hover .sticky-actions {
 }
 .log-line.process {
   color: #75c7d1;
+}
+.log-line.packet {
+  color: #9fc7ff;
 }
 .log-line:hover {
   background: #ffffff06;

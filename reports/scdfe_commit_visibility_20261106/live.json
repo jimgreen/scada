@@ -1,0 +1,49 @@
+{
+  "channel": 1,
+  "pid": 46732,
+  "before": {
+    "RX": 19,
+    "TX": 57
+  },
+  "periodic_asdus_before_debug": {
+    "1": 2,
+    "13": 2
+  },
+  "off": {
+    "RX": 19,
+    "TX": 57
+  },
+  "on": {
+    "RX": 20,
+    "TX": 63
+  },
+  "yc": 42.0,
+  "before_off_again": {
+    "RX": 20,
+    "TX": 63
+  },
+  "off_again": {
+    "RX": 20,
+    "TX": 63
+  },
+  "same_connection": true,
+  "filter_RX": {
+    "count": 5,
+    "latest": {
+      "filename": "2026/11/06/15/scdfe_t-channel-1-20261106-15.log",
+      "text": "15:32:47 [报文] 报文 RX IEC104 APDU frame=3 bytes=16 part=1/1 HEX=68 0e 02 00 14 00 64 01 06 00 01 00 00 00 00 14",
+      "level": "PACKET",
+      "time": 1793950367000
+    }
+  },
+  "filter_TX": {
+    "count": 5,
+    "latest": {
+      "filename": "2026/11/06/15/scdfe_t-channel-1-20261106-15.log",
+      "text": "15:32:47 [报文] 报文 TX IEC104 APDU frame=7 bytes=16 part=1/1 HEX=68 0e 1a 00 04 00 64 01 0a 00 01 00 00 00 00 14",
+      "level": "PACKET",
+      "time": 1793950367000
+    }
+  },
+  "final_override": null
+}

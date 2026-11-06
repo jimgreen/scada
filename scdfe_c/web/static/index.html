@@ -263,6 +263,12 @@
               <option value="">全部进程</option>
             </select>
           </div>
+          <div class="filterbar">
+            <label for="packet-recording-channel">报文保存范围</label><select id="packet-recording-channel" disabled><option value="">默认设置（未单独设置的通道）</option></select>
+            <label><input id="packet-recording" type="checkbox" disabled> 保存报文（调试）</label>
+            <button id="packet-recording-reset" class="button secondary" type="button" disabled>恢复使用默认设置</button>
+            <span id="packet-recording-status" role="status">读取报文保存设置…</span>
+          </div>
           <div id="logs-error" class="error-panel" role="alert" hidden></div>
           <div class="log-workspace">
             <section class="log-files">
@@ -299,6 +305,7 @@
                 /><select id="log-level" aria-label="日志类型">
                   <option value="">全部类型</option>
                   <option value="INFO">日志</option>
+                  <option value="PACKET">报文</option>
                   <option value="WARNING">警告</option>
                   <option value="ERROR">错误</option>
                   <option value="PROCESS">进程</option></select
@@ -435,6 +442,7 @@
       </div>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/packet-recording.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

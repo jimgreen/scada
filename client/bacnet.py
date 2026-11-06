@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import asyncio
 import threading
 from typing import Any
+from core.packet_trace import PacketTrace, trace_bacnet_app
 
 __all__ = [
     "BacnetMaster",
@@ -41,7 +42,7 @@ except ImportError as exc:  # pragma: no cover - dependency check
 
 
 def _field(row: Any, name: str, default=None):
-    value = row.get(name) if isinstance(row, Mapping) else getattr(row, name, None)
+    value = row.get(name) if type(row) is dict or isinstance(row, Mapping) else getattr(row, name, None)
     return default if value is None else value
 
 
@@ -146,7 +147,7 @@ def _require_bacnet():
         raise BacnetError("缺少依赖 bacpypes3，请执行: python -m pip install -r requirements.txt") from _BACNET_IMPORT_ERROR
 
 
-class _BacnetProtocol:
+class _BacnetProtocol(PacketTrace):
     """Synchronous BACnet/IP client.
 
     Parameters use BACnet/IP terminology: ``local_ip``/``local_port`` bind
@@ -191,6 +192,8 @@ class _BacnetProtocol:
         ORDER BY CASE p.kind WHEN 'yc' THEN 1 WHEN 'yx' THEN 2
                              WHEN 'yk' THEN 3 ELSE 4 END, p.pnt_no
     """
+
+    PACKET_PROTOCOL = "BACnet/IP"
 
     def __init__(self, remote_host: str, *, remote_port: int = 47808,
                  local_ip: str = "0.0.0.0", local_port: int = 47808,
@@ -278,6 +281,7 @@ class _BacnetProtocol:
 
     async def _connect_backend(self):
         self._app = await self._create_app()
+        trace_bacnet_app(self._app, self._packet)
 
     async def _close_backend(self):
         if self._app is not None:
@@ -450,12 +454,10 @@ class _BacnetProtocol:
             return []
         if not self.connected:
             raise BacnetError("未连接，请先 connect() 或使用 with")
-        result = []
-        for start in range(0, len(selected), 100):
-            chunk = selected[start:start + 100]
-            result.extend(self._loop_thread.call(
-                self._read_points_backend, chunk, timeout=self.timeout * len(chunk) + 1.0))
-        return result
+        # Keep native reads sequential and individually timed out, while
+        # crossing the synchronous/async thread boundary once per collection.
+        return self._loop_thread.call(
+            self._read_points_backend, selected, timeout=self.timeout * len(selected) + 1.0)
 
     async def _read_points_backend(self, rows):
         result = []

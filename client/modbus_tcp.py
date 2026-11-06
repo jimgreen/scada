@@ -12,6 +12,7 @@ import math
 import struct
 import threading
 from typing import NamedTuple
+from core.packet_trace import PacketTrace
 
 __all__ = ['ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point']
 
@@ -136,7 +137,7 @@ def decode_point(raw: bytes, row):
     return _point_decoder(row, len(raw))(raw, 0)
 
 
-class _ModbusOperations:
+class _ModbusOperations(PacketTrace):
     """共用的读写/点表 API；子类 _invoke 调用第三方 TCP 或串口库。"""
 
     def _init_operations(self, unit_id, rtu_id, retry_count=0):
@@ -273,6 +274,7 @@ class _ModbusOperations:
 
 class _ModbusTcpTransport(_ModbusOperations):
     """每个连接串行请求；重试次数由通道参数控制；可使用 with。"""
+    PACKET_PROTOCOL = "Modbus-TCP"
 
     def __init__(self, host, port=502, *, unit_id=1, timeout=3.0,
                  connect_timeout=None, rtu_id=None, retry_count=0, keep_alive=True):
@@ -290,6 +292,7 @@ class _ModbusTcpTransport(_ModbusOperations):
                 or not math.isfinite(connect_timeout) or connect_timeout <= 0):
             raise ValueError('connect_timeout 必须是 > 0 的有限数')
         self.host, self.port = host.strip(), integer(port, 'port', 1, 65535)
+        self._packet_endpoint = f"peer={self.host}:{self.port}"
         self.response_timeout = float(timeout)
         self.connect_timeout = float(connect_timeout)
         if not isinstance(keep_alive, (bool, int)) or keep_alive not in (0, 1):
@@ -298,6 +301,7 @@ class _ModbusTcpTransport(_ModbusOperations):
         self.native = ModbusClient(host=self.host, port=self.port, unit_id=unit_id,
                                    timeout=self.response_timeout, auto_open=False,
                                    auto_close=not self.keep_alive)
+        self.native.on_tx_rx = lambda frame, is_tx: self._trace_packet(is_tx, frame)
         # auto_close=True intentionally closes after each request.  Keep this
         # marker separate from native.is_open so the next request can reopen
         # the connection, while a caller that never called connect() still
@@ -404,13 +408,18 @@ class _ModbusMasterOperations:
         self.configure(calls or (), points or (), definitions or ())
 
     @classmethod
-    def from_store(cls, store, rtu_id, *, unit_id=None, **kwargs):
+    def from_store(cls, store, rtu_id, *, unit_id=None, transport_overrides=None, **kwargs):
         """从 ``ScadaStore`` 读取通道、召唤、数据点和遥控遥调配置。
 
         Modbus 专用参数表保存 TCP 目标、从站号和点表；每个召唤行自己的 ``irtuaddr``
         仍优先于默认值。
         """
         integer(rtu_id, 'rtu_id', 1, 2**63 - 1)
+        overrides = dict(transport_overrides or {})
+        allowed = ({'remote_host', 'remote_port'} if cls.CHANNEL_TYPE == 'modbus-tcp'
+                   else {'serial_port'})
+        if set(overrides) - allowed:
+            raise ValueError('不支持的传输地址覆盖字段: ' + ', '.join(sorted(set(overrides) - allowed)))
         # 同一只读事务加载完整配置，避免分页截断或跨表读取不同版本。
         with store.connection() as connection:
             connection.execute('BEGIN')
@@ -465,6 +474,7 @@ class _ModbusMasterOperations:
                 kwargs['connect_timeout'] = field(parameter, 'connect_timeout')
             if field(parameter, 'response_timeout') is not None and 'timeout' not in kwargs:
                 kwargs['timeout'] = field(parameter, 'response_timeout')
+        channel.update(overrides)
         if not field(channel, address_name):
             raise ValueError(f'RTU {rtu_id} 尚未配置 {address_name}')
         modbus_channels = tables['fes_channel_modbus_define']

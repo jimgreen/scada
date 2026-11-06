@@ -1,0 +1,27 @@
+### Result
+{"old_visible_actions":6,"final_rtu":"10"}
+### Ran Playwright code
+```js
+await (async page => {
+  await page.goto('http://127.0.0.1:3554/#yc');
+  const selector=page.getByRole('combobox',{name:'筛选 RTU 编号'});
+  await selector.selectOption('1');
+  const grid=page.locator('#table-body');
+  await grid.getByText('S-CHANNEL-1',{exact:true}).waitFor();
+  let entered,release;
+  const arrival=new Promise(r=>entered=r), held=new Promise(r=>release=r);
+  await page.route('**/api/rtus/10/points/yc?*',async route=>{entered();await held;await route.continue();},{times:1});
+  let old;
+  try {
+    await selector.selectOption('10');
+    await arrival;
+    old=await grid.locator('button:visible').count();
+  } finally {release();}
+  await grid.getByText('other operator',{exact:true}).waitFor();
+  return {old_visible_actions:old,final_rtu:await selector.inputValue()};
+}
+)(page);
+```
+### Page
+- Page URL: http://127.0.0.1:3554/#yc
+- Page Title: SCADA · 运行工作台

@@ -9,13 +9,21 @@ import os
 from pathlib import Path
 import re
 
+from core.log_paths import log_entries
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN
 
 MAX_SCAN_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 128 * 1024
 CHUNK_SIZE = 64 * 1024
-HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[(日志|警告|错误|进程)\](?:\s|$)")
+HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[(" + "|".join(LOG_LEVEL_CODES) + r")\](?:\s|$)")
+PACKET = re.compile(r"\s*报文\s+(RX|TX)\b")
+PACKET_CHANNEL = re.compile(r"\s+通道=(0|[1-9][0-9]*)(?=\s)")
+LOG_PATTERNS = {
+    "c": LOG_PATTERN,
+    "s": re.compile(r"(?P<process>scdfe_s-(?:iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
+    "t": re.compile(r"(?P<process>scdfe_t-channel-[1-9]\d*)-(?P<hour>\d{8}-\d{2})\.log$"),
+}
 
 
 def _timestamp(value):
@@ -39,14 +47,26 @@ def _log_timestamp(value, file_date):
         raise ValueError("日志时间无效") from exc
 
 
-def _file_key(name):
-    match = LOG_PATTERN.fullmatch(Path(name).name)
+def _local_day(stamp):
+    if stamp is None:
+        return None
+    try:
+        value = datetime.fromtimestamp(stamp)
+        return f'{value.year:04d}{value.month:02d}{value.day:02d}'
+    except (ValueError, OverflowError, OSError):
+        # Extreme ISO timestamps can exceed platform localtime limits.
+        # Pruning is optional; the exact per-line comparison still applies.
+        return None
+
+
+def _file_key(name, pattern=LOG_PATTERN):
+    match = pattern.fullmatch(Path(name).name)
     if match is None:
         raise ValueError("日志文件名无效")
     return match.group("hour"), name
 
 
-def _relative_filename(root: Path, value: str) -> str:
+def _relative_filename(root: Path, value: str, pattern=LOG_PATTERN) -> str:
     """Validate and normalize a client-supplied relative log path."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError("日志文件名无效")
@@ -54,7 +74,7 @@ def _relative_filename(root: Path, value: str) -> str:
     if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
         raise ValueError("日志文件名无效")
     normalized = candidate.as_posix()
-    if LOG_PATTERN.fullmatch(candidate.name) is None:
+    if pattern.fullmatch(candidate.name) is None:
         raise ValueError("日志文件名无效")
     path = (root / candidate).resolve()
     try:
@@ -64,7 +84,7 @@ def _relative_filename(root: Path, value: str) -> str:
     return normalized
 
 
-def _iter_log_files(root: Path, filename: str | None):
+def _iter_log_files(root: Path, filename: str | None, pattern=LOG_PATTERN, prefix="scdfe_c-"):
     """Yield validated log paths without repeated pathlib resolution.
 
     The all-files search is already bounded by ``MAX_SCAN_BYTES`` but can
@@ -78,42 +98,21 @@ def _iter_log_files(root: Path, filename: str | None):
     """
     if filename is not None:
         path = root / filename
-        match = LOG_PATTERN.fullmatch(path.name)
+        match = pattern.fullmatch(path.name)
         if match is not None:
             yield path, filename, match.group("hour"), match.group("process"), False
         return
-    stack: list[tuple[str, str]] = [(os.fspath(root), "")]
-    while stack:
-        current, relative_base = stack.pop()
-        try:
-            entries = os.scandir(current)
-        except OSError:
-            continue
-        with entries:
-            for entry in entries:
-                try:
-                    if entry.is_symlink():
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append((entry.path, relative_base + entry.name + "/"))
-                        continue
-                    if not entry.name.startswith("scdfe_c-") or not entry.name.endswith(".log"):
-                        continue
-                    match = LOG_PATTERN.fullmatch(entry.name)
-                    if match is None or not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    # Rotation/retention may remove an entry while scanning.
-                    continue
-                yield (entry.path, relative_base + entry.name, match.group("hour"),
-                       match.group("process"), True)
+    for entry, name in log_entries(root, prefix):
+        match = pattern.fullmatch(entry.name)
+        if match is not None:
+            yield entry.path, name, match.group("hour"), match.group("process"), True
 
 
 def _encode(payload):
     return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
 
 
-def _decode(cursor, fingerprint):
+def _decode(cursor, fingerprint, pattern=LOG_PATTERN):
     try:
         if len(cursor) > 2048:
             raise ValueError
@@ -122,7 +121,7 @@ def _decode(cursor, fingerprint):
                 or not isinstance(data.get("file"), str)
                 or Path(data["file"]).is_absolute()
                 or any(part in {"", ".", ".."} for part in Path(data["file"]).parts)
-                or LOG_PATTERN.fullmatch(Path(data["file"]).name) is None
+                or pattern.fullmatch(Path(data["file"]).name) is None
                 or type(data.get("offset")) is not int or data["offset"] < 0
                 or not isinstance(data.get("identity"), list) or len(data["identity"]) != 2
                 or any(type(n) is not int for n in data["identity"])
@@ -134,13 +133,15 @@ def _decode(cursor, fingerprint):
         raise ValueError("检索游标无效或筛选条件已改变，请重新筛选") from exc
 
 
-def _reverse_lines(stream, end, budget, discard=False):
+def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None):
     """Yield whole lines with the byte offset needed to resume before them.
 
     Oversized lines are discarded without retaining unbounded strings. Reading
     stops at a whole-line boundary; the caller can resume an unfinished chunk.
     """
     position = end
+    if max_line_bytes is None:
+        max_line_bytes = MAX_LINE_BYTES
     buffer = b""
     oversized = discard
     while position > 0 or buffer:
@@ -150,16 +151,19 @@ def _reverse_lines(stream, end, budget, discard=False):
             stream.seek(position)
             buffer = stream.read(length) + buffer
             budget[0] -= length
-        while (split := buffer.rfind(b"\n")) >= 0:
-            line = buffer[split + 1:]
-            boundary = position + split + 1
-            buffer = buffer[:split]
-            if oversized or len(line) > MAX_LINE_BYTES:
+        # Split once per chunk instead of copying the remaining buffer for
+        # every short line (quadratic copying within each 64 KiB chunk).
+        parts = buffer.split(b"\n")
+        boundary = position + len(buffer) + 1
+        buffer = parts[0]
+        for line in reversed(parts[1:]):
+            boundary -= len(line) + 1
+            if oversized or len(line) > max_line_bytes:
                 yield None, boundary, False
                 oversized = False
             elif line:
                 yield line.rstrip(b"\r"), boundary, False
-        if len(buffer) > MAX_LINE_BYTES:
+        if len(buffer) > max_line_bytes:
             oversized = True
             buffer = b""
         if position == 0:
@@ -173,17 +177,27 @@ def _reverse_lines(stream, end, budget, discard=False):
             break
 
 
-def search_logs(directory, query):
-    allowed = {"q", "level", "start", "end", "process", "rtu_id", "filename", "file_query", "limit", "cursor"}
+def search_logs(directory, query, *, family="c"):
+    pattern = LOG_PATTERNS[family]
+    allowed = {"q", "level", "start", "end", "process", "rtu_id", "filename", "file_query", "limit", "cursor", "record", "direction"}
+    if family == "s":
+        allowed.add("channel_id")
     if set(query) - allowed:
         raise ValueError("未知日志检索参数")
     query = {key: value for key, value in query.items() if value != ""}
+    record, direction = query.get("record", ""), query.get("direction", "")
+    if record not in {"", "packet", "runtime"} or direction not in {"", "RX", "TX"}:
+        raise ValueError("记录类型或收发方向无效")
+    channel = query.get("channel_id")
+    if channel is not None and (len(channel) > 19 or not channel.isascii() or not channel.isdecimal()
+                                or str(int(channel)) != channel or int(channel) >= 2**63):
+        raise ValueError("通道编号必须为有效非负整数")
     keyword = query.get("q", "").strip()
     if len(keyword) > 256 or len(query.get("file_query", "")) > 256:
         raise ValueError("关键词最多 256 个字符")
     level = query.get("level", "")
-    if level not in {"", "INFO", "WARNING", "ERROR", "PROCESS"}:
-        raise ValueError("日志类型必须为 INFO、WARNING、ERROR 或 PROCESS")
+    if level and level not in LOG_LEVEL_CODES.values():
+        raise ValueError("日志类型必须为 INFO、WARNING、ERROR、PROCESS 或 PACKET")
     try:
         limit = int(query.get("limit", "1000"))
         rtu = int(query["rtu_id"]) if "rtu_id" in query else None
@@ -195,17 +209,23 @@ def search_logs(directory, query):
     end = _timestamp(query["end"]) if "end" in query else None
     if start is not None and end is not None and start > end:
         raise ValueError("开始时间不能晚于结束时间")
+    # File dates are part of the persisted format. Exclude other local days
+    # before opening files or consuming a scan page; retain per-line clock
+    # and timezone conversion for exact boundaries and DST behavior.
+    start_day = _local_day(start)
+    end_day = _local_day(end)
     root = Path(directory).resolve()
-    filename = _relative_filename(root, query["filename"]) if query.get("filename") else None
+    filename = _relative_filename(root, query["filename"], pattern) if query.get("filename") else None
     fingerprint = hashlib.sha256(json.dumps(
         {k: v for k, v in query.items() if k not in {"cursor", "limit"}}, sort_keys=True,
     ).encode()).hexdigest()
-    cursor = _decode(query["cursor"], fingerprint) if "cursor" in query else None
+    cursor = _decode(query["cursor"], fingerprint, pattern) if "cursor" in query else None
     files = []
     # An explicitly selected file does not require walking the retention tree.
     # The all-files path uses scandir so each directory entry is checked once.
-    paths = _iter_log_files(root, filename)
-    cursor_key = _file_key(cursor["file"]) if cursor else None
+    prefix = query["process"] + "-" if query.get("process") else f"scdfe_{family}-"
+    paths = _iter_log_files(root, filename, pattern, prefix)
+    cursor_key = _file_key(cursor["file"], pattern) if cursor else None
     file_needle = query.get("file_query", "").casefold()
     for path, relative_name, file_hour, process, enumerated in paths:
         if not enumerated:
@@ -221,6 +241,9 @@ def search_logs(directory, query):
             continue
         if file_needle not in relative_name.rsplit("/", 1)[-1].casefold():
             continue
+        if ((start_day is not None and file_hour[:8] < start_day)
+                or (end_day is not None and file_hour[:8] > end_day)):
+            continue
         key = (file_hour, relative_name)
         if cursor_key and key > cursor_key:
             continue
@@ -231,9 +254,21 @@ def search_logs(directory, query):
     result_bytes = 0
     next_cursor = None
     needle = keyword.casefold()
+    # These exact byte sequences are necessary (but not sufficient) for a
+    # match. Keep Unicode casefold and header parsing for every candidate.
+    if channel is not None:
+        required = f"通道={channel} ".encode()
+    elif direction:
+        required = direction.encode('ascii')
+    elif level:
+        required = next(f'[{label}]'.encode() for label, code in LOG_LEVEL_CODES.items() if code == level)
+    else:
+        required = '报文'.encode() if record == 'packet' else None
     for index, (path, relative_name, file_hour) in enumerate(files):
         try:
             # Retention cleanup may delete files between listing and opening.
+            if not Path(path).resolve().is_relative_to(root):
+                continue
             with open(path, "rb") as stream:
                 stat = os.fstat(stream.fileno())
                 identity = [stat.st_dev, stat.st_ino]
@@ -257,14 +292,24 @@ def search_logs(directory, query):
                 for raw, boundary, discard in _reverse_lines(stream, offset, budget, discard):
                     if raw is None:
                         skipped += 1
-                    elif raw:
+                    elif raw and (required is None or required in raw):
                         line = raw.decode("utf-8", "replace")
                         header = HEADER.match(line)
                         header_level = LOG_LEVEL_CODES[header[2]] if header else ""
+                        packet = (PACKET.match(line, header.end()) if (record or direction or channel is not None)
+                                  and header_level in {"INFO", "PACKET"} else None)
+                        # Historical packets used [日志]; keep their record and
+                        # direction filters while new records have their own type.
+                        # Error/warning messages about packets remain runtime logs.
+                        is_packet = header_level == "PACKET" or bool(packet)
                         # Cheap filters first; rejected records need no local
                         # datetime conversion. Always reach the scan-budget
                         # checks below, including when nothing matches.
-                        if ((not level or header_level == level)
+                        owner = PACKET_CHANNEL.match(line, packet.end()) if packet and channel is not None else None
+                        if ((channel is None or (owner and owner[1] == channel))
+                                and (not level or header_level == level)
+                                and (not record or is_packet == (record == "packet"))
+                                and (not direction or (packet and packet[1] == direction))
                                 and (not needle or needle in line.casefold())):
                             stamp = None
                             if header and file_date is not None:

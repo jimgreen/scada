@@ -7,20 +7,26 @@ same operators and obey the same optimistic-version rules.
 """
 from __future__ import annotations
 
-import os
+from contextlib import contextmanager
 from pathlib import Path
-import signal
 import subprocess
-import sys
 import threading
 import time
 from typing import Any
+from weakref import WeakValueDictionary
 
-from core.process_registry import process_is_alive
+from core.scdfe_control import InstanceLock
+from scdfe_c.web.process_control import runtime_python
 from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, ScadaStore
 
 CHANNEL_TABLE = "fes_scdfe_t_define"
 POINT_TABLE = "fes_scdfe_t_point_define"
+RUNTIME_FIELDS = frozenset({
+    "_version", "process_status", "process_pid", "process_start_time", "process_stop_time",
+    "process_heartbeat_time", "process_exit_code", "process_error", "process_enable",
+})
+START_TIMEOUT = 10.0
+STOP_TIMEOUT = 10.0
 
 
 def _now_ms() -> int:
@@ -30,12 +36,39 @@ def _now_ms() -> int:
 class TransStore:
     """CRUD, process lifecycle and log projection for transmission channels."""
 
-    def __init__(self, db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DIR):
-        self.store = ScadaStore(db_path, schema_dir)
-        self.db_path = Path(db_path)
-        self.schema_dir = Path(schema_dir)
-        self._lock = threading.RLock()
+    def __init__(self, db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DIR, *, connection_pool_size=0):
+        self.store = ScadaStore(db_path, schema_dir, connection_pool_size=connection_pool_size)
+        self.db_path = Path(db_path).resolve()
+        self.schema_dir = Path(schema_dir).resolve()
+        self._lock_guard = threading.Lock()
+        self._channel_locks = WeakValueDictionary()
         self._children: dict[int, subprocess.Popen] = {}
+
+    @contextmanager
+    def _control(self, channel_id: int):
+        """Serialize mutations and lifecycle requests across Web instances."""
+        # Keep only active channel locks. A slow stop must not block other channels.
+        with self._lock_guard:
+            local = self._channel_locks.get(channel_id)
+            if local is None:
+                local = self._channel_locks[channel_id] = threading.RLock()
+        with local:
+            lock = InstanceLock(self.db_path, f"trans-control-{channel_id}")
+            if not lock.acquire():
+                raise ApiError(409, "该转发通道正在处理其他操作，请稍后重试", code="trans_busy")
+            try:
+                yield
+            finally:
+                lock.release()
+
+    def _owned(self, channel_id: int) -> bool:
+        # A recycled PID is not evidence of channel ownership. The running
+        # CLI holds this OS lock throughout startup, execution and cleanup.
+        return InstanceLock.held(self.db_path, f"trans-{channel_id}")
+
+    @staticmethod
+    def _definition(row):
+        return {key: value for key, value in row.items() if key not in RUNTIME_FIELDS}
 
     def _schema(self, table: str) -> dict[str, Any]:
         try:
@@ -79,34 +112,24 @@ class TransStore:
 
     def channels(self) -> list[dict[str, Any]]:
         self._schema(CHANNEL_TABLE)
-        return self.store.list_rows(CHANNEL_TABLE, limit=500, sort="channel_id")["items"]
+        rows = []
+        while True:
+            page = self.store.list_rows(CHANNEL_TABLE, limit=500, offset=len(rows), sort="channel_id")
+            rows.extend(page["items"])
+            if len(rows) >= page["total"] or not page["items"]:
+                return rows
 
     def get_channel(self, channel_id: Any) -> dict[str, Any]:
         return self.store.get_row(CHANNEL_TABLE, self._channel_key(channel_id))
 
     def create_channel(self, body: dict[str, Any]) -> dict[str, Any]:
+        if body.keys() & (RUNTIME_FIELDS - {'process_enable'}):
+            raise ApiError(400, "运行时字段只能由转发进程更新")
         columns = self._columns(CHANNEL_TABLE)
         unknown = set(body) - columns
         if unknown:
             raise ApiError(400, "转发通道包含未知字段", details={"unknown_fields": sorted(unknown)})
         values = dict(body)
-        # ``channel_id`` is an implementation key, so the Web form does not
-        # require operators to allocate it manually.  Allocate the next
-        # positive integer while holding the same SQLite write transaction
-        # used by ``create_row``; the UNIQUE code constraint still protects
-        # retries and concurrent requests.
-        if "channel_id" not in values:
-            with self.store.connection() as con:
-                row = con.execute(f"SELECT COALESCE(MAX(channel_id), 0) + 1 FROM {CHANNEL_TABLE}").fetchone()
-                values["channel_id"] = int(row[0])
-        values.setdefault("process_enable", 0)
-        values.setdefault("process_status", 0)
-        values.setdefault("process_pid", 0)
-        values.setdefault("process_start_time", 0)
-        values.setdefault("process_stop_time", 0)
-        values.setdefault("process_heartbeat_time", 0)
-        values.setdefault("process_exit_code", 0)
-        values.setdefault("process_error", "")
         if "protocol" in columns:
             protocol = str(values.get("protocol", "")).lower()
             if protocol not in {"iec104", "modbus-tcp"}:
@@ -116,13 +139,12 @@ class TransStore:
             raise ApiError(400, "转发通道 code 不能为空")
         if not values.get("name"):
             values["name"] = values["code"]
-        return self.store.create_row(CHANNEL_TABLE, values)
+        return self.store.create_row(CHANNEL_TABLE, values, allocate_key="channel_id" not in values)
 
     def update_channel(self, channel_id: Any, body: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
         self.get_channel(channel_id)
         columns = self._columns(CHANNEL_TABLE)
-        runtime = {"process_status", "process_pid", "process_start_time", "process_stop_time",
-                   "process_heartbeat_time", "process_exit_code", "process_error"}
+        runtime = RUNTIME_FIELDS - {"process_enable"}
         unknown = set(body) - columns
         if unknown:
             raise ApiError(400, "转发通道包含未知字段", details={"unknown_fields": sorted(unknown)})
@@ -130,49 +152,81 @@ class TransStore:
             raise ApiError(400, "运行时字段只能由转发进程更新")
         if "protocol" in body and str(body["protocol"]).lower() not in {"iec104", "modbus-tcp"}:
             raise ApiError(400, "转发规约只能是 iec104 或 modbus-tcp")
-        return self.store.update_row(CHANNEL_TABLE, self._channel_key(channel_id), body, if_match)
+        cid = self._channel_key(channel_id)[0]
+        with self._control(cid):
+            return self.store.update_row(CHANNEL_TABLE, [cid], body, if_match)
 
     def delete_channel(self, channel_id: Any, if_match: int | None = None) -> None:
-        self.stop(channel_id)
         cid = self._channel_key(channel_id)[0]
-        with self.store.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            row = con.execute(f"SELECT _version FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,)).fetchone()
-            if row is None:
-                raise ApiError(404, "记录不存在", code="not_found")
-            if if_match is not None and int(row[0]) != int(if_match):
-                raise ApiError(409, "记录已被其他操作修改，请关闭并重新打开编辑窗口", code="version_conflict")
-            con.execute(f"DELETE FROM {POINT_TABLE} WHERE channel_id=?", (cid,))
-            con.execute("DELETE FROM " + CHANNEL_TABLE + " WHERE channel_id=?", (cid,))
-            con.commit()
+        with self._control(cid):
+            # Check the caller's version before changing enable/state. A
+            # rejected stale DELETE must never stop a running channel.
+            with self.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute(f"SELECT * FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,)).fetchone()
+                if row is None:
+                    raise ApiError(404, "记录不存在", code="not_found")
+                if if_match is not None and int(row["_version"]) != int(if_match):
+                    raise ApiError(409, "记录已被其他操作修改，请重新加载", code="version_conflict")
+                definition = self._definition(dict(row))
+                con.execute(f"UPDATE {CHANNEL_TABLE} SET process_enable=0, _version=_version+1 WHERE channel_id=?", (cid,))
+                con.commit()
+            self._stop_locked(cid)
+            with self.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute(f"SELECT * FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,)).fetchone()
+                if row is None:
+                    raise ApiError(404, "记录不存在", code="not_found")
+                # Runtime heartbeats and our own stop change _version. Check
+                # operator definitions instead so those writes do not make a
+                # valid DELETE conflict with itself.
+                if self._definition(dict(row)) != definition:
+                    raise ApiError(409, "通道定义在停止期间发生变化，请重新加载", code="version_conflict")
+                con.execute(f"DELETE FROM {POINT_TABLE} WHERE channel_id=?", (cid,))
+                con.execute(f"DELETE FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,))
+                con.commit()
 
     def points(self, channel_id: Any) -> list[dict[str, Any]]:
+        """Return all mappings for in-process callers; HTTP uses point_page."""
+        rows = []
+        while True:
+            page = self.point_page(channel_id, limit=500, offset=len(rows))
+            rows.extend(page["items"])
+            if len(rows) >= page["total"] or not page["items"]:
+                return rows
+
+    @staticmethod
+    def _point_response(row):
+        # The old trans API exposed both names. Derive its read-only alias;
+        # the DB, generic table API and operator form have just one type.
+        return {**row, "source_kind": row["kind"]}
+
+    def point_page(self, channel_id: Any, *, limit: int = 100, offset: int = 0,
+                   kind: str | None = None) -> dict[str, Any]:
         self.get_channel(channel_id)
-        # ScadaStore deliberately caps a single projection at 500 rows; the
-        # transmission UI paginates at channel scope and does not need an
-        # oversized request here.
-        return self.store.list_rows(POINT_TABLE, where={"channel_id": self._channel_key(channel_id)[0]}, limit=500,
-                                    sort="kind")["items"]
+        where = {"channel_id": self._channel_key(channel_id)[0]}
+        if kind:
+            if kind not in {"yc", "yx", "yk", "yt"}:
+                raise ApiError(400, "点映射 kind 必须是 yc、yx、yk 或 yt")
+            where["kind"] = kind
+        page = self.store.list_rows(POINT_TABLE, where=where, limit=limit, offset=offset, sort="pnt_no")
+        page["items"] = [self._point_response(row) for row in page["items"]]
+        return page
 
     def create_point(self, channel_id: Any, body: dict[str, Any]) -> dict[str, Any]:
         cid = self._channel_key(channel_id)[0]
         self.get_channel(cid)
         columns = self._columns(POINT_TABLE)
-        unknown = set(body) - columns - {"channel_id"}
+        unknown = set(body) - columns - {"channel_id", "source_kind"}
         if unknown:
             raise ApiError(400, "转发点映射包含未知字段", details={"unknown_fields": sorted(unknown)})
         values = dict(body)
         values["channel_id"] = cid
-        # The source point kind is normally identical to the exposed point
-        # kind.  Keep it explicit in storage while allowing the UI to omit a
-        # redundant field.
-        values.setdefault("source_kind", values.get("kind"))
         if values.get("kind") not in {"yc", "yx", "yk", "yt"}:
             raise ApiError(400, "点映射 kind 必须是 yc、yx、yk 或 yt")
-        if values.get("source_kind") not in {"yc", "yx", "yk", "yt"}:
-            raise ApiError(400, "点映射 source_kind 必须是 yc、yx、yk 或 yt")
-        if values.get("kind") != values.get("source_kind"):
+        if values.pop("source_kind", values["kind"]) != values["kind"]:
             raise ApiError(400, "点映射 kind 必须与 source_kind 一致")
+        values.setdefault("source_pnt_no", values.get("pnt_no"))
         for key in ("pnt_no", "source_rtu_id", "source_pnt_no"):
             try:
                 values[key] = int(values[key])
@@ -185,19 +239,37 @@ class TransStore:
         # as the corresponding scdfe_c definition appears.  This also makes
         # definition maintenance atomic: operators can create the mapping,
         # then add or replace source four-remote points without a race.
-        return self.store.create_row(POINT_TABLE, values)
+        with self._control(cid):
+            self.get_channel(cid)
+            return self._point_response(self.store.create_row(POINT_TABLE, values))
 
     def get_point(self, channel_id: Any, key: list[Any]) -> dict[str, Any]:
         self.get_channel(channel_id)
-        return self.store.get_row(POINT_TABLE, key)
+        return self._point_response(self.store.get_row(POINT_TABLE, key))
 
     def update_point(self, channel_id: Any, key: list[Any], body: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
-        self.get_channel(channel_id)
-        return self.store.update_row(POINT_TABLE, key, body, if_match)
+        cid = self._channel_key(channel_id)[0]
+        with self._control(cid):
+            current = self.get_point(cid, key)
+            values = dict(body)
+            legacy_type = "source_kind" in values
+            if legacy_type and values.pop("source_kind") != current["kind"]:
+                raise ApiError(400, "点映射 kind 必须与 source_kind 一致")
+            for name in self._schema(POINT_TABLE)["primary_keys"]:
+                if name in values:
+                    if str(values[name]) != str(current[name]):
+                        raise ApiError(400, "主键字段不能修改")
+                    values.pop(name)
+            if legacy_type and not values:
+                self.store._check_version(current, if_match)
+                return current
+            return self._point_response(self.store.update_row(POINT_TABLE, key, values, if_match))
 
     def delete_point(self, channel_id: Any, key: list[Any], if_match: int | None = None) -> None:
-        self.get_channel(channel_id)
-        self.store.delete_row(POINT_TABLE, key, if_match)
+        cid = self._channel_key(channel_id)[0]
+        with self._control(cid):
+            self.get_channel(cid)
+            self.store.delete_row(POINT_TABLE, key, if_match)
 
     def _update_runtime(self, channel_id: int, **values: Any) -> None:
         allowed = self._columns(CHANNEL_TABLE)
@@ -206,68 +278,138 @@ class TransStore:
             self.store.update_row(CHANNEL_TABLE, [channel_id], values)
 
     def _command(self, channel_id: int) -> list[str]:
-        return [sys.executable, "-B", "-m", "scdfe_t", "--db", str(self.db_path),
-                "--schema-dir", str(self.schema_dir), "--channel-id", str(channel_id)]
+        return [runtime_python(), "-B", "-m", "scdfe_t", "--db", str(self.db_path),
+                "--schema-dir", str(self.schema_dir), "--channel-id", str(channel_id), "--managed-start"]
 
     def start(self, channel_id: Any) -> dict[str, Any]:
         cid = self._channel_key(channel_id)[0]
-        row = self.get_channel(cid)
-        with self._lock:
+        with self._control(cid):
+            row = self.get_channel(cid)
+            launch_time = int(row.get("process_start_time") or 0)
+            owned = self._owned(cid)
+            if owned:
+                if not row.get("process_enable") or row.get("process_status") == 3:
+                    raise ApiError(409, "转发通道正在停止，请稍后重试", code="trans_stopping")
+                if row.get("process_status") == 2:
+                    return row
             process = self._children.get(cid)
-            if process is not None and process.poll() is None:
-                return self.get_channel(cid)
-            pid = int(row.get("process_pid") or 0)
-            if pid and process_is_alive(pid):
+            if process is not None and process.poll() is None and not row.get("process_enable"):
+                # A different Web instance can observe the lease release
+                # just before this instance's child handle reports exit.
+                # Reap that previous launch before re-enabling the channel.
+                try:
+                    process.wait(timeout=STOP_TIMEOUT)
+                except subprocess.TimeoutExpired as exc:
+                    raise ApiError(409, "上次转发进程尚未退出，请稍后重试", code="trans_stopping") from exc
+            own_starting = owned or process is not None and process.poll() is None
+            # Another Web instance may have spawned the child just before it
+            # acquired the runtime lease. Treat only a recent STARTING intent
+            # as pending; an arbitrary live PID never proves a running lease.
+            pending = (row.get("process_status") == 1 and row.get("process_enable")
+                       and 0 <= _now_ms() - int(row.get("process_start_time") or 0) < START_TIMEOUT * 1000)
+            if not own_starting and not pending:
+                started = _now_ms()
+                launch_time = started
+                self._update_runtime(cid, process_enable=1, process_status=1, process_pid=0,
+                                     process_start_time=started, process_stop_time=0,
+                                     process_error="", process_exit_code=0)
+                try:
+                    project_root = Path(__file__).resolve().parents[2]
+                    process = subprocess.Popen(self._command(cid), cwd=str(project_root),
+                                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                               stderr=subprocess.DEVNULL, close_fds=True)
+                except OSError as exc:
+                    self._update_runtime(cid, process_enable=0, process_status=5, process_pid=0,
+                                         process_stop_time=_now_ms(), process_exit_code=-1, process_error=str(exc))
+                    raise ApiError(409, f"转发进程启动失败: {exc}", code="trans_start_failed") from exc
+                self._children[cid] = process
+                # The runtime may already have published RUNNING. Do not
+                # overwrite that state with the parent's launch metadata.
+                with self.store.connection() as con:
+                    con.execute(f"UPDATE {CHANNEL_TABLE} SET process_pid=?, _version=_version+1 "
+                                "WHERE channel_id=? AND process_status=1 AND process_pid=0 AND process_start_time=?",
+                                (process.pid, cid, started))
+                    con.commit()
+        return self._wait_started(cid, launch_time=launch_time)
+
+    def _wait_started(self, cid: int, *, launch_time: int) -> dict[str, Any]:
+        deadline = time.monotonic() + START_TIMEOUT
+        while time.monotonic() < deadline:
+            row = self.get_channel(cid)
+            if row.get("process_status") == 2 and self._owned(cid):
                 return row
-            started = _now_ms()
-            self._update_runtime(cid, process_enable=1, process_status=1, process_pid=0,
-                                 process_start_time=started, process_stop_time=0, process_error="")
-            try:
-                project_root = Path(__file__).resolve().parents[2]
-                process = subprocess.Popen(self._command(cid), cwd=str(project_root),
-                                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.DEVNULL, close_fds=(os.name != "nt"))
-            except OSError as exc:
-                self._update_runtime(cid, process_enable=0, process_status=5, process_pid=0,
-                                     process_stop_time=_now_ms(), process_exit_code=-1, process_error=str(exc))
-                raise ApiError(409, f"转发进程启动失败: {exc}", code="trans_start_failed") from exc
-            self._children[cid] = process
-            self._update_runtime(cid, process_status=2, process_pid=process.pid)
-            return self.get_channel(cid)
+            if not row.get("process_enable") or row.get("process_status") == 3:
+                raise ApiError(409, "启动请求已取消", code="trans_start_cancelled")
+            if row.get("process_status") == 5:
+                raise ApiError(409, row.get("process_error") or "转发进程启动失败，请查看日志",
+                               code="trans_start_failed")
+            process = self._children.get(cid)
+            if process is not None and process.poll() is not None and not self._owned(cid):
+                try:
+                    with self._control(cid):
+                        current = self.get_channel(cid)
+                        # An old waiter may outlive a stop followed by a
+                        # different Web instance's new start. Only this exact
+                        # parent's unchanged launch record may be failed.
+                        if (current["_version"] == row["_version"] and
+                                current.get("process_pid") == process.pid and
+                                current.get("process_start_time") == launch_time and
+                                self._children.get(cid) is process and not self._owned(cid)):
+                            message = "转发进程启动后退出，请查看日志"
+                            self._update_runtime(cid, process_enable=0, process_status=5, process_pid=0,
+                                                 process_stop_time=_now_ms(), process_error=message,
+                                                 process_exit_code=process.returncode)
+                            raise ApiError(409, message, code="trans_start_failed")
+                except ApiError as exc:
+                    if exc.code != "trans_busy":
+                        raise
+            time.sleep(.05)
+        raise ApiError(409, "转发进程未在规定时间内就绪，请查看进程状态和日志", code="trans_start_timeout")
 
     def stop(self, channel_id: Any) -> dict[str, Any]:
         cid = self._channel_key(channel_id)[0]
-        row = self.get_channel(cid)
-        with self._lock:
-            process = self._children.get(cid)
-            pid = process.pid if process is not None else int(row.get("process_pid") or 0)
-            self._update_runtime(cid, process_enable=0, process_status=3)
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-            elif pid and process_is_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
-            self._children.pop(cid, None)
-            self._update_runtime(cid, process_status=0, process_pid=0, process_stop_time=_now_ms())
-            return self.get_channel(cid)
+        with self._control(cid):
+            return self._stop_locked(cid)
+
+    def _stop_locked(self, cid: int) -> dict[str, Any]:
+        self.get_channel(cid)
+        process = self._children.get(cid)
+        self._update_runtime(cid, process_enable=0, process_status=3)
+        deadline = time.monotonic() + STOP_TIMEOUT
+        while self._owned(cid) or process is not None and process.poll() is None:
+            if time.monotonic() >= deadline:
+                message = "转发进程尚未退出，已请求停止，请稍后重试"
+                self._update_runtime(cid, process_status=3, process_error=message)
+                raise ApiError(409, message, code="trans_stop_timeout")
+            time.sleep(.05)
+        self._children.pop(cid, None)
+        self._update_runtime(cid, process_status=0, process_pid=0, process_stop_time=_now_ms(), process_error="")
+        return self.get_channel(cid)
 
     def processes(self) -> list[dict[str, Any]]:
         rows = []
         for row in self.channels():
             cid = int(row["channel_id"])
-            pid = int(row.get("process_pid") or 0)
-            alive = bool(pid and process_is_alive(pid))
+            alive = self._owned(cid)
             item = dict(row)
             item["alive"] = alive
-            if pid and not alive and row.get("process_status") in {1, 2, 3, 4}:
-                self._update_runtime(cid, process_status=5, process_pid=0, process_error="进程已退出")
-                item.update(process_status=5, process_pid=0, process_error="进程已退出", alive=False)
+            process = self._children.get(cid)
+            pending = row.get("process_status") == 1 and (
+                process is not None and process.poll() is None or
+                0 <= _now_ms() - int(row.get("process_start_time") or 0) < START_TIMEOUT * 1000
+            )
+            if not alive and not pending and row.get("process_status") in {1, 2, 3, 4}:
+                # Recheck under the control lock: a fresh start must not be
+                # overwritten by a stale monitor request.
+                try:
+                    with self._control(cid):
+                        current = self.get_channel(cid)
+                        if current["_version"] == row["_version"] and not self._owned(cid):
+                            self._update_runtime(cid, process_status=5, process_pid=0, process_error="进程已退出")
+                            item.update(process_status=5, process_pid=0, process_error="进程已退出", alive=False)
+                except ApiError as exc:
+                    if exc.code != "trans_busy":
+                        raise
             rows.append(item)
         return rows
 
@@ -275,30 +417,35 @@ class TransStore:
         log_root = self.db_path.parent / "logs"
         if not log_root.is_dir():
             return {"items": [], "total": 0}
-        suffix = f"{int(channel_id)}" if channel_id is not None else None
-        files = []
-        for path in log_root.rglob("*.log"):
-            name = path.name
-            if "scdfe_t" not in name:
-                continue
-            if suffix and not name.startswith(f"scdfe_t-channel-{suffix}-"):
-                continue
-            try:
-                files.append({"filename": str(path.relative_to(log_root)).replace("\\", "/"),
-                              "size": path.stat().st_size, "mtime": int(path.stat().st_mtime * 1000)})
-            except OSError:
-                continue
+        from core.web_logs import log_files
+        query = {"process": f"scdfe_t-channel-{int(channel_id)}"} if channel_id is not None else {}
+        files = [{"filename": item["name"], "size": item["size"], "mtime": item["modified_at"]}
+                 for item in log_files(log_root, "t", query)["items"]]
         files.sort(key=lambda item: item["mtime"], reverse=True)
         return {"items": files[:max(1, min(int(limit), 1000))], "total": len(files)}
 
     def read_log(self, filename: str, tail: int = 300) -> dict[str, Any]:
+        from scdfe_c.web.log_query import LOG_PATTERNS, _relative_filename
         root = (self.db_path.parent / "logs").resolve()
-        path = (root / filename).resolve()
-        if root not in path.parents or path.suffix != ".log" or not path.name.startswith("scdfe_t-channel-"):
-            raise ApiError(400, "非法日志路径")
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            path = root / _relative_filename(root, filename, LOG_PATTERNS["t"])
+            if path.is_symlink():
+                raise ValueError("不读取链接")
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise ApiError(400, "非法日志路径") from exc
+        try:
+            # Packet traces can make an hourly file large. Only read a bounded
+            # tail, as the c Web already does, rather than allocating the file.
+            with path.open("rb") as stream:
+                size = stream.seek(0, 2)
+                start = max(0, size - 2_000_000)
+                stream.seek(start)
+                data = stream.read(2_000_000)
+            if start:
+                data = data.partition(b"\n")[2]
+            lines = data.decode("utf-8", errors="replace").splitlines()
         except FileNotFoundError as exc:
             raise ApiError(404, "日志文件不存在", code="not_found") from exc
         count = max(1, min(int(tail), 5000))
-        return {"filename": filename, "lines": lines[-count:], "total": len(lines)}
+        return {"filename": filename, "lines": lines[-count:],
+                "total": None if start else len(lines), "truncated": bool(start)}

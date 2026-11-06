@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable, Iterable, Mapping
 
 from .point_store import PointStore
+from core.packet_trace import PacketTrace, trace_bacnet_app
 
 try:
     from bacpypes3.object import DeviceObject
@@ -25,8 +26,10 @@ class BacnetServerError(RuntimeError):
     pass
 
 
-class BacnetServer:
+class BacnetServer(PacketTrace):
     """BACnet/IP server exposing four-remote points as local BACnet objects."""
+
+    PACKET_PROTOCOL = "BACnet/IP"
 
     def __init__(self, *, bind_ip="127.0.0.1", bind_port=47808, device_id=1001,
                  device_name="SCADA BACnet Server", points: Iterable[Mapping[str, Any]] | None = None,
@@ -89,6 +92,7 @@ class BacnetServer:
     async def _start_async(self):
         device = DeviceObject(objectIdentifier=("device", self.device_id), objectName=self.device_name)
         self._app = NormalApplication(device, IPv4Address(self.endpoint))
+        trace_bacnet_app(self._app, self._packet)
         for point in self.point_store.snapshot():
             kind, pnt_no = point["kind"], int(point["pnt_no"])
             object_type, object_class = self._object_class(kind)

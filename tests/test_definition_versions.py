@@ -63,14 +63,48 @@ class DefinitionVersionTests(unittest.TestCase):
         self.store.delete_rtu_cascade(7)
         with self.store.connection() as connection:
             self.assertIsNone(connection.execute(
-                "SELECT 1 FROM _scada_definition_version WHERE rtu_id=7",
-            ).fetchone())
-            self.assertIsNone(connection.execute(
-                "SELECT 1 FROM _scada_command_version WHERE rtu_id=7",
+                "SELECT 1 FROM _scada_rtu_version WHERE rtu_id=7",
             ).fetchone())
         # Keep the local variable meaningful: the command token existed before
         # the cascade and is intentionally removed with its RTU.
         self.assertGreaterEqual(command, 0)
+
+    def test_unchanged_static_values_keep_definition_token_but_version_advances(self):
+        with self.store.connection() as connection:
+            connection.execute('UPDATE fes_yc_define SET name=NULL WHERE rtu_id=7')
+            before = connection.execute(
+                'SELECT _version FROM fes_yc_define WHERE rtu_id=7').fetchone()[0]
+        token = definition_version_token(self.store, 7)
+        with self.store.connection() as connection:
+            connection.execute('UPDATE fes_yc_define SET name=name, pnt_no=pnt_no, '
+                               '_version=_version+1 WHERE rtu_id=7')
+            after = connection.execute(
+                'SELECT _version FROM fes_yc_define WHERE rtu_id=7').fetchone()[0]
+        self.assertEqual(definition_version_token(self.store, 7), token)
+        self.assertGreater(after, before)
+        self.store.update_row('fes_yc_define', [7, 1], {'name': '恢复电压'})
+        self.assertGreater(definition_version_token(self.store, 7), token)
+        token = definition_version_token(self.store, 7)
+        self.store.update_row('fes_yc_define', [7, 1], {'name': '恢复电压'})
+        self.assertEqual(definition_version_token(self.store, 7), token)
+
+    def test_legacy_update_trigger_is_migrated_once_without_changing_tokens(self):
+        with self.store.connection() as connection:
+            connection.execute('DROP TRIGGER _scada_defver_fes_yc_define_upd')
+            connection.execute('''CREATE TRIGGER _scada_defver_fes_yc_define_upd
+                AFTER UPDATE OF name ON fes_yc_define BEGIN
+                INSERT INTO _scada_definition_version(rtu_id, version) VALUES (NEW.rtu_id, 1)
+                ON CONFLICT(rtu_id) DO UPDATE SET version=version+1; END''')
+        token = definition_version_token(self.store, 7)
+        reopened = ScadaStore(self.store.db_path)
+        self.assertEqual(definition_version_token(reopened, 7), token)
+        reopened.update_row('fes_yc_define', [7, 1], {'name': '电压'})
+        self.assertEqual(definition_version_token(reopened, 7), token)
+        with reopened.connection() as connection:
+            schema_version = connection.execute('PRAGMA schema_version').fetchone()[0]
+        ScadaStore(self.store.db_path)
+        with reopened.connection() as connection:
+            self.assertEqual(connection.execute('PRAGMA schema_version').fetchone()[0], schema_version)
 
 
 if __name__ == "__main__":

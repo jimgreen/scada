@@ -80,15 +80,30 @@ class ProcessController:
         except Exception as exc:
             if getattr(exc, "code", None) != "not_found":
                 raise
-            row = self.store.create_row(COMMAND_TABLE, {
-                "id": 1, "bind_host": "127.0.0.1", "bind_port": 8890,
-                "auth_token": secrets.token_urlsafe(32), "process_enable": 0,
-                "log_retention_hours": 720,
-            })
+            try:
+                row = self.store.create_row(COMMAND_TABLE, {
+                    "id": 1, "bind_host": "127.0.0.1", "bind_port": 8890,
+                    "auth_token": secrets.token_urlsafe(32), "process_enable": 0,
+                    "log_retention_hours": 720,
+                })
+            except ApiError as conflict:
+                if conflict.code != "conflict":
+                    raise
+                # The process/config panels refresh concurrently, possibly
+                # from separate Web processes. Keep the winning singleton
+                # and its token instead of surfacing an initial-load 409.
+                row = self.store.get_row(COMMAND_TABLE, [1])
         if not row.get("auth_token"):
-            row = self.store.update_row(COMMAND_TABLE, [1], {
-                "auth_token": secrets.token_urlsafe(32),
-            })
+            with self.store.connection() as connection:
+                # Initialising a legacy empty token must not rotate a token
+                # another request has already returned to a caller.
+                connection.execute(
+                    f"UPDATE {COMMAND_TABLE} SET auth_token=?, _version=_version+1 "
+                    "WHERE id=1 AND (auth_token IS NULL OR auth_token='')",
+                    (secrets.token_urlsafe(32),),
+                )
+                connection.commit()
+            row = self.store.get_row(COMMAND_TABLE, [1])
         # A hard-killed child may not reach its ``finally`` block.  Do not
         # leave the Web configuration locked forever on the stale PID from
         # that child; the process registry probe is the authoritative check.
@@ -240,7 +255,7 @@ class ProcessController:
                         raise ApiError(400, str(exc)) from exc
                     if action == "start":
                         rtu = row["target_rtu"] if target.startswith("debug:") else None
-                        if target != "writer" and not self._row(target)["process_pid"] and ServerInstanceLock.held(rtu):
+                        if target not in {"writer", "command-server"} and not self._row(target)["process_pid"] and ServerInstanceLock.held(rtu):
                             raise ApiError(409, "本服务器已有相应通信实例，等待原实例退出后再启动", code="process_already_running")
                     if "include_in_all" in body:
                         if not target.startswith("debug:"):

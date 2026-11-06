@@ -1,0 +1,75 @@
+{
+  "requests": 90,
+  "web": [
+    {
+      "port": 8877,
+      "path": "rtus?limit=10",
+      "requests": 10,
+      "median_ms": 3.205,
+      "max_ms": 16.96
+    },
+    {
+      "port": 8877,
+      "path": "scdfe_c/logs/search?process=scdfe_c-main&record=runtime&limit=5",
+      "requests": 10,
+      "median_ms": 18.775,
+      "max_ms": 31.72
+    },
+    {
+      "port": 8877,
+      "path": "packet-recording",
+      "requests": 10,
+      "median_ms": 3.9699999999999998,
+      "max_ms": 20.94
+    },
+    {
+      "port": 8878,
+      "path": "channels?limit=10",
+      "requests": 10,
+      "median_ms": 2.8449999999999998,
+      "max_ms": 19.48
+    },
+    {
+      "port": 8878,
+      "path": "log-files/search?channel_id=10&record=packet&direction=RX&limit=5",
+      "requests": 10,
+      "median_ms": 50.93,
+      "max_ms": 80.74
+    },
+    {
+      "port": 8878,
+      "path": "monitor/processes",
+      "requests": 10,
+      "median_ms": 9.07,
+      "max_ms": 30.13
+    },
+    {
+      "port": 8879,
+      "path": "trans/channels",
+      "requests": 10,
+      "median_ms": 2.67,
+      "max_ms": 24.51
+    },
+    {
+      "port": 8879,
+      "path": "log-files/search?process=scdfe_t-channel-1&record=packet&direction=TX&limit=5",
+      "requests": 10,
+      "median_ms": 18.22,
+      "max_ms": 36.31
+    },
+    {
+      "port": 8879,
+      "path": "trans/channels/1/points?limit=10",
+      "requests": 10,
+      "median_ms": 3.2,
+      "max_ms": 24.5
+    }
+  ],
+  "iec104_gi": [
+    42.0,
+    42.0,
+    42.0,
+    42.0,
+    42.0
+  ]
+}

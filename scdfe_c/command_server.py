@@ -28,11 +28,11 @@ import threading
 import time
 from typing import Any
 
-from core.process_registry import ProcessLease
+from core.process_registry import PROCESS_TABLE, ProcessLease
 from core.scdfe_control import InstanceLock, ensure_control_row, log_directory
 from . import ScdfeLogger
 from .web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
-from .writer_ipc import WriterClient, WriterRequestError, WriterUnavailable
+from .writer_ipc import WriterClient, WriterRequestError, WriterUnavailable, _command_json
 
 MAX_LINE = 64 * 1024
 REQUEST_TIMEOUT = 10.0
@@ -57,7 +57,7 @@ def _validate_request(payload: Mapping[str, Any]) -> tuple[str, int, str, int, A
     if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
         raise ValueError("request_id 必须是非空字符串且不超过 128 个字符")
     op = payload.get("op", "submit_command")
-    if op not in {"command", "submit_command"}:
+    if op not in ("command", "submit_command"):
         raise ValueError("op 只能是 command 或 submit_command")
     # JSON command identifiers are integers on the wire.  Do not silently
     # truncate floats (``1.5`` -> ``1``) or accept booleans (``true`` -> ``1``)
@@ -71,7 +71,7 @@ def _validate_request(payload: Mapping[str, Any]) -> tuple[str, int, str, int, A
     if rtu_id <= 0 or point_no <= 0:
         raise ValueError("rtu_id 和 point_no 必须为正整数")
     kind = payload.get("kind")
-    if kind not in {"yk", "yt"}:
+    if kind not in ("yk", "yt"):
         raise ValueError("只支持遥控 yk 和遥调 yt")
     if "value" not in payload:
         raise ValueError("缺少 value")
@@ -88,7 +88,7 @@ def _validate_request(payload: Mapping[str, Any]) -> tuple[str, int, str, int, A
     else:
         try:
             numeric = float(value)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("遥调 value 必须是数字") from exc
         if not math.isfinite(numeric):
             raise ValueError("遥调 value 必须是有限数字")
@@ -131,15 +131,15 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
                 self._send(owner.error_response("request_too_large", "请求过大", 413))
                 return
             try:
-                payload = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = _command_json(raw)
+            except (ValueError, RecursionError):
                 self._send(owner.error_response("invalid_json", "请求不是有效 JSON", 400))
                 return
             if not isinstance(payload, dict):
                 self._send(owner.error_response("invalid_request", "请求必须是 JSON 对象", 400))
                 return
             token = payload.pop("token", None)
-            if not isinstance(token, str) or not hmac.compare_digest(token, owner.token):
+            if not isinstance(token, str) or not hmac.compare_digest(token.encode("utf-8", "surrogatepass"), owner.token.encode("utf-8", "surrogatepass")):
                 owner.logger.error("TCP 指令认证失败")
                 self._send(owner.error_response("unauthorized", "指令服务令牌无效", 401))
                 return

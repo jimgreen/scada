@@ -279,14 +279,14 @@ const PROTOCOL_RULES = {
         1: "1 · 单点/浮点",
         2: "2 · 双点/标度",
         3: "3 · 短浮点",
-        9: "9 · M_ME_NC_1 浮点",
+        9: "9 · M_ME_NA_1 归一化",
         11: "11 · M_ME_NB_1 标度",
-        13: "13 · M_ME_NA_1 短浮点",
+        13: "13 · M_ME_NC_1 短浮点",
         45: "45 · 单点命令",
         46: "46 · 双点命令",
-        48: "48 · 标度设点",
-        49: "49 · 短浮点设点",
-        50: "50 · 归一化设点",
+        48: "48 · C_SE_NA_1 归一化设点",
+        49: "49 · C_SE_NB_1 标度设点",
+        50: "50 · C_SE_NC_1 短浮点设点",
       },
     },
     report_ms: { min: 0, step: 100 },
@@ -597,11 +597,19 @@ function showView() {
     $("#view-" + view).classList.toggle("selected", state.view === view);
   }
 }
+let displayedTableScope = null;
+function guardTableScope(ctx) {
+  const stale = displayedTableScope !== JSON.stringify([ctx.resource, ctx.rtu]);
+  const body = $("#table-body");
+  body.hidden = stale;
+  body.inert = stale;
+}
 async function loadRows() {
   if (!state.schemas.size || ["processes", "scdfe", "logs"].includes(state.resource)) return;
   const sequence = ++state.request;
   state.loading = true;
   const ctx = context();
+  guardTableScope(ctx);
   showView();
   $("#table-error").hidden = true;
   $("#add").disabled = true;
@@ -645,7 +653,11 @@ async function loadRows() {
     $("#table-error").textContent = error.message;
     $("#table-error").hidden = false;
   } finally {
-    if (sequence === state.request) state.loading = false;
+    if (sequence === state.request) {
+      state.loading = false;
+      displayedTableScope = JSON.stringify([ctx.resource, ctx.rtu]);
+      guardTableScope(ctx);
+    }
   }
 }
 function visibleColumns() {
@@ -713,6 +725,7 @@ function reconcileBody(body, rows, cache, patchCells = false) {
   cache.rows = rows;
 }
 function renderTable() {
+  $("#table-body").closest(".data-table").classList.toggle("rtu-table", state.resource === "rtus");
   const columns = visibleColumns();
   const schema = schemaFor();
   const columnsKey = state.resource + "\u001f" + columns.map((column) => column.eng_name).join("\u001f");
@@ -742,7 +755,8 @@ function renderTable() {
             : "") +
           "<small>" +
           esc(column.eng_name) +
-          "</small></button></th>",
+          "</small></button></th>" +
+          (state.resource === "rtus" && column.eng_name === "channel_type" ? '<th scope="col">报文保存</th>' : ""),
       )
       .join("") +
     '<th class="sticky-actions">操作</th></tr>';
@@ -778,7 +792,8 @@ function renderTable() {
                 esc(values[columnIndex] ?? "—") +
                 '">' +
                 cellValue(column.eng_name, values[columnIndex], schema.head.eng_name) +
-                "</td>",
+                "</td>" +
+                (state.resource === "rtus" && column.eng_name === "channel_type" ? window.PacketRecordingChannels.cell(item.channel_id) : ""),
             )
             .join("") +
           '<td class="actions-cell sticky-actions">' +
@@ -810,9 +825,10 @@ function renderTable() {
         return markup;
       })
     : ['<tr><td class="empty" colspan="' +
-      (columns.length + 1) +
+      (columns.length + 1 + (state.resource === "rtus" ? 1 : 0)) +
       '">没有匹配的记录</td></tr>'];
   reconcileBody($("#table-body"), rows, tableRender);
+  if (state.resource === "rtus") window.PacketRecordingChannels.mount();
   tableRender.entries.length = state.items.length;
   $("#result-count").textContent =
     "共 " +
@@ -862,12 +878,12 @@ function commandMarkup(row) {
   return '<span class="command-state ' + status + '">' + label + '</span>';
 }
 async function openCommand(row) {
-  const kind = state.resource;
+  const kind = state.resource, originRtu = state.rtu;
   if (!["yk", "yt"].includes(kind)) return;
   try {
     const path = "/api/rtus/" + encodeURIComponent(row.rtu_id) + "/points/" + kind + "/" + encodeURIComponent(row.pnt_no);
     const current = (await api(path)).item;
-    if (state.resource !== kind) return;
+    if (state.resource !== kind || state.rtu !== originRtu) return;
     state.command = { kind, row: current, busy: false };
     $("#command-title").textContent = kind === "yk" ? "遥控下发" : "遥调下发";
     $("#command-point").textContent = "RTU " + current.rtu_id + " · 点 " + current.pnt_no + " · " + (current.name || current.code || "未命名");
@@ -956,7 +972,7 @@ async function openEditor(row = null, options = {}) {
   try {
     // Always edit the latest record. A later concurrent edit is protected by If-Match.
     if (row) row = (await api(ctx.fetchPath || pathFor(ctx, row))).item;
-    if (ctx.resource !== state.resource) return;
+    if (base.resource !== state.resource || base.rtu !== context().rtu) return;
     state.editing = { ...ctx, row };
     $("#form-title").textContent =
       (row ? "编辑 · " : "新增 · ") + (options.title || ctx.schema.head.chn_name);
@@ -1575,12 +1591,12 @@ function changeResource(resource, updateHash = true) {
 }
 
 async function openDetails(row, resource = state.resource) {
-  const origin = state.resource;
+  const origin = state.resource, originRtu = state.rtu;
   try {
     const schema = schemaFor(resource);
     const ctx = { resource, schema, rtu: "" };
     const current = (await api(pathFor(ctx, row))).item;
-    if (state.resource !== origin) return;
+    if (state.resource !== origin || state.rtu !== originRtu) return;
     state.detail = { resource, row: current };
     $("#detail-title").textContent =
       (current.name || schema.head.chn_name) + " · " + keyOf(current, schema);
@@ -1976,7 +1992,10 @@ async function loadScdfeLogs(refreshContent = true) {
     const selected = $("#log-process").value;
     const processes = [...new Set(data.items.map((item) => item.process))];
     if (selected && !processes.includes(selected)) processes.push(selected);
-    $("#log-process").innerHTML =
+    // Traffic changes file order on each refresh; keep this menu stable and
+    // preserve its option nodes while its membership remains unchanged.
+    processes.sort();
+    const processOptions =
       '<option value="">全部进程</option>' +
       processes
         .map(
@@ -1988,7 +2007,11 @@ async function loadScdfeLogs(refreshContent = true) {
             "</option>",
         )
         .join("");
-    $("#log-process").value = selected;
+    const processMenu = $("#log-process");
+    if (processMenu.innerHTML !== processOptions) {
+      processMenu.innerHTML = processOptions;
+      processMenu.value = selected;
+    }
     $("#log-directory").textContent = "日志目录：" + data.directory;
     showError("#logs-error", null);
     await filterLogs(true, refreshContent);
@@ -2006,8 +2029,12 @@ async function filterLogs(refresh = false, refreshContent = true) {
   );
   if (logs.offset >= logs.filtered.length) logs.offset = 0;
   let selected = logs.filtered.find((item) => item.name === logs.selected);
-  if (refresh && $("#log-follow").checked && !$("#log-end").value && selected)
-    selected = logs.filtered.find((item) => item.process === selected.process);
+  if (refresh && $("#log-follow").checked && !$("#log-end").value && selected) {
+    // File modification times can change when an archive is copied back.
+    // Follow the file hour of the same process, not its position in the list.
+    for (const item of logs.filtered)
+      if (item.process === selected.process && item.hour > selected.hour) selected = item;
+  }
   if (!selected) selected = logs.filtered[0];
   const changed = logs.selected !== (selected?.name || "");
   logs.selected = selected?.name || "";
@@ -2044,6 +2071,7 @@ $("#scdfe-logs").onclick = (event) => {
   const button = event.target.closest("[data-log-name]");
   if (!button) return;
   $("#log-scope").value = "file";
+  $("#log-follow").checked = false;
   logs.selected = button.dataset.logName;
   renderLogFiles();
   readLog(logs.selected, true);
@@ -2456,6 +2484,7 @@ $("#rtu-filter").onchange = (event) => {
   state.rtu = event.target.value.trim();
   state.offset = 0;
   ++state.request;
+  guardTableScope(context());
   $("#add").disabled = true;
   clearTimeout(state.rtuTimer);
   state.rtuTimer = setTimeout(loadRows, 300);

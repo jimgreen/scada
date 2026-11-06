@@ -11,6 +11,9 @@ import threading
 import time
 from typing import NamedTuple
 
+from core.iec104_values import binary_command_value, double_to_binary
+from core.packet_trace import PacketTrace
+
 try:
     import c104
 except ImportError as exc:  # pragma: no cover - exercised in dependency checks
@@ -36,7 +39,7 @@ class IEC104Error(RuntimeError):
 
 
 class IEC104Value(NamedTuple):
-    """一次读取的不可变点快照；按名称读取字段。"""
+    """不可变业务值快照；双点 OFF/ON 为 False/True，未知态为 None。"""
 
     rtu_id: int | None
     point_no: int
@@ -57,7 +60,7 @@ def _require_c104():
         raise IEC104Error('缺少依赖 c104，请执行: python -m pip install -r requirements.txt') from _C104_IMPORT_ERROR
 
 
-class IEC104Master:
+class IEC104Master(PacketTrace):
     """一个远端 RTU 的 IEC104 主站。
 
     ``connect()`` 启动 c104 的后台线程并连接；它不是阻塞式 socket 接口。
@@ -65,6 +68,7 @@ class IEC104Master:
     """
 
     DEFAULT_BASE = {'yc': 0x4001, 'yx': 0x01, 'yk': 0x6001, 'yt': 0x6201}
+    PACKET_PROTOCOL = "IEC104 APDU"
     TYPE_NAMES = {
         'yx': ('M_SP_NA_1', 'M_DP_NA_1'),
         'yc': ('M_ME_NC_1', 'M_ME_NB_1', 'M_ME_NA_1'),
@@ -116,6 +120,7 @@ class IEC104Master:
         init_enum = getattr(c104.Init, str(init).upper(), None) if isinstance(init, str) else init
         if init_enum is None:
             raise ValueError(f'未知 c104 初始化模式 {init!r}')
+        self._start_muted = init_enum == c104.Init.MUTED
         self._connection = self._client.add_connection(host, port=self.port, init=init_enum)
         if self._connection is None:
             raise IEC104Error(f'创建 {host}:{port} 连接失败')
@@ -224,6 +229,15 @@ class IEC104Master:
         state = self._connection.is_connected
         return bool(state() if callable(state) else state)
 
+    def set_packet_handler(self, handler):
+        super().set_packet_handler(handler)
+        def receive(connection: c104.Connection, data: bytes) -> None:
+            self._packet("RX", data, f"peer={connection.ip}:{connection.port}")
+        def send(connection: c104.Connection, data: bytes) -> None:
+            self._packet("TX", data, f"peer={connection.ip}:{connection.port}")
+        self._connection.on_receive_raw(receive)
+        self._connection.on_send_raw(send)
+
     @property
     def connection(self):
         """底层 c104.Connection；需要高级功能时可直接使用。"""
@@ -234,11 +248,34 @@ class IEC104Master:
             self._client.start()
             self._started = True
         deadline = time.monotonic() + timeout
-        while not self.connected and time.monotonic() < deadline:
-            time.sleep(0.02)
-        if not self.connected:
-            raise IEC104Error(f'IEC104 连接超时 {self.host}:{self.port}')
-        return self
+        muted_since = None
+        requested_start = False
+        # is_connected also includes OPEN_MUTED: the TCP socket can be
+        # connected before the peer confirms STARTDT. A GI issued there can
+        # time out. Only a deliberately muted client may return in that state.
+        while True:
+            state = self._connection.state
+            if state == c104.ConnectionState.OPEN or (
+                self._start_muted and state == c104.ConnectionState.OPEN_MUTED
+            ):
+                return self
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise IEC104Error(f'IEC104 连接超时 {self.host}:{self.port} ({state.name})')
+            if state == c104.ConnectionState.OPEN_MUTED:
+                # Let c104 perform its normal automatic handshake. On a cold
+                # connection it can remain muted without sending STARTDT. In
+                # that case request data transfer once, never replay an ASDU.
+                now = time.monotonic()
+                if muted_since is None:
+                    muted_since = now
+                elif not requested_start and now - muted_since >= .25:
+                    requested_start = True
+                    self._connection.unmute()
+            else:
+                muted_since = None
+                requested_start = False
+            time.sleep(min(.02, remaining))
 
     def close(self):
         if self._started:
@@ -353,6 +390,7 @@ class IEC104Master:
         return True
 
     def _write_yk_command(self, point_no, value, *, double=None, select_execute=None, qualifier=None):
+        value = binary_command_value(value)
         definition = self._point_definitions.get(('yk', int(point_no)), {})
         if double is None:
             type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
@@ -409,7 +447,9 @@ class IEC104Master:
         converter = _PLAIN_CONVERTERS.get(value_type)
         if converter is None:
             name = value_type.__name__
-            if name in _PLAIN_INT_NAMES or name == 'Double':
+            if name == 'Double':
+                converter = double_to_binary
+            elif name in _PLAIN_INT_NAMES:
                 converter = int
             elif name == 'NormalizedFloat':
                 converter = float
@@ -442,6 +482,10 @@ class IEC104Master:
         value = self._cached_plain((kind, point_no), info.value)
         point_quality = info.quality
         quality = point_quality.value if point_quality is not None else None
+        if value is None and isinstance(info.value, c104.Double):
+            # Neither an intermediate switch position nor an indeterminate
+            # double state is a valid OFF/ON sample, even if QDS says good.
+            quality = (quality or 0) | int(c104.Quality.Invalid.value)
         recorded = info.recorded_at
         result = IEC104Value(self.rtu_id, point_no, kind, value, quality, recorded,
                              received_at if received_at is not None else datetime.now(timezone.utc))

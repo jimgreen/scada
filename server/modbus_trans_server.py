@@ -10,6 +10,7 @@ same pymodbus transport and lifecycle API.
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 import struct
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -47,7 +48,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
     ``register_area``, ``address``, ``data_type``, ``byte_order``,
     ``word_order``, ``scale`` and ``offset``.  ``pnt_no`` is accepted as a
     fallback for hand-written configurations.  ``command_handler`` is called
-    for YK/YT writes as ``handler(kind, source_pnt_no, engineering_value)``;
+    for YK/YT writes as ``handler(kind, pnt_no, engineering_value)``. The
+    transmission point identifies its complete source RTU/point mapping;
     returning ``False`` (or raising) produces a Modbus server exception and the
     remote write is not committed.
     """
@@ -152,19 +154,26 @@ class ModbusTcpTransServer(ModbusTcpServer):
                     # float32/64 mapping is fully readable by remote clients.
                     blocks[index].append(SimData(address=row["address"], count=len(raw),
                                                  values=raw, datatype=DataType.REGISTERS,
-                                                 readonly=area == "input"))
+                                                 readonly=area == "input" or row.get("kind") in {"yc", "yx"}))
         return tuple(blocks)
 
     def _encode(self, row: Mapping[str, Any], engineering: Any) -> list[int]:
         scale = row["scale"] or 1.0
-        raw_value = (float(engineering) - row["offset"]) / scale
         dtype = row["data_type"]
+        if dtype in {"float32", "single", "float64", "double"}:
+            raw_value = (float(engineering) - row["offset"]) / scale
+        else:
+            # Integer wire types must not pass through float64: uint64 values
+            # above 2**53 otherwise lose bits, and UINT64_MAX rounds to 2**64.
+            numeric = int(engineering) if isinstance(engineering, bool) else engineering
+            raw_value = ((Decimal(str(numeric)) - Decimal(str(row["offset"]))) /
+                         Decimal(str(scale)))
         if dtype in {"float32", "single"}:
             payload = struct.pack(">f", raw_value)
         elif dtype in {"float64", "double"}:
             payload = struct.pack(">d", raw_value)
         elif dtype in {"int32", "uint32", "int64", "uint64"}:
-            bits = int(dtype[3:] if dtype.startswith(("int", "uint")) else 32)
+            bits = self._TYPE_SIZES[dtype] * 16
             payload = int(raw_value).to_bytes(bits // 8, "big", signed=dtype.startswith("int"))
         else:
             value = int(round(raw_value))
@@ -191,6 +200,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
         elif dtype in {"int32", "uint32", "int64", "uint64"}: raw = int.from_bytes(payload, "big", signed=dtype.startswith("int"))
         elif dtype in {"bool", "boolean"}: raw = bool(words[0])
         else: raw = int.from_bytes(payload[:2], "big", signed=dtype in {"int16", "int"})
+        if isinstance(raw, int) and row["scale"].is_integer() and row["offset"].is_integer():
+            return raw * int(row["scale"]) + int(row["offset"])
         return raw * row["scale"] + row["offset"]
 
     async def _action(self, function_code, start_address, address, count, current_registers, set_values):
@@ -199,24 +210,35 @@ class ModbusTcpTransServer(ModbusTcpServer):
         area = next((name for name, funcs in _AREA_TO_FUNCTION.items() if function_code in funcs), None)
         if area is None:
             return None
-        # A write may span several mapped points.  Validate/dispatch every
-        # mapped point and reject the whole transaction when one is refused.
+        # pymodbus reports packed register count for coils, whereas values
+        # contains the actual written bits. Validate the entire requested span
+        # before dispatching commands so a mixed command/measurement write
+        # cannot partially act on equipment before reaching the read-only bit.
+        # Per-bit permissions belong here because SimData readonly flags are
+        # packed per 16-bit word and would also disable adjacent command coils.
+        write_count = len(set_values)
         candidates = []
-        for offset in range(count):
+        for offset in range(write_count):
             row = self._by_address.get((area, int(address) + offset))
-            if row is not None and row not in candidates:
+            if row is None or row["kind"] not in {"yk", "yt"}:
+                return ExcCodes.ILLEGAL_ADDRESS
+            if row not in candidates:
                 candidates.append(row)
+        decoded = []
         for row in candidates:
-            if row["kind"] not in {"yk", "yt"}:
-                continue
-            values = set_values if row["size"] == count else set_values[int(row["address"]) - int(address): int(row["address"]) - int(address) + row["size"]]
+            begin = int(row["address"]) - int(address)
+            if begin < 0 or begin + row["size"] > write_count:
+                return ExcCodes.ILLEGAL_VALUE
+            values = set_values[begin:begin + row["size"]]
             if area in {"coil", "discrete"}:
                 value = bool(values[0])
             else:
                 value = self._decode(row, values)
+            decoded.append((row, value))
+        for row, value in decoded:
             if self._command_handler is not None:
                 try:
-                    accepted = self._command_handler(row["kind"], row["source_pnt_no"], value)
+                    accepted = self._command_handler(row["kind"], row["pnt_no"], value)
                 except Exception as exc:  # callbacks must not kill pymodbus loop
                     self._log("ERROR", f"Modbus 转发命令回调失败: {exc}")
                     return ExcCodes.SLAVE_DEVICE_FAILURE

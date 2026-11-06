@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable, Iterable, Mapping
 
 from .point_store import PointStore, coerce_value
+from core.packet_trace import PacketTrace, trace_stream_server_loop
 
 try:
     from asyncua import Server as UaServer, ua
@@ -21,8 +22,10 @@ class OpcUaServerError(RuntimeError):
     pass
 
 
-class OpcUaServer:
+class OpcUaServer(PacketTrace):
     """A writable OPC UA endpoint exposing the configured four-remote points."""
+
+    PACKET_PROTOCOL = "OPC-UA"
 
     def __init__(self, *, bind_ip="127.0.0.1", port=4840, endpoint_path="/scada/server/",
                  namespace_uri="urn:scada:server", device_name="SCADA OPC UA Server",
@@ -99,6 +102,7 @@ class OpcUaServer:
     def _run(self):
         try:
             self._loop = asyncio.new_event_loop()
+            trace_stream_server_loop(self._loop, self._packet)
             asyncio.set_event_loop(self._loop)
             self._loop.run_until_complete(self._start_async())
             self._ready.set()

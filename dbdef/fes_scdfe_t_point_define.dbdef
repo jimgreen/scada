@@ -7,7 +7,6 @@
 #  pnt_no  转发点号  int  1  INT
 #  name  点名称  str  0  STRING
 #  kind  转发点类型  str  1  单选菜单
-#  source_kind  源点类型  str  0  单选菜单
 #  source_rtu_id  源RTU  int  0  KEYID类型
 #  source_pnt_no  源点号  int  0  INT
 #  enabled  启用  int  0  单选菜单

@@ -17,6 +17,7 @@ Unix-socket special cases.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import hmac
 import json
 from pathlib import Path
@@ -62,6 +63,22 @@ class WriterRequest:
     payload: dict[str, Any]
     done: threading.Event = field(default_factory=threading.Event)
     response: dict[str, Any] | None = None
+    fingerprint: bytes = b""
+
+
+def _command_json(raw):
+    def unique(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate field")
+            obj[key] = value
+        return obj
+    def invalid(value):
+        raise ValueError(value)
+    if not raw.endswith(b"\n"):
+        raise ValueError("missing frame terminator")
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=invalid)
 
 
 class _ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
@@ -90,33 +107,33 @@ class _RequestHandler(socketserver.StreamRequestHandler):
                 self._send({"ok": False, "error": "请求过大", "code": "request_too_large"})
                 return
             try:
-                payload = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = _command_json(raw)
+            except (ValueError, RecursionError):
                 self._send({"ok": False, "error": "请求不是有效 JSON", "code": "invalid_json"})
                 return
             if not isinstance(payload, dict):
                 self._send({"ok": False, "error": "请求必须是 JSON 对象", "code": "invalid_request"})
                 return
             token = payload.pop("token", None)
-            if not isinstance(token, str) or not hmac.compare_digest(token, self.server.token):
+            if not isinstance(token, str) or not token.isascii() or not hmac.compare_digest(token, self.server.token):
                 self._send({"ok": False, "error": "写库进程令牌无效", "code": "unauthorized", "status": 401})
                 return
             request_id = payload.get("request_id")
             if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
                 self._send({"ok": False, "error": "缺少有效 request_id", "code": "invalid_request", "status": 400})
                 return
-            cached = self.server.cached(request_id)
-            if cached is not None:
-                self._send(cached)
+            if payload.get("op", "submit_command") != "submit_command":
+                self._send({"ok": False, "error": "不支持的写库操作", "code": "invalid_request", "status": 400})
                 return
             request, owner = self.server.claim(request_id, payload)
+            if isinstance(request, dict):
+                self._send(request)
+                return
             if owner:
                 try:
                     self.server.requests.put(request, timeout=2.0)
                 except queue.Full:
-                    self.server.forget(request_id)
-                    self._send({"ok": False, "error": "写库请求队列已满", "code": "writer_busy", "status": 503})
-                    return
+                    self.server.reject_busy(request_id, request)
             if not request.done.wait(self.server.request_timeout):
                 self._send({"ok": False, "error": "写库进程响应超时", "code": "writer_timeout", "status": 504})
                 return
@@ -142,27 +159,33 @@ class _WriterTCPServer(_ThreadingTCPServer):
         self.requests = requests
         self.token = token
         self.request_timeout = request_timeout
-        self._cache: dict[str, dict[str, Any]] = {}
+        self._cache: dict[str, tuple[bytes, dict[str, Any]]] = {}
         self._inflight: dict[str, WriterRequest] = {}
         self._cache_lock = threading.RLock()
         super().__init__(address, _RequestHandler)
 
-    def cached(self, request_id: str) -> dict[str, Any] | None:
+    def claim(self, request_id: str, payload: dict[str, Any]):
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).digest()
+        conflict = {"ok": False, "code": "request_id_conflict", "status": 409,
+                    "error": "相同 request_id 不能用于不同指令"}
+        # Lookup and reservation share a lock: completion cannot move a request
+        # from in-flight to cached between two independent lookups.
         with self._cache_lock:
-            return self._cache.get(request_id)
-
-    def claim(self, request_id: str, payload: dict[str, Any]) -> tuple[WriterRequest, bool]:
-        with self._cache_lock:
+            cached = self._cache.get(request_id)
+            if cached is not None:
+                return (cached[1] if cached[0] == fingerprint else conflict), False
             current = self._inflight.get(request_id)
             if current is not None:
-                return current, False
-            current = WriterRequest(payload)
+                return (current if current.fingerprint == fingerprint else conflict), False
+            current = WriterRequest(payload, fingerprint=fingerprint)
             self._inflight[request_id] = current
             return current, True
 
-    def forget(self, request_id: str) -> None:
+    def reject_busy(self, request_id: str, request: WriterRequest) -> None:
         with self._cache_lock:
             self._inflight.pop(request_id, None)
+            request.response = {"ok": False, "error": "写库请求队列已满", "code": "writer_busy", "status": 503}
+            request.done.set()  # also release identical requests that were waiting
 
     def complete(self, request: WriterRequest) -> None:
         request_id = str(request.payload.get("request_id", ""))
@@ -170,7 +193,7 @@ class _WriterTCPServer(_ThreadingTCPServer):
             return
         with self._cache_lock:
             self._inflight.pop(request_id, None)
-            self._cache[request_id] = dict(request.response)
+            self._cache[request_id] = (request.fingerprint, dict(request.response))
             while len(self._cache) > 2048:
                 self._cache.pop(next(iter(self._cache)))
 
@@ -321,10 +344,12 @@ class WriterClient:
     def submit_command(self, rtu_id: int, kind: str, point_no: int, value: Any,
                        *, timeout: float | None = None,
                        request_id: str | None = None) -> dict[str, Any]:
+        if type(rtu_id) is not int or rtu_id <= 0 or type(point_no) is not int or point_no <= 0:
+            raise ValueError("rtu_id/point_no 必须为正整数")
         response = self.request({
-            "op": "submit_command", "rtu_id": int(rtu_id), "kind": str(kind),
-            "point_no": int(point_no), "value": value,
-            **({"request_id": request_id} if request_id else {}),
+            "op": "submit_command", "rtu_id": rtu_id, "kind": kind,
+            "point_no": point_no, "value": value,
+            **({"request_id": request_id} if request_id is not None else {}),
         }, timeout=timeout)
         item = response.get("item")
         return item if isinstance(item, dict) else response

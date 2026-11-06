@@ -5,15 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SCADA · 通信测试</title>
   <link rel="stylesheet" href="/static/protocol.css">
-  <style>
-    .protocol-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:15px; }
-    .protocol-card { display:flex; flex-direction:column; gap:10px; min-height:170px; }
-    .protocol-card h2 { margin:0; }
-    .protocol-card p { margin:0; color:#627b88; line-height:1.6; font-size:13px; }
-    .protocol-card nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; }
-    .protocol-card nav a { border:1px solid #b7cbd2; border-radius:5px; padding:7px 10px; background:#fff; }
-    .protocol-card nav a.primary { background:#087f8c; color:#fff; border-color:#087f8c; }
-  </style>
 </head>
 <body>
   <header><div><h1>SCADA 通信测试</h1><small>主站与服务端独立测试入口</small></div><nav><a href="/channels">通道与测点</a><a href="/processes">进程监控</a><a href="/communication">通信监控</a><a href="/logs">运行日志</a><a href="/api-docs">API 文档</a></nav></header>
@@ -28,10 +19,6 @@
       <section class="card protocol-card"><h2>OPC UA</h2><p>OPC UA 服务端节点与四遥点测试。</p><nav><a class="primary" href="/opc-server">服务端</a></nav></section>
     </div>
   </main>
-  <script>
-    fetch('/api/health').then(r => r.json()).then(x => {
-      document.querySelector('#health').textContent = x.status === 'ok' ? '测试服务已就绪 · ' + x.database : '服务异常';
-    }).catch(() => { document.querySelector('#health').textContent = '服务不可用'; });
-  </script>
+  <script src="/static/index.js"></script>
 </body>
 </html>

@@ -45,6 +45,10 @@ def migrate(db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DI
         if current_pk != ["channel_id", "pnt_no"]:
             raise RuntimeError(f"unsupported existing primary key: {current_pk}")
         existing = {row[1] for row in info}
+        if {'kind','source_kind'} <= existing and connection.execute(
+                f'SELECT 1 FROM {quote_identifier(TABLE)} WHERE kind IS NOT NULL AND '
+                'source_kind IS NOT NULL AND kind IS NOT source_kind LIMIT 1').fetchone():
+            raise RuntimeError('转发类型与源类型不同，不能自动合并')
         missing = set(names) - existing - {"_version"}
         if missing:
             raise RuntimeError(f"existing table is missing columns: {sorted(missing)}")
@@ -64,6 +68,9 @@ def migrate(db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DI
         if "kind" in existing:
             select_expr[select_names.index("kind")] = 'COALESCE("kind", "source_kind", \'yc\')' if "source_kind" in existing else 'COALESCE("kind", \'yc\')'
         insert_names = [name for name in names if name in select_names]
+        if '_version' in existing:
+            insert_names.insert(0, '_version')
+            select_expr.insert(0, '"_version"')
         connection.execute(
             f"INSERT INTO {quote_identifier(temp)} ({', '.join(quote_identifier(name) for name in insert_names)}) "
             f"SELECT {', '.join(select_expr)} FROM {quote_identifier(TABLE)}"

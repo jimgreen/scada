@@ -17,6 +17,7 @@ db/*.scdfe_writer.json
 db/iec104_server_config.json
 db/*.sqlite3-wal
 db/*.sqlite3-shm
+db/*.packet-log.json
 
 # Local test result transcripts
 tests/*_result.txt

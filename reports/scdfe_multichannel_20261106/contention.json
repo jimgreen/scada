@@ -1,0 +1,11 @@
+{
+  "writers": 12,
+  "committed_batches": 960,
+  "point_updates": 2880,
+  "consistent_reads": {
+    "c": 309,
+    "s": 314,
+    "t": 3999
+  },
+  "seconds": 1.156
+}

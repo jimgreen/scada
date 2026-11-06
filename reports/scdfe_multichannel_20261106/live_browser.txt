@@ -1,0 +1,47 @@
+### Result
+{"c_filter":["1","2"],"s_channel_filter":10,"t_RX":1,"t_TX":4,"page_errors":[]}
+### Ran Playwright code
+```js
+await (async page=>{
+ const check=(x,m)=>{if(!x)throw Error(m)};
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const data={};
+ await page.goto('http://127.0.0.1:8877/#yc');
+ const select=page.getByRole('combobox',{name:'筛选 RTU 编号'});
+ const cids=await select.locator('option').evaluateAll(opts=>opts.map(o=>o.value).filter(Boolean).slice(0,2));
+ check(cids.length===2,'C catalogue did not load');
+ for(const cid of cids){
+  const got=page.waitForResponse(r=>r.url().includes('/api/rtus/'+cid+'/points/yc?')&&r.ok());
+  await select.selectOption(cid);
+  const resp=await got;
+  const rows=(await resp.json()).items;
+  check(rows.every(r=>r.rtu_id===Number(cid)), 'C API mixed RTUs');
+  await page.locator('#table-body:not([hidden])').waitFor({state:'visible'});
+  check(await page.locator('#table-body tr').count()===Math.max(1,rows.length),'C rendered count');
+ }
+ data.c_filter=cids;
+ await page.goto('http://127.0.0.1:8878/logs');
+ await page.locator('#lb-scope').selectOption('all');
+ await page.locator('#lb-direction').selectOption('RX');
+ const s=page.waitForResponse(r=>r.url().includes('/api/log-files/search?')&&new URL(r.url()).searchParams.get('channel_id')==='10');
+ await page.getByRole('textbox',{name:'报文通道号'}).fill('10');
+ const sr=await s;check(sr.ok(),'S filter failed');
+ check((await sr.json()).items.every(x=>x.text.includes('报文 RX 通道=10 ')),'S foreign channel');
+ data.s_channel_filter=10;
+ await page.goto('http://127.0.0.1:8879/logs.html?channel_id=1');
+ await page.locator('#lb-record').selectOption('packet');
+ for (const d of ['RX','TX']){
+  const network=page.waitForResponse(r=>r.url().includes('/api/log-files/search?')&&new URL(r.url()).searchParams.get('direction')===d);
+  await page.locator('#lb-direction').selectOption(d);
+  const packet=await (await network).json();check(packet.items.length>0,'T empty '+d);
+  await page.locator('#lb-content .lb-line-text').filter({hasText:'报文 '+d+' '}).first().waitFor();
+  const texts=await page.locator('#lb-content .lb-line-text').allInnerTexts();
+  check(texts.every(t=>t.includes('报文 '+d+' ')),'T wrong direction');
+  check(texts.some(t=>t.includes('16:03:')&&t.includes('HEX=')),'Newest packet omitted '+d);
+  data['t_'+d]=texts.length;
+ }
+ await page.screenshot({path:'original-t.png'});
+ check(!errors.length,errors.join(';'));data.page_errors=errors;return data;
+}
+)(page);
+```

@@ -1,0 +1,10 @@
+{
+  "common_address": 60000,
+  "first": 42.75,
+  "after_c_web_write": 43.25,
+  "same_peer": true,
+  "rejected_forged_pid": true,
+  "rejected_reserved_address": true,
+  "rejected_modbus_248": true,
+  "stopped": true
+}

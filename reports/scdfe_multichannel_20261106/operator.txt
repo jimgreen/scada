@@ -1,0 +1,60 @@
+### Result
+{"s":{"old_actions_while_loading":0,"stale_save":409,"other_channel_unchanged":true},"t":{"old_actions_while_loading":0,"stale_save":409,"other_channel_unchanged":true},"s_log_channel_rx":[10,1],"page_errors":[]}
+### Ran Playwright code
+```js
+await (async page => {
+  const results = {};
+  const assert = (ok, msg) => { if (!ok) throw Error(msg); };
+  const err=[]; page.on('pageerror',e=>err.push(e.message));
+  for (const [family,base] of [['s','http://127.0.0.1:3555'],['t','http://127.0.0.1:3556']]) {
+    const s=family==='s';
+    await page.goto(base+(s?'/points?rtu_id=1':'/points.html?channel_id=1'));
+    const grid=page.locator('#points');
+    await grid.getByText(family.toUpperCase()+'-CHANNEL-1',{exact:true}).waitFor();
+    let entered,release;
+    const arrived=new Promise(r=>entered=r), held=new Promise(r=>release=r);
+    const match=s?'**/api/channels/10/points/yc?*':'**/api/trans/channels/10/points?*';
+    await page.route(match,async route=>{entered();await held;await route.continue();}, {times:1});
+    try {
+      await page.locator(s?'#point-rtu':'#selected-channel').selectOption('10');
+      await arrived;
+      assert(await grid.locator('button').count()===0, 'Old actions remain during '+family+' switch');
+    } finally {release();}
+    await grid.getByText(family.toUpperCase()+'-CHANNEL-10',{exact:true}).waitFor();
+    await grid.getByRole('button',{name:'编辑'}).click();
+    const path = base+(s?'/api/channels/10/points/yc/1':'/api/trans/channels/10/points/yc/1');
+    const concurrent=await page.request.patch(path,{data:{name:'other operator'}});
+    assert(concurrent.ok(), 'Concurrent editor not accepted');
+    await page.locator(s?'#point-name':'#editor-fields [name=name]').fill('do not overwrite');
+    const ack=page.waitForResponse(r=>r.url()===path && r.request().method()==='PATCH');
+    await (s?page.locator('#update-point'):page.locator('#editor-form button[type=submit]')).click();
+    const conflict=await ack;
+    assert(conflict.status()===409 && !!(await conflict.request().allHeaders())['if-match'],family+' did not detect stale edit');
+    const stored=(await (await page.request.get(path)).json()).item;
+    assert(stored.name==='other operator',family+' stale save overwrote other operator');
+    const other=path.replace('/10/','/1/');
+    assert((await (await page.request.get(other)).json()).item.name===family.toUpperCase()+'-CHANNEL-1', 'wrong channel changed');
+    results[family]={old_actions_while_loading:0,stale_save:409,other_channel_unchanged:true};
+    await page.screenshot({path:family+'-conflict.png'});
+  }
+  await page.goto('http://127.0.0.1:3555/logs');
+  const field=page.getByRole('textbox',{name:'报文通道号'});
+  await page.locator('#lb-scope').selectOption('all');
+  await page.locator('#lb-direction').selectOption('RX');
+  for (const n of [10,1]) {
+    await field.fill(String(n));
+    const row=page.locator('#lb-content .lb-line-text');
+    await row.filter({hasText:'通道='+n+' '}).first().waitFor();
+    assert(await row.count()===1 && (await row.innerText()).includes(n===10?'HEX=0a':'HEX=01'),'Mixed S packets');
+  }
+  await page.screenshot({path:'s-channel-filter.png'});
+  assert(!err.length,err.join(';'));
+  results.s_log_channel_rx=[10,1];results.page_errors=err;return results;
+}
+)(page);
+```
+### Page
+- Page URL: http://127.0.0.1:3555/logs
+- Page Title: scdfe_s · 运行日志
+### Events
+- New console entries: .playwright-cli\console-2026-11-06T07-54-38-044Z.log#L1-L2

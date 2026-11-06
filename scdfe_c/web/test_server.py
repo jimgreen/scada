@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import socket
 from pathlib import Path
 import tempfile
 import sys
@@ -95,7 +96,9 @@ class WebTests(unittest.TestCase):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
         self.assertEqual(len(body['items']), 26)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 431)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 430)
+        mapping = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_scdfe_t_point_define')
+        self.assertNotIn('source_kind', {column['eng_name'] for column in mapping['columns']})
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')
         rtu_columns = {column['eng_name'] for column in rtu_schema['columns']}
         self.assertNotIn('proto_type', rtu_columns)
@@ -222,7 +225,7 @@ class WebTests(unittest.TestCase):
             if name == 'fes_scdfe_t_define':
                 row.update(code='TEST_TRANS', protocol='iec104')
             elif name == 'fes_scdfe_t_point_define':
-                row.update(kind='yc', source_kind='yc', source_rtu_id=1, source_pnt_no=1)
+                row.update(kind='yc', source_rtu_id=1, source_pnt_no=1)
             if any(c['eng_name'] == 'name' for c in schema['columns']):
                 row['name'] = name
             route = f'/api/tables/{name}/rows'
@@ -382,6 +385,43 @@ class WebTests(unittest.TestCase):
         self.call('/api/rtus/1', 'PATCH', {'name': 'new'})
         self.call('/api/rtus/1', 'DELETE')
         self.assertEqual(sources, {p: p.read_bytes() for p in sources})
+
+    def test_control_routes_write_exactly_one_http_response(self):
+        from scdfe_c import ScdfeLogger
+        directory = self.db.parent / 'logs'
+        ScdfeLogger(directory, process_name='scdfe_c-main').packet('RX', b'\x68\x04')
+        filename = next(directory.rglob('*.log')).relative_to(directory).as_posix()
+        cases = [
+            ('GET', '/api/scdfe_c/status', None, 200),
+            ('GET', '/api/scdfe_c/logs', None, 200),
+            ('GET', '/api/scdfe_c/logs/search?level=PACKET', None, 200),
+            ('GET', '/api/scdfe_c/logs/' + filename, None, 200),
+            ('GET', '/api/scdfe_c/command-server', None, 200),
+            ('PATCH', '/api/scdfe_c/control', {'log_retention_hours': 720}, 200),
+            ('HEAD', '/api/scdfe_c/logs/search?level=PACKET', None, 200),
+            ('GET', '/api/health', None, 200),
+            ('GET', '/api/scdfe_c/unknown', None, 404),
+            ('PATCH', '/api/scdfe_c/control', {'process_pid': 123}, 400),
+        ]
+        for method, path, data, status in cases:
+            with self.subTest(method=method, path=path, status=status):
+                body = json.dumps(data).encode() if data is not None else b''
+                request = (f'{method} {path} HTTP/1.1\r\n'
+                           f'Host: 127.0.0.1:{self.server.server_port}\r\n'
+                           f'Content-Length: {len(body)}\r\n'
+                           'Content-Type: application/json\r\nConnection: close\r\n\r\n').encode() + body
+                with socket.create_connection(self.server.server_address, timeout=5) as connection:
+                    connection.sendall(request)
+                    chunks = []
+                    while chunk := connection.recv(65536):
+                        chunks.append(chunk)
+                header, content = b''.join(chunks).split(b'\r\n\r\n', 1)
+                status_line, *fields = header.split(b'\r\n')
+                self.assertEqual(int(status_line.split()[1]), status)
+                headers = dict(field.split(b': ', 1) for field in fields)
+                self.assertEqual(len(content), 0 if method == 'HEAD' else int(headers[b'Content-Length']))
+                if method != 'HEAD':
+                    self.assertIsInstance(json.loads(content), dict)
 
     def test_scdfe_control_status_and_log_routes(self):
         self.rtu()
@@ -558,6 +598,22 @@ class WebTests(unittest.TestCase):
         for body in ({}, {'target': 'bad', 'action': 'start'}, {'target': 'main', 'action': []},
                      {'target': 'all', 'action': 'configure'}, {'target': 'writer', 'action': 'start', 'unknown': 1}):
             self.assertEqual(self.call('/api/processes/control', 'POST', body)[0], 400, body)
+
+    def test_readonly_route_returns_json_even_when_post_body_arrives_separately(self):
+        port = self.server.server_port
+        with socket.create_connection(('127.0.0.1',port),timeout=4) as peer:
+            peer.sendall((f'POST /api/tables/fes_process_define/rows HTTP/1.0\r\n'
+                          f'Host: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n'
+                          'Content-Length: 2\r\n\r\n').encode('ascii'))
+            peer.settimeout(.12)
+            with self.assertRaises(socket.timeout):
+                peer.recv(1)
+            peer.sendall(b'{}')
+            peer.settimeout(4)
+            with peer.makefile('rb') as response:
+                header, body = response.read().split(b'\r\n\r\n',1)
+            self.assertIn(b' 405 ',header.splitlines()[0])
+            self.assertIn('error',json.loads(body))
 
     def test_command_server_configuration_route(self):
         status, body = self.call('/api/scdfe_c/command-server')

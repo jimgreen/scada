@@ -10,9 +10,7 @@
 python -m pip install -r <项目目录>/requirements.txt
 ```
 
-`c104` 2.2.1 提供 CPython 3.7–3.13 的 Windows x64 wheel，以及 Linux
-manylinux x86_64/aarch64 wheel。换 Python 大版本、CPU 架构或发行版前应先确认
-对应 wheel；没有匹配 wheel 时需要按 c104 上游文档准备 C++ 构建环境。其余适配器
+项目使用 `c104` 2.2.1+scada.1，保留 2.2.1 的接口并修复快速命令确认偶发误报超时。[随项目提供的源码和构建说明](../vendor/c104/README.md)包含 Windows x64 / CPython 3.11 wheel；其他平台没有匹配 wheel 时需要 C++ 构建环境。其余适配器
 使用跨平台 Python 包，但底层设备驱动仍由操作系统决定。
 
 平台差异需要在部署配置中明确：Modbus RTU 在 Windows 使用 `COM3` 等串口名，Linux

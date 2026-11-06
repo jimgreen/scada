@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from scdfe_c import (
     BATCH_WRITER_INTERVAL,
+    BATCH_WRITER_DRAIN,
     BATCH_WRITER_STOP,
     BATCH_WRITER_WAL_AUTOCHECKPOINT,
     ScdfeLogger,
@@ -107,13 +108,15 @@ class ScdfeControlTests(unittest.TestCase):
             finally:
                 supervisor.stop()
 
-    def test_drain_writer_uses_public_join_without_private_queue_state(self):
+    def test_drain_writer_uses_public_barrier_without_private_queue_state(self):
+        acknowledgement = mp.get_context("spawn").Value("Q", 0)
         class Queue:
             def __init__(self):
-                self.join_called = threading.Event()
+                self.messages = []
 
-            def join(self):
-                self.join_called.set()
+            def put(self, message, timeout=None):
+                self.messages.append(message)
+                acknowledgement.value = message[1]
 
             def __getattr__(self, name):
                 if name == "_unfinished_tasks":
@@ -130,8 +133,9 @@ class ScdfeControlTests(unittest.TestCase):
                                          log_dir=Path(directory) / "logs")
             supervisor._writer_queue = Queue()
             supervisor._writer_process = Process()
+            supervisor._writer_drain_ack = acknowledgement
             self.assertTrue(supervisor._drain_writer(timeout=1))
-            self.assertTrue(supervisor._writer_queue.join_called.is_set())
+            self.assertEqual(supervisor._writer_queue.messages, [(BATCH_WRITER_DRAIN, 1)])
             supervisor._writer_queue = None
             supervisor._writer_process = None
             supervisor.stop()

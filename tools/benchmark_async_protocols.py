@@ -271,7 +271,10 @@ def wire_case(classes, protocol, size, cycles, repeats):
                                   ms_per_cycle=elapsed * 1000 / cycles, cycles=cycles, points=size,
                                   loop_calls=counts.calls, protocol_requests=counts.requests,
                                   auxiliary_requests=counts.auxiliary_requests, checked_points=size * cycles)
-                    expected_requests = size * cycles if variant == 'before' or protocol == 'bacnet' else (size + master.read_batch_size - 1) // master.read_batch_size * cycles
+                    # Baselines may already support native OPC batching.  The
+                    # variant name must not imply one request per point.
+                    batch_size = getattr(master, 'read_batch_size', 1) if protocol == 'opc' else 1
+                    expected_requests = (size + batch_size - 1) // batch_size * cycles
                     assert counts.requests == expected_requests, (result, expected_requests)
                     results.append(result)
                     print(json.dumps(result), flush=True)

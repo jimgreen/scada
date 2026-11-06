@@ -33,7 +33,7 @@ class WriterCommandClient:
         try:
             from scdfe_c.writer_ipc import WriterClient, WriterRequestError, WriterUnavailable
             return WriterClient(self.db_path, timeout=self.timeout).submit_command(
-                int(rtu_id), str(kind), int(pnt_no), value, timeout=self.timeout,
+                rtu_id, kind, pnt_no, value, timeout=self.timeout,
                 request_id=request_id,
             )
         except (WriterRequestError, WriterUnavailable, OSError, ConnectionError) as exc:

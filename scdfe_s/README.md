@@ -18,6 +18,10 @@ Web 服务只有一个站点，不同规约和角色使用独立页面；命令�
 
 ## Web 服务
 
+IEC104 的增量更新、全量更新与模拟指令先校验显式点并写入数据库，再更新站内值、向已连接客户端上送。全量更新中，一个点写入失败会回滚整批，不会发送这批值。如果数据库已经提交而网络发布失败，页面错误会明确区分这两种结果。
+
+运行中保存服务配置时，先将新配置写入磁盘，再切换服务。文件写入失败时原连接继续工作；新服务启动失败时会尝试恢复原配置和原服务，并在页面显示结果。启动 Web 时若发现配置文件损坏，页面显示错误并允许人工修复，保存有效配置前不能启动该规约。运行中的服务固定使用启动时选定的 RTU，新增其他 RTU 不会改变现有连接的命令归属。
+
 Windows：
 
 ```text
@@ -63,6 +67,23 @@ GET/PATCH/DELETE       /api/channels/{rtu_id}/points/{kind}/{pnt_no}
 运行监控 API 为 `GET /api/monitor/processes`、`GET /api/monitor/communications`、
 `GET /api/monitor/logs`，服务启停使用
 `POST /api/monitor/communications/{service}/start|stop`。
+
+日志页 `/logs` 左侧按年、月、日、小时展示数据库旁 `logs/` 中的文件，右侧读取正文。
+可选择协议服务、当前文件或全部匹配文件，并组合筛选报文/运行日志、RX/TX、级别、
+关键字和时间范围；支持历史分批检索、自动换行、跟随最新和导出本批结果。
+文件目录接口为 `GET /api/log-files`，正文检索接口为 `GET /api/log-files/search`。
+检索参数包括 `filename`（相对 `logs/` 的文件路径）、`process`、`file_query`、`q`、
+`record=packet|runtime`、`direction=RX|TX`、`level=INFO|PACKET|WARNING|ERROR|PROCESS`、
+`start/end`（带时区的 ISO 8601 时间）、`limit=1..5000` 和 `cursor`。
+使用响应中的 `next_cursor` 继续向前检索；改变筛选条件后应清除游标。
+这些接口只读取 `scdfe_s` 的日志，历史检索不受内存最近记录数量限制。
+报文默认不写入文件。在“运行日志”的“报文保存范围”中选择具体通道，再切换“保存报文（调试）”，只影响该通道；“默认设置”影响未单独设置的通道，“恢复使用默认设置”清除当前通道的单独设置。设置持久化在数据库旁的 `<数据库文件名>.scdfe_s.packet-log.json`，约 1 秒内生效，无需重启协议服务。`GET/PUT /api/packet-recording` 管理默认值，`GET/PUT /api/packet-recording/channels/<channel_id>` 管理通道设置；PUT 请求体为 `{"enabled":true}` / `{"enabled":false}`，通道接口可用 `{"enabled":null}` 恢复默认。通道编号来自服务启动时绑定的 RTU 的 `channel_id`；未绑定 RTU 的独立模拟服务使用默认设置。同一通道的客户端和服务端共用该通道设置，三套应用之间互不影响。普通日志、历史文件和界面即时通信记录不受影响。
+
+“通道数据”列表也提供“报文保存”列：显示每个通道的实际开启/关闭状态及“沿用默认/单独设置”，可直接切换或恢复默认，与运行日志页使用同一设置。页面每 5 秒刷新保存状态，保存失败会恢复原状态并显示错误。
+
+开启保存后的新收发记录使用独立类型 `[报文]`（`PACKET`），保留 RX/TX 和十六进制原始字节。
+运行日志的“报文通道号”可与协议服务、RX/TX、关键字同时筛选；对应接口参数为 `GET /api/log-files/search?channel_id=10&direction=RX`。新报文记录保存收发时绑定的通道号，已停用或重新配置的通道也按原通道查询。旧报文或未绑定通道的记录仍可在不指定通道号时查看。
+历史 `[日志] 报文 ...` 仍可通过 `record=packet` 检索，文件原文和类型保持原样。
 
 ## 命令行通道入口
 
