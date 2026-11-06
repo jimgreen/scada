@@ -12,6 +12,7 @@ from scdfe_c.web.service import ScadaStore
 class IEC104ServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.store = ScadaStore(Path(self.temp.name) / "scada.sqlite3")
         self.store.create_row("fes_rtu_define", {
             "rtu_id": 1, "channel_id": 1, "channel_type": "iec104", "name": "测试站",
@@ -36,9 +37,6 @@ class IEC104ServiceTests(unittest.TestCase):
         self.service.configure({"rtu_id": 1, "port": 25141})
         self.service.start()
         self.addCleanup(self.service.close)
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def test_full_and_incremental_updates_without_client(self):
         self.assertEqual(self.service.incremental_update("yc", 1, 221.5)["value"], 221.5)

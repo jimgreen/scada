@@ -1,7 +1,7 @@
 """Thread-safe four-remote point storage shared by protocol servers."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 import threading
 from typing import Any, Iterable, Mapping
 
@@ -23,7 +23,10 @@ class PointValue:
     name: str = ""
 
     def public(self) -> dict[str, Any]:
-        return asdict(self)
+        # All stored fields are scalars. A new dict isolates callers without
+        # recursively copying immutable values on every protocol read.
+        return {"kind": self.kind, "pnt_no": self.pnt_no, "value": self.value,
+                "status": self.status, "name": self.name}
 
 
 class PointStore:

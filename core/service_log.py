@@ -1,5 +1,6 @@
 """Hourly persistent s-service logs with a bounded history for the Web."""
 from collections import deque
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -30,9 +31,21 @@ class ServiceFileLog:
         from core.packet_logging import packet_log_switch
         self.packet_switch = packet_log_switch(store.db_path, 's')
         self.logger = ScdfeLogger(self.directory, process_name=self.name)
+        self._active = None
         self._next_cleanup = 0
         self._next_error = 0
         self._startup_files = None if startup_catalog is None else startup_catalog.get(self.name, ())
+
+    def start_session(self):
+        """Owned by the protocol lifecycle lock; each emit still flushes."""
+        if self._active is None:
+            self._active = ExitStack()
+            self._active.enter_context(self.logger.session())
+
+    def end_session(self):
+        if self._active is not None:
+            session, self._active = self._active, None
+            session.close()
 
     def _files(self):
         # Protocol client/server names share a prefix, but never a log file.

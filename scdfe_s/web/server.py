@@ -276,9 +276,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             raise ApiError(405, "IEC104 配置接口只支持 GET 或 PATCH")
         if len(parts) == 3 and parts[2] == "points":
             if method == "GET":
-                if set(query) - {"kind"}:
+                if set(query) - {"kind", "view"} or query.get("view","full") not in {"full","table"}:
                     raise ApiError(400, "未知 IEC104 点查询参数")
-                return self._json(200, {"items": service.points(query.get("kind"))})
+                return self._json(200, {"items": service.points(query.get("kind"), table_view=query.get("view")=="table")})
             if method == "POST":
                 if query:
                     raise ApiError(400, "IEC104 点定义不接受查询参数")
@@ -380,8 +380,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"item": service.poll()})
         if len(parts) == 3 and parts[2] == "points":
             if method == "GET":
-                if set(query) - {"kind"}: raise ApiError(400, "未知点查询参数")
-                return self._json(200, {"items": service.points(query.get("kind"))})
+                if set(query) - {"kind", "view"} or query.get("view","full") not in {"full","table"}:
+                    raise ApiError(400, "未知点查询参数")
+                return self._json(200, {"items": service.points(query.get("kind"), table_view=query.get("view")=="table")})
             if method == "POST": return self._json(201, {"item": service.define_point(self._body())})
             raise ApiError(405, "点定义接口只支持 GET 或 POST")
         if len(parts) == 5 and parts[2] == "points":
@@ -394,7 +395,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 service.delete_point(kind, point_no)
                 return self._json(200, {"deleted": True})
             if method == "GET":
-                item = next((row for row in service.points(kind) if int(row["pnt_no"]) == point_no), None)
+                item = next(iter(service.points(kind, point_no=point_no)), None)
                 if item is None: raise ApiError(404, "点定义不存在", code="not_found")
                 return self._json(200, {"item": item})
             raise ApiError(405, "单点定义只支持 GET、PATCH 或 DELETE")

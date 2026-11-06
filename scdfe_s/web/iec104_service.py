@@ -210,11 +210,13 @@ class IEC104Service:
             if self._server and self._server.running:
                 return self.status()
             try:
+                self._file_log.start_session()
                 server = self._build_server()
                 server.start()
             except Exception as exc:
                 self._last_error = str(exc)
                 self._record("ERROR", f"IEC104 服务启动失败: {exc}", alert=True)
+                self._file_log.end_session()
                 raise IEC104ServiceError(str(exc)) from exc
             self._server = server
             self._started_at = _now_ms()
@@ -239,6 +241,7 @@ class IEC104Service:
                 self._record("INFO", "IEC104 服务已停止")
             self._server = None
             self._stopped_at = _now_ms()
+            self._file_log.end_session()
             return self.status()
 
     def close(self) -> None:
@@ -246,6 +249,9 @@ class IEC104Service:
             self.stop()
         except IEC104ServiceError:
             pass
+        finally:
+            with self._lock:
+                self._file_log.end_session()
 
     def configure(self, values: dict[str, Any]) -> dict[str, Any]:
         allowed = set(self.DEFAULT_CONFIG)
@@ -447,7 +453,7 @@ class IEC104Service:
                 "connections": connections,
             }
 
-    def points(self, kind: str | None = None) -> list[dict[str, Any]]:
+    def points(self, kind: str | None = None, *, table_view=False) -> list[dict[str, Any]]:
         config = self._effective_config()
         rtu_id = config.get("rtu_id")
         if rtu_id is None:
@@ -459,6 +465,14 @@ class IEC104Service:
         rows: list[dict[str, Any]] = []
         with self.store.connection() as connection:
             connection.execute("BEGIN")
+            if table_view:
+                for item in kinds:
+                    rows.extend(dict(row) for row in connection.execute(
+                        f"SELECT ? AS kind,p.rtu_id,p.pnt_no,p.value,p.status,m.io_address,m.type_id "
+                        f"FROM {tables[item]} p LEFT JOIN fes_channel_iec104_point_define m "
+                        "ON m.rtu_id=p.rtu_id AND m.kind=? AND m.pnt_no=p.pnt_no "
+                        "WHERE p.rtu_id=? ORDER BY p.pnt_no", (item, item, rtu_id)))
+                return rows
             sql = "SELECT * FROM fes_channel_iec104_point_define WHERE rtu_id=?"
             params = (rtu_id,)
             if kind:

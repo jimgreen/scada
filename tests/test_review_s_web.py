@@ -57,6 +57,17 @@ for (const match of html.matchAll(/<(input|select|button|form|div|section|tbody|
     addEventListener(name, handler) { this.handlers[name] = handler; },
     reset() {}, setAttribute(name, value) { this[name] = String(value); },
     removeAttribute(name) { delete this[name]; }};
+  // The protocol table updates existing cells on polling; emulate those DOM nodes.
+  if (a.id === 'points') {
+    Object.defineProperty(node, 'innerHTML', {
+      set(html) {
+        this.rows=Array.from(html.matchAll(/<tr>(.*?)<\/tr>/g), row => ({
+          cells:Array.from(row[1].matchAll(/<td[^>]*>(.*?)<\/td>/g), cell => ({textContent:cell[1]}))
+        }));
+      },
+      get() { return (this.rows || []).map(r=>'<tr>'+r.cells.map(c=>'<td>'+c.textContent+'</td>').join('')+'</tr>').join(''); }
+    });
+  }
   let value = a.value || '';
   Object.defineProperty(node, 'value', {get:() => value, set:v => { value=String(v); }});
   if (a.id) nodes.set(a.id, node);
@@ -84,7 +95,7 @@ async function request(path, options={}) {
       data={item:{running:true,config:{...config},rtu_id:101,point_count:1,open_connections:1}};
     } else if (path.endsWith('/poll')) {
       sampled=true; data={item:{count:1,items:[{kind:'yc',pnt_no:1,value:42,status:0}]}};
-    } else if (path.endsWith('/points')) {
+    } else if (path.endsWith('/points?view=table')) {
       data={items:[{kind:'yc',pnt_no:1,name:'sample',value:sampled?42:1,status:0}]};
     } else if (path.endsWith('/config')) {
       Object.assign(config,body || {}); data={item:{config:{...config}}};
@@ -155,9 +166,11 @@ vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.
     const button={dataset:{update:input.kind,point:'7'}};
     await node('points').onclick({target:{closest:() => button}}); await settle();
   } else if(input.scenario === 'poll') {
+    const first=node('points').rows[0];
     observed.before=node('points').innerHTML;
     await node('poll').onclick(); await settle();
     observed.after=node('points').innerHTML;
+    observed.kept=first === node('points').rows[0];
   }
   process.stdout.write(JSON.stringify({writes,observed}));
 })().catch(error => { console.error(error.stack); process.exitCode=1; });
@@ -284,6 +297,7 @@ class ReviewSWebTests(unittest.TestCase):
         result = self.run_js("protocol.js", "modbus_tcp.html", scenario="poll", slug="modbus-tcp")
         self.assertIn("<td>1</td>", result["observed"]["before"])
         self.assertIn("<td>42</td>", result["observed"]["after"])
+        self.assertTrue(result["observed"]["kept"])
         self.assertEqual(result["writes"][0]["path"], "/api/modbus-tcp/poll")
 
 

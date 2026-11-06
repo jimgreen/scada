@@ -1,0 +1,122 @@
+{
+  "date": "2026-11-06",
+  "module": "scdfe_s",
+  "benchmarks": {
+    "iec104": {
+      "before_ms": 99.023,
+      "after_ms": 23.472,
+      "reduction_percent": 76.3,
+      "rows": 2400,
+      "visible_sha256": "d1818c6e20bdb2f606d53b46077148ab2e1f2159a38f3c6f60bba7012a853882",
+      "before_bytes": 2060698,
+      "after_bytes": 252315
+    },
+    "modbus-tcp-server": {
+      "before_ms": 87.307,
+      "after_ms": 25.863,
+      "reduction_percent": 70.4,
+      "rows": 2400,
+      "visible_sha256": "f0fe6f0aee2f76b4cc3988b70bd4265defd8a1f09586b7a7aca2611d8a14c498",
+      "before_bytes": 1756493,
+      "after_bytes": 263846
+    },
+    "single": {
+      "before_ms": 34.868,
+      "after_ms": 3.842,
+      "reduction_percent": 89.0
+    },
+    "snapshot": {
+      "before_ms": 12.451,
+      "after_ms": 0.357,
+      "reduction_percent": 97.1
+    },
+    "batch_50": {
+      "before_ms": 66.189,
+      "after_ms": 3.623,
+      "reduction_percent": 94.5
+    },
+    "log_150": {
+      "before_ms": 136.762,
+      "after_ms": 1.517,
+      "reduction_percent": 98.9,
+      "visible_records": 900
+    }
+  },
+  "regression": {
+    "tests": 474,
+    "passed": 473,
+    "skipped": 1,
+    "failed": 0,
+    "seconds": 257.517
+  },
+  "native_peers": {
+    "seconds": 40.08,
+    "opc_ua_rounds": 884,
+    "modbus_tcp_rounds": 927,
+    "two_points_per_round": 2,
+    "rejected_batches_verified": 2,
+    "peers": "native TCP loopback, separate temporary database"
+  },
+  "original": {
+    "schema_identical": true,
+    "business_tables": 28,
+    "integrity": "ok",
+    "foreign_key_errors": 0,
+    "single_query_plan": [
+      "SEARCH fes_yc_define USING PRIMARY KEY (rtu_id=? AND pnt_no=?)"
+    ],
+    "mapping_query_plan": [
+      "SEARCH p USING PRIMARY KEY (rtu_id=?)",
+      "SEARCH m USING INDEX sqlite_autoindex_fes_channel_iec104_point_define_1 (rtu_id=? AND kind=? AND pnt_no=?) LEFT-JOIN"
+    ],
+    "original_ports": [
+      8877,
+      8878,
+      8879
+    ],
+    "T_pid": 15476,
+    "stopped_S_services": 9,
+    "concurrent_http_requests": 90,
+    "filtered_rows": {
+      "RX": 3,
+      "TX": 3
+    },
+    "recording_enabled": false
+  },
+  "browser": {
+    "modbus_before": {
+      "rows": 2400,
+      "kept": 0,
+      "replaced": 2400,
+      "buttons": 4800
+    },
+    "modbus_after": {
+      "rows": 2400,
+      "kept": 2400,
+      "replaced": 0,
+      "buttons": 4800
+    },
+    "iec104": {
+      "rows": 2400,
+      "retained": 2400,
+      "correct": true
+    },
+    "filtered_files": {
+      "tree": "1 / 3 · 108 个",
+      "rendered": {
+        "RX": 200,
+        "TX": 200
+      }
+    },
+    "point_change": {
+      "sameRow": true,
+      "sameButton": true,
+      "value": "81.25",
+      "draft": "19412"
+    },
+    "saved_point": {
+      "database": 81.25,
+      "engine": 81.25
+    }
+  }
+}

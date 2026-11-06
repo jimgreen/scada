@@ -50,7 +50,7 @@
   }
   const form = protocolForm($("#config-form"));
   function load(background = false) {
-    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points"), api("/api/iec104/logs?limit=100")]), ([status,points,logs]) => {
+    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points?view=table"), api("/api/iec104/logs?limit=100")]), ([status,points,logs]) => {
       render(status.item,points,logs);
       const config = status.item.config || {};
       for (const [id, value] of [["bind-ip", config.bind_ip], ["port", config.port],

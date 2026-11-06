@@ -76,13 +76,30 @@ function protocolForm(form) {
     $("#status-json").textContent = JSON.stringify(item, null, 2);
     $("#start").disabled = !!item.running; $("#stop").disabled = !item.running;
   }
+  let previousPoints;
   function renderPoints(items) {
-    const rows = items.map(p => `<tr><td>${esc(p.kind)}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.name || "")}</td><td>${esc(p.value)}</td><td>${esc(p.status)}</td><td><button data-update="${esc(p.kind)}" data-point="${esc(p.pnt_no)}">${isCommand(p.kind) ? "下发" : "更新"}</button> <button data-delete="${esc(p.kind)}" data-point="${esc(p.pnt_no)}" class="danger">删除</button></td></tr>`).join("");
-    $("#points").innerHTML = rows || `<tr><td colspan="6" class="muted">暂无点定义</td></tr>`;
+    const body = $("#points");
+    const rows = items.map(p => [p.kind,p.pnt_no,p.name,p.value,p.status,isCommand(p.kind) ? "下发" : "更新"]
+      .map(value => String(value ?? "")));
+    const stable = previousPoints && rows.length === previousPoints.length &&
+      rows.every((r,i) => r[0] === previousPoints[i][0] && r[1] === previousPoints[i][1]);
+    if (!stable) {
+      body.innerHTML = rows.map(([kind,no,name,value,status,action]) =>
+        `<tr><td>${esc(kind)}</td><td>${esc(no)}</td><td>${esc(name)}</td><td>${esc(value)}</td><td>${esc(status)}</td><td><button data-update="${esc(kind)}" data-point="${esc(no)}">${action}</button> <button data-delete="${esc(kind)}" data-point="${esc(no)}" class="danger">删除</button></td></tr>`).join("") ||
+        '<tr><td colspan="6" class="muted">暂无点定义</td></tr>';
+    } else {
+      rows.forEach((r,i) => {
+        for (let j=2; j<=5; j++) if (r[j] !== previousPoints[i][j]) {
+          const cell = body.rows[i].cells[j];
+          (j===5 ? cell.querySelector("[data-update]") : cell).textContent = r[j];
+        }
+      });
+    }
+    previousPoints = rows;
   }
   function renderLogs(items, target) { $(target).innerHTML = items.slice().reverse().map(x => `<div class="${esc(x.level)}">[${esc(x.time)}] ${esc(x.message)}</div>`).join("") || "暂无记录"; }
   function load(background = false) {
-    return form.refresh(() => Promise.all([api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points`), api(`/api/${cfg.slug}/logs?limit=100`), api(`/api/${cfg.slug}/alerts?limit=100`)]), ([s, p, l, a]) => {
+    return form.refresh(() => Promise.all([api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points?view=table`), api(`/api/${cfg.slug}/logs?limit=100`), api(`/api/${cfg.slug}/alerts?limit=100`)]), ([s, p, l, a]) => {
       renderStatus(s.item); renderPoints(p.items); renderLogs(l.items, "#logs"); renderLogs(a.items, "#alerts");
       cfg.fields.forEach(name => field(name, s.item.config[name]));
       message("已更新 " + new Date().toLocaleTimeString());

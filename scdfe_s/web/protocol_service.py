@@ -192,23 +192,25 @@ class ProtocolService:
         self._configured_fields = set(payload["_overrides"])
         self._config = {key: value for key, value in payload.items() if key != "_overrides"}
 
-    def _default_rtu_id(self):
-        with self.store.connection() as con:
-            row = con.execute(
-                "SELECT rtu_id FROM fes_rtu_define WHERE channel_type=? ORDER BY rtu_id LIMIT 1",
-                (self.PROTOCOL.removesuffix("-server"),),
-            ).fetchone()
+    def _default_rtu_id(self, con=None):
+        if con is None:
+            with self.store.connection() as connection:
+                return self._default_rtu_id(connection)
+        row = con.execute(
+            "SELECT rtu_id FROM fes_rtu_define WHERE channel_type=? ORDER BY rtu_id LIMIT 1",
+            (self.PROTOCOL.removesuffix("-server"),),
+        ).fetchone()
         return int(row[0]) if row else None
 
     def config(self):
         with self._lock:
             table = getattr(self, "PARAMETER_TABLE", None)
-            item = self._transport_config(table) if table else dict(self._config)
-            item["effective_rtu_id"] = self._configured_rtu()
-        return item
+            if table:
+                return self._transport_config(table, include_rtu=True)
+            return {**self._config, "effective_rtu_id": self._configured_rtu()}
 
-    def _configured_rtu(self):
-        return self._bound_rtu_id if self._binding_active else self._config.get("rtu_id") or self._default_rtu_id()
+    def _configured_rtu(self, con=None):
+        return self._bound_rtu_id if self._binding_active else self._config.get("rtu_id") or self._default_rtu_id(con)
 
     def configure(self, values):
         if not isinstance(values, dict):
@@ -236,25 +238,22 @@ class ProtocolService:
             raise ProtocolServiceError(f"没有可用的 {self.LABEL} RTU，请先配置通道")
         return int(rtu_id)
 
-    def _parameter_row(self, table):
-        rtu_id = self._configured_rtu()
-        if rtu_id is None:
-            return {}
-        try:
-            with self.store.connection() as con:
-                row = con.execute(f"SELECT * FROM {table} WHERE rtu_id=? LIMIT 1", (rtu_id,)).fetchone()
-            return dict(row) if row else {}
-        except Exception:
-            return {}
-
-    def _transport_config(self, table):
-        """Combine persisted parameters with only explicitly saved overrides."""
-        parameter = self._parameter_row(table)
+    def _transport_config(self, table, *, include_rtu=False):
+        """Resolve the station and its parameters from one database snapshot."""
+        with self.store.connection() as con:
+            con.execute("BEGIN")
+            rtu_id = self._configured_rtu(con)
+            row = None if rtu_id is None else con.execute(
+                f"SELECT * FROM {table} WHERE rtu_id=? LIMIT 1", (rtu_id,)).fetchone()
+        parameter = dict(row) if row else {}
         config = dict(self._config)
         for name, value in parameter.items():
             if name in self.DEFAULT_CONFIG and name not in self._configured_fields and value is not None:
                 config[name] = value
-        return self._validate_config(config)
+        item = self._validate_config(config)
+        if include_rtu:
+            item["effective_rtu_id"] = rtu_id
+        return item
 
     def _build_engine(self):
         raise NotImplementedError
@@ -266,6 +265,7 @@ class ProtocolService:
             if self.running:
                 return self.status()
             try:
+                self._file_log.start_session()
                 if self._engine is not None:
                     self._stop_engine(self._engine)
                 self._latest_values.clear()
@@ -287,6 +287,7 @@ class ProtocolService:
                 self._binding_active = False
                 self._last_error = str(exc)
                 self._record("ERROR", f"{self.LABEL} 服务启动失败: {exc}", alert=True)
+                self._file_log.end_session()
                 raise ProtocolServiceError(str(exc)) from exc
             self._started_at = _now_ms()
             self._stopped_at = None
@@ -311,6 +312,7 @@ class ProtocolService:
             self._engine = None
             self._binding_active = False
             self._stopped_at = _now_ms()
+            self._file_log.end_session()
             return self.status()
 
     def _stop_engine(self, engine):
@@ -321,6 +323,9 @@ class ProtocolService:
             self.stop()
         except ProtocolServiceError:
             pass
+        finally:
+            with self._lock:
+                self._file_log.end_session()
 
     def status(self):
         with self._lock:
@@ -370,15 +375,20 @@ class ProtocolService:
     def connections(self):
         return list(self._connections)
 
-    def points(self, kind=None):
+    def points(self, kind=None, *, point_no=None, table_view=False):
         tables = {"yc": "fes_yc_define", "yx": "fes_yx_define", "yt": "fes_yt_define", "yk": "fes_yk_define"}
         if kind is not None and kind not in tables:
             raise ProtocolServiceError("kind 必须是 yc、yx、yk 或 yt")
         with self._lock:
-            rtu_id = self.config().get("effective_rtu_id")
-            latest = {key: dict(value) for key, value in self._latest_values.items()}
-        if rtu_id is None:
-            return []
+            if kind is not None and point_no is not None:
+                key = (kind, point_no)
+                latest = {key: self._latest_values.get(key, {})}
+            else:
+                # Poll replaces sample dictionaries, never mutates them in place.
+                latest = self._latest_values.copy()
+            rtu_id = self._configured_rtu()
+            if rtu_id is None:
+                return self._unbound_points(kind, point_no)
         rows = []
         with self.store.connection() as con:
             if kind is None:
@@ -386,12 +396,24 @@ class ProtocolService:
             for name, table in tables.items():
                 if kind is not None and kind != name:
                     continue
-                for row in con.execute(f"SELECT * FROM {table} WHERE rtu_id=? ORDER BY pnt_no", (rtu_id,)):
+                columns = "rtu_id,pnt_no,name,value,status" if table_view else "*"
+                predicate, args = ("rtu_id=?", (rtu_id,)) if point_no is None else ("rtu_id=? AND pnt_no=?", (rtu_id, point_no))
+                for row in con.execute(f"SELECT {columns} FROM {table} WHERE {predicate} ORDER BY pnt_no", args):
                     item = dict(row)
                     item["kind"] = name
-                    item.update(latest.get((name, int(item["pnt_no"])), {}))
+                    sample = latest.get((name, item["pnt_no"]))
+                    if sample:
+                        if table_view:
+                            for field in ("value", "status"):
+                                if field in sample:
+                                    item[field] = sample[field]
+                        else:
+                            item.update(sample)
                     rows.append(item)
         return rows
+
+    def _unbound_points(self, kind, point_no):
+        return []
 
     def define_point(self, body):
         if not isinstance(body, dict):
@@ -749,7 +771,72 @@ class StandaloneServerService(ProtocolService):
         super().__init__(store, **kwargs)
 
     def _has_database_rtu(self):
-        return self.config().get("effective_rtu_id") is not None
+        with self._lock:
+            return self._configured_rtu() is not None
+
+    def _commit_server_points(self, values):
+        """Commit one batch before allowing any station or network publication."""
+        if not self.running:
+            raise ProtocolServiceError(f"{self.LABEL} 服务未启动")
+        batch, seen = [], set()
+        try:
+            if not isinstance(values, dict):
+                raise ValueError("全量更新必须是按类型、点号组织的对象")
+            now = _now_ms()
+            for kind, group in values.items():
+                if kind not in {"yc","yx","yk","yt"} or not isinstance(group, dict):
+                    raise ValueError("测点类型或点号映射无效")
+                for raw_no, value in group.items():
+                    no = int(raw_no)
+                    if no < 1 or (kind, no) in seen:
+                        raise ValueError("点号必须为正整数，且同一批次不能重复")
+                    seen.add((kind, no))
+                    actual = bool(_boolean(value, "位值")) if kind in {"yx","yk"} else float(value)
+                    if not math.isfinite(actual):
+                        raise ValueError("点值必须是有限数")
+                    batch.append((kind, no, actual))
+            rows = self.store.update_rows(((f"fes_{kind}_define", [self._bound_rtu_id, no],
+                {"value": value, "refresh_time": now, "status": 0}) for kind,no,value in batch), return_rows=True)
+        except Exception as exc:
+            self._record("ERROR", f"模拟点更新未提交: {exc}", alert=True)
+            raise ProtocolServiceError(str(exc)) from exc
+        for key in seen:
+            self._latest_values.pop(key, None)
+        try:
+            for kind,no,value in batch:
+                self._engine_update(kind,no,value)
+        except Exception as exc:
+            message = f"数据库已写入，但 {self.LABEL} 发布未确认（{kind}/{no}）: {exc}"
+            self._record("ERROR", message, alert=True)
+            raise ProtocolServiceError(message) from exc
+        return [{"kind": kind, "pnt_no": no, "value": value, "item": row}
+                for (kind,no,value), row in zip(batch, rows)]
+
+    def full_update(self, values=None):
+        with self._lock:
+            if not self._binding_active or self._bound_rtu_id is None:
+                return super().full_update(values)
+            items = self._commit_server_points({} if values is None else values)
+            self._record("INFO", f"全量更新完成: {len(items)} 个点")
+            return {"updated": len(items), "items": items}
+
+    def incremental_update(self, kind, point_no, value):
+        with self._lock:
+            if not self._binding_active or self._bound_rtu_id is None:
+                return super().incremental_update(kind, point_no, value)
+            item, = self._commit_server_points({kind: {point_no: value}})
+            self._record("INFO", f"增量更新 {kind}/{point_no}={item['value']}")
+            return item
+
+    def command(self, kind, point_no, value):
+        with self._lock:
+            if not self._binding_active or self._bound_rtu_id is None:
+                return super().command(kind, point_no, value)
+            if kind not in {"yk", "yt"}:
+                raise ProtocolServiceError("只支持 yk/yt 命令")
+            item, = self._commit_server_points({kind: {point_no: value}})
+            self._record("INFO", f"{self.LABEL} {kind}/{point_no}={item['value']} 指令已发送")
+            return {**item, "command_status": "sent", "result": item["value"]}
 
     def _server_points(self):
         rows = self.points()
@@ -762,15 +849,11 @@ class StandaloneServerService(ProtocolService):
             {"kind": "yt", "pnt_no": 1, "name": "YT_1", "value": 0},
         ]
 
-    def points(self, kind=None):
-        rows = super().points(kind)
-        if rows or self._has_database_rtu():
-            return rows
+    def _unbound_points(self, kind, point_no):
         if self.running and hasattr(self._engine, "snapshot"):
-            rows = self._engine.snapshot()
-            self._standalone_points = {(row["kind"], int(row["pnt_no"])): dict(row) for row in rows}
-        rows = list(self._standalone_points.values())
-        return [row for row in rows if kind is None or row.get("kind") == kind]
+            self._standalone_points = {(r["kind"], int(r["pnt_no"])): dict(r) for r in self._engine.snapshot()}
+        return [dict(row) for (k,n),row in self._standalone_points.items()
+                if (kind is None or k == kind) and (point_no is None or n == point_no)]
 
     def _persist_value(self, kind, point_no, value):
         if self._has_database_rtu():
