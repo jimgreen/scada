@@ -381,6 +381,8 @@ class ProtocolService:
             return []
         rows = []
         with self.store.connection() as con:
+            if kind is None:
+                con.execute("BEGIN")  # all four point kinds must belong to one committed snapshot
             for name, table in tables.items():
                 if kind is not None and kind != name:
                     continue
@@ -464,10 +466,35 @@ class ProtocolService:
             return {"kind": kind, "pnt_no": int(point_no), "value": value,
                     "command_status": "sent", "result": _json_value(result), "item": row}
 
+    def _publish_modbus(self, updates):
+        try:
+            batch = self._engine.prepare_updates(updates)
+            rtu = self._effective_rtu()
+            now = _now_ms()
+            rows = self.store.update_rows(((f"fes_{kind}_define", [rtu, no],
+                {"value": int(value), "status": 0, "refresh_time": now}) for kind, no, value in batch), return_rows=True)
+        except Exception as exc:
+            self._record("ERROR", f"模拟点更新未提交: {exc}", alert=True)
+            raise ProtocolServiceError(str(exc)) from exc
+        for kind, no, _ in batch:
+            self._latest_values.pop((kind, no), None)
+        try:
+            self._engine.publish_updates(batch)
+        except Exception as exc:
+            message = f"数据库已写入，但模拟寄存器更新未确认: {exc}"
+            self._record("ERROR", message, alert=True)
+            raise ProtocolServiceError(message) from exc
+        return [{"kind": kind, "pnt_no": no, "value": value, "item": row}
+                for (kind, no, value), row in zip(batch, rows)]
+
     def incremental_update(self, kind, point_no, value):
         with self._lock:
             if not self.running:
                 raise ProtocolServiceError(f"{self.LABEL} 服务未启动")
+            if isinstance(self._engine, ModbusAsyncServer):
+                item, = self._publish_modbus([(kind, point_no, value)])
+                self._record("INFO", f"增量更新 {kind}/{point_no}={item['value']}")
+                return item
             if self._config["mode"] == "master" and kind in {"yk", "yt"}:
                 return self.command(kind, point_no, value)
             try:
@@ -487,6 +514,15 @@ class ProtocolService:
 
     def full_update(self, values=None):
         values = values or {}
+        if not isinstance(values, dict) or any(not isinstance(items, dict) for items in values.values()):
+            raise ProtocolServiceError("全量更新必须是按类型、点号组织的对象")
+        with self._lock:
+            if isinstance(self._engine, ModbusAsyncServer):
+                if not self.running:
+                    raise ProtocolServiceError(f"{self.LABEL} 服务未启动")
+                items = self._publish_modbus((kind, no, value) for kind, group in values.items() for no, value in group.items())
+                self._record("INFO", f"全量更新完成: {len(items)} 个点")
+                return {"updated": len(items), "items": items}
         updated = []
         for kind, items in values.items():
             if not isinstance(items, dict):

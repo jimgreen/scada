@@ -1123,20 +1123,22 @@ class ScadaStore:
         self._validate_trans_row(table, merged, partial=False)
         connection.execute(sql, params)
 
-    def update_rows(self, updates):
-        """Apply internal validated updates atomically; return their count."""
+    def update_rows(self, updates, *, return_rows=False):
+        """Commit one validated batch; optionally return its exact row versions."""
         changes = [self._prepare_update(*item) for item in updates]
         if not changes:
-            return 0
+            return [] if return_rows else 0
         try:
             with self.connection() as connection:
                 connection.execute('BEGIN IMMEDIATE')
                 for change in changes:
                     self._apply_update(connection, change)
+                result = ([self._read(connection, change[0], change[1]) for change in changes]
+                          if return_rows else len(changes))
                 connection.commit()
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, '引用的 RTU 不存在或数据违反约束', code='conflict') from exc
-        return len(changes)
+        return result
 
     def update_row(self, table: str, key: str | list[Any] | tuple[Any, ...], values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
         change = self._prepare_update(table, key, values)

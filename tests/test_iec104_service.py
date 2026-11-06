@@ -48,6 +48,12 @@ class IEC104ServiceTests(unittest.TestCase):
         self.assertEqual(self.store.get_row("fes_yx_define", [1,1])["value"], 0)
         self.assertEqual(self.service.status()["point_count"], 4)
 
+    def test_point_projection_joins_each_kind_and_point_by_name(self):
+        expected = {"yc": (0x4001, 1), "yx": (1, 1), "yk": (0x6001, 1), "yt": (0x6201, 3)}
+        rows = self.service.points()
+        self.assertEqual({r["kind"]: (r.get("io_address"), r.get("type_id")) for r in rows}, expected)
+        self.assertEqual([(r["pnt_no"], r["io_address"]) for r in self.service.points("yt")], [(1, 0x6201)])
+
     def test_client_interrogation_spontaneous_update_and_command(self):
         client = IEC104Master("127.0.0.1", 25141, common_address=1, init="NONE")
         self.addCleanup(client.close)

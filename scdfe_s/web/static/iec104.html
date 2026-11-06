@@ -13,9 +13,9 @@
     <section class="status-grid" id="status-grid"></section>
     <div class="grid">
       <section class="card"><h2>服务配置</h2><form id="config-form"><label>监听地址<input id="bind-ip" required></label><label>监听端口<input id="port" type="number" min="1" max="65535" required></label><label>RTU 编号<input id="rtu-id" type="number" min="1" placeholder="自动选择"></label><label>最大连接数<input id="max-connections" type="number" min="0" required></label><label>周期（毫秒）<input id="tick-rate" type="number" min="1" required></label><div class="form-actions"><button class="primary">保存配置</button></div></form><pre id="status-json"></pre></section>
-      <section class="card"><h2>四遥点</h2><form id="update-form"><label>类型<select id="kind"><option>yc</option><option>yx</option><option>yk</option><option>yt</option></select></label><label>点号<input id="point" type="number" min="1" value="1" required></label><label>值<input id="value" value="0" required></label><div class="form-actions"><button class="primary">更新点</button></div></form><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>值</th><th>状态</th></tr></thead><tbody id="points"></tbody></table></div><h2>连接</h2><div id="connections" class="log-list"></div><h2>日志</h2><div id="logs" class="log-list"></div></section>
+      <section class="card"><h2>四遥点</h2><form id="update-form"><label>类型<select id="kind"><option>yc</option><option>yx</option><option>yk</option><option>yt</option></select></label><label>点号<input id="point" type="number" min="1" value="1" required></label><label>值<input id="value" value="0" required></label><div class="form-actions"><button class="primary">更新点</button></div></form><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th></tr></thead><tbody id="points"></tbody></table></div><h2>连接</h2><div id="connections" class="log-list"></div><h2>日志</h2><div id="logs" class="log-list"></div></section>
     </div>
   </main>
-  <script src="/static/iec104.js"></script>
+  <script src="/static/protocol.js"></script><script src="/static/iec104.js"></script>
 </body>
 </html>

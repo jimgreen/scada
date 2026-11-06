@@ -458,12 +458,15 @@ class IEC104Service:
             raise IEC104ServiceError("kind 必须是 yc、yx、yk 或 yt")
         rows: list[dict[str, Any]] = []
         with self.store.connection() as connection:
+            connection.execute("BEGIN")
+            sql = "SELECT * FROM fes_channel_iec104_point_define WHERE rtu_id=?"
+            params = (rtu_id,)
+            if kind:
+                sql += " AND kind=?"
+                params += (kind,)
             mappings = {
-                (str(row[0]), int(row[1])): dict(row)
-                for row in connection.execute(
-                    "SELECT * FROM fes_channel_iec104_point_define WHERE rtu_id=?",
-                    (rtu_id,),
-                )
+                (row["kind"], row["pnt_no"]): dict(row)
+                for row in connection.execute(sql, params)
             }
             for item in kinds:
                 for row in connection.execute(

@@ -12,37 +12,64 @@
     $("#message").textContent = text || "";
     $("#message").className = "message" + (error ? " error" : "");
   }
+  let lastPoints = null;
+  function renderPoints(items) {
+    const body = $("#points");
+    const rows = items.map(p => [p.kind, p.pnt_no, p.io_address ?? "—", p.type_id ?? "—", p.value, p.status]
+      .map(value => String(value ?? "")));
+    const sameKeys = lastPoints && rows.length === lastPoints.length &&
+      rows.every((r, i) => r[0] === lastPoints[i][0] && r[1] === lastPoints[i][1]);
+    if (!sameKeys) {
+      if (rows.length) {
+        const fragment = document.createDocumentFragment();
+        for (const row of rows) {
+          const tr = document.createElement("tr");
+          for (const value of row) tr.insertCell().textContent = value;
+          fragment.append(tr);
+        }
+        body.replaceChildren(fragment);
+      } else {
+        body.innerHTML = '<tr><td colspan="6">暂无点</td></tr>';
+      }
+    } else {
+      rows.forEach((row, i) => row.forEach((value, j) => {
+        if (value !== lastPoints[i][j]) body.rows[i].cells[j].textContent = value;
+      }));
+    }
+    lastPoints = rows;
+  }
   function render(status, points, logs) {
     $("#status-grid").innerHTML = [["运行状态",status.running ? "运行中" : "已停止"], ["RTU",status.rtu_id || "未选择"], ["连接",status.active_connections || 0], ["点数",status.point_count || 0], ["错误",status.last_error || "无"]]
       .map(([label,value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
     $("#status-json").textContent = JSON.stringify(status,null,2);
-    $("#points").innerHTML = (points.items || []).map(p => `<tr><td>${esc(p.kind)}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.value)}</td><td>${esc(p.status)}</td></tr>`).join("") || '<tr><td colspan="4">暂无点</td></tr>';
+    renderPoints(points.items || []);
     $("#connections").innerHTML = (status.connections || []).map(c => `<div>[${esc(c.time)}] ${esc(c.ip)}</div>`).join("") || "暂无连接";
     $("#logs").innerHTML = (logs.items || []).map(log => `<div class="${esc(log.level)}">[${esc(log.time)}] ${esc(log.message)}</div>`).join("") || "暂无日志";
     $("#start").disabled = !!status.running;
     $("#stop").disabled = !status.running;
   }
-  async function load() {
-    try {
-      const [status,points,logs] = await Promise.all([api("/api/iec104/status"), api("/api/iec104/points"), api("/api/iec104/logs?limit=100")]);
+  const form = protocolForm($("#config-form"));
+  function load(background = false) {
+    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points"), api("/api/iec104/logs?limit=100")]), ([status,points,logs]) => {
       render(status.item,points,logs);
       const config = status.item.config || {};
-      $("#bind-ip").value = config.bind_ip || "";
-      $("#port").value = config.port || "";
-      $("#rtu-id").value = config.rtu_id ?? "";
-      $("#max-connections").value = config.max_connections ?? 0;
-      $("#tick-rate").value = config.tick_rate_ms ?? 100;
+      for (const [id, value] of [["bind-ip", config.bind_ip], ["port", config.port],
+        ["rtu-id", config.rtu_id], ["max-connections", config.max_connections ?? 0],
+        ["tick-rate", config.tick_rate_ms ?? 100]]) {
+        const input = $("#" + id);
+        if (form.editableFromServer(input)) input.value = value ?? "";
+      }
       message("已更新 " + new Date().toLocaleTimeString());
-    } catch (error) { message(error.message,true); }
+    }, error => message(error.message,true), background === true);
   }
   $("#config-form").onsubmit = async event => {
     event.preventDefault();
     try {
-      await api("/api/iec104/config", {method:"PATCH", body:JSON.stringify({
+      await form.save(() => api("/api/iec104/config", {method:"PATCH", body:JSON.stringify({
         bind_ip:$("#bind-ip").value.trim(), port:Number($("#port").value),
         rtu_id:$("#rtu-id").value ? Number($("#rtu-id").value) : null,
         max_connections:Number($("#max-connections").value), tick_rate_ms:Number($("#tick-rate").value),
-      })});
+      })}));
       await load();
       message("配置已保存");
     } catch (error) { message(error.message,true); }
@@ -75,5 +102,5 @@
     } catch (error) { message(error.message,true); }
   };
   load();
-  setInterval(() => { if (!document.hidden) load(); }, 5000);
+  setInterval(() => { if (!document.hidden) load(true); }, 5000);
 })();

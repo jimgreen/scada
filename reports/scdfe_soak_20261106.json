@@ -1,0 +1,249 @@
+{
+  "duration_s": 1800.18,
+  "window": [
+    "2026-11-06T16:58:31",
+    "2026-11-06T17:28:31"
+  ],
+  "counts": {
+    "t_http": 4248,
+    "c_http": 8160,
+    "s_http": 4080,
+    "log_direction_checks": 8470,
+    "gi_11": 477,
+    "gi_10": 477,
+    "wire_1": 2385,
+    "wire_100": 2385,
+    "wire_10": 2385,
+    "wire_11": 2385,
+    "c_samples": 4770,
+    "commands": 51,
+    "generations": 2385
+  },
+  "maxima": {
+    "publication_to_verified_seconds": 0.695
+  },
+  "samples": 30,
+  "private_T_resources": {
+    "1": {
+      "pid": 42516,
+      "peak_private_MiB": 53.11,
+      "handles_min": 203,
+      "handles_max": 204,
+      "last_handles": 203
+    },
+    "10": {
+      "pid": 47264,
+      "peak_private_MiB": 58.77,
+      "handles_min": 631,
+      "handles_max": 634,
+      "last_handles": 631
+    },
+    "11": {
+      "pid": 45664,
+      "peak_private_MiB": 59.25,
+      "handles_min": 631,
+      "handles_max": 634,
+      "last_handles": 631
+    },
+    "100": {
+      "pid": 31372,
+      "peak_private_MiB": 52.12,
+      "handles_min": 202,
+      "handles_max": 203,
+      "last_handles": 202
+    }
+  },
+  "db_wal_range": [
+    1409072,
+    4144752
+  ],
+  "peers": {
+    "S-wire": {
+      "count": 39898,
+      "errors": 0,
+      "seconds": 1761.53,
+      "p95_ms": 6.37
+    },
+    "S-database": {
+      "count": 12938,
+      "errors": 0,
+      "seconds": 1761.53,
+      "p95_ms": 20.12
+    },
+    "T-reconnect": {
+      "count": 4270,
+      "errors": 0,
+      "seconds": 1761.64,
+      "p95_ms": 18.72
+    }
+  },
+  "S_IEC104": {
+    "elapsed": 720.2,
+    "pairs": 1702,
+    "wire_clients": 2,
+    "gi": 426,
+    "atomic_http_reads": 4932
+  },
+  "S_contention": {
+    "writer0": {
+      "count": 5661,
+      "p95_ms": 28.83
+    },
+    "writer1": {
+      "count": 5637,
+      "p95_ms": 29.01
+    },
+    "writer2": {
+      "count": 5668,
+      "p95_ms": 28.77
+    },
+    "bad": {
+      "count": 1023,
+      "p95_ms": 28.4
+    },
+    "wire": {
+      "count": 18456,
+      "p95_ms": 1.59
+    },
+    "sql": {
+      "count": 19242,
+      "p95_ms": 0.24
+    },
+    "web": {
+      "count": 9706,
+      "p95_ms": 22.2
+    }
+  },
+  "hour_boundary": {
+    "c_RX": {
+      "pages": 117,
+      "matched": 350,
+      "hours": [
+        "16",
+        "17"
+      ]
+    },
+    "c_TX": {
+      "pages": 118,
+      "matched": 351,
+      "hours": [
+        "16",
+        "17"
+      ]
+    },
+    "s_RX": {
+      "pages": 322,
+      "matched": 965,
+      "hours": [
+        "16",
+        "17"
+      ]
+    },
+    "s_TX": {
+      "pages": 322,
+      "matched": 963,
+      "hours": [
+        "16",
+        "17"
+      ]
+    },
+    "t_RX": {
+      "pages": 2,
+      "matched": 5,
+      "hours": [
+        "16",
+        "17"
+      ]
+    },
+    "t_TX": {
+      "pages": 8,
+      "matched": 21,
+      "hours": [
+        "16",
+        "17"
+      ]
+    }
+  },
+  "browser": {
+    "cycles": 61,
+    "errors": 1,
+    "selected_files": [
+      "2026/11/06/16/scdfe_t-channel-10-20261106-16.log",
+      "2026/11/06/17/scdfe_t-channel-10-20261106-17.log"
+    ]
+  },
+  "suite": {
+    "run": 465,
+    "seconds": 228.905,
+    "skipped": "test_selected_symlink_cannot_read_outside_log_root (test_log_query.LogQueryTests.test_selected_symlink_cannot_read_outside_log_root) ... skipped \"symlink creation is unavailable: [WinError 1314] A required privilege is not held by the client: 'C:\\\\\\\\Users\\\\\\\\wangbin\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\tmppq9ikeip\\\\\\\\private.log' -> 'C:\\\\\\\\Users\\\\\\\\wangbin\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\tmp9ygze40w\\\\\\\\scdfe_c-main-20261101-10.log'\""
+  },
+  "original": {
+    "services": {
+      "c": {
+        "port": 8877,
+        "health": "ok",
+        "policies": 62,
+        "recording": false
+      },
+      "s": {
+        "port": 8878,
+        "health": "ok",
+        "policies": 62,
+        "recording": false
+      },
+      "t": {
+        "port": 8879,
+        "health": "ok",
+        "policies": 1,
+        "recording": false
+      }
+    },
+    "mapping": {
+      "rtu": 2,
+      "db_mappings": 2400,
+      "matched": 2400,
+      "kinds": 4
+    },
+    "database": {
+      "tables_compared": 28,
+      "same_schema": true,
+      "integrity": "ok",
+      "foreign_key_errors": 0
+    },
+    "http_requests": 90,
+    "gi": [
+      42.0,
+      42.0,
+      42.0,
+      42.0,
+      42.0
+    ],
+    "channel_pid": 15476,
+    "new_rx_tx": {
+      "RX": 1,
+      "TX": 6
+    },
+    "html": 24,
+    "resources": 47,
+    "browser": {
+      "c_filter": [
+        "1",
+        "2"
+      ],
+      "s_mapped_rows": 2400,
+      "s_channel_filter": 10,
+      "t_RX": 1,
+      "t_TX": 6,
+      "page_errors": []
+    }
+  },
+  "transport": {
+    "cancelled_after_disconnect": 3,
+    "disconnect_probe": {
+      "aborted_peers": 60,
+      "persistent_reads": 60,
+      "cancel_messages": 50,
+      "same_connection": true
+    }
+  }
+}

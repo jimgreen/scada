@@ -53,13 +53,47 @@ class ModbusAsyncServer(PacketTrace):
         return operation()
 
     def update_point(self, kind, point_no, value):
-        point_no = int(point_no)
-        if point_no < 1:
-            raise ValueError("点号必须是正整数")
+        batch = self.prepare_updates([(kind, point_no, value)])
+        self.publish_updates(batch)
+        return batch[0][2]
+
+    def prepare_updates(self, updates):
+        """Validate every slot/value before touching the datastore or SQLite."""
         context = self.server.context if self.server is not None else self.context
-        self._on_datastore(lambda: _set_context_value(context, self.unit_id, kind, point_no - 1, value))
-        self.point_store.update(kind, point_no, value)
-        return value
+        batch, seen, slots = [], set(), {}
+        for kind, point_no, value in updates:
+            point_no = int(point_no)
+            if point_no < 1 or (kind, point_no) in seen:
+                raise ValueError("点号必须为正整数，且同一批次不能重复")
+            seen.add((kind, point_no))
+            values, index, mask = _context_slot(context, self.unit_id, kind, point_no - 1)
+            if kind in {"yx", "yk"}:
+                if isinstance(value, str):
+                    value = {"0": False, "false": False, "1": True, "true": True}.get(value.strip().lower())
+                if value not in (0, 1):
+                    raise ValueError("Modbus 位值必须是 0 或 1")
+                value = bool(value)
+            else:
+                number = float(value)
+                if not number.is_integer() or not 0 <= number <= 65535:
+                    raise ValueError("模拟寄存器值必须是 0..65535 的整数")
+                value = int(number)
+            # YC and YT can name the same holding register.
+            slot = (id(values), index, mask)
+            if slot in slots and slots[slot] != value:
+                raise ValueError("同一批次不能为同一 Modbus 地址指定不同的值")
+            slots[slot] = value
+            batch.append((kind, point_no, value))
+        return batch
+
+    def publish_updates(self, batch):
+        context = self.server.context if self.server is not None else self.context
+        def publish():
+            for kind, point_no, value in batch:
+                _set_context_value(context, self.unit_id, kind, point_no - 1, value)
+                self.point_store.update(kind, point_no, value)
+        # One event-loop callback: no peer can poll between two updates.
+        self._on_datastore(publish)
 
     def snapshot(self):
         context = self.server.context if self.server is not None else self.context

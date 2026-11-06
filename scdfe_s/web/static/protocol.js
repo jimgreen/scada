@@ -1,3 +1,34 @@
+/* Keep live status polls independent of edits in a protocol configuration form. */
+function protocolForm(form) {
+  const edits = new Map();
+  let revision = 0, generation = 0, pending = 0;
+  form.addEventListener("input", event => edits.set(event.target, ++revision));
+  return {
+    editableFromServer: node => !edits.has(node),
+    async save(write) {
+      const submitted = new Map(edits);
+      await write();
+      ++generation; // A GET started before the save may carry the old config.
+      for (const [node, version] of submitted) {
+        if (edits.get(node) === version) edits.delete(node);
+      }
+    },
+    async refresh(read, render, error, background = false) {
+      if (background && pending) return;
+      const request = ++generation;
+      ++pending;
+      try {
+        const data = await read();
+        if (request === generation) render(data);
+      } catch (cause) {
+        if (request === generation) error(cause);
+      } finally {
+        --pending;
+      }
+    },
+  };
+}
+
 (function () {
   "use strict";
   const configs = {
@@ -11,8 +42,10 @@
     "bacnet-server": {slug:"bacnet-server", fields:["rtu_id","bind_ip","bind_port","device_id","device_name","simulation"]},
   };
   const cfg = configs[document.body.dataset.protocol];
+  if (!cfg) return;  // IEC104 uses its own dashboard and the same form state.
   const $ = (s) => document.querySelector(s);
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const form = protocolForm($("#config-form"));
   let status = null;
   async function api(path, options = {}) {
     const response = await fetch(path, {headers: {"Content-Type":"application/json", ...(options.headers || {})}, ...options});
@@ -24,7 +57,7 @@
   const booleanFields = new Set(["simulation", "keep_alive", "fd", "receive_own_messages", "is_extended_id"]);
   function field(name, value) {
     const node = $("[data-field='" + name + "']");
-    if (!node) return;
+    if (!node || !form.editableFromServer(node)) return;
     if (node.type === "checkbox") node.checked = value === true || Number(value) === 1;
     else node.value = value ?? "";
   }
@@ -48,15 +81,14 @@
     $("#points").innerHTML = rows || `<tr><td colspan="6" class="muted">暂无点定义</td></tr>`;
   }
   function renderLogs(items, target) { $(target).innerHTML = items.slice().reverse().map(x => `<div class="${esc(x.level)}">[${esc(x.time)}] ${esc(x.message)}</div>`).join("") || "暂无记录"; }
-  async function load() {
-    try {
-      const [s, p, l, a] = await Promise.all([api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points`), api(`/api/${cfg.slug}/logs?limit=100`), api(`/api/${cfg.slug}/alerts?limit=100`)]);
+  function load(background = false) {
+    return form.refresh(() => Promise.all([api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points`), api(`/api/${cfg.slug}/logs?limit=100`), api(`/api/${cfg.slug}/alerts?limit=100`)]), ([s, p, l, a]) => {
       renderStatus(s.item); renderPoints(p.items); renderLogs(l.items, "#logs"); renderLogs(a.items, "#alerts");
       cfg.fields.forEach(name => field(name, s.item.config[name]));
       message("已更新 " + new Date().toLocaleTimeString());
-    } catch (e) { message(e.message, true); }
+    }, e => message(e.message, true), background === true);
   }
-  $("#config-form").onsubmit = async (e) => { e.preventDefault(); const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)}); await load(); message("配置已保存"); } catch (err) { message(err.message, true); } };
+  $("#config-form").onsubmit = async (e) => { e.preventDefault(); const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await form.save(() => api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)})); await load(); message("配置已保存"); } catch (err) { message(err.message, true); } };
   $("#start").onclick = async () => { try { await api(`/api/${cfg.slug}/start`, {method:"POST", body:"{}"}); message("服务已启动"); await load(); } catch(e) { message(e.message, true); } };
   $("#stop").onclick = async () => { try { await api(`/api/${cfg.slug}/stop`, {method:"POST", body:"{}"}); message("服务已停止"); await load(); } catch(e) { message(e.message, true); } };
   $("#refresh").onclick = load;
@@ -87,5 +119,5 @@
   };
   $("#add-point").onsubmit = async (e) => { e.preventDefault(); const kind = $("#new-kind").value; const pnt_no = Number($("#new-point").value); const name = $("#new-name").value; try { await api(`/api/${cfg.slug}/points`, {method:"POST", body:JSON.stringify({kind, pnt_no, name, value:0, status:0})}); message("点定义已新增"); e.target.reset(); await load(); } catch(err) { message(err.message, true); } };
   $("#frame-form")?.addEventListener("submit", async e => { e.preventDefault(); try { const body = {arbitration_id:Number($("#frame-id").value), data:$("#frame-data").value, is_extended_id:Number($("#frame-ext").value)}; await api(`/api/${cfg.slug}/frame`, {method:"POST", body:JSON.stringify(body)}); message("CAN 帧已发送"); await load(); } catch(err) { message(err.message, true); } });
-  load(); setInterval(() => { if (!document.hidden) load(); }, 5000);
+  load(); setInterval(() => { if (!document.hidden) load(true); }, 5000);
 })();
