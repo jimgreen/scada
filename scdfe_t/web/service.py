@@ -40,6 +40,7 @@ class TransStore:
         self.store = ScadaStore(db_path, schema_dir, connection_pool_size=connection_pool_size)
         self.db_path = Path(db_path).resolve()
         self.schema_dir = Path(schema_dir).resolve()
+        self._table_schemas = {}
         self._lock_guard = threading.Lock()
         self._channel_locks = WeakValueDictionary()
         self._children: dict[int, subprocess.Popen] = {}
@@ -72,7 +73,9 @@ class TransStore:
 
     def _schema(self, table: str) -> dict[str, Any]:
         try:
-            return self.store.catalog.public(table)
+            if table not in self._table_schemas:
+                self._table_schemas[table] = self.store.catalog.public(table)
+            return self._table_schemas[table]
         except Exception as exc:
             raise ApiError(503, f"缺少转发定义表 {table}，请先执行数据库结构升级", code="trans_schema_missing") from exc
 
@@ -110,14 +113,15 @@ class TransStore:
             values["kind"] = kind
         return [values[key] for key in keys]
 
-    def channels(self) -> list[dict[str, Any]]:
-        self._schema(CHANNEL_TABLE)
-        rows = []
-        while True:
-            page = self.store.list_rows(CHANNEL_TABLE, limit=500, offset=len(rows), sort="channel_id")
-            rows.extend(page["items"])
-            if len(rows) >= page["total"] or not page["items"]:
-                return rows
+    def channels(self, *, selector=False) -> list[dict[str, Any]]:
+        if selector:
+            with self.store.connection() as con:
+                return [dict(row) for row in con.execute(
+                    f"SELECT channel_id,code,name,protocol FROM {CHANNEL_TABLE} ORDER BY channel_id")]
+        columns = self._schema(CHANNEL_TABLE)["columns"]
+        with self.store.connection() as con:
+            rows = con.execute(f"SELECT * FROM {CHANNEL_TABLE} ORDER BY channel_id").fetchall()
+        return self.store._public_rows(rows, columns)
 
     def get_channel(self, channel_id: Any) -> dict[str, Any]:
         return self.store.get_row(CHANNEL_TABLE, self._channel_key(channel_id))
@@ -188,12 +192,14 @@ class TransStore:
 
     def points(self, channel_id: Any) -> list[dict[str, Any]]:
         """Return all mappings for in-process callers; HTTP uses point_page."""
-        rows = []
-        while True:
-            page = self.point_page(channel_id, limit=500, offset=len(rows))
-            rows.extend(page["items"])
-            if len(rows) >= page["total"] or not page["items"]:
-                return rows
+        cid = self._channel_key(channel_id)[0]
+        columns = self._schema(POINT_TABLE)["columns"]
+        with self.store.connection() as con:
+            con.execute("BEGIN")
+            if con.execute(f"SELECT 1 FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,)).fetchone() is None:
+                raise ApiError(404, "转发通道不存在", code="not_found")
+            rows = con.execute(f"SELECT * FROM {POINT_TABLE} WHERE channel_id=? ORDER BY pnt_no,kind", (cid,)).fetchall()
+        return [self._point_response(row) for row in self.store._public_rows(rows, columns)]
 
     @staticmethod
     def _point_response(row):
@@ -433,19 +439,31 @@ class TransStore:
                 raise ValueError("不读取链接")
         except (ValueError, OSError, RuntimeError) as exc:
             raise ApiError(400, "非法日志路径") from exc
+        count = max(1, min(int(tail), 5000))
         try:
-            # Packet traces can make an hourly file large. Only read a bounded
-            # tail, as the c Web already does, rather than allocating the file.
+            # Small files promise an exact total; large files return total=None
+            # and need only enough complete lines for the requested tail.
             with path.open("rb") as stream:
                 size = stream.seek(0, 2)
-                start = max(0, size - 2_000_000)
-                stream.seek(start)
-                data = stream.read(2_000_000)
+                if size <= 2_000_000:
+                    start = 0
+                    stream.seek(0)
+                    data = stream.read(size)
+                else:
+                    floor, start = size - 2_000_000, size
+                    chunks, newlines = [], 0
+                    while start > floor and newlines <= count:
+                        block = min(16_384, start - floor)
+                        start -= block
+                        stream.seek(start)
+                        chunk = stream.read(block)
+                        chunks.append(chunk)
+                        newlines += chunk.count(b"\n")
+                    data = b"".join(reversed(chunks))
             if start:
                 data = data.partition(b"\n")[2]
             lines = data.decode("utf-8", errors="replace").splitlines()
         except FileNotFoundError as exc:
             raise ApiError(404, "日志文件不存在", code="not_found") from exc
-        count = max(1, min(int(tail), 5000))
         return {"filename": filename, "lines": lines[-count:],
                 "total": None if start else len(lines), "truncated": bool(start)}

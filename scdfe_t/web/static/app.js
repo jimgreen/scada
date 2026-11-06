@@ -13,7 +13,8 @@ function id(r){return Number(r.channel_id)}
 function selected(){return state.channels.find(x=>id(x)===Number(state.selected))}
 function badge(r){const s=Number(r.process_status||0);return `<span class="status-badge ${s===2?"running":s===5?"error":""}">${esc(statusName[s]||s)}</span>`}
 function setPage(p){state.page=p;document.querySelectorAll(".page").forEach(x=>x.classList.toggle("active",x.id===`page-${p}`));document.querySelectorAll("nav button[data-page]").forEach(x=>x.classList.toggle("active",x.dataset.page===p));if(p==="processes")loadProcesses().catch(e=>toast(e.message));if(p==="logs")loadLogs().catch(e=>toast(e.message))}
-function renderSelects(){const s=$("#selected-channel"),l=$("#log-channel"),old=l?.value||"";if(s)s.innerHTML='<option value="">请选择</option>'+state.channels.map(x=>`<option value="${id(x)}">${id(x)} · ${esc(x.name||x.code||"")} · ${esc(x.protocol||"")}</option>`).join("");if(s)s.value=state.selected||"";if(!l)return;l.innerHTML='<option value="">全部通道</option>'+state.channels.map(x=>`<option value="${id(x)}">${id(x)} · ${esc(x.name||x.code||"")}</option>`).join("");l.value=state.logsChannel||old}
+function setOptions(node,markup){if(node._optionsMarkup!==markup){node.innerHTML=markup;node._optionsMarkup=markup;}}
+function renderSelects(){const s=$("#selected-channel"),l=$("#log-channel"),old=l?.value||"";if(s)setOptions(s,'<option value="">请选择</option>'+state.channels.map(x=>`<option value="${id(x)}">${id(x)} · ${esc(x.name||x.code||"")} · ${esc(x.protocol||"")}</option>`).join(""));if(s)s.value=state.selected||"";if(!l)return;setOptions(l,'<option value="">全部通道</option>'+state.channels.map(x=>`<option value="${id(x)}">${id(x)} · ${esc(x.name||x.code||"")}</option>`).join(""));l.value=state.logsChannel||old}
 function renderChannels() {
   const body = $("#channels");
   if (!body) { renderSelects(); return; }
@@ -28,13 +29,32 @@ function renderChannels() {
 }
 function renderDetail(){if(!$("#channel-detail"))return;const x=selected();if(!x){$("#channel-detail").innerHTML='<dt>通道</dt><dd>未选择</dd>';return}const n={channel_id:"编号",code:"编码",name:"名称",protocol:"规约",bind_host:"监听地址",bind_port:"监听端口",common_address:"公共地址",unit_id:"从站地址",scan_interval_ms:"扫描周期(ms)",report_interval_ms:"全量周期(ms)",process_enable:"自动运行",process_pid:"进程号",process_start_time:"启动时间",process_stop_time:"停止时间",process_heartbeat_time:"心跳",process_error:"错误"};$("#channel-detail").innerHTML=Object.entries(n).filter(([k])=>k in x).map(([k,v])=>`<dt>${v}</dt><dd>${k.includes("time")?fmt(x[k],k.includes("heartbeat")):k==="process_enable"?(Number(x[k])?"是":"否"):esc(x[k])||"—"}</dd>`).join("")}
 function pno(x){return x.pnt_no??0}
-function renderPoints(){const r=state.points;$("#points").innerHTML=r.length?r.map(x=>`<tr><td>${kindName[x.kind]||esc(x.kind)}</td><td>${pno(x)}</td><td>${esc(x.source_rtu_id)}</td><td>${esc(x.source_pnt_no)}</td><td>${esc(x.name)}</td><td>${esc(x.io_address??"—")}</td><td>${esc(x.register_area??"—")} / ${esc(x.address??"—")}</td><td>${Number(x.enabled??1)?"是":"否"}</td><td class="actions"><button data-point-edit="${pno(x)}" data-point-kind="${x.kind}">编辑</button><button data-owner="${id(x)}" data-version="${esc(x._version)}" data-point-delete="${pno(x)}" data-point-kind="${x.kind}" class="danger">删除</button></td></tr>`).join(""):'<tr><td colspan="9" class="muted">暂无点映射</td></tr>';if($("#point-page-summary"))$("#point-page-summary").textContent=`共 ${state.pointTotal} 条 · 当前 ${r.length?state.pointOffset+1:0}–${state.pointOffset+r.length} 条`;if($("#point-prev"))$("#point-prev").disabled=state.pointOffset===0;if($("#point-next"))$("#point-next").disabled=state.pointOffset+r.length>=state.pointTotal}
+let previousRows = null;
+function renderPoints(){
+  const r=state.points, body=$("#points");
+  const rows=r.map(x=>({owner:String(x.channel_id),kind:x.kind,no:String(pno(x)),version:String(x._version),
+    cells:[kindName[x.kind]||x.kind,pno(x),x.source_rtu_id,x.source_pnt_no,x.name,x.io_address??"—",
+      (x.register_area??"—")+" / "+(x.address??"—"),Number(x.enabled??1)?"是":"否"].map(v=>String(v??""))}));
+  const same=previousRows && rows.length===previousRows.length && rows.every((x,i)=>{
+    const old=previousRows[i];return x.owner===old.owner && x.kind===old.kind && x.no===old.no;
+  });
+  if (!same) {
+    body.innerHTML=rows.map(x=>`<tr>${x.cells.map(v=>`<td>${esc(v)}</td>`).join("")}<td class="actions"><button data-point-edit="${esc(x.no)}" data-point-kind="${esc(x.kind)}">编辑</button><button data-owner="${esc(x.owner)}" data-version="${esc(x.version)}" data-point-delete="${esc(x.no)}" data-point-kind="${esc(x.kind)}" class="danger">删除</button></td></tr>`).join("")||'<tr><td colspan="9" class="muted">暂无点映射</td></tr>';
+  } else {
+    rows.forEach((x,i)=>{
+      const old=previousRows[i];
+      x.cells.forEach((value,j)=>{if(value!==old.cells[j]) body.rows[i].cells[j].textContent=value;});
+      if(x.version!==old.version) body.rows[i].querySelector("[data-point-delete]").dataset.version=x.version;
+    });
+  }
+  previousRows=rows;
+  if($("#point-page-summary"))$("#point-page-summary").textContent=`共 ${state.pointTotal} 条 · 当前 ${r.length?state.pointOffset+1:0}–${state.pointOffset+r.length} 条`;if($("#point-prev"))$("#point-prev").disabled=state.pointOffset===0;if($("#point-next"))$("#point-next").disabled=state.pointOffset+r.length>=state.pointTotal}
 let channelRequest = 0, pendingChannels = 0;
 async function loadChannels() {
   const request = ++channelRequest;
   pendingChannels++;
   try {
-    const v = await api("/api/trans/channels");
+    const v = await api($("#points") && !$("#channels") ? "/api/trans/channels?view=selector" : "/api/trans/channels");
     if (request !== channelRequest) return;
     const previous = state.selected;
     state.channels = v.items || [];
@@ -45,7 +65,7 @@ async function loadChannels() {
   } catch (error) { if (request === channelRequest) throw error; }
   finally { pendingChannels--; }
 }
-async function loadPoints(){if(!$("#points"))return;const request=++state.pointRequest;if(!state.selected){state.points=[];state.pointTotal=0;state.pointOffset=0;renderPoints();return}const cid=state.selected,kind=$("#kind-filter").value,q=new URLSearchParams({limit:String(state.pointLimit),offset:String(state.pointOffset)});if(kind)q.set("kind",kind);const scope=cid+"/"+kind;if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();$("#points").innerHTML='<tr><td colspan="9">正在读取点映射…</td></tr>'}let page;try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(request!==state.pointRequest)return;throw error}if(request!==state.pointRequest||cid!==state.selected)return;state.pointTotal=page.total??0;if(state.pointOffset>0&&state.pointOffset>=state.pointTotal){state.pointOffset=Math.max(0,Math.floor((state.pointTotal-1)/state.pointLimit)*state.pointLimit);return loadPoints()}state.points=page.items||[];renderPoints()}
+async function loadPoints(){if(!$("#points"))return;const request=++state.pointRequest;if(!state.selected){state.points=[];state.pointTotal=0;state.pointOffset=0;renderPoints();return}const cid=state.selected,kind=$("#kind-filter").value,q=new URLSearchParams({limit:String(state.pointLimit),offset:String(state.pointOffset)});if(kind)q.set("kind",kind);const scope=cid+"/"+kind;if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;$("#points").innerHTML='<tr><td colspan="9">正在读取点映射…</td></tr>'}let page;try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(request!==state.pointRequest)return;throw error}if(request!==state.pointRequest||cid!==state.selected)return;state.pointTotal=page.total??0;if(state.pointOffset>0&&state.pointOffset>=state.pointTotal){state.pointOffset=Math.max(0,Math.floor((state.pointTotal-1)/state.pointLimit)*state.pointLimit);return loadPoints()}state.points=page.items||[];renderPoints()}
 async function control(cid,a){await api(`/api/trans/channels/${Number(cid)}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels();if(state.page==="processes")await loadProcesses()}
 async function loadProcesses(){const r=(await api("/api/trans/processes")).items||[];$("#process-summary").textContent=`运行 ${r.filter(x=>x.alive).length} / 总数 ${r.length}`;$("#processes").innerHTML=r.length?r.map(x=>`<tr><td>${id(x)} · ${esc(x.name||x.code||"")}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid||"—"}</td><td>${fmt(x.process_start_time)}</td><td>${fmt(x.process_heartbeat_time,true)}</td><td title="${esc(x.process_error)}">${esc(x.process_error)||"—"}</td><td class="actions"><button data-control="start" data-id="${id(x)}">启动</button><button data-control="stop" data-id="${id(x)}">停止</button><button data-log-channel="${id(x)}">日志</button></td></tr>`).join(""):'<tr><td colspan="8" class="muted">暂无通道</td></tr>'}
 async function loadLogs(){const c=$("#log-channel").value;state.logsChannel=c;const v=await api(`/api/trans/logs${c?`?channel_id=${encodeURIComponent(c)}`:""}`);state.logs=v.items||[];$("#log-count").textContent=`${v.total||0} 个文件`;$("#log-files").innerHTML=state.logs.map(x=>`<button class="log-file ${state.log===x.filename?"active":""}" data-log="${esc(x.filename)}">${esc(x.filename)}<small>${(x.size/1024).toFixed(1)} KB · ${fmt(x.mtime)}</small></button>`).join("")||'<div class="muted">暂无日志</div>';if(state.log&&!state.logs.some(x=>x.filename===state.log))state.log=null;if(!state.log&&state.logs.length)state.log=state.logs[0].filename;if(state.log)await loadLog();else {$("#log-name").textContent="请选择日志文件";$("#log-content").textContent="—"}}

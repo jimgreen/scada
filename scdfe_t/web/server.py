@@ -147,7 +147,9 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         # channels collection and channel-scoped resources
         if len(tail) == 1:
             if method == "GET":
-                return self._json(200, {"items": self.service.channels()})
+                if set(query) - {"view"} or query.get("view", "full") not in {"selector", "full"}:
+                    raise ApiError(400, "未知通道列表查询参数")
+                return self._json(200, {"items": self.service.channels(selector=query.get("view")=="selector")})
             if method == "POST":
                 return self._json(201, {"item": self.service.create_channel(self._body())})
             raise ApiError(405, "通道集合只支持 GET/POST")

@@ -1,0 +1,129 @@
+{
+  "date": "2026-11-06",
+  "module": "scdfe_t",
+  "performance": {
+    "dense_scan": {
+      "before_ms": 2.523,
+      "after_ms": 1.671,
+      "decrease_percent": 33.8,
+      "verified_digest": "ea4538aee7e9f9fd30da3221572329b3aa8bd01a1ff23eca5cf23f9e1ef24cc3"
+    },
+    "sparse_scan": {
+      "before_ms": 0.118,
+      "after_ms": 0.1,
+      "decrease_percent": 15.3,
+      "verified_digest": "941efb275d6eab491feeb5b3393388d691be8de90c65f4487c45b42ea93440d5"
+    },
+    "channels": {
+      "before_ms": 5.569,
+      "after_ms": 4.974,
+      "decrease_percent": 10.7,
+      "verified_digest": "775581bab3a80ec1005b6602af2d4f042e2d496721ad95de6301bbce6935f4ae"
+    },
+    "tail_3": {
+      "before_ms": 5.584,
+      "after_ms": 0.428,
+      "decrease_percent": 92.3,
+      "verified_digest": "a024d64aa9d59d7308ef9590e56ea69d001049baca0fcd3feac8a5c704d5215a"
+    }
+  },
+  "selector_http": {
+    "full": {
+      "ms": 16.493,
+      "bytes": 529490
+    },
+    "selector": {
+      "ms": 4.162,
+      "bytes": 101090
+    },
+    "rows": 1200
+  },
+  "regression": {
+    "tests": 477,
+    "passed": 476,
+    "failed": 0,
+    "skipped": 1,
+    "seconds": 229.342
+  },
+  "dual_process_wire": {
+    "seconds": 42.4,
+    "source_commits": 706,
+    "modbus_reads": 2820,
+    "iec104_interrogations": 693,
+    "web_checks": 141,
+    "filtered": {
+      "1-RX": 2,
+      "1-TX": 2,
+      "2-RX": 2,
+      "2-TX": 2
+    },
+    "final_values": [
+      746,
+      747
+    ],
+    "final_quality": 0
+  },
+  "original": {
+    "healthy_ports": [
+      8877,
+      8878,
+      8879
+    ],
+    "worker_pid": 17736,
+    "iec104_port": 2404,
+    "wire_samples": {
+      "yc/1": [
+        42.0,
+        0
+      ],
+      "yx/1": [
+        false,
+        0
+      ]
+    },
+    "business_tables": 28,
+    "schema_identical": true,
+    "integrity": "ok",
+    "foreign_key_errors": 0,
+    "plans": [
+      "SEARCH fes_yc_define USING PRIMARY KEY (rtu_id=? AND pnt_no>? AND pnt_no<?)",
+      "SEARCH fes_scdfe_t_point_define USING INDEX sqlite_autoindex_fes_scdfe_t_point_define_1 (channel_id=?)"
+    ],
+    "packet_enabled": false,
+    "filtered": {
+      "RX": 5,
+      "TX": 5
+    },
+    "read_requests": 84
+  },
+  "browser": {
+    "before": {
+      "rows": 4,
+      "retained": 0,
+      "focusRetained": false
+    },
+    "after": {
+      "rows": 4,
+      "retained": 4,
+      "focusRetained": true
+    },
+    "edit": {
+      "keptRow": true,
+      "keptButton": true,
+      "advancedVersion": true,
+      "switchedChannel": true,
+      "emptyKind": true
+    },
+    "persistence": {
+      "channel1": "修改后",
+      "channel2": "row 2"
+    },
+    "log_filter": {
+      "channel": 1,
+      "filtered": {
+        "RX": 88,
+        "TX": 150
+      }
+    }
+  }
+}

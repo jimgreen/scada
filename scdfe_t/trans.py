@@ -214,11 +214,17 @@ class TransRuntime:
         plan = []
         for (table, rtu), targets in grouped.items():
             numbers = sorted(targets)
+            # Sequential point numbers form one bounded primary-key range.
+            # Sparse mappings still use exact lookups; never read intervening rows.
+            projection = f"SELECT pnt_no,value,status FROM {table} WHERE rtu_id=? AND "
+            if len(numbers) > 1 and numbers[-1] - numbers[0] + 1 == len(numbers):
+                plan.append((projection + "pnt_no BETWEEN ? AND ?", (rtu, numbers[0], numbers[-1]), targets))
+                continue
             # Leave room for the RTU parameter on SQLite builds with a 999
             # variable limit. Multiple destinations may share a source.
             for start in range(0, len(numbers), 900):
                 batch = numbers[start:start+900]
-                sql = f"SELECT pnt_no,value,status FROM {table} WHERE rtu_id=? AND pnt_no IN ({','.join('?' for _ in batch)})"
+                sql = projection + f"pnt_no IN ({','.join('?' for _ in batch)})"
                 plan.append((sql, (rtu, *batch), targets))
         return tuple(plan)
 
@@ -229,8 +235,10 @@ class TransRuntime:
         with self.store.connection() as con:
             if len(plan) > 1:
                 con.execute('BEGIN')  # all groups/chunks see the same committed scan
+            cursor = con.cursor()
+            cursor.row_factory = None
             for sql, args, targets in plan:
-                for no, value, quality in con.execute(sql, args):
+                for no, value, quality in cursor.execute(sql, args):
                     if value is not None:
                         sample = (value, int(quality or 0)) if include_quality else value
                         for key in targets[no]:
@@ -317,7 +325,7 @@ class TransRuntime:
             self.server = server
             return server
         from server.modbus_trans_server import ModbusTcpTransServer
-        point_index = {(p.kind, p.pnt_no): p for p in points}
+        point_index = self.points
         def on_command(kind, no, value):
             point = point_index.get((str(kind).lower(), int(no)))
             return False if point is None else self.command(point, value)
@@ -327,6 +335,10 @@ class TransRuntime:
             command_handler=on_command,
             log=lambda level, message: self.logger.emit("normal", message, level=level))
         server.set_packet_handler(self.logger.packet)
+        # The constructor already encoded the initial samples into the datastore.
+        for key, (value, quality) in initial_samples.items():
+            if key[0] in {"yc", "yx"}:
+                self.values[key], self.qualities[key] = value, quality
         self.server = server
         return server
 
@@ -351,6 +363,26 @@ class TransRuntime:
 
     def refresh(self):
         current = self._read_sources(self._scan_plan, True)
+        if getattr(type(self.server), "update_many", None) is not None:
+            changes = []
+            for key, (value, quality) in current.items():
+                if self.values.get(key) != value:
+                    changes.append((*key, value))
+                else:
+                    self.qualities[key] = quality  # Modbus does not transmit quality bits.
+            if changes:
+                try:
+                    errors = self.server.update_many(changes)
+                except Exception as exc:
+                    self.logger.error(f"Modbus 扫描发布未确认: {exc}")
+                    return  # Retry unconfirmed values on the next scan.
+                for kind, no, value in changes:
+                    key = (kind, no)
+                    if key in errors:
+                        self.logger.error(f"转发点 {kind}/{no} 更新失败: {errors[key]}")
+                    else:
+                        self.values[key], self.qualities[key] = current[key]
+            return
         for key, point in self.points.items():
             if point.kind not in {"yc", "yx"}:
                 continue
@@ -397,10 +429,10 @@ class TransRuntime:
         return row is not None and bool(row[0])
 
     def _cleanup_logs(self, hours):
-        from scdfe_c.web.log_query import LOG_PATTERNS, _iter_log_files
         now = time.monotonic()
         if hours == self._log_retention and now < self._next_cleanup:
             return
+        from scdfe_c.web.log_query import LOG_PATTERNS, _iter_log_files
         self._log_retention, self._next_cleanup = hours, now + 3600
         root = self.logger.directory.resolve()
         prefix = f"scdfe_t-channel-{self.channel_id}-"

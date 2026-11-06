@@ -153,7 +153,10 @@
       ["keyword", "q"], ["record", "record"], ["direction", "direction"],
       ["level", "level"], ["limit", "limit"]]) {
       const value = $(id).value.trim();
-      if (value) params.set(key, value);
+      if (!value) continue;
+      if (module === "t" && key === "process" && /^scdfe_t-channel-([1-9]\d*)$/.test(value)) {
+        params.set("channel_id", value.slice("scdfe_t-channel-".length));
+      } else params.set(key, value);
     }
     if ($("channel")?.value.trim()) params.set("channel_id", $("channel").value.trim());
     for (const key of ["start", "end"]) {

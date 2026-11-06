@@ -29,4 +29,15 @@ def log_files(directory, family, query):
 
 
 def log_browser(directory, family, search, query):
+    if family == "t" and "channel_id" in query:
+        channel = query["channel_id"]
+        if (not isinstance(channel, str) or len(channel) > 19 or not channel.isascii()
+                or not channel.isdecimal() or not 0 < int(channel) < 2**63 or str(int(channel)) != channel):
+            raise ValueError("转发通道号必须为正整数")
+        process = f"scdfe_t-channel-{channel}"
+        if query.get("process") and query["process"] != process:
+            raise ValueError("转发通道号与进程筛选不一致")
+        # One T process owns one channel; historical packets need no channel marker.
+        query = {k: v for k, v in query.items() if k != "channel_id"}
+        query["process"] = process
     return search_logs(directory, query, family=family) if search else log_files(directory, family, query)

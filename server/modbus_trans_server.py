@@ -248,75 +248,102 @@ class ModbusTcpTransServer(ModbusTcpServer):
                 self._values[(row["kind"], row["pnt_no"])] = value
         return None
 
-    def update(self, kind: str, point_no: int, value: Any):
-        """Update a local YC/YX value exposed to the remote Modbus client."""
+    def _prepare_sample(self, kind, point_no, value):
         key = (str(kind).lower(), int(point_no))
         row = self._mappings.get(key)
         if row is None:
             raise KeyError(f"转发点不存在: {kind}/{point_no}")
         if row["kind"] not in {"yc", "yx"}:
             raise ValueError("Modbus 转发 update 只允许 yc/yx")
-        with self._lock:
-            self._values[key] = value
-            runtime = getattr(self.server, "context", None) if self.server is not None else None
-            # ModbusTcpServer wraps a direct SimDevice in SimCore once the
-            # listener starts.  SimCore exposes async get/set methods rather
-            # than the in-memory arrays, so use our original SimDevice for a
-            # deterministic local update.
-            if runtime is None or not hasattr(runtime, "devices") and not hasattr(runtime, "simdata") and not hasattr(runtime, "async_setValues"):
-                runtime = self.context
-            area = row["register_area"]
-            raw = [bool(value)] if area in {"coil", "discrete"} else self._encode(row, value)
-            # pymodbus accepts either a ModbusServerContext or the newer
-            # simulator SimDevice directly.  The latter is what this adapter
-            # passes to ModbusTcpServer, so update both forms here; otherwise
-            # refresh() only changes the private cache and remote reads stay
-            # at zero until a write arrives from the client.
-            if hasattr(runtime, "devices"):
-                device = runtime.devices[self.unit_id]
-                block = device.block["c" if area == "coil" else "d" if area == "discrete" else "h" if area == "holding" else "i"]
-                start, _count, registers, _flags = block
-                index = (row["address"] // 16 - start) if area in {"coil", "discrete"} else row["address"] - start
-                if area in {"coil", "discrete"}:
-                    bit = row["address"] % 16
-                    registers[index] = (registers[index] | (1 << bit)) if raw[0] else (registers[index] & ~(1 << bit))
-                else:
-                    registers[index:index + len(raw)] = raw
-            elif hasattr(runtime, "simdata"):
-                blocks = runtime.simdata[_AREA_TO_INDEX[area]]
-                target = None
-                for candidate in blocks:
-                    begin = int(candidate.address)
-                    count = int(candidate.count)
-                    if begin <= row["address"] and row["address"] + len(raw) <= begin + count:
-                        target = candidate
-                        break
-                if target is None:
-                    raise KeyError(f"Modbus 地址未映射: {area}/{row['address']}")
-                index = row["address"] - int(target.address)
-                values = target.values
-                if area in {"coil", "discrete"}:
-                    if isinstance(values, list):
-                        values[index] = bool(raw[0])
-                    elif index == 0:
-                        target.values = bool(raw[0])
-                elif isinstance(values, list):
-                    values[index:index + len(raw)] = raw
-            elif hasattr(runtime, "async_setValues"):
-                # Live pymodbus server context (SimCore) owns the datastore
-                # on the event-loop thread.  Marshal the update there so the
-                # next remote read sees the new YC/YX value.
-                loop = getattr(self, "loop", None)
-                if loop is None or not loop.is_running():
-                    raise RuntimeError("Modbus 服务事件循环尚未运行")
-                function_code = {"coil": 1, "discrete": 2,
-                                 "holding": 3, "input": 4}[area]
-                future = asyncio.run_coroutine_threadsafe(
-                    runtime.async_setValues(self.unit_id, function_code,
-                                            int(row["address"]), raw), loop)
-                error = future.result(timeout=2)
-                if error not in (None, False):
-                    raise RuntimeError(f"Modbus 数据更新失败: {error}")
+        area = row["register_area"]
+        raw = [bool(value)] if area in {"coil", "discrete"} else self._encode(row, value)
+        return key, row, area, raw
+
+    def _write_local(self, runtime, row, area, raw):
+        if hasattr(runtime, "devices"):
+            device = runtime.devices[self.unit_id]
+            block = device.block["c" if area == "coil" else "d" if area == "discrete" else "h" if area == "holding" else "i"]
+            start, _count, registers, _flags = block
+            index = (row["address"] // 16 - start) if area in {"coil", "discrete"} else row["address"] - start
+            if area in {"coil", "discrete"}:
+                bit = row["address"] % 16
+                registers[index] = (registers[index] | (1 << bit)) if raw[0] else (registers[index] & ~(1 << bit))
+            else:
+                registers[index:index + len(raw)] = raw
+        elif hasattr(runtime, "simdata"):
+            blocks = runtime.simdata[_AREA_TO_INDEX[area]]
+            target = None
+            for candidate in blocks:
+                begin = int(candidate.address)
+                count = int(candidate.count)
+                if begin <= row["address"] and row["address"] + len(raw) <= begin + count:
+                    target = candidate
+                    break
+            if target is None:
+                raise KeyError(f"Modbus 地址未映射: {area}/{row['address']}")
+            index = row["address"] - int(target.address)
+            values = target.values
+            if area in {"coil", "discrete"}:
+                if isinstance(values, list):
+                    values[index] = bool(raw[0])
+                elif index == 0:
+                    target.values = bool(raw[0])
+            elif isinstance(values, list):
+                values[index:index + len(raw)] = raw
+        else:
+            return False
+        return True
+
+    def update_many(self, updates):
+        """Publish a scan on the datastore's own thread; return only failed keys."""
+        failed, ready = {}, []
+        for kind, no, value in updates:
+            try:
+                ready.append((*self._prepare_sample(kind, no, value), value))
+            except Exception as exc:
+                failed[(kind, no)] = exc
+        if not ready:
+            return failed
+        runtime = getattr(self.server, "context", None)
+        if runtime is None or not any(hasattr(runtime, attr) for attr in ("devices", "simdata", "async_setValues")):
+            runtime = self.context
+        loop = self.loop
+        async def publish():
+            for key, row, area, raw, value in ready:
+                try:
+                    if not self._write_local(runtime, row, area, raw):
+                        code = {"coil": 1, "discrete": 2, "holding": 3, "input": 4}[area]
+                        error = await runtime.async_setValues(self.unit_id, code, row["address"], raw)
+                        if error not in (None, False):
+                            raise RuntimeError(f"Modbus 数据更新失败: {error}")
+                    self._values[key] = value
+                except Exception as exc:
+                    failed[key] = exc
+        if loop is not None and loop.is_running() and threading.current_thread() is not self.thread:
+            # Do not hold _lock while the event loop may be accepting a remote command.
+            future = asyncio.run_coroutine_threadsafe(publish(), loop)
+            try:
+                future.result(timeout=2)
+            except TimeoutError:
+                future.cancel()
+                raise
+        else:
+            with self._lock:
+                for key, row, area, raw, value in ready:
+                    try:
+                        if not self._write_local(runtime, row, area, raw):
+                            raise RuntimeError("Modbus 更新需要活动的服务事件循环")
+                        self._values[key] = value
+                    except Exception as exc:
+                        failed[key] = exc
+        return failed
+
+    def update(self, kind: str, point_no: int, value: Any):
+        """Update one measurement and preserve the single-point error contract."""
+        key = (str(kind).lower(), int(point_no))
+        failed = self.update_many([(*key, value)])
+        if key in failed:
+            raise failed[key]
         return value
 
     # Keep the same spelling used by the standalone Modbus server service.
