@@ -1441,6 +1441,7 @@ const processRender = { rows: [] };
 const threadRender = { rows: [] };
 const logs = {
   record: "runtime",
+  recordingEnabled: null,
   files: [],
   filtered: [],
   selected: "",
@@ -1461,6 +1462,7 @@ const logs = {
 const logContentRender = { rows: [] };
 // Snapshot just the visible page, never the full log index or API responses.
 const logFilesRender = { files: [], selected: null };
+const logTreeClosed = new Set();
 const timeFields = new Set([
   "refresh_time",
   "raw_time",
@@ -2000,6 +2002,17 @@ async function loadScdfeLogs(refreshContent = true) {
     const data = await api("/api/scdfe_c/logs?record=" + encodeURIComponent(logs.record));
     if (request !== logs.request) return;
     logs.files = data.items;
+    $("#log-record").value = logs.record;
+    $("#log-direction").disabled = logs.record === "runtime";
+    if (logs.record === "runtime") $("#log-direction").value = "";
+    logs.recordingEnabled = null;
+    const processFilter = logProcessFilter();
+    if (logs.record === "packet" && processFilter.rtu_id) {
+      const policyParams = new URLSearchParams({ record: "packet", rtu_id: processFilter.rtu_id });
+      const policy = await api("/api/scdfe_c/logs?" + policyParams);
+      if (request !== logs.request) return;
+      logs.recordingEnabled = policy.recording_enabled ?? null;
+    }
     const selected = $("#log-process").value;
     const processes = [...new Set(data.items.map((item) => item.process))];
     if (selected && !processes.includes(selected)) processes.push(selected);
@@ -2024,8 +2037,7 @@ async function loadScdfeLogs(refreshContent = true) {
       processMenu.value = selected;
     }
     $("#log-directory").textContent = (logs.record === "packet" ? "报文目录：" : "运行日志目录：") + data.directory;
-    $("#log-files-label").textContent = logs.record === "packet" ? "报文日志文件" : "运行日志文件";
-    $("#logs-panel h1").textContent = logs.record === "packet" ? "报文日志" : "运行日志";
+    $("#log-status").textContent = "目录已更新 · " + new Date().toLocaleTimeString();
     showError("#logs-error", null);
     await filterLogs(true, refreshContent);
     markUpdated();
@@ -2037,8 +2049,10 @@ async function loadScdfeLogs(refreshContent = true) {
 }
 async function filterLogs(refresh = false, refreshContent = true) {
   const filters = Object.entries(logProcessFilter());
+  const fileQuery = $("#log-file-query")?.value.trim().toLowerCase() || "";
   logs.filtered = logs.files.filter(
-    (item) => filters.every(([key, value]) => String(item[key] ?? "") === value),
+    (item) => filters.every(([key, value]) => String(item[key] ?? "") === value)
+      && (!fileQuery || item.name.split("/").pop().toLowerCase().includes(fileQuery)),
   );
   if (logs.offset >= logs.filtered.length) logs.offset = 0;
   let selected = logs.filtered.find((item) => item.name === logs.selected);
@@ -2056,20 +2070,32 @@ async function filterLogs(refresh = false, refreshContent = true) {
     await readLog(logs.selected, changed);
 }
 function renderLogFiles() {
-  $("#log-file-count").textContent =
-    logs.filtered.length + " / " + logs.files.length + " 个文件";
+  if ($("#log-file-count"))
+    $("#log-file-count").textContent = logs.filtered.length + " / " + logs.files.length + " 个文件";
   const page = logs.filtered.slice(logs.offset, logs.offset + 50);
   if (logs.selected !== logFilesRender.selected ||
       page.length !== logFilesRender.files.length ||
       page.some((item, index) => {
         const previous = logFilesRender.files[index];
         return item.name !== previous.name || item.process !== previous.process ||
-          item.size !== previous.size;
+          item.size !== previous.size || item.modified_at !== previous.modified_at;
       })) {
+    let empty = "暂无匹配文件";
+    if (logs.record === "packet") {
+      if (logs.recordingEnabled === false) {
+        empty = "当前通道未开启报文保存，请到“通道参数”中将“保存报文”设为“是”，并保持通信线程运行。";
+      } else if (!logs.files.length) {
+        empty = "暂无报文文件；请在“通道参数”中开启“保存报文”，通信线程产生收发报文后再刷新。";
+      } else {
+        empty = "当前筛选条件暂无报文文件，请确认对应通道已开启“保存报文”。";
+      }
+    }
     $("#scdfe-logs").innerHTML = page.length
       ? renderLogTree(page)
-      : '<div class="empty">暂无匹配文件</div>';
-    logFilesRender.files = page.map(({ name, process, size }) => ({ name, process, size }));
+      : '<div class="lb-empty">' + esc(empty) + "</div>";
+    bindLogTreeState();
+    logFilesRender.files = page.map(({ name, process, size, modified_at }) =>
+      ({ name, process, size, modified_at }));
     logFilesRender.selected = logs.selected;
   }
   $("#log-page").textContent =
@@ -2090,12 +2116,12 @@ $("#scdfe-logs").onclick = (event) => {
   readLog(logs.selected, true);
 };
 function logTreeDirectoryLabel(name, depth) {
-  const suffix = ["年", "月", "日", "时"][depth] || "";
+  const suffix = [" 年", " 月", " 日", " 时"][depth] || "";
   return suffix ? name + suffix : name;
 }
 function logTreeFile(item) {
   return (
-    '<button class="log-file' +
+    '<button class="lb-file' +
     (item.name === logs.selected ? " selected" : "") +
     '" data-log-name="' +
     esc(item.name) +
@@ -2103,9 +2129,9 @@ function logTreeFile(item) {
     (item.name === logs.selected) +
     '" role="treeitem"><strong>' +
     esc(processLabel(item.process)) +
-    '</strong><span class="log-file-size">' +
+    '</strong><small>' +
     esc(fmtSize(item.size)) +
-    "</span></button>"
+    "</small></button>"
   );
 }
 function renderLogTree(items) {
@@ -2117,7 +2143,7 @@ function renderLogTree(items) {
     node.count += 1;
     parts.forEach((part, depth) => {
       if (!node.children.has(part))
-        node.children.set(part, { name: part, depth, children: new Map(), files: [], count: 0 });
+        node.children.set(part, { name: part, depth, path: [...(node.path || []), part], children: new Map(), files: [], count: 0 });
       node = node.children.get(part);
       node.count += 1;
     });
@@ -2125,15 +2151,17 @@ function renderLogTree(items) {
   }
   function renderNode(node) {
     const groups = [...node.children.values()]
-      .map((child) =>
-        '<details class="log-tree-group" open><summary role="treeitem">' +
-        '<span class="log-tree-folder" aria-hidden="true"></span><strong>' +
-        esc(logTreeDirectoryLabel(child.name, child.depth)) +
-        '</strong><small>' + child.count + ' 个文件</small></summary>' +
-        '<div class="log-tree-children" role="group">' +
-        renderNode(child) +
-        '</div></details>',
-      )
+      .map((child) => {
+        const key = child.path.join("/");
+        return '<details class="lb-group" data-key="' + esc(key) + '"' +
+          (logTreeClosed.has(key) ? "" : " open") +
+          '><summary role="treeitem"><strong>' +
+          esc(logTreeDirectoryLabel(child.name, child.depth)) +
+          '</strong><small>' + child.count + ' 个文件</small></summary>' +
+          '<div class="lb-children" role="group">' +
+          renderNode(child) +
+          '</div></details>';
+      })
       .join("");
     return (
       groups +
@@ -2142,10 +2170,20 @@ function renderLogTree(items) {
   }
   return renderNode(root);
 }
+function bindLogTreeState() {
+  $("#scdfe-logs").querySelectorAll("details[data-key]").forEach((detail) => {
+    detail.addEventListener("toggle", () => {
+      if (detail.open) logTreeClosed.delete(detail.dataset.key);
+      else logTreeClosed.add(detail.dataset.key);
+    });
+  });
+}
 function logSearchParams(filename) {
   const params = new URLSearchParams({ limit: $("#log-tail").value, ...logProcessFilter() });
   params.set("record", logs.record);
-  for (const [id, key] of [["log-search", "q"], ["log-level", "level"]]) {
+  for (const [id, key] of [["log-search", "q"], ["log-level", "level"],
+    ["log-direction", "direction"], ["log-channel", "channel_id"],
+    ["log-file-query", "file_query"]]) {
     const value = $("#" + id).value.trim();
     if (value) params.set(key, value);
   }
@@ -2171,7 +2209,7 @@ function resetLogContent(message) {
   logs.nextCursor = null;
   logs.resultKey = null;
   logContentRender.rows = [];
-  $("#scdfe-log-content").innerHTML = '<div class="log-empty">' + esc(message) + '</div>';
+  $("#scdfe-log-content").innerHTML = '<div class="lb-empty">' + esc(message) + '</div>';
 }
 async function readLog(filename = logs.selected, changed = false, cursor = null, history = []) {
   clearTimeout(logs.searchTimer);
@@ -2251,14 +2289,14 @@ function renderLogContent(changed = false) {
   const content = $("#scdfe-log-content"), scroll = content.scrollTop;
   const allFiles = $("#log-scope").value === "all";
   const rows = logs.entries.map((entry, index) =>
-    '<div class="log-line ' + esc(entry.level.toLowerCase()) + '"><span class="line-no">' + (index + 1) +
-    '</span><span class="line-text">' + highlight(entry.text, query) +
-    (allFiles ? '<small class="log-source">' + esc(entry.filename) + '</small>' : '') + '</span></div>',
+    '<div class="lb-line ' + esc(entry.level) + '"><span class="lb-line-no">' + (index + 1) +
+    '</span><span class="lb-line-text">' + highlight(entry.text, query) +
+    (allFiles ? '<small class="lb-source">' + esc(entry.filename) + '</small>' : '') + '</span></div>',
   );
-  reconcileBody(content, rows.length ? rows : ['<div class="log-empty">' + (logs.nextCursor
+  reconcileBody(content, rows.length ? rows : ['<div class="lb-empty">' + (logs.nextCursor
     ? "本批无匹配日志"
     : "没有匹配的日志") + '</div>'], logContentRender);
-  content.classList.toggle("wrap", $("#log-wrap").checked);
+  content.classList.toggle("lb-wrap", $("#log-wrap").checked);
   $("#log-lines").textContent = "本批匹配 " + logs.entries.length + " 条" + (logs.meta?.skipped_lines ? " · 已跳过超长日志行" : "");
   $("#log-search-info").textContent = logs.nextCursor
     ? "还有更早日志"
@@ -2397,11 +2435,14 @@ $("#thread-next").onclick = () => {
   loadScdfe();
 };
 $("#logs-refresh").onclick = () => loadScdfeLogs(true);
-document.querySelectorAll(".log-record-tab").forEach((tab) => {
+document.querySelectorAll(".lb-record-tab").forEach((tab) => {
   tab.onclick = () => {
     const record = tab.dataset.record;
     if (!record || record === logs.record || logs.loading) return;
     logs.record = record;
+    $("#log-direction").disabled = logs.record === "runtime";
+    if (logs.record === "runtime") $("#log-direction").value = "";
+    logs.recordingEnabled = null;
     logs.files = [];
     logs.filtered = [];
     logs.selected = "";
@@ -2411,12 +2452,16 @@ document.querySelectorAll(".log-record-tab").forEach((tab) => {
     logs.nextCursor = null;
     logFilesRender.files = [];
     logFilesRender.selected = null;
-    document.querySelectorAll(".log-record-tab").forEach((node) =>
+    document.querySelectorAll(".lb-record-tab").forEach((node) =>
       node.setAttribute("aria-selected", String(node.dataset.record === logs.record)));
     resetLogContent("正在读取日志文件列表…");
     loadScdfeLogs(true);
   };
 });
+$("#log-record").onchange = () => {
+  const tab = document.querySelector('.lb-record-tab[data-record="' + $("#log-record").value + '"]');
+  if (tab) tab.click();
+};
 $("#log-scope").onchange = () => readLog(logs.selected, true);
 $("#log-process").onchange = () => {
   logs.offset = 0;
@@ -2431,13 +2476,15 @@ $("#log-next").onclick = () => {
   renderLogFiles();
 };
 function clearLogConditions() {
-  for (const id of ["log-search", "log-level", "log-start", "log-end"]) $("#" + id).value = "";
+  for (const id of ["log-search", "log-level", "log-direction", "log-channel", "log-file-query", "log-start", "log-end"])
+    $("#" + id).value = "";
 }
 $("#log-search").oninput = () => {
   clearTimeout(logs.searchTimer);
   logs.searchTimer = setTimeout(() => readLog(logs.selected, true), 300);
 };
-for (const id of ["log-level", "log-start", "log-end", "log-tail"])
+$("#log-file-query").oninput = debounce(() => { logs.offset = 0; filterLogs(); }, 250);
+for (const id of ["log-level", "log-direction", "log-channel", "log-start", "log-end", "log-tail"])
   $("#" + id).onchange = () => readLog(logs.selected, true);
 $("#log-search").onkeydown = (event) => { if (event.key === "Enter") readLog(logs.selected, true); };
 $("#log-apply").onclick = () => readLog(logs.selected, true);
@@ -2454,7 +2501,7 @@ $("#log-result-prev").onclick = () => {
 };
 $("#log-wrap").onchange = () => {
   const content = $("#scdfe-log-content"), scroll = content.scrollTop;
-  content.classList.toggle("wrap", $("#log-wrap").checked);
+  content.classList.toggle("lb-wrap", $("#log-wrap").checked);
   content.scrollTop = $("#log-follow").checked ? content.scrollHeight : scroll;
 };
 $("#log-follow").onchange = () => {
@@ -2562,18 +2609,23 @@ $("#show-schema").onclick = () => {
 $("#close-schema").onclick = () => $("#schema-dialog").close();
 setInterval(() => {
   if (
-    !$("#auto-refresh").checked ||
     document.hidden ||
     document.querySelector("dialog[open]") ||
     state.saving
   )
     return;
+  // Log and packet directories are external file state. Keep their catalogue
+  // live whenever the log page is open, even if the general data refresh
+  // toggle is disabled; the reader preserves the current selection/filter.
+  if (state.resource === "logs") {
+    if (!logs.loading && !logs.contentLoading) loadScdfeLogs(true);
+    return;
+  }
+  if (!$("#auto-refresh").checked) return;
   if (state.resource === "processes") {
     if (!processMonitor.loading) loadProcesses();
   } else if (state.resource === "scdfe") {
     if (!monitor.loading) loadScdfe();
-  } else if (state.resource === "logs") {
-    if (!logs.loading && !logs.contentLoading) loadScdfeLogs(false);
   } else if (!state.loading) loadRows();
 }, 5000);
 boot();

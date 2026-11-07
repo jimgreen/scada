@@ -46,7 +46,7 @@
     const processes = [...new Set(files.map((file) => file.process))].sort((a, b) =>
       a.localeCompare(b, undefined, {numeric: true}));
     if (value && !processes.includes(value)) processes.push(value);
-    const options = '<option value="">全部' + (module === "s" ? "服务" : "通道") + "</option>"
+    const options = '<option value="">全部进程</option>'
       + processes.map((name) => '<option value="' + esc(name) + '">' + esc(processName(name)) + "</option>").join("");
     if (options !== processOptions) { $("process").innerHTML = options; processOptions = options; }
     $("process").value = value;
@@ -57,7 +57,7 @@
     filePage = Math.min(filePage, Math.max(0, Math.ceil(all.length / PAGE_SIZE) - 1));
     const page = all.slice(filePage * PAGE_SIZE, (filePage + 1) * PAGE_SIZE);
     const signature = JSON.stringify([filePage, all.length, selected,
-      page.map((f) => [f.name, f.hour, f.process, f.size])]);
+      page.map((f) => [f.name, f.hour, f.process, f.size, f.modified_at])]);
     // A quiet follow refresh must leave the actual buttons and focus in place.
     if (signature === renderedTree) return;
     renderedTree = signature;
@@ -83,13 +83,16 @@
         + group.files.map((file) => '<button class="lb-file" data-file="' + esc(file.name)
           + '" title="' + esc(file.name) + '" aria-label="' + esc(file.name)
           + '" aria-pressed="' + (selected === file.name) + '"><strong>'
-          + esc(processName(file.process)) + '.log</strong><small>' + size(file.size) + "</small></button>").join("")
+          + esc(processName(file.process)) + '</strong><small>' + size(file.size) + "</small></button>").join("")
         + "</div></details>").join("");
     }
     const tree = $("tree"), scroll = tree.scrollTop;
     const focus = tree.contains(document.activeElement) ? document.activeElement : null;
     const focusFile = focus?.dataset.file, focusGroup = focus?.parentElement.dataset.key;
-    tree.innerHTML = all.length ? groups(root) : '<div class="lb-empty">暂无匹配的日志文件</div>';
+    const empty = activeRecord === "packet"
+      ? "暂无报文文件；请在“通道参数”中开启“保存报文”，通信线程产生收发报文后再刷新。"
+      : "暂无匹配的日志文件";
+    tree.innerHTML = all.length ? groups(root) : '<div class="lb-empty">' + empty + '</div>';
     tree.querySelectorAll("details").forEach((detail) => detail.addEventListener("toggle", () => {
       if (detail.open) closed.delete(detail.dataset.key);
       else closed.add(detail.dataset.key);
@@ -156,8 +159,8 @@
       params.set("filename", selected);
     }
     for (const [id, key] of [["process", "process"], ["file-query", "file_query"],
-      ["keyword", "q"], ["direction", "direction"],
-      ["level", "level"], ["limit", "limit"]]) {
+      ["keyword", "q"], ["direction", "direction"], ["level", "level"],
+      ["channel", "channel_id"], ["limit", "limit"]]) {
       const value = $(id).value.trim();
       if (!value) continue;
       if (module === "t" && key === "process" && /^scdfe_t-channel-([1-9]\d*)$/.test(value)) {
@@ -166,9 +169,16 @@
     }
     params.set("record", activeRecord);
     if ($("channel")?.value.trim()) params.set("channel_id", $("channel").value.trim());
+    const selectedDate = /-(\d{8})-\d{2}\.log$/.exec(selected || "")?.[1];
     for (const key of ["start", "end"]) {
       if (!$(key).validity.valid) throw new Error("请输入有效的开始和结束时间");
-      if ($(key).value) params.set(key, new Date($(key).value).toISOString());
+      if (!$(key).value) continue;
+      if (!selectedDate) throw new Error("请先选择日志文件");
+      const value = $(key).value;
+      const date = selectedDate.slice(0, 4) + "-" + selectedDate.slice(4, 6) + "-" + selectedDate.slice(6, 8);
+      const parsed = new Date(date + "T" + value);
+      if (!Number.isFinite(parsed.valueOf())) throw new Error("请输入有效的开始和结束时间");
+      params.set(key, parsed.toISOString());
     }
     if (params.has("start") && params.has("end") && params.get("start") > params.get("end"))
       throw new Error("开始时间不能晚于结束时间");
@@ -297,9 +307,10 @@
   }
   $("channel")?.addEventListener("input", () => resetSearch(250));
   $("keyword").addEventListener("input", () => resetSearch(250));
+  $("apply").addEventListener("click", () => search());
   $("clear").addEventListener("click", () => {
     $("record").value = activeRecord;
-    for (const id of ["direction", "level", "keyword", "start", "end"]) $(id).value = "";
+    for (const id of ["direction", "level", "channel", "keyword", "start", "end"]) $(id).value = "";
     $("direction").disabled = activeRecord === "runtime";
     if ($("channel")) $("channel").value = "";
     resetSearch();
@@ -335,6 +346,11 @@
   }
   $("record").value = activeRecord;
   $("direction").disabled = true;
-  setInterval(() => { if (!document.hidden && $("follow").checked) refresh(true); }, 5000);
+  // The file catalogue is live state, independent of the reader's "follow
+  // latest" option.  Poll while this page is visible so a newly rotated
+  // hourly file (or a growing runtime/packet file) appears without a manual
+  // refresh.  `refresh` preserves the selected file and filters when follow
+  // is off; with follow on it advances to the newest hour for that process.
+  setInterval(() => { if (!document.hidden) refresh(true); }, 5000);
   refresh();
 })();

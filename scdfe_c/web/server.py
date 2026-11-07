@@ -21,6 +21,7 @@ else:
 from core.process_registry import PROCESS_TABLE, process_is_alive
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core.web_workbench import ASSET_DIR
 from scdfe_c.web.process_control import ProcessController
 
 
@@ -313,8 +314,20 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                             expected = query[key]
                         items = [item for item in items if item.get(key) == expected]
                 active_directory = packet_directory if record == "packet" else directory
+                # Expose the per-channel policy when the caller is looking at
+                # one RTU.  An empty packet directory is otherwise ambiguous:
+                # it can mean either that the channel has not communicated or
+                # that the operator intentionally left packet recording off.
+                recording_enabled = None
+                if record == "packet" and "rtu_id" in query:
+                    try:
+                        rtu_row = self.store.get_row("fes_rtu_define", [expected])
+                        recording_enabled = bool(rtu_row.get("packet_recording"))
+                    except ApiError:
+                        recording_enabled = False
                 return self._json(200, {"items": items, "total": len(items),
-                                        "directory": str(active_directory), "record": record})
+                                       "directory": str(active_directory), "record": record,
+                                       "recording_enabled": recording_enabled})
             if len(parts) >= 4 and method == "GET":
                 try:
                     tail = int(query.pop("tail", "200")) if "tail" in query else 200
@@ -510,10 +523,12 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _static(self, name):
         allowed = {"index.html": "text/html", "api.html": "text/html",
-                   "app.css": "text/css", "app.js": "application/javascript"}
-        if name not in allowed or not (STATIC_DIR / name).is_file():
+                   "app.css": "text/css", "app.js": "application/javascript",
+                   "log-browser.css": "text/css"}
+        path = ASSET_DIR / name if name == "log-browser.css" else STATIC_DIR / name
+        if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        self._send(200, allowed[name] + "; charset=utf-8", (STATIC_DIR / name).read_bytes())
+        self._send(200, allowed[name] + "; charset=utf-8", path.read_bytes())
 
 
 class ScadaHTTPServer(ThreadingHTTPServer):

@@ -14,8 +14,8 @@ body[data-log-module] .workbench-content { display:flex; flex-direction:column; 
 .log-browser .lb-file-search { flex:1; min-width:200px; }
 .log-browser .lb-file-search input { width:100%; }
 .log-browser .lb-check { white-space:nowrap; }
-.log-browser #lb-status { font-size:11px; color:#778899; }
-.log-browser #lb-status.lb-error { color:#b83340; }
+.log-browser #lb-status,.log-browser #log-status { font-size:11px; color:#778899; }
+.log-browser #lb-status.lb-error,.log-browser #log-status.lb-error { color:#b83340; }
 .log-browser .lb-workspace { display:grid; grid-template-columns:265px minmax(0,1fr); gap:12px; flex:1; min-height:0; }
 .log-browser .lb-files { display:flex; flex-direction:column; min-height:0; border:1px solid #dfe6ed; border-radius:6px; background:white; overflow:hidden; }
 .log-browser .lb-panel-label { padding:12px; display:flex; align-items:center; justify-content:space-between; gap:8px; background:#f5f8fa; border-bottom:1px solid #dfe6ed; }

@@ -848,6 +848,16 @@ tbody tr:hover .sticky-actions {
 #logs-panel {
   padding-bottom: 8px;
 }
+.log-page-heading h1 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--ink, #20333d);
+}
+.log-page-heading p {
+  margin: 4px 0 12px;
+  color: var(--muted, #627b88);
+  font-size: 12px;
+}
 .log-workspace {
   display: grid;
   grid-template-columns: 285px minmax(0, 1fr);

@@ -182,7 +182,7 @@ def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None, i
 def search_logs(directory, query, *, family="c", packet_directory=None):
     pattern = LOG_PATTERNS[family]
     allowed = {"q", "level", "start", "end", "process", "rtu_id", "filename", "file_query", "limit", "cursor", "record", "direction"}
-    if family == "s":
+    if family in {"c", "s"}:
         allowed.add("channel_id")
     if set(query) - allowed:
         raise ValueError("未知日志检索参数")
