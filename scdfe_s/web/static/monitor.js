@@ -32,7 +32,7 @@
         const action = x.running ? "stop" : "start";
         return `<tr><td>${esc(x.label)}</td><td>${x.running ? "运行中" : "已停止"}</td><td>${esc(s.rtu_id || s.config && s.config.effective_rtu_id || "")}</td><td>${esc(s.started_at || "")}</td><td>${esc(s.last_error || "")}</td><td><button data-service="${esc(x.name)}" data-action="${action}">${action === "start" ? "启动" : "停止"}</button> <a href="/communication">通信</a></td></tr>`;
       }).join("") || `<tr><td colspan="6">暂无服务</td></tr>`);
-      msg("已更新 " + new Date().toLocaleTimeString());
+      msg("");
     } catch (e) { msg(e.message, true); }
   }
   async function loadCommunications() {
@@ -40,7 +40,7 @@
       const data = await fetchView("/api/monitor/communications");
       if (!data) return;
       show("#cards", data.items.map(x => `<section class="card"><h2>${esc(x.label)}</h2><div class="status-grid"><div class="metric"><b>${x.running ? "运行中" : "停止"}</b><span>状态</span></div><div class="metric"><b>${esc(x.open_connections || 0)}</b><span>连接</span></div><div class="metric"><b>${esc(x.point_count || 0)}</b><span>测点</span></div></div><p class="muted">${esc(x.last_error || "无错误")}</p><button data-service="${esc(x.name)}" data-action="${x.running ? "stop" : "start"}">${x.running ? "停止" : "启动"}</button> <a href="/${esc(x.name)}">打开通道页面</a></section>`).join(""));
-      msg("已更新 " + new Date().toLocaleTimeString());
+      msg("");
     } catch (e) { msg(e.message, true); }
   }
   async function loadLogs() {
@@ -50,12 +50,12 @@
       const data = await fetchView("/api/monitor/logs?" + query.toString());
       if (!data) return;
       show("#log-list", data.items.map(x => `<div class="${esc(x.level)}">[${esc(x.time)}] [${esc(x.service)}] ${esc(x.message)}</div>`).join("") || "暂无日志");
-      msg("已更新 " + new Date().toLocaleTimeString());
+      msg("");
     } catch (e) { msg(e.message, true); }
   }
   async function action(button) {
     button.disabled = true;
-    try { await api(`/api/monitor/communications/${encodeURIComponent(button.dataset.service)}/${button.dataset.action}`, {method:"POST", body:"{}"}); msg("操作已完成"); await (document.body.dataset.monitor === "processes" ? loadProcesses() : loadCommunications()); }
+    try { await api(`/api/monitor/communications/${encodeURIComponent(button.dataset.service)}/${button.dataset.action}`, {method:"POST", body:"{}"}); await (document.body.dataset.monitor === "processes" ? loadProcesses() : loadCommunications()); msg("操作已完成"); }
     catch (e) { msg(e.message, true); } finally { button.disabled = false; }
   }
   if (document.body.dataset.monitor) {

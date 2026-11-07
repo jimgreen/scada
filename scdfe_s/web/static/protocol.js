@@ -171,14 +171,14 @@ function protocolForm(form) {
       if ($("#logs") && l) renderLogs(l.items, "#logs");
       if ($("#alerts") && a) renderLogs(a.items, "#alerts");
       cfg.fields.forEach(name => field(name, s.item.config[name]));
-      message("已更新 " + new Date().toLocaleTimeString());
+      message("");
     }, e => message(e.message, true), background === true);
   }
-  $("#config-form").onsubmit = async (e) => { e.preventDefault(); const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await form.save(() => api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)})); await load(); message("配置已保存"); } catch (err) { message(err.message, true); } };
-  $("#start").onclick = async () => { try { await api(`/api/${cfg.slug}/start`, {method:"POST", body:"{}"}); message("服务已启动"); await load(); } catch(e) { message(e.message, true); } };
-  $("#stop").onclick = async () => { try { await api(`/api/${cfg.slug}/stop`, {method:"POST", body:"{}"}); message("服务已停止"); await load(); } catch(e) { message(e.message, true); } };
+  $("#config-form").onsubmit = async (e) => { e.preventDefault(); const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await form.save(() => api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)})); await load(true); message("配置已保存"); } catch (err) { message(err.message, true); } };
+  $("#start").onclick = async () => { try { await api(`/api/${cfg.slug}/start`, {method:"POST", body:"{}"}); await load(true); message("服务已启动"); } catch(e) { message(e.message, true); } };
+  $("#stop").onclick = async () => { try { await api(`/api/${cfg.slug}/stop`, {method:"POST", body:"{}"}); await load(true); message("服务已停止"); } catch(e) { message(e.message, true); } };
   $("#refresh").onclick = load;
-  $("#poll").onclick = async () => { try { const result = await api(`/api/${cfg.slug}/poll`, {method:"POST", body:"{}"}); await load(); message("采集完成 " + (result.item.count ?? 0) + " 个值"); } catch (e) { message(e.message, true); } };
+  $("#poll").onclick = async () => { try { const result = await api(`/api/${cfg.slug}/poll`, {method:"POST", body:"{}"}); await load(true); message("采集完成 " + (result.item.count ?? 0) + " 个值"); } catch (e) { message(e.message, true); } };
   // Use one delegated handler for all four-remote tables.  The fallback keeps
   // the handler compatible with compact DOMs that expose only the YC body.
   const pointRoot = document.querySelector("[data-point-panels]") || $("#points");

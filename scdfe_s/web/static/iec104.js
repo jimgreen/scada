@@ -93,7 +93,7 @@
         const input = $("#" + id);
         if (form.editableFromServer(input)) input.value = value ?? "";
       }
-      message("已更新 " + new Date().toLocaleTimeString());
+      message("");
     }, error => message(error.message,true), background === true);
   }
   $("#config-form").onsubmit = async event => {
@@ -104,14 +104,14 @@
         rtu_id:$("#rtu-id").value ? keyValue($("#rtu-id").value) : null,
         max_connections:Number($("#max-connections").value), tick_rate_ms:Number($("#tick-rate").value),
       })}));
-      await load();
+      await load(true);
       message("配置已保存");
     } catch (error) { message(error.message,true); }
   };
   for (const action of ["start","stop"]) $("#" + action).onclick = async () => {
     try {
       await api("/api/iec104/" + action, {method:"POST", body:"{}"});
-      await load();
+      await load(true);
       message(action === "start" ? "服务已启动" : "服务已停止");
     } catch (error) { message(error.message,true); }
   };
@@ -131,7 +131,7 @@
         method:"PATCH", headers, body:JSON.stringify({value, status})
       });
       closePointEditor();
-      await load();
+      await load(true);
       message("点值已更新");
     } catch (error) { message(error.message,true); }
   };
@@ -139,7 +139,7 @@
   $("#full-update").onclick = async () => {
     try {
       await api("/api/iec104/update/full", {method:"POST", body:JSON.stringify({values:{}})});
-      await load();
+      await load(true);
       message("已执行全量更新");
     } catch (error) { message(error.message,true); }
   };
