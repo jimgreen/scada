@@ -24,7 +24,7 @@ table{width:100%;border-collapse:collapse;font-size:.92rem;line-height:1.58;marg
 </style></head><body>
 <a class="skip" href="#main">跳至正文</a>
 <div class="wrap"><aside class="side"><header><div class="over">SCADA / SCDFE</div><strong>手册目录</strong></header><nav aria-label="手册目录">
-<a href="#architecture"><span>00</span>先选对服务</a><a href="#install"><span>↳</span>运行准备</a><a href="#c"><span>01</span>scdfe_c · 现场采集</a><a href="#s"><span>02</span>scdfe_s · 规约测试</a><a href="#t"><span>03</span>scdfe_t · 四遥转发</a><a href="#workflow"><span>04</span>三端联调实例</a><a href="#logs"><span>05</span>报文保存与检索</a><a href="#protocols"><span>06</span>通信规约与增删改查</a><a href="#external-commands"><span>07</span>外部应用下发指令</a><a href="#api"><span>A</span>只读接口速查</a><a href="#trouble"><span>B</span>故障定位</a>
+<a href="#architecture"><span>00</span>先选对服务</a><a href="#install"><span>↳</span>运行准备</a><a href="#operations"><span>↳</span>通用操作细节</a><a href="#c"><span>01</span>scdfe_c · 现场采集</a><a href="#s"><span>02</span>scdfe_s · 规约测试</a><a href="#t"><span>03</span>scdfe_t · 四遥转发</a><a href="#workflow"><span>04</span>三端联调实例</a><a href="#logs"><span>05</span>报文保存与检索</a><a href="#protocols"><span>06</span>通信规约与增删改查</a><a href="#external-commands"><span>07</span>外部应用下发指令</a><a href="#api"><span>A</span>只读接口速查</a><a href="#trouble"><span>B</span>故障定位</a>
 </nav><div class="tools"><span>单文件离线版</span><button id="print" type="button" hidden>打印手册</button></div></aside><main id="main">
 <header class="hero"><div class="over">SCADA · 操作手册 / 2026.11</div><h1>SCDFE 功能与使用说明</h1><p>从一次数据采集出发，分别说明如何模拟源站、检查四遥点、配置转发通道，以及怎样用收发报文确认数据到了哪一端。</p><div class="meta"><span>数据库布局：S 独立，C/T 共用</span><span>手册更新 2026-11-07</span><span>默认 Web 端口 8877 / 8878 / 8879</span></div></header>
 <section class="sheet " id="architecture"><div class="over">00 / 导览</div><h2>先选对服务</h2>
@@ -50,6 +50,43 @@ python -m venv .venv
 # T：转发管理
 .\.venv\Scripts\python.exe -B -m scdfe_t.web.server --host 127.0.0.1 --port 8879 --db db/scada.sqlite3</code></pre><p>逐个打开 <code>/api/health</code>，确认 <code>status</code> 为 <code>ok</code>，并核对 <code>database</code> 的绝对路径。8877（C）和 8879（T）应返回同一业务库，8878（S）应返回另一个文件和 <code>database_role: simulator</code>。S 的 Web 和独立规约命令均默认使用 <code>db/scdfe_s.sqlite3</code>；误把 <code>--db</code> 指向业务库会拒绝启动。Linux 从仓库根目录运行相同模块，将解释器替换为 <code>.venv/bin/python</code>。</p><p class="note"><b>区分两类端口：</b>8877–8879 提供管理页面；IEC 104、Modbus 等规约端口由通道配置。Web 可访问只证明页面服务正常，不代表采集线程或转发通道已经启动。</p>
 <a class="back" href="#architecture">返回导览 ↑</a></section>
+
+<section class="sheet" id="operations"><div class="over">使用 / 通用操作</div><h2>通用操作细节：每次改动都可追溯</h2>
+<p>三套 Web 的按钮名称略有不同，但后台处理遵循同一条路径：先选服务和数据库，再选 RTU、通道和点，保存后核对接口返回，最后观察进程、通信和日志。只刷新页面只能证明页面重新读到了数据，不能证明规约已经连通或设备已经执行。</p>
+<h3>0.1　操作前先记下四个编号</h3>
+<table><thead><tr><th>编号</th><th>含义</th><th>在哪里看</th><th>常见错误</th></tr></thead><tbody>
+<tr><td>RTU 编号</td><td>站点定义及四遥点的业务主键。</td><td>“RTU 与通道”列表、四遥页的 RTU 选择器。</td><td>把协议从站号或 IEC 公共地址当成 RTU 编号。</td></tr>
+<tr><td>通道编号</td><td>连接、进程所有权和报文保存策略的对象。</td><td>RTU 行的通道列、通信监控和日志筛选器。</td><td>只改 RTU 行，没有改通道参数或开关。</td></tr>
+<tr><td>点号</td><td>YC、YX、YK、YT 在系统中的业务点号。</td><td>对应四遥页的点号列。</td><td>把业务点号直接当寄存器地址、IOA 或 CAN 位偏移。</td></tr>
+<tr><td>规约地址</td><td>设备侧寄存器、IOA、对象实例或 CAN 帧字段。</td><td>规约辅助表、协议参数或点映射表。</td><td>地址基准、功能码、字节序或比例偏移填错。</td></tbody></table>
+<p class="note">测试记录建议写成“C / RTU 37101 / 通道 38101 / YC 1 / Modbus TCP 地址 0”。S 与 C 可以使用相同编号，但属于不同数据库；T 还要记录源点和目标点。</p>
+<h3>0.2　新增、修改、查询、删除的固定顺序</h3>
+<ol class="steps"><li><b>查询范围。</b>确认服务地址和数据库路径，再用 RTU 或通道筛选。没有查到目标时先检查编号，不要立即新增同名记录。</li><li><b>新增定义。</b>先保存 RTU/通道，再保存协议参数，最后保存四遥点和映射。每一步刷新确认主键与输入一致。</li><li><b>修改定义。</b>先停止占用通道的协议进程；修改后重新读取详情，确认新值落库，再启动并做最小采集。</li><li><b>查询运行结果。</b>同时看四遥值、更新时间/质量、通信监控和日志，四个视图都指向同一对象才算完整核对。</li><li><b>删除定义。</b>先停进程，再看删除预览及关联数量；删除后复查 RTU、点表、T 映射和日志索引。只是暂时不用时改禁用状态。</li></ol>
+<h3>0.3　后台数据流：保存、启动、采集和转发</h3>
+<table><thead><tr><th>阶段</th><th>前端动作</th><th>后台处理</th><th>应核对的证据</th></tr></thead><tbody>
+<tr><td>定义保存</td><td>填写表单并保存。</td><td>Web 校验字段/主键 → SQLite 事务写入定义表 → 返回保存行。</td><td>HTTP 状态、返回主键、重新查询后的字段。</td></tr>
+<tr><td>进程启动</td><td>进程监控点击启动。</td><td>写控制请求 → 守护/服务进程领取 → 登记 PID、状态和心跳。</td><td>运行状态、PID 存在、心跳持续。</td></tr>
+<tr><td>规约采集</td><td>单次采集或等待周期。</td><td>通信线程读定义 → 适配器收发 → 解码/比例偏移 → 批量写四遥表。</td><td>成功次数、点值、时间戳、质量、RX 报文。</td></tr>
+<tr><td>转发输出</td><td>T 启动映射通道，远方主站读取。</td><td>T 读源点 → 按映射转换 → 协议栈输出；命令反向进入 C 写库流程。</td><td>源点、映射点、目标读数、TX/RX 报文。</td></tbody></table>
+<h3>0.4　状态判断与排障顺序</h3>
+<p>“已保存”只说明定义事务成功；“运行”只说明服务线程存在；“已连接”才表示连接建立；四遥更新时间前进才表示有新数据；命令处理时间追上提交时间且独立反馈变化，才表示命令完成。</p>
+<table><thead><tr><th>现象</th><th>先看什么</th><th>下一步</th></tr></thead><tbody>
+<tr><td>保存成功但值不变</td><td>通信监控状态和点定义。</td><td>确认进程已重载定义、地址映射正确，再做单次采集。</td></tr>
+<tr><td>进程运行但无新值</td><td>连接错误、超时、最近日志。</td><td>核对地址、端口、串口参数、站号和防火墙，不要反复启动。</td></tr>
+<tr><td>值变化但 T 不变</td><td>T 的源 RTU/点号和映射启用状态。</td><td>先读 T 源点，再读目标点；不一致时查映射和 T 进程。</td></tr>
+<tr><td>命令提交但设备未动作</td><td><code>cmd_time</code>、<code>cmd_handle_time</code>、状态和发送日志。</td><td>确认线程下发，再读独立反馈点，不能用命令表 value 代替反馈。</td></tbody></table>
+<h3>0.5　按通道保存和检索报文</h3>
+<ol class="steps"><li>在目标服务通道页找到具体通道，打开“报文保存”，确认状态开启；该开关只影响这一通道。</li><li>触发单次采集、源值变化或一次命令，记下时间、方向和点号。</li><li>进入运行日志，按年月日小时展开，选择对应通道文件；记录类型选“报文”，方向选 RX/TX，再按 RTU、点号或协议关键词筛选。</li><li>验证后关闭保存。开关只影响后续文件写入，已有日志仍可查询；高频通道长期开启会增加磁盘写入。</li></ol>
+<p class="note">日志查询只读文件，不会重新读取设备。刚开启后搜不到时，先确认动作发生在开启之后，并检查小时、通道和方向。</p>
+<h3>0.6　长时间运行、停止与恢复</h3>
+<table><thead><tr><th>时机</th><th>操作</th><th>验收标准</th></tr></thead><tbody>
+<tr><td>启动前</td><td>确认端口、数据库路径和通道定义。</td><td><code>/api/health</code> 为 ok，进程可启动。</td></tr>
+<tr><td>启动后 1 分钟</td><td>依次看进程、通信、四遥值和日志。</td><td>心跳持续、无连续错误、至少一条点时间戳前进。</td></tr>
+<tr><td>稳定运行</td><td>记录成功/失败次数和最近错误；只为故障通道保存报文。</td><td>待处理命令/写库队列不持续增长，日志按小时滚动。</td></tr>
+<tr><td>停止或重启</td><td>先停目标通道，等待线程退出和锁释放，再启动一次。</td><td>旧 PID 消失后出现新实例。</td></tr>
+<tr><td>异常恢复</td><td>保存错误时间和日志文件名，修正参数后重启。</td><td>新连接建立，采集时间恢复前进，旧错误停止增长。</td></tbody></table>
+<a class="back" href="#architecture">返回导览 ↑</a></section>
+
 <section class="sheet module" id="c"><div class="over">01 / 现场采集</div><h2>scdfe_c：采集、写库和命令下发</h2>
 <p>C 按 RTU 配置连接现场设备。自动守护进程扫描定义，为符合条件的 RTU 启动通信线程；写库进程批量提交采集数据。采集支持 IEC 104、Modbus TCP、Modbus RTU、CAN、BACnet/IP 和 OPC UA。</p><p class="route"><span class="tag">管理入口</span> <code>http://127.0.0.1:8877/</code>　左侧：进程监控 / 通信监控 / 运行日志 / 数据与定义</p><h3>1.1　让一个 RTU 开始采集</h3><ol class="steps">
 <li>在「数据与定义 → RTU 与通道」建站或选择已有 RTU，核对 RTU 编号、通道号和规约。RTU 编号用于定位源站；通道号用于连接配置和报文保存，两个编号不必相同。</li>
@@ -334,6 +371,25 @@ throw 'Still pending; inspect the worker and device. Do not resend automatically
 <p class="note"><b>示例实测：</b>从本页下载并运行三个脚本：同机 Python 向 C RTU 37101 / YK 1 发 1，独立读取 S 模拟从站线圈地址 2，结果为真；TCP Python 向 YT 1 发 26，保持寄存器地址 4 读回 26；停掉 TCP 指令服务后，Web 示例发 38，同一寄存器读回 38。错误令牌、相同编号改值和缺失／过期的 Web 点版本均被拒绝。客户端与服务在不同进程中通过本机网络连接；跨服务器的路由、防火墙、隧道及现场设备仍须在部署网络验证。</p>
 <a class="back" href="#architecture">返回导览 ↑</a></section>
 
+
+<div class="protocol" id="protocol-details"><h3>补充：各规约的最小配置与验收顺序</h3>
+<p>参数名称以页面当前字段为准，设备地址和时序以现场协议手册为准。不认识的字段先复制同规约测试通道，逐项修改并验证。</p>
+<table><thead><tr><th>规约</th><th>连接参数</th><th>点/帧参数</th><th>最小验收动作</th></tr></thead><tbody>
+<tr><td>IEC 60870-5-104</td><td>IP、TCP 端口、公共地址、<code>t1/t2/t3</code>、发送/接收窗口。</td><td>类型标识、IOA、公共地址、时标和品质位。</td><td>连接并启动传送，再总召唤；读 YC/YX，改变源值核对监视报文。</td></tr>
+<tr><td>Modbus TCP</td><td>IP、端口、Unit ID、超时和周期。</td><td>功能码 01–04、起始地址、数量、数据类型、字节序、比例和偏移。</td><td>读线圈/保持寄存器，再验证多寄存器和比例偏移，最后做 YK/YT。</td></tr>
+<tr><td>Modbus RTU</td><td>COM、波特率、数据位、校验位、停止位、单元号和超时。</td><td>同 TCP，另检查 RS-485 方向和终端。</td><td>回环或真实从站读离散量和寄存器；超时先查串口占用和 A/B 线。</td></tr>
+<tr><td>CAN / CAN FD</td><td>接口、通道、仲裁速率；CAN FD 还要核对数据速率。</td><td>帧 ID、扩展帧、帧格式、字节/位偏移、位长度、字节序和缩放。</td><td>先收一帧核对 ID，再改变位域；命令帧同时核对响应 ID 和匹配条件。</td></tr>
+<tr><td>BACnet/IP</td><td>本地/远端地址、UDP 端口、设备实例、超时和重试。</td><td>对象类型、实例号、属性、数组索引、优先级和转换。</td><td>读取对象属性，再写测试对象，确认返回值和优先级。</td></tr>
+<tr><td>OPC UA</td><td>Endpoint、超时、安全模式/策略、账号或证书。</td><td>NodeId、属性、批量大小、写入类型和状态码。</td><td>读一个 Node，再批量读取；断开重连后重复，确认句柄未跨连接复用。</td></tr></tbody></table>
+<h3>补充：定义修改后什么时候生效</h3>
+<ol class="steps"><li>保存定义不等于正在运行的线程已重载；线程通常继续使用当前内存配置。</li><li>修改连接、寻址或映射后，先停目标通道并确认旧线程退出，再启动新配置。</li><li>启动后先做最小读取，再做批量读取和命令测试；每步记录时间、RTU、通道和点号。</li><li>值正确但报文不符时，只打开目标通道报文保存，核对原始帧、解析值和比例偏移，验证后关闭。</li></ol>
+<h3>补充：规约维护的增删改查验收清单</h3>
+<table><thead><tr><th>动作</th><th>定义层检查</th><th>运行层检查</th><th>回滚方式</th></tr></thead><tbody>
+<tr><td>新增</td><td>主键唯一，必填连接参数齐全，辅助表引用存在。</td><td>启动后能连接，至少一个点有新时间戳。</td><td>停通道后删除新增定义和关联点。</td></tr>
+<tr><td>查询</td><td>按 RTU、通道、类型和点号筛选。</td><td>对照通信监控、四遥值和日志同一编号。</td><td>查询不改变运行状态。</td></tr>
+<tr><td>修改</td><td>保存前记录旧值，保存后重开详情核对。</td><td>重启通道后做最小读写，确认旧报文不再出现。</td><td>恢复记录的旧值并按同样顺序重启。</td></tr>
+<tr><td>删除</td><td>确认关联点、映射、命令和辅助表数量；先停通道。</td><td>确认进程、锁和日志查询不再引用对象。</td><td>删除前备份定义，不直接编辑 SQLite 补数据。</td></tr></tbody></table></div>
+
 <section class="sheet appendix" id="api"><div class="over">附录 A / 接口</div><h2>常用接口：先读状态，再定位数据</h2>
 <p>需要下发命令的应用请先看<a href="#external-commands">外部应用接入</a>；查收发结果见<a href="#ext-check">命令回读与排障</a>。</p><p>下面均为 GET，路径相对于本服务的 Web 地址。花括号表示需替换的真实编号或类型；示例未发送命令，也不修改配置。</p><table><thead><tr><th scope="col">服务</th><th scope="col">路径示例</th><th scope="col">确认什么</th></tr></thead><tbody>
 <tr><td>C / 8877</td><td><code>/api/processes</code><br><code>/api/rtus/{rtu_id}/points/yc/{pnt_no}</code><br><code>/api/scdfe_c/logs/search?record=packet&amp;direction=RX&amp;limit=3</code></td><td>进程、指定源点、最近的接收报文。</td></tr>
@@ -351,7 +407,7 @@ Invoke-RestMethod 'http://127.0.0.1:8879/api/log-files/search?channel_id=1&amp;r
 <tr><td>T 已启动，远方值为零或停在旧值</td><td>先读 C 的同一源 RTU、同类型、同点号，再查 T 的映射是否启用。</td><td>核对远方读的是 T 的协议端口和转发地址。IEC 104 同时检查质量码；Modbus 仅凭数值不能判定新鲜度。</td></tr>
 <tr><td>有上行，没有下行</td><td>检查 C 写库服务、目标 YK/YT 点和通信线程，区分命令提交与实际处理。</td><td>对照 cmd_time、cmd_handle_time、发送报文与对端反馈；测试时只用可回读的模拟点。</td></tr>
 <tr><td>日志为空或只有普通日志</td><td>查看该服务、该通道的实际保存状态；核对所选小时、进程和 RX/TX 方向。</td><td>开关生效后制造一次新流量，从“全部匹配文件”重查；不要用另一个服务的开关判断本端是否保存。</td></tr>
-<tr><td>修改不生效或被拒绝</td><td>先看是否选错 RTU/通道、数据库路径或编辑版本。</td><td>重新打开记录，核对当前版本；监听/映射变更后，到进程监控和通信监控确认生效，再用对端读取。</td></tr></tbody></table><p>本文按工作树版本 b386c89 的页面、运行入口和接口核对。示例是本机联调方法；真实串口、现场总线、远方主站与设备动作需在实际环境另行核对。</p>
+<tr><td>修改不生效或被拒绝</td><td>先看是否选错 RTU/通道、数据库路径或编辑版本。</td><td>重新打开记录，核对当前版本；监听/映射变更后，到进程监控和通信监控确认生效，再用对端读取。</td></tr></tbody></table><p>本文按工作树版本 fa82ede（含本页扩展内容） 的页面、运行入口和接口核对。示例是本机联调方法；真实串口、现场总线、远方主站与设备动作需在实际环境另行核对。</p>
 <a class="back" href="#architecture">返回导览 ↑</a></section>
 
 <footer class="foot">SCADA · SCDFE 操作手册　|　本文可离线阅读；示例中的本机 Web 地址仅在对应服务启动后可用。</footer></main></div>
