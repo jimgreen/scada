@@ -13,7 +13,7 @@ S_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes", "▤", "进程监控", "各协议服务的运行状态与启停"),
         ("communication.html", "/communication", "◉", "通信监控", "连接、测点数量与通道状态"),
-        ("logs.html", "/logs", "≡", "运行日志", "按年月日小时浏览文件，筛选运行日志与收发报文"),
+        ("logs.html", "/logs", "≡", "日志与报文", "按年月日小时浏览运行日志和收发报文文件"),
     ]),
     ("数据与定义", [
         ("channels.html", "/channels", "▦", "通道数据", "维护 RTU、通道和规约定义"),
@@ -36,7 +36,7 @@ T_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes.html", "▤", "进程监控", "转发进程的启停、心跳和运行状态"),
         ("communication.html", "/communication.html", "◉", "通信监控", "转发通道的监听地址与通信状态"),
-        ("logs.html", "/logs.html", "≡", "运行日志", "按年月日小时浏览文件，筛选运行日志与收发报文"),
+        ("logs.html", "/logs.html", "≡", "日志与报文", "按年月日小时浏览运行日志和收发报文文件"),
     ]),
     ("数据与定义", [
         ("channels.html", "/channels.html", "▦", "通道数据", "维护转发通道、规约和监听参数"),

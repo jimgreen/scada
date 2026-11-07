@@ -14,12 +14,27 @@
     $("#message").className = "message" + (error ? " error" : "");
   }
   let lastPoints = null;
+  let allPoints = [], activeKind = document.querySelector("[data-iec-point-tab][aria-selected='true']")?.dataset.iecPointTab || "yc";
+  function pointBody() { return document.querySelector(`[data-iec-point-panel="${activeKind}"] tbody`) || $("#points"); }
+  function setPointTab(kind) {
+    activeKind = ["yc", "yx", "yk", "yt"].includes(kind) ? kind : "yc";
+    document.querySelectorAll("[data-iec-point-tab]").forEach(tab => {
+      const active = tab.dataset.iecPointTab === activeKind;
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.tabIndex = active ? 0 : -1;
+    });
+    document.querySelectorAll("[data-iec-point-panel]").forEach(panel => { panel.hidden = panel.dataset.iecPointPanel !== activeKind; });
+    renderPoints(allPoints);
+  }
   function renderPoints(items) {
-    const body = $("#points");
-    const rows = items.map(p => [p.kind, p.pnt_no, p.io_address ?? "—", p.type_id ?? "—", p.value, p.status]
+    allPoints = items || [];
+    const body = pointBody();
+    if (!body) return;
+    const rows = allPoints.filter(p => p.kind === activeKind).map(p => [p.kind, p.pnt_no, p.io_address ?? "—", p.type_id ?? "—", p.value, p.status]
       .map(value => String(value ?? "")));
-    const sameKeys = lastPoints && rows.length === lastPoints.length &&
-      rows.every((r, i) => r[0] === lastPoints[i][0] && r[1] === lastPoints[i][1]);
+    const previous = lastPoints && lastPoints.kind === activeKind ? lastPoints.rows : null;
+    const sameKeys = previous && rows.length === previous.length &&
+      rows.every((r, i) => r[0] === previous[i][0] && r[1] === previous[i][1]);
     if (!sameKeys) {
       if (rows.length) {
         const fragment = document.createDocumentFragment();
@@ -34,25 +49,24 @@
       }
     } else {
       rows.forEach((row, i) => row.forEach((value, j) => {
-        if (value !== lastPoints[i][j]) body.rows[i].cells[j].textContent = value;
+        if (value !== previous[i][j]) body.rows[i].cells[j].textContent = value;
       }));
     }
-    lastPoints = rows;
+    lastPoints = {kind: activeKind, rows};
   }
-  function render(status, points, logs) {
+  function render(status, points) {
     $("#status-grid").innerHTML = [["运行状态",status.running ? "运行中" : "已停止"], ["RTU",status.rtu_id || "未选择"], ["连接",status.active_connections || 0], ["点数",status.point_count || 0], ["错误",status.last_error || "无"]]
       .map(([label,value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
     $("#status-json").textContent = JSON.stringify(status,null,2);
     renderPoints(points.items || []);
     $("#connections").innerHTML = (status.connections || []).map(c => `<div>[${esc(c.time)}] ${esc(c.ip)}</div>`).join("") || "暂无连接";
-    $("#logs").innerHTML = (logs.items || []).map(log => `<div class="${esc(log.level)}">[${esc(log.time)}] ${esc(log.message)}</div>`).join("") || "暂无日志";
     $("#start").disabled = !!status.running;
     $("#stop").disabled = !status.running;
   }
   const form = protocolForm($("#config-form"));
   function load(background = false) {
-    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points?view=table"), api("/api/iec104/logs?limit=100")]), ([status,points,logs]) => {
-      render(status.item,points,logs);
+    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points?view=table")]), ([status,points]) => {
+      render(status.item,points);
       const config = status.item.config || {};
       for (const [id, value] of [["bind-ip", config.bind_ip], ["port", config.port],
         ["rtu-id", config.rtu_id], ["max-connections", config.max_connections ?? 0],
@@ -102,6 +116,8 @@
       message("已执行全量更新");
     } catch (error) { message(error.message,true); }
   };
+  document.querySelectorAll("[data-iec-point-tab]").forEach(tab => tab.addEventListener("click", () => setPointTab(tab.dataset.iecPointTab)));
+  setPointTab(activeKind);
   load();
   setInterval(() => { if (!document.hidden) load(true); }, 5000);
 })();

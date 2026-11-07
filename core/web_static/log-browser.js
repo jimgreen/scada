@@ -11,6 +11,10 @@
     can: "CAN 主站", "can-server": "CAN 服务端", "opc-server": "OPC UA 服务端",
     "bacnet-server": "BACnet 服务端",
   };
+  // Protocol pages can open the common browser with a preselected service;
+  // the standalone S/T log page keeps the value empty and shows all files.
+  let requestedProcess = new URLSearchParams(location.search).get("process")
+    || document.body.dataset.logProcess || "";
   let files = [], selected = "", filePage = 0, rows = [], renderedTree = "", processOptions = "";
   let cursors = [""], batch = 0, nextCursor = null, searchVersion = 0, listVersion = 0;
   let controller, debounce, busy = false, refreshing = false;
@@ -38,7 +42,7 @@
       && file.name.split("/").pop().toLowerCase().includes(needle));
   }
   function updateProcesses() {
-    const value = $("process").value;
+    const value = $("process").value || requestedProcess;
     const processes = [...new Set(files.map((file) => file.process))].sort((a, b) =>
       a.localeCompare(b, undefined, {numeric: true}));
     if (value && !processes.includes(value)) processes.push(value);
@@ -46,6 +50,7 @@
       + processes.map((name) => '<option value="' + esc(name) + '">' + esc(processName(name)) + "</option>").join("");
     if (options !== processOptions) { $("process").innerHTML = options; processOptions = options; }
     $("process").value = value;
+    requestedProcess = "";
   }
   function renderTree() {
     const all = visibleFiles();

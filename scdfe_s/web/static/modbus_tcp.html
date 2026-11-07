@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SCADA · Modbus-TCP</title>
   <link rel="stylesheet" href="/static/protocol.css">
+  <link rel="stylesheet" href="/static/log-browser.css">
 </head>
-<body data-protocol="modbus-tcp">
+<body data-protocol="modbus-tcp" data-log-module="s" data-log-process="scdfe_s-modbus-tcp">
   <header>
     <div>
       <h1>Modbus-TCP 主站</h1>
@@ -34,7 +35,7 @@
       <button type="button" class="page-tab" data-page-tab="config" role="tab" aria-selected="true">通道配置</button>
       <button type="button" class="page-tab" data-page-tab="points" role="tab" aria-selected="false">四遥数据</button>
       <button type="button" class="page-tab" data-page-tab="runtime" role="tab" aria-selected="false">运行状态</button>
-      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志与告警</button>
+      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志与报文</button>
     </div>
 
     <section class="tab-panel" data-tab-panel="config" role="tabpanel">
@@ -66,11 +67,41 @@
           <label>名称<input id="new-name"></label>
           <div class="form-actions"><button class="primary">新增点</button></div>
         </form>
-        <div class="table-wrap">
-          <table>
+        <nav class="page-tabs point-tabs" role="tablist" aria-label="四遥子分页">
+          <button type="button" class="page-tab" data-point-tab="yc" role="tab" aria-selected="true">遥测 YC</button>
+          <button type="button" class="page-tab" data-point-tab="yx" role="tab" aria-selected="false">遥信 YX</button>
+          <button type="button" class="page-tab" data-point-tab="yk" role="tab" aria-selected="false">遥控 YK</button>
+          <button type="button" class="page-tab" data-point-tab="yt" role="tab" aria-selected="false">遥调 YT</button>
+        </nav>
+        <div class="point-panels" data-point-panels>
+        <section class="card tab-panel" data-point-panel="yc" role="tabpanel">
+          <h3>遥测（YC）</h3>
+          <div class="table-wrap"><table>
             <thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody id="points"></tbody>
-          </table>
+            <tbody id="points" data-points-body></tbody>
+          </table></div>
+        </section>
+        <section class="card tab-panel" data-point-panel="yx" role="tabpanel" hidden>
+          <h3>遥信（YX）</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="points-yx" data-points-body></tbody>
+          </table></div>
+        </section>
+        <section class="card tab-panel" data-point-panel="yk" role="tabpanel" hidden>
+          <h3>遥控（YK）</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="points-yk" data-points-body></tbody>
+          </table></div>
+        </section>
+        <section class="card tab-panel" data-point-panel="yt" role="tabpanel" hidden>
+          <h3>遥调（YT）</h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="points-yt" data-points-body></tbody>
+          </table></div>
+        </section>
         </div>
       </section>
     </section>
@@ -84,12 +115,50 @@
     </section>
 
     <section class="tab-panel" data-tab-panel="logs" role="tabpanel" hidden>
-      <div class="grid">
-        <section class="card"><h2>运行日志</h2><div id="logs" class="log-list"></div></section>
-        <section class="card"><h2>告警</h2><div id="alerts" class="log-list"></div></section>
+      <section class="card"><h2>日志与报文</h2><div class="protocol-log-browser">
+  <nav class="lb-record-tabs" aria-label="记录类别">
+    <button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button>
+    <button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button>
+  </nav>
+  <div class="lb-toolbar">
+    <label>协议服务<select id="lb-process"><option value="">全部服务</option></select></label>
+    <label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
+    <button id="lb-refresh" class="primary">刷新日志</button>
+    <label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label>
+    <span id="lb-status" role="status" aria-live="polite">读取中…</span>
+  </div>
+  <div class="lb-workspace">
+    <aside class="lb-files" aria-label="日志文件目录">
+      <div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div>
+      <div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div>
+      <div class="lb-file-pager"><button id="lb-files-prev" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" aria-label="下一页文件">下一页</button></div>
+    </aside>
+    <section class="lb-reader" aria-label="日志内容">
+      <div class="lb-reader-head"><div><strong id="lb-name">请选择日志文件</strong><small id="lb-meta">从左侧目录选择文件，或检索全部文件</small></div><button id="lb-export" disabled>导出本批</button></div>
+      <div class="lb-reader-tools">
+        <label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label>
+        <label>当前目录<select id="lb-record"><option value="runtime">运行日志</option><option value="packet">报文日志</option></select></label>
+        <label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label>
+        <label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label>
+        <label class="lb-keyword">关键字<input id="lb-keyword" type="search" maxlength="256" placeholder="协议、HEX 或报文内容"></label>
       </div>
+      <div class="lb-reader-tools lb-time-tools">
+        <label>开始<input id="lb-start" type="datetime-local" step="1"></label>
+        <label>结束<input id="lb-end" type="datetime-local" step="1"></label>
+        <button id="lb-clear">清除筛选</button>
+        <label>每批<select id="lb-limit"><option value="200">200 条</option><option value="1000" selected>1000 条</option><option value="5000">5000 条</option></select></label>
+        <label class="lb-check"><input id="lb-wrap" type="checkbox" checked>自动换行</label>
+      </div>
+      <div id="lb-content" class="lb-content lb-wrap" tabindex="0" aria-label="日志文本"><div class="lb-empty">读取中…</div></div>
+      <div class="lb-reader-foot"><span id="lb-result" role="status"></span><div><button id="lb-newer" disabled>较新一批</button><button id="lb-older" disabled>较早一批</button></div></div>
+    </section>
+  </div>
+  <div id="lb-directory" class="lb-directory"></div>
+</div>
+      </section>
     </section>
   </main>
   <script src="/static/protocol.js"></script>
+<script src="/static/log-browser.js"></script>
 </body>
 </html>

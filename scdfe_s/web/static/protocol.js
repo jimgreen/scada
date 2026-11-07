@@ -55,6 +55,25 @@ function protocolForm(form) {
     activate(selected.dataset.pageTab);
   }
   initPageTabs();
+  function initPointTabs() {
+    if (typeof document.querySelectorAll !== "function") return;
+    const tabs = Array.from(document.querySelectorAll("[data-point-tab]"));
+    const panels = Array.from(document.querySelectorAll("[data-point-panel]"));
+    if (!tabs.length || !panels.length) return;
+    const activate = name => {
+      tabs.forEach(tab => {
+        const active = tab.dataset.pointTab === name;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach(panel => { panel.hidden = panel.dataset.pointPanel !== name; });
+      document.dispatchEvent(new CustomEvent("scada:point-tab", {detail:{kind:name}}));
+    };
+    tabs.forEach(tab => tab.addEventListener("click", () => activate(tab.dataset.pointTab)));
+    const selected = tabs.find(tab => tab.getAttribute("aria-selected") === "true") || tabs[0];
+    activate(selected.dataset.pointTab);
+  }
+  initPointTabs();
   const configs = {
     "modbus-tcp": {slug:"modbus-tcp", fields:["mode","rtu_id","bind_ip","listen_port","remote_host","remote_port","unit_id","response_timeout","connect_timeout","retry_count","keep_alive"]},
     "modbus-tcp-server": {slug:"modbus-tcp-server", fields:["rtu_id","bind_ip","listen_port","unit_id"]},
@@ -95,37 +114,62 @@ function protocolForm(form) {
   function isCommand(kind) { return status?.config?.mode === "master" && (kind === "yk" || kind === "yt"); }
   function renderStatus(item) {
     status = item;
-    $("#status-grid").innerHTML = [
+    const grid = $("#status-grid");
+    if (grid) grid.innerHTML = [
       ["运行状态", item.running ? "运行中" : "已停止"], ["工作模式", item.config.mode], ["RTU", item.rtu_id || "未选择"], ["连接/客户端", item.open_connections || 0], ["点数", item.point_count || 0]
     ].map(([a,b]) => `<div class="metric"><b>${esc(b)}</b><span>${esc(a)}</span></div>`).join("");
-    $("#status-json").textContent = JSON.stringify(item, null, 2);
+    const statusJson = $("#status-json");
+    if (statusJson) statusJson.textContent = JSON.stringify(item, null, 2);
     $("#start").disabled = !!item.running; $("#stop").disabled = !item.running;
   }
-  let previousPoints;
+  let previousPoints = {}, allPoints = [];
+  let activePointKind = document.querySelector("[data-point-tab][aria-selected='true']")?.dataset.pointTab || "yc";
+  function pointsBody(kind = activePointKind) {
+    const panel = document.querySelector(`[data-point-panel="${kind}"]`);
+    return panel?.querySelector("[data-points-body]") || $("#points");
+  }
+  function renderActivePoints() { renderPoints(allPoints); }
   function renderPoints(items) {
-    const body = $("#points");
-    const rows = items.map(p => [p.kind,p.pnt_no,p.name,p.value,p.status,isCommand(p.kind) ? "下发" : "更新"]
+    allPoints = items || [];
+    const body = pointsBody();
+    if (!body) return;
+    const rows = allPoints.filter(p => p.kind === activePointKind).map(p => [p.kind,p.pnt_no,p.name,p.value,p.status,isCommand(p.kind) ? "下发" : "更新"]
       .map(value => String(value ?? "")));
-    const stable = previousPoints && rows.length === previousPoints.length &&
-      rows.every((r,i) => r[0] === previousPoints[i][0] && r[1] === previousPoints[i][1]);
+    const previous = previousPoints[activePointKind];
+    const stable = previous && rows.length === previous.length &&
+      rows.every((r,i) => r[0] === previous[i][0] && r[1] === previous[i][1]);
     if (!stable) {
       body.innerHTML = rows.map(([kind,no,name,value,status,action]) =>
         `<tr><td>${esc(kind)}</td><td>${esc(no)}</td><td>${esc(name)}</td><td>${esc(value)}</td><td>${esc(status)}</td><td><button data-update="${esc(kind)}" data-point="${esc(no)}">${action}</button> <button data-delete="${esc(kind)}" data-point="${esc(no)}" class="danger">删除</button></td></tr>`).join("") ||
         '<tr><td colspan="6" class="muted">暂无点定义</td></tr>';
     } else {
       rows.forEach((r,i) => {
-        for (let j=2; j<=5; j++) if (r[j] !== previousPoints[i][j]) {
+        for (let j=2; j<=5; j++) if (r[j] !== previous[i][j]) {
           const cell = body.rows[i].cells[j];
           (j===5 ? cell.querySelector("[data-update]") : cell).textContent = r[j];
         }
       });
     }
-    previousPoints = rows;
+    previousPoints[activePointKind] = rows;
   }
   function renderLogs(items, target) { $(target).innerHTML = items.slice().reverse().map(x => `<div class="${esc(x.level)}">[${esc(x.time)}] ${esc(x.message)}</div>`).join("") || "暂无记录"; }
   function load(background = false) {
-    return form.refresh(() => Promise.all([api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points?view=table`), api(`/api/${cfg.slug}/logs?limit=100`), api(`/api/${cfg.slug}/alerts?limit=100`)]), ([s, p, l, a]) => {
-      renderStatus(s.item); renderPoints(p.items); renderLogs(l.items, "#logs"); renderLogs(a.items, "#alerts");
+    return form.refresh(() => {
+      // Durable hourly files are rendered by the shared log browser.  Keep
+      // the old in-memory endpoints only for compact/custom pages that still
+      // provide #logs or #alerts; normal protocol pages no longer show an
+      // independent alert panel.
+      const requests = [api(`/api/${cfg.slug}/status`), api(`/api/${cfg.slug}/points?view=table`)];
+      if ($("#logs") || $("#alerts")) {
+        requests.push(api(`/api/${cfg.slug}/logs?limit=100`));
+        if ($("#alerts")) requests.push(api(`/api/${cfg.slug}/alerts?limit=100`));
+      }
+      return Promise.all(requests);
+    }, (result) => {
+      const [s, p, l, a] = result;
+      renderStatus(s.item); renderPoints(p.items);
+      if ($("#logs") && l) renderLogs(l.items, "#logs");
+      if ($("#alerts") && a) renderLogs(a.items, "#alerts");
       cfg.fields.forEach(name => field(name, s.item.config[name]));
       message("已更新 " + new Date().toLocaleTimeString());
     }, e => message(e.message, true), background === true);
@@ -135,7 +179,10 @@ function protocolForm(form) {
   $("#stop").onclick = async () => { try { await api(`/api/${cfg.slug}/stop`, {method:"POST", body:"{}"}); message("服务已停止"); await load(); } catch(e) { message(e.message, true); } };
   $("#refresh").onclick = load;
   $("#poll").onclick = async () => { try { const result = await api(`/api/${cfg.slug}/poll`, {method:"POST", body:"{}"}); await load(); message("采集完成 " + (result.item.count ?? 0) + " 个值"); } catch (e) { message(e.message, true); } };
-  $("#points").onclick = async (e) => {
+  // Use one delegated handler for all four-remote tables.  The fallback keeps
+  // the handler compatible with compact DOMs that expose only the YC body.
+  const pointRoot = document.querySelector("[data-point-panels]") || $("#points");
+  if (pointRoot) pointRoot.onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b) return;
     const kind = b.dataset.update || b.dataset.delete, point = b.dataset.point;
@@ -159,6 +206,10 @@ function protocolForm(form) {
       }
     } catch(err) { message(err.message, true); }
   };
+  document.addEventListener("scada:point-tab", event => {
+    activePointKind = event.detail.kind;
+    renderActivePoints();
+  });
   $("#add-point").onsubmit = async (e) => { e.preventDefault(); const kind = $("#new-kind").value; const pnt_no = keyValue($("#new-point").value); const name = $("#new-name").value; try { await api(`/api/${cfg.slug}/points`, {method:"POST", body:JSON.stringify({kind, pnt_no, name, value:0, status:0})}); message("点定义已新增"); e.target.reset(); await load(); } catch(err) { message(err.message, true); } };
   $("#frame-form")?.addEventListener("submit", async e => { e.preventDefault(); try { const body = {arbitration_id:Number($("#frame-id").value), data:$("#frame-data").value, is_extended_id:Number($("#frame-ext").value)}; await api(`/api/${cfg.slug}/frame`, {method:"POST", body:JSON.stringify(body)}); message("CAN 帧已发送"); await load(); } catch(err) { message(err.message, true); } });
   load(); setInterval(() => { if (!document.hidden) load(true); }, 5000);
