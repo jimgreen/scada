@@ -52,7 +52,7 @@
     const request = ++channelsRequest;
     try {
       const rows = [];
-      const fields = $("#channels") ? "rtu_id,channel_id,channel_type,code,name,process_enable" : "rtu_id,channel_type,name,code";
+      const fields = $("#channels") ? "rtu_id,channel_id,channel_type,code,name,packet_recording,process_enable" : "rtu_id,channel_type,name,code,packet_recording";
       for (;;) {
         const page = await api("/api/channels?limit=500&fields=" + fields + (rows.length ? "&offset=" + rows.length : ""));
         if (request !== channelsRequest) return;
@@ -63,8 +63,7 @@
       channelRows = rows;
       if (request !== channelsRequest) return;
       if ($("#channels")) {
-        $("#channels").innerHTML = rows.map(r => `<tr><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || r.code || "")}</td>${window.PacketRecordingChannels.cell(r.channel_id)}<td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="7">暂无通道</td></tr>';
-        window.PacketRecordingChannels.mount();
+        $("#channels").innerHTML = rows.map(r => `<tr><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || r.code || "")}</td><td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="6">暂无通道</td></tr>';
         notice("#channel-message", `共 ${rows.length} 个通道`);
       }
       if ($("#point-rtu")) {
@@ -80,7 +79,7 @@
   }
   function fillChannel(row) {
     selected = row;
-    for (const key of ["rtu_id","channel_id","channel_type","code","name","process_enable"]) $("#" + key).value = row[key] == null ? "" : row[key];
+    for (const key of ["rtu_id","channel_id","channel_type","code","name","packet_recording","process_enable"]) $("#" + key).value = row[key] == null ? "" : row[key];
     showEditor("#channel-editor");
   }
   async function loadPoints() {
@@ -116,7 +115,7 @@
     $("#point-value").value = point.value == null ? 0 : point.value;
     showEditor("#point-editor");
   }
-  const channelBody = () => ({rtu_id:keyValue($("#rtu_id").value),channel_id:keyValue($("#channel_id").value),channel_type:$("#channel_type").value,code:$("#code").value,name:$("#name").value,process_enable:Number($("#process_enable").value)});
+  const channelBody = () => ({rtu_id:keyValue($("#rtu_id").value),channel_id:keyValue($("#channel_id").value),channel_type:$("#channel_type").value,code:$("#code").value,name:$("#name").value,packet_recording:Number($("#packet_recording").value),process_enable:Number($("#process_enable").value)});
   const pointBody = () => ({pnt_no:keyValue($("#point-no").value),code:$("#point-code").value,name:$("#point-name").value,value:Number($("#point-value").value)});
   if ($("#channel-form")) $("#channel-form").onsubmit = async event => {
     event.preventDefault();

@@ -460,12 +460,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                                     order=query.get("order", "asc"), fields=fields)
 
     def _dispatch(self):
-        from core.packet_logging import handle_packet_recording
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
-        if handle_packet_recording(self, parts, query, method, self.store, 's'):
-            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')

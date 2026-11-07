@@ -1260,7 +1260,10 @@ class ScadaStore:
 
     @staticmethod
     def _channel_fields() -> set[str]:
-        return {"channel_id", "channel_type"}
+        # Packet recording is part of the channel definition.  Keeping it in
+        # this allow-list makes the channel editor the single write path for
+        # the setting, alongside the channel identity and protocol.
+        return {"channel_id", "channel_type", "packet_recording"}
 
     def create_channel(self, rtu_id, values: dict[str, Any]) -> dict[str, Any]:
         """Create the single channel attached to an existing RTU.

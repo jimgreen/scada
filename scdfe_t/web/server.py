@@ -105,9 +105,6 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         return {"item": self.service.store.catalog.public(table)}
 
     def _api(self, method, parts, query):
-        from core.packet_logging import handle_packet_recording
-        if handle_packet_recording(self, parts, query, method, self.service.store, 't'):
-            return
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
             if method != "GET":
                 raise ApiError(405, "日志文件接口只支持 GET")

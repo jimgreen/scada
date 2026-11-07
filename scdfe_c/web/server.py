@@ -356,12 +356,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                                     order=query.get("order", "asc"), fields=fields)
 
     def _dispatch(self):
-        from core.packet_logging import handle_packet_recording
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
-        if handle_packet_recording(self, parts, query, method, self.store, 'c'):
-            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -512,10 +509,6 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _handle
 
     def _static(self, name):
-        if name == 'packet-recording.js':
-            from core.web_workbench import ASSET_DIR
-            return self._send(200, 'application/javascript; charset=utf-8',
-                              (ASSET_DIR / name).read_bytes())
         allowed = {"index.html": "text/html", "api.html": "text/html",
                    "app.css": "text/css", "app.js": "application/javascript"}
         if name not in allowed or not (STATIC_DIR / name).is_file():

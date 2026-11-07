@@ -39,7 +39,7 @@ const parameterTables = {
   fes_channel_opc_point_define: "OPC点映射",
   fes_channel_can_point_define: "CAN报文解析",
 };
-const channelFields = ["channel_id", "channel_type"];
+const channelFields = ["channel_id", "channel_type", "packet_recording"];
 const rtuRuntimeFields = [
   "process_enable",
   "process_status",
@@ -176,6 +176,9 @@ const MODBUS_ENUM_LABELS = {
 };
 
 const PROTOCOL_RULES = {
+  fes_rtu_define: {
+    packet_recording: { options: [0, 1], labels: MODBUS_ENUM_LABELS.binary, default: 0 },
+  },
   fes_channel_modbus_tcp_define: {
     remote_port: { min: 1, max: 65535, step: 1 },
     unit_id: { min: 1, max: 247, step: 1 },
@@ -765,8 +768,7 @@ function renderTable() {
             : "") +
           "<small>" +
           esc(column.eng_name) +
-          "</small></button></th>" +
-          (state.resource === "rtus" && column.eng_name === "channel_type" ? '<th scope="col">报文保存</th>' : ""),
+          "</small></button></th>"
       )
       .join("") +
     '<th class="sticky-actions">操作</th></tr>';
@@ -802,8 +804,7 @@ function renderTable() {
                 esc(values[columnIndex] ?? "—") +
                 '">' +
                 cellValue(column.eng_name, values[columnIndex], schema.head.eng_name) +
-                "</td>" +
-                (state.resource === "rtus" && column.eng_name === "channel_type" ? window.PacketRecordingChannels.cell(item.channel_id) : ""),
+                "</td>"
             )
             .join("") +
           '<td class="actions-cell sticky-actions">' +
@@ -835,10 +836,9 @@ function renderTable() {
         return markup;
       })
     : ['<tr><td class="empty" colspan="' +
-      (columns.length + 1 + (state.resource === "rtus" ? 1 : 0)) +
+      (columns.length + 1) +
       '">没有匹配的记录</td></tr>'];
   reconcileBody($("#table-body"), rows, tableRender);
-  if (state.resource === "rtus") window.PacketRecordingChannels.mount();
   tableRender.entries.length = state.items.length;
   $("#result-count").textContent =
     "共 " +

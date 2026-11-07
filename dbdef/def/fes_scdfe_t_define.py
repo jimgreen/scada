@@ -31,6 +31,8 @@ class fes_scdfe_t_define:
 
     log_retention_hours: Optional[int] = field(default=720, metadata={'chn_name': '日志保留小时数', 'disp_type': 'INT', 'disp_menu': ''})
 
+    packet_recording: Optional[int] = field(default=0, metadata={'chn_name': '保存报文', 'eng_name': 'packet_recording', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
+
     process_enable: Optional[int] = field(default=0, metadata={'chn_name': '参与自动运行', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
 
     process_status: Optional[int] = field(default=0, metadata={'chn_name': '进程状态', 'disp_type': 'INT', 'disp_menu': ''})

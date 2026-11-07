@@ -7,8 +7,7 @@ ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
           "workbench.js": "application/javascript; charset=utf-8",
           "log-browser.css": "text/css; charset=utf-8",
-          "log-browser.js": "application/javascript; charset=utf-8",
-          "packet-recording.js": "application/javascript; charset=utf-8"}
+          "log-browser.js": "application/javascript; charset=utf-8"}
 
 S_PAGES = [
     ("运行管理", [

@@ -86,9 +86,13 @@ def run(minutes,out):
                 bind_port=ports[cid],common_address=cid,scan_interval_ms=50,report_interval_ms=1000),status=201)
             opts=dict(io_address=0x4001,type_id=13) if kind=='iec104' else dict(register_area='input',address=0,data_type='uint16')
             api('t',f'/api/trans/channels/{cid}/points','POST',dict(kind='yc',pnt_no=1,source_rtu_id=rid,source_pnt_no=1,**opts),status=201)
-        for f,cids in {'c':[fixture.RTUS[0]+1000],'s':[fixture.SOURCE+1000],'t':[1,10]}.items():
-            for cid in cids:
-                api(f,f'/api/packet-recording/channels/{cid}','PUT',{'enabled':True})
+        # Packet recording is a persisted channel parameter.  Enable only the
+        # channels exercised by this soak; there is no service-wide switch.
+        for rid in (fixture.RTUS[0],):
+            api('c', f'/api/rtus/{rid}/channel', 'PATCH', {'packet_recording': 1})
+        api('s', f'/api/channels/{fixture.SOURCE}', 'PATCH', {'packet_recording': 1})
+        for cid in (1, 10):
+            api('t', f'/api/trans/channels/{cid}', 'PATCH', {'packet_recording': 1})
         fixture.control('main','start')
         fixture.wait_for(lambda:fixture.c_point(fixture.RTUS[0],'yc')['value']==12)
         fixture.wait_for(lambda:fixture.c_point(fixture.RTUS[1],'yc')['value']==31)

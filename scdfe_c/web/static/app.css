@@ -451,7 +451,6 @@ small,
 .filterbar input[type="search"] {
   width: 235px;
 }
-#packet-recording-channel { max-width: min(360px, 65vw); }
 .packet-policy { min-width:136px; display:grid; gap:4px; font-size:12px; }
 .packet-policy .packet-policy-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; margin:0; cursor:pointer; }
 .packet-policy input[type="checkbox"] { width:15px; height:15px; margin:0; accent-color:#087f8c; }

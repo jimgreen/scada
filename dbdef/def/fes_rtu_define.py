@@ -70,6 +70,11 @@ class fes_rtu_define:
         metadata={'chn_name': '通道类型', 'eng_name': 'channel_type', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'SCADA通道类型', 'required': True, 'allowed_values': ['iec104', 'modbus-rtu', 'modbus-tcp', 'can', 'bacnet', 'opc', 'custom']},
     )
 
+    packet_recording: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '保存报文', 'eng_name': 'packet_recording', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
+    )
+
     process_enable: Optional[int] = field(
         default=1,
         metadata={'chn_name': '通信线程启用', 'eng_name': 'process_enable', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},

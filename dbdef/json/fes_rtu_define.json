@@ -96,6 +96,15 @@
       ]
     },
     {
+      "chn_name": "保存报文",
+      "eng_name": "packet_recording",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
       "chn_name": "通信线程启用",
       "eng_name": "process_enable",
       "primary_key": false,

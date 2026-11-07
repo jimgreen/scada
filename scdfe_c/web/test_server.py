@@ -96,7 +96,7 @@ class WebTests(unittest.TestCase):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
         self.assertEqual(len(body['items']), 26)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 430)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 432)
         mapping = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_scdfe_t_point_define')
         self.assertNotIn('source_kind', {column['eng_name'] for column in mapping['columns']})
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')

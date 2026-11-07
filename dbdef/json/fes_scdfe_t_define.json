@@ -15,6 +15,7 @@
     {"chn_name": "数据扫描周期（毫秒）", "eng_name": "scan_interval_ms", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 200},
     {"chn_name": "全量上送周期（毫秒）", "eng_name": "report_interval_ms", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 1000},
     {"chn_name": "日志保留小时数", "eng_name": "log_retention_hours", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 720},
+    {"chn_name": "保存报文", "eng_name": "packet_recording", "primary_key": false, "data_type": "int", "disp_type": "单选菜单", "disp_menu": "二值判断", "default": 0},
     {"chn_name": "参与自动运行", "eng_name": "process_enable", "primary_key": false, "data_type": "int", "disp_type": "单选菜单", "disp_menu": "二值判断", "default": 0},
     {"chn_name": "进程状态", "eng_name": "process_status", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 0},
     {"chn_name": "进程号", "eng_name": "process_pid", "primary_key": false, "data_type": "int", "disp_type": "LONG", "disp_menu": "", "default": 0},
