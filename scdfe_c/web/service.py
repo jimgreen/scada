@@ -201,6 +201,11 @@ class ScadaStore:
         self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.catalog = SchemaCatalog(schema_dir)
+        # Derived table metadata is immutable for the lifetime of a store.
+        # Cache the identifier map and text projection used by every Web list
+        # request; rebuilding them for each 5-second monitor refresh is pure
+        # Python overhead and does not improve schema safety.
+        self._table_meta_cache: dict[str, tuple[str, list[dict[str, Any]], list[str], dict[str, dict[str, Any]], list[str]]] = {}
         if self.db_path.exists() and self.db_path.stat().st_size:
             # Reject a database with the wrong role before enabling WAL.
             with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro", uri=True)) as existing:
@@ -256,9 +261,11 @@ class ScadaStore:
             retained = False
             try:
                 # Closing the old per-call connection rolled back implicitly.
-                # Do so explicitly before reuse, including read snapshots and
-                # exception paths, so no transaction crosses request boundaries.
-                connection.rollback()
+                # Reused handles only need the rollback when a caller actually
+                # left a transaction open; skip the no-op syscall on the
+                # common autocommit read path.
+                if connection.in_transaction:
+                    connection.rollback()
                 connection.row_factory = sqlite3.Row
                 with self._pool_lock:
                     if not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
@@ -572,9 +579,25 @@ class ScadaStore:
         return [self.catalog.public(name) for name in self.catalog.names()]
 
     def _table_parts(self, table: str) -> tuple[str, list[dict[str, Any]], list[str]]:
+        canonical, columns, primary_keys, _by_name, _text_columns = self._table_metadata(table)
+        return canonical, columns, primary_keys
+
+    def _table_metadata(self, table: str) -> tuple[str, list[dict[str, Any]], list[str], dict[str, dict[str, Any]], list[str]]:
+        """Return cached metadata used to validate and project table requests."""
+        cached = self._table_meta_cache.get(table)
+        if cached is not None:
+            return cached
         payload = self.schema(table)
         columns = payload["columns"]
-        return payload["head"]["eng_name"], columns, [c["eng_name"] for c in columns if c["primary_key"]]
+        primary_keys = [column["eng_name"] for column in columns if column["primary_key"]]
+        by_name = {column["eng_name"]: column for column in columns}
+        text_columns = [
+            column["eng_name"] for column in columns
+            if column["data_type"] == "str" or column["primary_key"]
+        ]
+        cached = (payload["head"]["eng_name"], columns, primary_keys, by_name, text_columns)
+        self._table_meta_cache[table] = cached
+        return cached
 
     @staticmethod
     def _coerce(value: Any, column: dict[str, Any], *, required: bool = False) -> Any:
@@ -862,10 +885,9 @@ class ScadaStore:
     def list_rows(self, table: str, *, where: dict[str, Any] | None = None, search: str = "", limit: int = 50,
                   offset: int = 0, sort: str | None = None, order: str = "asc",
                   fields: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
-        canonical, columns, primary_keys = self._table_parts(table)
+        canonical, columns, primary_keys, by_name, text_columns = self._table_metadata(table)
         if limit < 1 or limit > 500 or offset < 0:
             raise ApiError(400, "limit 必须在 1 到 500 之间，offset 不能为负数")
-        by_name = {c["eng_name"]: c for c in columns}
         # List views often show only a small projection of a wide point or
         # protocol auxiliary table.  Keep the full schema authoritative while
         # allowing callers to avoid reading/serialising hidden columns.  Keys
@@ -892,7 +914,6 @@ class ScadaStore:
             conditions.append(f"{quote_identifier(name)}=?")
             params.append(self._coerce(value, by_name[name], required=True))
         if search:
-            text_columns = [c["eng_name"] for c in columns if c["data_type"] == "str" or c['primary_key']]
             if text_columns:
                 conditions.append("(" + " OR ".join(f"CAST({quote_identifier(name)} AS TEXT) LIKE ? ESCAPE '\\'" for name in text_columns) + ")")
                 escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')

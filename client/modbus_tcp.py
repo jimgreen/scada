@@ -16,6 +16,13 @@ from core.packet_trace import PacketTrace
 
 __all__ = ['ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point']
 
+_READ_METHODS = {
+    1: 'read_coils',
+    2: 'read_discrete_inputs',
+    3: 'read_holding_registers',
+    4: 'read_input_registers',
+}
+
 
 class ModbusError(RuntimeError):
     """通信失败或设备异常；写失败不代表设备一定没有执行，不自动重发。"""
@@ -576,8 +583,17 @@ class _ModbusMasterOperations:
 
     def _execute_poll_plan(self, plan):
         result = []
+        # The plan has already validated function code, address, count and
+        # unit during configure(). Call the transport directly here instead
+        # of redoing the public read() dispatch and range checks for every
+        # request in every scan. The default unit remains dynamic so changing
+        # master.unit_id after configure() keeps its existing semantics.
+        invoke = self._invoke
+        read_methods = _READ_METHODS
+        default_unit = self.unit_id
         for rtu_id, seq, address, count, fc, unit, matched in plan:
-            values = self.read(fc, address, count, unit_id=unit)
+            values = invoke(read_methods[fc], address, count,
+                            default_unit if unit is None else unit)
             if len(values) < count:
                 raise ModbusError(f'召唤 {seq} 响应数量错误：至少需要 {count}，得到 {len(values)}')
             raw = _register_packer(count)(*values[:count]) if fc >= 3 else b''

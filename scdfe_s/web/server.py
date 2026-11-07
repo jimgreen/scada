@@ -53,6 +53,9 @@ def browser_safe(value):
 
 
 class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
+    # Responses carry Content-Length, so HTTP/1.1 keep-alive is safe and
+    # avoids a new TCP handshake for each protocol-monitor refresh.
+    protocol_version = "HTTP/1.1"
     server_version = "ScadaWeb/1.0"
 
     def setup(self):

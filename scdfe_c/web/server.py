@@ -44,6 +44,10 @@ def browser_safe(value):
 
 
 class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
+    # All response paths use ``_send`` with an explicit Content-Length. Keep
+    # browser refreshes and the 5-second workbench poll on one TCP connection
+    # instead of reopening an HTTP/1.0 socket for every request.
+    protocol_version = "HTTP/1.1"
     server_version = "ScadaWeb/1.0"
 
     def setup(self):

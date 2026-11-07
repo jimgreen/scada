@@ -36,6 +36,9 @@ def _safe(value):
 
 
 class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
+    # Every response is length-delimited by ``_send``. Reuse the browser
+    # connection for status, log and mapping refreshes.
+    protocol_version = "HTTP/1.1"
     server_version = "ScdfeTWeb/1.0"
 
     @property

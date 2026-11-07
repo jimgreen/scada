@@ -224,6 +224,10 @@ class _OpcUaProtocol(PacketTrace):
         self._lock = threading.RLock()
         self._points: list[dict[str, Any]] = []
         self._command_index: dict[tuple[str, int], dict[str, Any]] = {}
+        # asyncua Node wrappers are immutable handles for a connected client.
+        # Reusing them avoids reparsing the same NodeId on every poll while
+        # clearing the cache on reconnect prevents handles crossing sessions.
+        self._node_cache: dict[str, Any] = {}
 
     @classmethod
     def from_channel(cls, channel, definition=None, **kwargs):
@@ -282,6 +286,7 @@ class _OpcUaProtocol(PacketTrace):
 
     async def _connect_backend(self):
         self._read_limit = self.read_batch_size
+        self._node_cache.clear()
         self._client = _UaClient(self.endpoint, timeout=self.timeout)
         factory = self._client.uaclient._make_protocol
         self._client.uaclient._make_protocol = lambda: trace_stream_protocol(factory(), self._packet)
@@ -295,6 +300,7 @@ class _OpcUaProtocol(PacketTrace):
         if self._client is not None:
             await self._client.disconnect()
             self._client = None
+        self._node_cache.clear()
 
     def connect(self, timeout=None):
         with self._lock:
@@ -346,13 +352,20 @@ class _OpcUaProtocol(PacketTrace):
             raise ValueError("node_id 必须是 OPC UA NodeId，例如 ns=2;s=YC_001")
         return node_id
 
+    def _client_node(self, node_id):
+        node = self._node_cache.get(node_id)
+        if node is None:
+            node = self._client.get_node(node_id)
+            self._node_cache[node_id] = node
+        return node
+
     async def _read_backend(self, node_id):
-        node = self._client.get_node(node_id)
+        node = self._client_node(node_id)
         data_value = await node.read_data_value()
         return data_value.Value.Value, data_value.StatusCode
 
     async def _read_attribute_backend(self, node_id, attribute):
-        node = self._client.get_node(node_id)
+        node = self._client_node(node_id)
         data_value = await node.read_attribute(_attribute_id(attribute))
         return data_value.Value.Value, data_value.StatusCode
 
@@ -364,7 +377,7 @@ class _OpcUaProtocol(PacketTrace):
         offset = 0
         while offset < len(node_ids):
             chunk = node_ids[offset:offset + self._read_limit]
-            nodes = [self._client.get_node(node_id) for node_id in chunk]
+            nodes = [self._client_node(node_id) for node_id in chunk]
             try:
                 async with asyncio.timeout(self.timeout):
                     data = await self._client.read_attributes(nodes)
@@ -397,7 +410,7 @@ class _OpcUaProtocol(PacketTrace):
             self._read_many_backend, node_ids, timeout=self.timeout * len(node_ids) + 1.0)
 
     async def _write_backend(self, node_id, value):
-        node = self._client.get_node(node_id)
+        node = self._client_node(node_id)
         await node.write_value(value)
         return value
 

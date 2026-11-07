@@ -1,0 +1,104 @@
+{
+  "date": "2026-11-07",
+  "workdir": "D:/codex/scada",
+  "scope": [
+    "IEC 60870-5-104",
+    "MODBUS-RTU",
+    "MODBUS-TCP",
+    "CAN",
+    "SQLite database read/write"
+  ],
+  "implemented": {
+    "modbus": {
+      "change": "预构建轮询计划并在采集循环直接调用已选定的底层 _invoke，避免每轮重复功能码分派、地址校验和公共 API 分发。",
+      "coverage": ["MODBUS-RTU", "MODBUS-TCP"],
+      "result": "保持请求边界、从站号、功能码和响应数量校验语义不变。"
+    },
+    "iec104": {
+      "change": "保留点对象/类型转换器缓存和单轮统一时间戳，减少重复对象构建。",
+      "coverage": ["IEC 60870-5-104"],
+      "result": "启动、总召唤、确认和监视量更新顺序保持不变。"
+    },
+    "can": {
+      "change": "保留帧索引、位域解码和命令帧路径的缓存/复用；候选解码优化经重复基准未达到稳定收益，未合入。",
+      "coverage": ["CAN"],
+      "result": "python-can virtual 总线收发、遥控和遥调回归通过。"
+    },
+    "database": {
+      "change": "ScadaStore 缓存不可变表元数据、主键、字段映射和文本筛选列；连接归还仅在存在未提交事务时 rollback。",
+      "coverage": ["SQLite", "Web list_rows", "连接池"],
+      "result": "读请求避免重复 schema 派生和无效 rollback，事务边界保持不变。"
+    }
+  },
+  "benchmarks": {
+    "modbus_poll_cpu": {
+      "before_median_ms": 166.17845,
+      "after_median_ms": 152.78305,
+      "improvement_percent": 8.06,
+      "method": "output/benchmark_modbus_candidate_repeat.py，六轮交替采样"
+    },
+    "db_pool_readonly": {
+      "before_median_ms": 13.86225,
+      "after_median_ms": 13.96220,
+      "improvement_percent": -0.72,
+      "method": "output/benchmark_db_pool_candidate.py，六轮交替采样；差异在本机噪声范围内"
+    },
+    "opcua_node_cache_reference": {
+      "before_ms_per_cycle": 17.8457333333,
+      "after_ms_per_cycle": 5.2087913333,
+      "improvement_percent": 70.80,
+      "method": "async_protocols_continue_final.json，2000 点 CPU 基准；实际收发结果一致"
+    },
+    "can_batch_receive": {
+      "before_ms_per_frame": 0.00198759,
+      "after_ms_per_frame": 0.00200393,
+      "improvement_percent": -0.82,
+      "method": "can_continue_optimization.json；候选没有稳定收益，因此未引入额外 CAN 算法改动"
+    },
+    "web_health_keepalive": {
+      "scdfe_c_latency_reduction_percent": 96.11,
+      "scdfe_s_latency_reduction_percent": 95.61,
+      "scdfe_t_latency_reduction_percent": 98.09,
+      "method": "HTTP/1.1 同 TCP 连接 200 次请求，对比 HTTP/1.0 重连"
+    }
+  },
+  "validation": {
+    "focused_protocol_database": {
+      "tests": 77,
+      "passed": 77,
+      "failed": 0,
+      "skipped": 0
+    },
+    "full_discovery": {
+      "tests": 449,
+      "passed": 448,
+      "failed": 0,
+      "skipped": 1,
+      "duration_seconds": 191.369
+    },
+    "static": {
+      "compileall": "passed",
+      "git_diff_check": "passed"
+    },
+    "warnings": [
+      "完整套件仍有 BACnet 测试夹具 UDP Proactor ResourceWarning；窄范围协议收发测试无该警告，来源已定位为测试服务关闭顺序。",
+      "pymodbus 测试输出包含上游弃用提示，不影响当前功能。"
+    ]
+  },
+  "ports": {
+    "8877": "not_listening",
+    "8878": "not_listening",
+    "8879": "not_listening",
+    "production_restart": false,
+    "note": "本轮未重启生产服务；协议测试使用隔离临时端口。"
+  },
+  "changed_files": [
+    "client/modbus_tcp.py",
+    "client/opc.py",
+    "scdfe_c/web/service.py",
+    "scdfe_c/web/server.py",
+    "scdfe_s/web/server.py",
+    "scdfe_t/web/server.py",
+    "docs/scdfe_usage_guide.html"
+  ]
+}
