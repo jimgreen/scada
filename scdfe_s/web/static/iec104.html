@@ -22,15 +22,15 @@
       <section class="card"><h2>IEC104 通道配置</h2><form id="config-form"><label>监听地址<input id="bind-ip" required></label><label>监听端口<input id="port" type="number" min="1" max="65535" required></label><label>RTU 编号<input id="rtu-id" type="number" min="1" placeholder="自动选择"></label><label>最大连接数<input id="max-connections" type="number" min="0" required></label><label>周期（毫秒）<input id="tick-rate" type="number" min="1" required></label><div class="form-actions"><button class="primary">保存配置</button></div></form></section>
     </section>
     <section class="tab-panel" data-tab-panel="points" role="tabpanel" hidden>
-      <section class="card"><h2>四遥点定义与实时值</h2><form id="update-form"><label>类型<select id="kind"><option>yc</option><option>yx</option><option>yk</option><option>yt</option></select></label><label>点号<input id="point" type="number" min="1" value="1" required></label><label>值<input id="value" value="0" required></label><div class="form-actions"><button class="primary">更新点</button></div></form>
+      <section class="card"><h2>四遥点定义与实时值</h2>
         <nav class="page-tabs point-tabs" role="tablist" aria-label="四遥子分页">
           <button type="button" class="page-tab" data-iec-point-tab="yc" role="tab" aria-selected="true">遥测 YC</button><button type="button" class="page-tab" data-iec-point-tab="yx" role="tab" aria-selected="false">遥信 YX</button><button type="button" class="page-tab" data-iec-point-tab="yk" role="tab" aria-selected="false">遥控 YK</button><button type="button" class="page-tab" data-iec-point-tab="yt" role="tab" aria-selected="false">遥调 YT</button>
         </nav>
         <div class="point-panels" data-iec-point-panels>
-          <section class="card tab-panel" data-iec-point-panel="yc"><h3>遥测（YC）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th></tr></thead><tbody id="points-yc"></tbody></table></div></section>
-          <section class="card tab-panel" data-iec-point-panel="yx" hidden><h3>遥信（YX）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th></tr></thead><tbody id="points-yx"></tbody></table></div></section>
-          <section class="card tab-panel" data-iec-point-panel="yk" hidden><h3>遥控（YK）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th></tr></thead><tbody id="points-yk"></tbody></table></div></section>
-          <section class="card tab-panel" data-iec-point-panel="yt" hidden><h3>遥调（YT）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th></tr></thead><tbody id="points-yt"></tbody></table></div></section>
+          <section class="card tab-panel" data-iec-point-panel="yc"><h3>遥测（YC）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th><th>操作</th></tr></thead><tbody id="points-yc"></tbody></table></div></section>
+          <section class="card tab-panel" data-iec-point-panel="yx" hidden><h3>遥信（YX）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th><th>操作</th></tr></thead><tbody id="points-yx"></tbody></table></div></section>
+          <section class="card tab-panel" data-iec-point-panel="yk" hidden><h3>遥控（YK）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th><th>操作</th></tr></thead><tbody id="points-yk"></tbody></table></div></section>
+          <section class="card tab-panel" data-iec-point-panel="yt" hidden><h3>遥调（YT）</h3><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>信息体地址（IOA）</th><th>类型标识</th><th>值</th><th>状态</th><th>操作</th></tr></thead><tbody id="points-yt"></tbody></table></div></section>
         </div>
       </section>
     </section>
@@ -41,10 +41,22 @@
   <div class="lb-toolbar"><label>日志进程<select id="lb-process"><option value="">全部进程</option></select></label><label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label><button id="lb-refresh" class="primary">刷新日志</button><label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label><span id="lb-status" role="status" aria-live="polite">读取中…</span></div>
   <div class="lb-workspace"><aside class="lb-files" aria-label="日志文件目录"><div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div><div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div><div class="lb-file-pager"><button id="lb-files-prev" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" aria-label="下一页文件">下一页</button></div></aside>
     <section class="lb-reader" aria-label="日志内容"><div class="lb-reader-head"><div><strong id="lb-name">请选择日志文件</strong><small id="lb-meta">从左侧目录选择文件，或检索全部文件</small></div><button id="lb-export" disabled>导出本批</button></div>
-      <div class="lb-reader-tools"><label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label><label>当前目录<select id="lb-record"><option value="runtime">运行日志</option><option value="packet">报文日志</option></select></label><label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label><label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label><label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道" title="按报文保存时的通道号筛选"></label><label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道" title="按报文保存时的通道号筛选"></label><label class="lb-keyword">关键字<input id="lb-keyword" type="search" maxlength="256" placeholder="协议、HEX 或日志内容"></label></div>
+      <div class="lb-reader-tools"><label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label><label>当前目录<select id="lb-record"><option value="runtime">运行日志</option><option value="packet">报文日志</option></select></label><label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label><label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label><label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道" title="按报文保存时的通道号筛选"></label><label class="lb-keyword">关键字<input id="lb-keyword" type="search" maxlength="256" placeholder="协议、HEX 或日志内容"></label></div>
       <div class="lb-reader-tools lb-time-tools"><label>开始<input id="lb-start" type="time" step="1"></label><label>结束<input id="lb-end" type="time" step="1"></label><button id="lb-apply">筛选</button><button id="lb-clear">清除筛选</button><label>每批<select id="lb-limit"><option value="200">200 条</option><option value="1000" selected>1000 条</option><option value="5000">5000 条</option></select></label><label class="lb-check"><input id="lb-wrap" type="checkbox" checked>自动换行</label></div>
       <div id="lb-content" class="lb-content lb-wrap" tabindex="0" aria-label="日志文本"><div class="lb-empty">读取中…</div></div><div class="lb-reader-foot"><span id="lb-result" role="status"></span><div><button id="lb-newer" disabled>较新一批</button><button id="lb-older" disabled>较早一批</button></div></div></section></div><div id="lb-directory" class="lb-directory"></div></div></section></section>
   </main>
+  <dialog id="point-editor" class="point-editor" aria-labelledby="point-editor-title">
+    <form id="point-editor-form">
+      <h2 id="point-editor-title">编辑四遥点</h2>
+      <p class="muted">类型、点号、IOA 和类型标识来自 IEC104 映射，只读；值和状态保存到当前 S 数据库。</p>
+      <div class="point-editor-grid">
+        <label>类型<input id="edit-kind" readonly></label><label>点号<input id="edit-point" readonly></label>
+        <label>信息体地址（IOA）<input id="edit-ioa" readonly></label><label>类型标识<input id="edit-type-id" readonly></label>
+        <label>值<input id="edit-value" type="number" step="any" required></label><label>状态<input id="edit-status" type="number" step="1" required></label>
+      </div>
+      <div class="form-actions"><button type="button" id="point-editor-cancel">取消</button><button type="submit" class="primary">保存</button></div>
+    </form>
+  </dialog>
   <script src="/static/protocol.js"></script><script src="/static/iec104.js"></script><script src="/static/log-browser.js"></script>
 </body>
 </html>

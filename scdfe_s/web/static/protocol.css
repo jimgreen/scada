@@ -41,6 +41,14 @@ pre { white-space:pre-wrap; overflow:auto; max-height:270px; background:#1d3442;
 nav a { margin-left:10px; }
 .visually-hidden { position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .point-page h2 { margin:0 0 10px; font-size:15px; color:#26495a; }
+.point-editor { width:min(560px, calc(100vw - 32px)); border:1px solid #b9cdd3; border-radius:8px; padding:0; color:#203847; box-shadow:0 16px 50px #173b4c35; }
+.point-editor::backdrop { background:#173b4c66; }
+.point-editor form { padding:20px; }
+.point-editor h2 { margin:0 0 7px; color:#26495a; }
+.point-editor .muted { margin:0 0 15px; }
+.point-editor-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px 14px; }
+.point-editor input[readonly] { background:#f1f5f6; color:#627b88; }
+@media(max-width:560px){ .point-editor-grid { grid-template-columns:1fr; } }
 .protocol-log-browser { height:min(720px, calc(100vh - 280px)); min-height:480px; }
 @media(max-height:760px) and (min-width:851px){ .protocol-log-browser { height:calc(100vh - 250px); min-height:460px; } }
 @media(max-width:850px){ .protocol-log-browser { height:auto; min-height:0; } }

@@ -471,7 +471,7 @@ class IEC104Service:
             if table_view:
                 for item in kinds:
                     rows.extend(dict(row) for row in connection.execute(
-                        f"SELECT ? AS kind,p.rtu_id,p.pnt_no,p.value,p.status,m.io_address,m.type_id "
+                        f"SELECT ? AS kind,p._version,p.rtu_id,p.pnt_no,p.value,p.status,m.io_address,m.type_id "
                         f"FROM {tables[item]} p LEFT JOIN fes_channel_iec104_point_define m "
                         "ON m.rtu_id=p.rtu_id AND m.kind=? AND m.pnt_no=p.pnt_no "
                         "WHERE p.rtu_id=? ORDER BY p.pnt_no", (item, item, rtu_id)))
