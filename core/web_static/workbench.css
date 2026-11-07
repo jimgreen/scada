@@ -29,16 +29,18 @@
 .workbench-sidebar .nav[aria-current=page] span { color:#bde5e9; }
 .workbench .side-note { padding:20px 12px 6px; margin-top:auto; color:#8c9cad; font-size:11px; }
 .workbench .side-note code { display:block; margin-top:8px; font:10px/1.5 Consolas,monospace; overflow-wrap:anywhere; }
-.workbench-content { min-width:0; width:auto; max-width:none; margin:0; padding:24px; overflow:auto; }
-.workbench .page-heading { margin-bottom:20px; }
+.workbench-content { min-width:0; width:auto; max-width:none; margin:0; padding:16px 20px 20px; overflow:auto; }
+.workbench .page-heading { margin-bottom:10px; }
 .workbench .page-heading h1 { font-size:20px; font-weight:650; margin:0; color:var(--ink); }
-.workbench .page-heading p { margin:7px 0 0; color:var(--muted); font-size:12px; }
-.workbench .card,.workbench .panel { background:white; border:1px solid var(--line); border-radius:7px; box-shadow:0 3px 12px #183c4208; padding:18px; min-width:0; }
+.workbench .page-heading p { display:none; }
+.workbench .card,.workbench .panel { background:white; border:1px solid var(--line); border-radius:7px; box-shadow:0 3px 12px #183c4208; padding:12px; min-width:0; }
 .workbench .card h2,.workbench .panel h2 { color:var(--ink); font-size:14px; font-weight:650; }
-.workbench .toolbar { border-radius:7px; gap:10px; }
+.workbench .toolbar { border-radius:7px; gap:8px; margin-bottom:10px; }
+.workbench .toolbar .message { min-height:0; margin:0; }
+.workbench .filterbar { gap:8px 10px; margin:8px 0; }
 .workbench .toolbar nav a:first-child { margin-left:0; }
 .workbench .grid { grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr); }
-.workbench .table-wrap { max-width:100%; max-height:min(65dvh,760px); overflow:auto; border-color:var(--line); }
+.workbench .table-wrap { max-width:100%; max-height:min(76dvh,900px); overflow:auto; border-color:var(--line); }
 .workbench table { font-size:12px; }
 .packet-policy { min-width:136px; display:grid; gap:4px; font-size:12px; }
 .packet-policy .packet-policy-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; margin:0; cursor:pointer; }
@@ -50,7 +52,7 @@
 .packet-policy .packet-policy-error { color:#b3261e; white-space:normal; max-width:210px; font-size:11px; }
 .packet-policy-error:empty { display:none; }
 .workbench th { position:sticky; top:0; background:#f5f8fa; z-index:1; }
-.workbench th,.workbench td { padding:10px 12px; }
+.workbench th,.workbench td { padding:7px 10px; }
 .workbench button { border:1px solid #d5dfe7; border-radius:5px; color:var(--ink); background:white; padding:7px 12px; }
 .workbench button:hover { border-color:var(--teal); color:var(--teal); background:#f4fbfb; }
 .workbench button.primary { background:var(--teal); border-color:var(--teal); color:#fff; }
@@ -77,5 +79,26 @@
 .workbench details.form-panel[open] summary { margin-bottom:14px; }
 .workbench-skip { position:fixed; left:12px; top:-60px; z-index:20; padding:10px; background:white; }
 .workbench-skip:focus { top:8px; }
-@media(max-width:1050px) { .workbench .grid,.workbench .split,.workbench .log-layout { grid-template-columns:1fr; } .workbench-content { padding:18px; } }
+/* Protocol pages already expose their service and record type in page tabs.
+   Keep the controls in the DOM for the shared log reader, but do not repeat
+   them in the compact page layout. */
+body.workbench[data-log-process] .lb-toolbar > label:first-child,
+body.workbench[data-log-process] .lb-toolbar .lb-file-search { display:none; }
+body.workbench[data-log-process] .tab-panel[data-tab-panel="logs"] > .card,
+body.workbench[data-log-process] .tab-panel[data-tab-panel="points"] > .card { padding:10px; }
+body.workbench[data-log-process] .tab-panel[data-tab-panel="logs"] > .card > h2,
+body.workbench[data-log-process] .tab-panel[data-tab-panel="points"] > .card > h2,
+body.workbench[data-log-process] .tab-panel[data-tab-panel="runtime"] > .card > h2,
+body.workbench[data-log-process] .tab-panel[data-tab-panel="connections"] > .card > h2 { display:none; }
+body.workbench[data-log-process] .point-panels > .card { padding:0; border:0; box-shadow:none; margin:0; }
+body.workbench[data-log-process] .point-panels > .card > h3 { display:none; }
+/* The page heading and point tabs already identify the active dataset. */
+body.workbench .points-panel > .panel-head > h2,
+body.workbench .points-panel .point-page > h3,
+body.workbench[data-points] .point-page > h2,
+body.workbench[data-channels] main > .card > p:first-child { display:none; }
+body.workbench .points-panel .point-page { padding-top:0; }
+body.workbench[data-points] main > .card > p:first-child { display:none; }
+
+@media(max-width:1050px) { .workbench .grid,.workbench .split,.workbench .log-layout { grid-template-columns:1fr; } .workbench-content { padding:14px 16px 16px; } }
 @media(max-width:640px) { .workbench-topbar { height:58px; padding:0 12px; gap:8px; } .workbench-brand { gap:7px; } .workbench-brand strong { font-size:14px; } .workbench-brand strong span { display:block; font-size:11px; border:0; padding:0; margin:2px 0 0; } .workbench .header-tools { gap:8px; } .workbench .header-tools > a { display:none; } .workbench-shell { grid-template-columns:136px minmax(0,1fr); } .workbench-sidebar { padding:10px 6px; } .workbench-sidebar .nav { gap:6px; padding:10px 7px; } .workbench-sidebar .nav span { width:18px; font-size:9px; } .workbench-sidebar .nav b { font-size:12px; } .workbench-content { padding:14px 10px; } .workbench .card,.workbench .panel { padding:12px; } .workbench .point-filters label { min-width:0; width:100%; } .workbench .data-form { grid-template-columns:1fr; } .workbench .page-heading h1 { font-size:18px; } }
