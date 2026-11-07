@@ -851,6 +851,22 @@ tbody tr:hover .sticky-actions {
 #logs-panel {
   padding-bottom: 8px;
 }
+#logs-panel > .lb-toolbar {
+  display: none;
+}
+#logs-panel .lb-reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+#logs-panel .lb-reader-actions .lb-check {
+  color: #a0b5c7;
+  font-size: 11px;
+}
+#logs-panel .lb-reader-actions input[type="checkbox"] {
+  accent-color: var(--teal);
+}
 .log-page-heading h1 {
   margin: 0;
   font-size: 20px;

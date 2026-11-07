@@ -254,7 +254,6 @@
             </select></label>
             <label class="lb-file-search">文件名<input id="log-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
             <button id="logs-refresh" class="primary">刷新日志</button>
-            <label class="lb-check"><input type="checkbox" id="log-follow">跟随最新</label>
             <span id="log-status" role="status" aria-live="polite">读取中…</span>
           </div>
           <div id="logs-error" class="error-panel" role="alert" hidden></div>
@@ -279,7 +278,10 @@
                     <strong id="log-title">请选择日志文件</strong
                   ><small id="log-meta"></small>
                 </div>
-                <button id="log-download" disabled>导出本批</button>
+                <div class="lb-reader-actions">
+                  <label class="lb-check"><input type="checkbox" id="log-follow">跟随最新</label>
+                  <button id="log-download" disabled>导出本批</button>
+                </div>
               </div>
               <div class="lb-reader-tools">
                 <label>范围<select id="log-scope" aria-label="日志检索范围">
