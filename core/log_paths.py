@@ -1,6 +1,13 @@
 """Traversal of regular log files without following directory or file links."""
 import os
 import stat
+from pathlib import Path
+
+
+def packet_log_directory(directory):
+    """Return the sibling directory reserved exclusively for packet files."""
+    root = Path(directory).resolve()
+    return root.parent / "packets"
 
 
 def log_entries(root, prefix=""):

@@ -19,6 +19,7 @@ class WebLogBrowserTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.logs = self.root / "logs"
+        self.packets = self.root / "packets"
         self.names = {}
         for module, process in (("s", "scdfe_s-iec104"), ("t", "scdfe_t-channel-1")):
             name = f"2026/11/04/23/{process}-20261104-23.log"
@@ -28,6 +29,10 @@ class WebLogBrowserTests(unittest.TestCase):
             path.write_text("23:01:00 [日志] 报文 RX IEC104 HEX=68 04\n"
                             "23:02:00 [日志] 报文 TX IEC104 HEX=68 05\n"
                             "23:03:00 [错误] 检查报文 RX 失败\n", encoding="utf-8")
+            packet_path = self.packets / name
+            packet_path.parent.mkdir(parents=True, exist_ok=True)
+            packet_path.write_text("23:01:00 [日志] 报文 RX IEC104 HEX=68 04\n"
+                                   "23:02:00 [日志] 报文 TX IEC104 HEX=68 05\n", encoding="utf-8")
         self.servers = {}
         for module, factory in (("s", s_server), ("t", t_server)):
             server = factory("127.0.0.1", 0, db_path=self.root / ("scdfe_s.sqlite3" if module == "s" else "scada.sqlite3"))
@@ -106,9 +111,9 @@ class WebLogBrowserTests(unittest.TestCase):
                           {"direction": "WRONG"}, {"record": "WRONG"}):
                 self.assertEqual(self.request(module, "/api/log-files/search", query)[0], 400)
 
-    def test_packet_type_filters_new_headers_and_preserves_old_packet_search(self):
+    def test_packet_type_filters_headers_in_packet_tree(self):
         for module in ("s", "t"):
-            with (self.logs / self.names[module]).open("a", encoding="utf-8") as stream:
+            with (self.packets / self.names[module]).open("a", encoding="utf-8") as stream:
                 stream.write("23:04:00 [报文] 报文 RX IEC104 HEX=68 06\n"
                              "23:05:00 [报文] 报文 TX IEC104 HEX=68 07\n")
             query = {"filename": self.names[module], "level": "PACKET"}
@@ -127,14 +132,16 @@ class WebLogBrowserTests(unittest.TestCase):
             self.assertEqual(len(runtime["items"]), 1)
             self.assertIn("检查报文", runtime["items"][0]["text"])
 
-    def test_packet_pagination_reaches_records_before_old_tail(self):
+    def test_packet_pagination_reaches_records_before_tail(self):
         name = self.names["t"]
-        with (self.logs / name).open("a", encoding="utf-8") as stream:
+        with (self.packets / name).open("a", encoding="utf-8") as stream:
             stream.write("23:04:00 [日志] ordinary status\n" * 7000)
-        first = search_logs(self.logs, {"filename": name, "record": "packet", "limit": "1"}, family="t")
+        first = search_logs(self.logs, {"filename": name, "record": "packet", "limit": "1"}, family="t",
+                            packet_directory=self.packets)
         self.assertIn("报文 TX", first["items"][0]["text"])
         second = search_logs(self.logs, {"filename": name, "record": "packet", "limit": "1",
-                                         "cursor": first["next_cursor"]}, family="t")
+                                         "cursor": first["next_cursor"]}, family="t",
+                             packet_directory=self.packets)
         self.assertIn("报文 RX", second["items"][0]["text"])
 
 

@@ -17,7 +17,7 @@ from weakref import WeakValueDictionary
 
 from core.scdfe_control import InstanceLock
 from scdfe_c.web.process_control import runtime_python
-from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, ScadaStore
+from scdfe_c.web.service import ApiError, DEFAULT_DB, KIND_TABLES, SCHEMA_DIR, ScadaStore
 
 CHANNEL_TABLE = "fes_scdfe_t_define"
 POINT_TABLE = "fes_scdfe_t_point_define"
@@ -219,7 +219,38 @@ class TransStore:
         page["items"] = [self._point_response(row) for row in page["items"]]
         return page
 
-    def create_point(self, channel_id: Any, body: dict[str, Any]) -> dict[str, Any]:
+    def source_catalog(self, kind: str, rtu_id: Any | None = None) -> dict[str, Any]:
+        """List selectable source RTUs and points from the C acquisition tables."""
+        kind = str(kind or "").lower()
+        table = KIND_TABLES.get(kind)
+        if table is None:
+            raise ApiError(400, "源数据 kind 必须是 yc、yx、yk 或 yt")
+        try:
+            selected_rtu = None if rtu_id in (None, "") else int(rtu_id)
+        except (TypeError, ValueError) as exc:
+            raise ApiError(400, "源 RTU 必须是正整数") from exc
+        if selected_rtu is not None and selected_rtu <= 0:
+            raise ApiError(400, "源 RTU 必须是正整数")
+        with self.store.connection() as con:
+            rtus = [dict(row) for row in con.execute(
+                f"SELECT r.rtu_id, COALESCE(r.code,'') AS code, "
+                f"COALESCE(r.name,'') AS name, COALESCE(r.channel_type,'') AS channel_type, "
+                f"COUNT(p.pnt_no) AS point_count "
+                f"FROM fes_rtu_define r JOIN {table} p ON p.rtu_id=r.rtu_id "
+                "GROUP BY r.rtu_id,r.code,r.name,r.channel_type ORDER BY r.rtu_id"
+            )]
+            points = []
+            if selected_rtu is not None:
+                points = [dict(row) for row in con.execute(
+                    f"SELECT rtu_id,pnt_no,COALESCE(code,'') AS code, "
+                    f"COALESCE(name,'') AS name,value,status FROM {table} "
+                    "WHERE rtu_id=? ORDER BY pnt_no", (selected_rtu,)
+                )]
+        for row in points:
+            row["kind"] = kind
+        return {"kind": kind, "rtus": rtus, "items": points, "rtu_id": selected_rtu}
+
+    def _point_values(self, channel_id: Any, body: dict[str, Any], *, allow_missing_pnt_no: bool = False) -> tuple[int, dict[str, Any]]:
         cid = self._channel_key(channel_id)[0]
         self.get_channel(cid)
         columns = self._columns(POINT_TABLE)
@@ -233,13 +264,19 @@ class TransStore:
         if values.pop("source_kind", values["kind"]) != values["kind"]:
             raise ApiError(400, "点映射 kind 必须与 source_kind 一致")
         values.setdefault("source_pnt_no", values.get("pnt_no"))
-        for key in ("pnt_no", "source_rtu_id", "source_pnt_no"):
+        if allow_missing_pnt_no and values.get("pnt_no") in (None, ""):
+            values.pop("pnt_no", None)
+        for key in (("source_rtu_id", "source_pnt_no") if allow_missing_pnt_no else ("pnt_no", "source_rtu_id", "source_pnt_no")):
             try:
                 values[key] = int(values[key])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ApiError(400, f"点映射 {key} 必须是正整数") from exc
             if values[key] <= 0:
                 raise ApiError(400, f"点映射 {key} 必须是正整数")
+        return cid, values
+
+    def create_point(self, channel_id: Any, body: dict[str, Any]) -> dict[str, Any]:
+        cid, values = self._point_values(channel_id, body)
         # A mapping may be created before the source RTU/point is provisioned.
         # The runtime skips a missing source row and starts transmission as soon
         # as the corresponding scdfe_c definition appears.  This also makes
@@ -248,6 +285,49 @@ class TransStore:
         with self._control(cid):
             self.get_channel(cid)
             return self._point_response(self.store.create_row(POINT_TABLE, values))
+
+    def create_points_batch(self, channel_id: Any, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """Create several mappings in one channel-control transaction."""
+        items = body.get("items") if isinstance(body, dict) else None
+        if not isinstance(items, list) or not items or len(items) > 500:
+            raise ApiError(400, "批量点映射 items 必须包含 1..500 项")
+        cid = self._channel_key(channel_id)[0]
+        prepared = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ApiError(400, "批量点映射每一项必须是对象")
+            prepared.append(self._point_values(cid, item, allow_missing_pnt_no=True)[1])
+        explicit = [item["pnt_no"] for item in prepared if item.get("pnt_no") is not None]
+        if len(explicit) != len(set(explicit)):
+            raise ApiError(409, "批量点映射包含重复的转发点号", code="conflict")
+        with self._control(cid):
+            self.get_channel(cid)
+            with self.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                next_no = con.execute(
+                    f"SELECT COALESCE(MAX(pnt_no),0)+1 FROM {POINT_TABLE} WHERE channel_id=?", (cid,)
+                ).fetchone()[0]
+                used = set(explicit)
+                for values in prepared:
+                    if values.get("pnt_no") is None:
+                        while next_no in used:
+                            next_no += 1
+                        values["pnt_no"] = next_no
+                        used.add(next_no)
+                        next_no += 1
+                    normalised = self.store._normalise(POINT_TABLE, values)
+                    columns = self.store.schema(POINT_TABLE)["columns"]
+                    names = [column["eng_name"] for column in columns if column["eng_name"] in normalised]
+                    con.execute(
+                        f"INSERT INTO {POINT_TABLE} ({', '.join(names)}) "
+                        f"VALUES ({', '.join('?' for _ in names)})",
+                        [normalised[name] for name in names],
+                    )
+                rows = [self._point_response(self.store._read(
+                    con, POINT_TABLE, [cid, values["pnt_no"], values["kind"]]
+                )) for values in prepared]
+                con.commit()
+        return rows
 
     def get_point(self, channel_id: Any, key: list[Any]) -> dict[str, Any]:
         self.get_channel(channel_id)
@@ -419,20 +499,34 @@ class TransStore:
             rows.append(item)
         return rows
 
-    def logs(self, channel_id: Any | None = None, limit: int = 200) -> dict[str, Any]:
+    def logs(self, channel_id: Any | None = None, limit: int = 200, *, record: str = "runtime") -> dict[str, Any]:
+        return self._logs_for_record(channel_id, limit, record)
+
+    def _logs_for_record(self, channel_id: Any | None, limit: int, record: str) -> dict[str, Any]:
+        if record not in {"runtime", "packet"}:
+            raise ApiError(400, "记录类型必须是 runtime 或 packet")
+        from core.log_paths import packet_log_directory
         log_root = self.db_path.parent / "logs"
-        if not log_root.is_dir():
-            return {"items": [], "total": 0}
+        packet_root = packet_log_directory(log_root)
+        active_root = packet_root if record == "packet" else log_root
+        if not active_root.is_dir():
+            return {"items": [], "total": 0, "record": record, "directory": str(active_root)}
         from core.web_logs import log_files
         query = {"process": f"scdfe_t-channel-{int(channel_id)}"} if channel_id is not None else {}
+        query["record"] = record
         files = [{"filename": item["name"], "size": item["size"], "mtime": item["modified_at"]}
-                 for item in log_files(log_root, "t", query)["items"]]
+                 for item in log_files(log_root, "t", query, packet_directory=packet_root)["items"]]
         files.sort(key=lambda item: item["mtime"], reverse=True)
-        return {"items": files[:max(1, min(int(limit), 1000))], "total": len(files)}
+        return {"items": files[:max(1, min(int(limit), 1000))], "total": len(files),
+                "record": record, "directory": str(active_root)}
 
-    def read_log(self, filename: str, tail: int = 300) -> dict[str, Any]:
+    def read_log(self, filename: str, tail: int = 300, *, record: str = "runtime") -> dict[str, Any]:
         from scdfe_c.web.log_query import LOG_PATTERNS, _relative_filename
-        root = (self.db_path.parent / "logs").resolve()
+        if record not in {"runtime", "packet"}:
+            raise ApiError(400, "记录类型必须是 runtime 或 packet")
+        from core.log_paths import packet_log_directory
+        runtime_root = (self.db_path.parent / "logs").resolve()
+        root = (packet_log_directory(runtime_root) if record == "packet" else runtime_root).resolve()
         try:
             path = root / _relative_filename(root, filename, LOG_PATTERNS["t"])
             if path.is_symlink():
@@ -466,4 +560,5 @@ class TransStore:
         except FileNotFoundError as exc:
             raise ApiError(404, "日志文件不存在", code="not_found") from exc
         return {"filename": filename, "lines": lines[-count:],
-                "total": None if start else len(lines), "truncated": bool(start)}
+                "total": None if start else len(lines), "truncated": bool(start),
+                "record": record, "directory": str(root)}

@@ -85,6 +85,41 @@ class TransWebReviewTests(unittest.TestCase):
         status, _ = self.request(server, "/api/trans/channels/1/points?offset=-1")
         self.assertEqual(status, 400)
 
+    def test_source_catalog_lists_existing_rtu_and_points(self):
+        self.service.store.create_row("fes_rtu_define", {
+            "rtu_id": 7, "channel_id": 70, "channel_type": "iec104", "name": "源站",
+        })
+        self.service.store.create_row("fes_yc_define", {
+            "rtu_id": 7, "pnt_no": 3, "code": "YC3", "name": "母线电压",
+        })
+        server = self.http_server()
+        status, catalog = self.request(server, "/api/trans/source-catalog?kind=yc&rtu_id=7")
+        self.assertEqual(status, 200)
+        self.assertEqual(catalog["rtus"][0]["rtu_id"], 7)
+        self.assertEqual(catalog["items"][0]["pnt_no"], 3)
+        self.assertEqual(catalog["items"][0]["name"], "母线电压")
+
+    def test_batch_point_mapping_allocates_forward_numbers(self):
+        self.service.store.create_row("fes_rtu_define", {
+            "rtu_id": 7, "channel_id": 70, "channel_type": "iec104", "name": "源站",
+        })
+        with self.service.store.connection() as con:
+            con.executemany(
+                "INSERT INTO fes_yc_define(rtu_id,pnt_no,name) VALUES(?,?,?)",
+                [(7, 3, "YC3"), (7, 4, "YC4")],
+            )
+            con.commit()
+        server = self.http_server()
+        status, result = self.request(server, "/api/trans/channels/1/points/batch", "POST", {
+            "items": [
+                {"kind": "yc", "source_rtu_id": 7, "source_pnt_no": 3},
+                {"kind": "yc", "source_rtu_id": 7, "source_pnt_no": 4},
+            ],
+        })
+        self.assertEqual(status, 201, result)
+        self.assertEqual([item["pnt_no"] for item in result["items"]], [1, 2])
+        self.assertEqual(self.service.point_page(1)["total"], 2)
+
     def test_current_etag_deletes_channel_and_mappings(self):
         self.service.create_point(1, {"pnt_no": 1, "kind": "yc", "source_rtu_id": 7, "source_pnt_no": 2})
         row = self.service.get_channel(1)

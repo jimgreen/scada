@@ -65,7 +65,7 @@ class PacketLoggingTests(unittest.TestCase):
             service = IEC104Service(store)
             service._on_receive_raw(bytes.fromhex("68 04 07 00 00 00"))
             service._on_send_raw(bytes.fromhex("68 04 0b 00 00 00"))
-            files = list((Path(root) / "logs").rglob("scdfe_s-iec104-*.log"))
+            files = list((Path(root) / "packets").rglob("scdfe_s-iec104-*.log"))
             self.assertEqual(len(files), 1)
             content = files[0].read_text(encoding="utf-8")
             self.assertIn("[报文] 报文 RX", content)
@@ -73,7 +73,7 @@ class PacketLoggingTests(unittest.TestCase):
             self.assertIn("[报文] 报文 TX", content)
             restored = IEC104Service(store)
             self.assertTrue(any(item["level"] == "PACKET" and "HEX=68 04 07 00 00 00" in item["message"]
-                                for item in restored.logs(500)))
+                                for item in restored.logs(500, record="packet")))
 
 
 class LivePacketLoggingTests(unittest.TestCase):
@@ -106,8 +106,9 @@ class LivePacketLoggingTests(unittest.TestCase):
         return client
 
     def content(self, process):
-        return "\n".join(p.read_text(encoding="utf-8") for p in
-                         (self.root / "logs").rglob(f"{process}-*.log"))
+        files = list((self.root / "logs").rglob(f"{process}-*.log"))
+        files.extend((self.root / "packets").rglob(f"{process}-*.log"))
+        return "\n".join(p.read_text(encoding="utf-8") for p in files)
 
     def assert_both_directions(self, process):
         content = self.content(process)

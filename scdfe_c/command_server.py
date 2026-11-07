@@ -32,6 +32,7 @@ from typing import Any
 from core.network_limits import LISTEN_BACKLOG
 from core.process_registry import PROCESS_TABLE, ProcessLease
 from core.scdfe_control import InstanceLock, ensure_control_row, log_directory
+from core.log_paths import packet_log_directory
 from . import ScdfeLogger
 from .web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
 from .writer_ipc import WriterClient, WriterRequestError, WriterUnavailable, _command_json
@@ -269,8 +270,9 @@ class CommandServer:
             raise ValueError("retention_hours 必须为正整数")
         if self.request_timeout <= 0:
             raise ValueError("request_timeout 必须为正数")
-        self.logger = ScdfeLogger(Path(log_dir).resolve() if log_dir else self.db_path.parent / "logs",
-                                  process_name="scdfe_c-command-server")
+        runtime_log_dir = Path(log_dir).resolve() if log_dir else self.db_path.parent / "logs"
+        self.logger = ScdfeLogger(runtime_log_dir, process_name="scdfe_c-command-server",
+                                  packet_directory=packet_log_directory(runtime_log_dir))
         self.writer = writer or WriterClient(self.db_path, timeout=self.request_timeout)
         self._server: _CommandTCPServer | None = None
         self._thread: threading.Thread | None = None
@@ -527,7 +529,8 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
                 _update_command_row(store, process_status=PROCESS_RUNNING, process_pid=os.getpid(),
                                     process_heartbeat_time=int(time.time() * 1000))
                 ScdfeLogger.cleanup(server.logger.directory, retention_hours=server.retention_hours,
-                                    process_name=server.logger.process_name)
+                                    process_name=server.logger.process_name,
+                                    packet_directory=server.logger.packet_directory)
             except Exception as exc:  # keep the endpoint alive while recording failure
                 try:
                     lease.heartbeat(status=PROCESS_ERROR, error=str(exc), force=True)

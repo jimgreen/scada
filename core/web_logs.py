@@ -5,10 +5,13 @@ from core.log_paths import log_entries
 from scdfe_c.web.log_query import LOG_PATTERNS, search_logs
 
 
-def log_files(directory, family, query):
-    if set(query) - {"process"}:
+def log_files(directory, family, query, *, packet_directory=None):
+    if set(query) - {"process", "record", "channel_id"}:
         raise ValueError("未知日志文件查询参数")
-    root = Path(directory).resolve()
+    record = query.get("record", "runtime") or "runtime"
+    if record not in {"runtime", "packet"}:
+        raise ValueError("记录类型无效")
+    root = Path(packet_directory if record == "packet" and packet_directory is not None else directory).resolve()
     items = []
     prefix = query["process"] + "-" if query.get("process") else f"scdfe_{family}-"
     for entry, name in log_entries(root, prefix):
@@ -25,10 +28,10 @@ def log_files(directory, family, query):
         items.append({"name": name, "hour": hour, "process": process,
                       "size": stat.st_size, "modified_at": int(stat.st_mtime * 1000)})
     items.sort(key=lambda row: (row["hour"], row["name"]), reverse=True)
-    return {"items": items, "total": len(items), "directory": str(root)}
+    return {"items": items, "total": len(items), "directory": str(root), "record": record}
 
 
-def log_browser(directory, family, search, query):
+def log_browser(directory, family, search, query, *, packet_directory=None):
     if family == "t" and "channel_id" in query:
         channel = query["channel_id"]
         if (not isinstance(channel, str) or len(channel) > 19 or not channel.isascii()
@@ -40,4 +43,5 @@ def log_browser(directory, family, search, query):
         # One T process owns one channel; historical packets need no channel marker.
         query = {k: v for k, v in query.items() if k != "channel_id"}
         query["process"] = process
-    return search_logs(directory, query, family=family) if search else log_files(directory, family, query)
+    return (search_logs(directory, query, family=family, packet_directory=packet_directory)
+            if search else log_files(directory, family, query, packet_directory=packet_directory))

@@ -4,6 +4,7 @@
   const $ = (name) => document.getElementById("lb-" + name);
   const module = document.body.dataset.logModule;
   const PAGE_SIZE = 50;
+  let activeRecord = "runtime";
   const serviceNames = {
     iec104: "IEC104", "modbus-tcp": "Modbus TCP 主站", "modbus-tcp-server": "Modbus TCP 从站",
     "modbus-rtu": "Modbus RTU 主站", "modbus-rtu-server": "Modbus RTU 从站",
@@ -150,7 +151,7 @@
       params.set("filename", selected);
     }
     for (const [id, key] of [["process", "process"], ["file-query", "file_query"],
-      ["keyword", "q"], ["record", "record"], ["direction", "direction"],
+      ["keyword", "q"], ["direction", "direction"],
       ["level", "level"], ["limit", "limit"]]) {
       const value = $(id).value.trim();
       if (!value) continue;
@@ -158,6 +159,7 @@
         params.set("channel_id", value.slice("scdfe_t-channel-".length));
       } else params.set(key, value);
     }
+    params.set("record", activeRecord);
     if ($("channel")?.value.trim()) params.set("channel_id", $("channel").value.trim());
     for (const key of ["start", "end"]) {
       if (!$(key).validity.valid) throw new Error("请输入有效的开始和结束时间");
@@ -236,13 +238,13 @@
     refreshing = true;
     status("正在读取文件目录…");
     try {
-      const result = await api("/api/log-files");
+      const result = await api("/api/log-files?record=" + encodeURIComponent(activeRecord));
       if (version !== listVersion) return;
       files = result.items;
       updateProcesses();
       const previous = selected;
       reconcileSelection($("follow").checked);
-      $("directory").textContent = "日志目录：" + result.directory;
+      $("directory").textContent = (activeRecord === "packet" ? "报文目录：" : "运行日志目录：") + result.directory;
       status("目录已更新 · " + new Date().toLocaleTimeString());
       if (selected !== previous) resetSearch();
       else if (!follow || batch === 0) await search(true);
@@ -253,6 +255,19 @@
     }
   }
   $("refresh").addEventListener("click", () => refresh());
+  document.querySelectorAll(".lb-record-tab").forEach((tab) => tab.addEventListener("click", () => {
+    const record = tab.dataset.record;
+    if (!record || record === activeRecord || refreshing) return;
+    activeRecord = record;
+    document.querySelectorAll(".lb-record-tab").forEach((node) =>
+      node.setAttribute("aria-selected", String(node.dataset.record === activeRecord)));
+    $("record").value = activeRecord;
+    $("direction").disabled = activeRecord === "runtime";
+    if (activeRecord === "runtime") $("direction").value = "";
+    selected = ""; filePage = 0; files = []; renderedTree = "";
+    resetSearch();
+    refresh();
+  }));
   $("files-prev").addEventListener("click", () => { filePage--; renderTree(); });
   $("files-next").addEventListener("click", () => { filePage++; renderTree(); });
   $("process").addEventListener("change", () => {
@@ -264,7 +279,12 @@
   for (const id of ["scope", "record", "direction", "level", "limit", "start", "end"]) {
     $(id).addEventListener("change", () => {
       if (id === "record") {
-        $("direction").disabled = $("record").value === "runtime";
+        const requested = $("record").value;
+        if (requested !== activeRecord) {
+          document.querySelector('.lb-record-tab[data-record="' + requested + '"]')?.click();
+          return;
+        }
+        $("direction").disabled = activeRecord === "runtime";
         if ($("direction").disabled) $("direction").value = "";
       }
       resetSearch();
@@ -273,8 +293,9 @@
   $("channel")?.addEventListener("input", () => resetSearch(250));
   $("keyword").addEventListener("input", () => resetSearch(250));
   $("clear").addEventListener("click", () => {
-    for (const id of ["record", "direction", "level", "keyword", "start", "end"]) $(id).value = "";
-    $("direction").disabled = false;
+    $("record").value = activeRecord;
+    for (const id of ["direction", "level", "keyword", "start", "end"]) $(id).value = "";
+    $("direction").disabled = activeRecord === "runtime";
     if ($("channel")) $("channel").value = "";
     resetSearch();
   });
@@ -295,7 +316,7 @@
     const url = URL.createObjectURL(new Blob(["\ufeff", text], {type: "text/plain;charset=utf-8"}));
     const link = document.createElement("a");
     link.href = url;
-    link.download = "scdfe_" + module + "-logs-batch-" + (batch + 1) + ".log";
+    link.download = "scdfe_" + module + "-" + activeRecord + "-batch-" + (batch + 1) + ".log";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
@@ -307,6 +328,8 @@
       $("process").value = option.value;
     }
   }
+  $("record").value = activeRecord;
+  $("direction").disabled = true;
   setInterval(() => { if (!document.hidden && $("follow").checked) refresh(true); }, 5000);
   refresh();
 })();

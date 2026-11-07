@@ -86,22 +86,26 @@ GET/PATCH/DELETE       /api/channels/{rtu_id}/points/{kind}/{pnt_no}
 `GET /api/monitor/logs`，服务启停使用
 `POST /api/monitor/communications/{service}/start|stop`。
 
-日志页 `/logs` 左侧按年、月、日、小时展示数据库旁 `logs/` 中的文件，右侧读取正文。
-可选择协议服务、当前文件或全部匹配文件，并组合筛选报文/运行日志、RX/TX、级别、
-关键字和时间范围；支持历史分批检索、自动换行、跟随最新和导出本批结果。
+日志页 `/logs` 先用分页标签选择“运行日志”或“报文日志”。左侧按年、月、日、小时展示
+数据库旁对应目录中的文件，右侧读取正文；运行日志只读 `logs/YYYY/MM/DD/HH/`，报文日志
+只读 `packets/YYYY/MM/DD/HH/`，两棵目录树不混写、不共用文件。可选择协议服务、当前文件
+或全部匹配文件，并组合筛选 RX/TX、级别、关键字和时间范围；支持历史分批检索、自动换行、
+跟随最新和导出本批结果。
 文件目录接口为 `GET /api/log-files`，正文检索接口为 `GET /api/log-files/search`。
-检索参数包括 `filename`（相对 `logs/` 的文件路径）、`process`、`file_query`、`q`、
-`record=packet|runtime`、`direction=RX|TX`、`level=INFO|PACKET|WARNING|ERROR|PROCESS`、
+检索参数包括 `record=runtime|packet`（必须与所选标签一致）、`filename`（相对当前
+`logs/` 或 `packets/` 目录的文件路径）、`process`、`file_query`、`q`、`direction=RX|TX`、
+`level=INFO|PACKET|WARNING|ERROR|PROCESS`、
 `start/end`（带时区的 ISO 8601 时间）、`limit=1..5000` 和 `cursor`。
 使用响应中的 `next_cursor` 继续向前检索；改变筛选条件后应清除游标。
 这些接口只读取 `scdfe_s` 的日志，历史检索不受内存最近记录数量限制。
-报文默认不写入文件。在“运行日志”的“报文保存范围”中选择具体通道，再切换“保存报文（调试）”，只影响该通道；“默认设置”影响未单独设置的通道，“恢复使用默认设置”清除当前通道的单独设置。设置持久化在数据库旁的 `<数据库文件名>.scdfe_s.packet-log.json`，约 1 秒内生效，无需重启协议服务。`GET/PUT /api/packet-recording` 管理默认值，`GET/PUT /api/packet-recording/channels/<channel_id>` 管理通道设置；PUT 请求体为 `{"enabled":true}` / `{"enabled":false}`，通道接口可用 `{"enabled":null}` 恢复默认。通道编号来自服务启动时绑定的 RTU 的 `channel_id`；未绑定 RTU 的独立模拟服务使用默认设置。同一通道的客户端和服务端共用该通道设置，三套应用之间互不影响。普通日志、历史文件和界面即时通信记录不受影响。
+报文默认不写入文件。在“运行日志”的“报文保存范围”中选择具体通道，再切换“保存报文（调试）”，只影响该通道；“默认设置”影响未单独设置的通道，“恢复使用默认设置”清除当前通道的单独设置。设置持久化在数据库旁的 `<数据库文件名>.scdfe_s.packet-log.json`，约 1 秒内生效，无需重启协议服务。`GET/PUT /api/packet-recording` 管理默认值，`GET/PUT /api/packet-recording/channels/<channel_id>` 管理通道设置；PUT 请求体为 `{"enabled":true}` / `{"enabled":false}`，通道接口可用 `{"enabled":null}` 恢复默认。通道编号来自服务启动时绑定的 RTU 的 `channel_id`；未绑定 RTU 的独立模拟服务使用默认设置。同一通道的客户端和服务端共用该通道设置，三套应用之间互不影响。普通日志、已写入文件和界面即时通信记录不受影响。
 
 “通道数据”列表也提供“报文保存”列：显示每个通道的实际开启/关闭状态及“沿用默认/单独设置”，可直接切换或恢复默认，与运行日志页使用同一设置。页面每 5 秒刷新保存状态，保存失败会恢复原状态并显示错误。
 
-开启保存后的新收发记录使用独立类型 `[报文]`（`PACKET`），保留 RX/TX 和十六进制原始字节。
-运行日志的“报文通道号”可与协议服务、RX/TX、关键字同时筛选；对应接口参数为 `GET /api/log-files/search?channel_id=10&direction=RX`。新报文记录保存收发时绑定的通道号，已停用或重新配置的通道也按原通道查询。旧报文或未绑定通道的记录仍可在不指定通道号时查看。
-历史 `[日志] 报文 ...` 仍可通过 `record=packet` 检索，文件原文和类型保持原样。
+开启保存后的新收发记录使用独立类型 `[报文]`（`PACKET`），写入 `packets/YYYY/MM/DD/HH/`，
+保留 RX/TX 和十六进制原始字节；运行日志不再追加报文行。报文日志页可按通道、协议服务、
+RX/TX 和关键字筛选，对应接口参数为 `GET /api/log-files/search?record=packet&channel_id=10&direction=RX`。
+新报文记录保存收发时绑定的通道号，已停用或重新配置的通道也按原通道查询。报文查询只读取 `packets/YYYY/MM/DD/HH/`，不会把运行日志中的内容复制到报文目录。
 
 ## 点表刷新与批量更新
 

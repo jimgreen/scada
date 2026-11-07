@@ -60,7 +60,10 @@ class IEC104Service:
         self._config_error = None
         self._config = self._load_config()
         self._file_log = ServiceFileLog(store, "iec104", startup_catalog=startup_catalog)
-        self._logs: deque[dict[str, Any]] = deque(self._file_log.recent(self.LOG_LIMIT), maxlen=self.LOG_LIMIT)
+        initial_logs = self._file_log.recent(self.LOG_LIMIT, record="runtime")
+        initial_logs.extend(self._file_log.recent(self.LOG_LIMIT, record="packet"))
+        initial_logs.sort(key=lambda item: item.get("time", ""))
+        self._logs: deque[dict[str, Any]] = deque(initial_logs[-self.LOG_LIMIT:], maxlen=self.LOG_LIMIT)
         self._alerts: deque[dict[str, Any]] = deque(maxlen=self.ALERT_LIMIT)
         self._connections: deque[dict[str, Any]] = deque(maxlen=self.CONNECTION_LIMIT)
         self._started_at: int | None = None
@@ -559,9 +562,13 @@ class IEC104Service:
             })
         return result
 
-    def logs(self, limit: int = 200) -> list[dict[str, Any]]:
+    def logs(self, limit: int = 200, record: str = "runtime") -> list[dict[str, Any]]:
+        if record not in {"runtime", "packet"}:
+            raise ValueError("记录类型无效")
         with self._log_lock:
-            return list(self._logs)[-max(1, min(int(limit), self.LOG_LIMIT)):][::-1]
+            rows = [item for item in self._logs
+                    if (item.get("level") == "PACKET") == (record == "packet")]
+            return rows[-max(1, min(int(limit), self.LOG_LIMIT)):][::-1]
 
     def alerts(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._log_lock:

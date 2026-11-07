@@ -86,7 +86,9 @@ Web 启动和停止是推荐方式。需要脚本或调试时，可直接运行�
 
 四遥页面的通道选择框使用 `GET /api/trans/channels?view=selector`，只返回编号、编码、名称和规约。默认列表仍返回完整通道数据。刷新相同点映射时，界面保留原行和焦点；修改后使用新的版本号继续编辑。
 
-日志目录和检索均可传 `channel_id`，例如 `GET /api/log-files/search?channel_id=1&record=packet&direction=RX`。转发日志按所属通道的文件名过滤，旧报文不需要包含通道标记。大文件尾读只向前读取必要的块，最多 2 MB；小文件仍显示准确的总行数。
+日志目录和检索均可传 `channel_id`，例如 `GET /api/log-files/search?record=packet&channel_id=1&direction=RX`。
+转发日志按所属通道的文件名过滤，报文文件名按所属通道过滤；通道标记由文件名和查询参数共同确定。大文件尾读只向前读取必要的块，最多 2 MB；
+小文件仍显示准确的总行数。
 
 ## Web API
 
@@ -104,8 +106,9 @@ PATCH  /api/trans/channels/{channel_id}/points/{kind}/{pnt_no}
 DELETE /api/trans/channels/{channel_id}/points/{kind}/{pnt_no}
 GET    /api/trans/processes
 POST   /api/trans/channels/{channel_id}/start|stop
-GET    /api/trans/logs?channel_id=1
-GET    /api/trans/log?filename=logs/2026/11/04/08/scdfe_t-channel-1-20261104-08.log&tail=300
+GET    /api/trans/logs?channel_id=1&record=runtime
+GET    /api/trans/log?filename=2026/11/04/08/scdfe_t-channel-1-20261104-08.log&record=runtime&tail=300
+GET    /api/trans/log?filename=2026/11/04/08/scdfe_t-channel-1-20261104-08.log&record=packet&tail=300
 GET    /api/health
 ```
 
@@ -113,26 +116,26 @@ GET    /api/health
 
 ## 进程监控和日志
 
-“进程监控”展示每个转发通道的状态、PID、启动时间、停止时间、心跳、退出码和最近错误；可以独立启动/停止，某个通道异常不会停止其他通道。日志按小时写入数据库旁的 `logs/YYYY/MM/DD/HH/`，每个转发通道一个文件，例如：
+“进程监控”展示每个转发通道的状态、PID、启动时间、停止时间、心跳、退出码和最近错误；可以独立启动/停止，某个通道异常不会停止其他通道。运行日志按小时写入数据库旁的 `logs/YYYY/MM/DD/HH/`，报文日志按小时写入独立的 `packets/YYYY/MM/DD/HH/`；每个转发通道在两个目录各自使用对应文件，例如：
 
 ```text
 logs/2026/11/04/08/scdfe_t-channel-1-20261104-08.log
+packets/2026/11/04/08/scdfe_t-channel-1-20261104-08.log
 ```
 
 不同通道的启停可以并行，同一通道的管理请求仍互斥。周期心跳只更新时间，不使正在编辑的定义失效；通道配置或启停状态变化仍更新版本。通道及点映射表单提交已读取的版本，遇到其他操作员先保存时会报告冲突，重新打开记录后再修改。
 
-正文时间只有 `HH:MM:SS`，日志类型使用“日志/报文/警告/错误/进程”。通道启动、保留期变更及运行中每小时，按最后修改时间清理本通道超过 `log_retention_hours` 的小时日志。其他通道、其他服务以及不符合命名规则的文件不参与清理。
-报文默认不写入文件。在“运行日志”的“报文保存范围”中选择具体转发通道，再切换“保存报文（调试）”，只影响该通道；“默认设置”影响未单独设置的通道，“恢复使用默认设置”清除当前通道的单独设置。设置持久化在数据库旁的 `<数据库文件名>.scdfe_t.packet-log.json`，约 1 秒内生效，不重连通道，普通日志和历史文件不受影响。`GET/PUT /api/packet-recording` 管理默认值；`GET/PUT /api/packet-recording/channels/<channel_id>` 管理通道设置。PUT 请求体为 `{"enabled":true}` / `{"enabled":false}`，通道接口可用 `{"enabled":null}` 恢复默认。
+正文时间只有 `HH:MM:SS`，运行日志类型使用“日志/警告/错误/进程”，报文日志类型为“报文”。通道启动、保留期变更及运行中每小时，按最后修改时间分别清理本通道超过 `log_retention_hours` 的 `logs/` 和 `packets/` 小时文件。其他通道、其他服务以及不符合命名规则的文件不参与清理。
+报文默认不写入文件。在“运行日志”的“报文保存范围”中选择具体转发通道，再切换“保存报文（调试）”，只影响该通道；“默认设置”影响未单独设置的通道，“恢复使用默认设置”清除当前通道的单独设置。设置持久化在数据库旁的 `<数据库文件名>.scdfe_t.packet-log.json`，约 1 秒内生效，不重连通道，普通日志和已写入文件不受影响。`GET/PUT /api/packet-recording` 管理默认值；`GET/PUT /api/packet-recording/channels/<channel_id>` 管理通道设置。PUT 请求体为 `{"enabled":true}` / `{"enabled":false}`，通道接口可用 `{"enabled":null}` 恢复默认。
 
 “通道数据”列表也提供“报文保存”列：显示每个通道的实际开启/关闭状态及“沿用默认/单独设置”，可直接切换或恢复默认，与运行日志页使用同一设置。页面每 5 秒刷新保存状态，保存失败会恢复原状态并显示错误。
 
-开启保存后的新收发记录使用独立类型 `[报文]`（`PACKET`），保留 RX/TX 和十六进制原始字节；历史 `[日志] 报文 ...` 仍可通过 `record=packet` 检索，文件原文和类型保持原样。
-日志页 `/logs.html` 左侧按年、月、日、小时展示文件，右侧显示正文。可以按通道、
-文件名、报文/运行日志、RX/TX、关键词、时间范围和级别组合筛选，检索当前文件或全部匹配文件；
+开启保存后的新收发记录使用独立类型 `[报文]`（`PACKET`），只写入 `packets/`，保留 RX/TX 和十六进制原始字节；运行日志不会混入新报文。报文查询只读取 `packets/YYYY/MM/DD/HH/`，运行日志查询只读取 `logs/YYYY/MM/DD/HH/`。
+日志页 `/logs.html` 先选择“运行日志”或“报文日志”标签，再在左侧按年、月、日、小时展示对应目录文件，右侧显示正文。可以按通道、文件名、RX/TX、关键词、时间范围和级别组合筛选，检索当前文件或全部匹配文件；
 支持历史分批读取、自动换行、跟随最新和导出本批结果。
 
 文件目录接口为 `GET /api/log-files`，正文检索接口为 `GET /api/log-files/search`。
-检索参数包括 `filename`（相对 `logs/` 的文件路径）、`process=scdfe_t-channel-N`、
+检索参数包括 `filename`（相对当前 `logs/` 或 `packets/` 目录的文件路径）、`process=scdfe_t-channel-N`、
 `file_query`、`q`、`record=packet|runtime`、`direction=RX|TX`、
 `level=INFO|PACKET|WARNING|ERROR|PROCESS`、`start/end`（带时区的 ISO 8601 时间）、
 `limit=1..5000` 和 `cursor`。使用响应中的 `next_cursor` 继续向前检索；

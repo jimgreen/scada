@@ -23,6 +23,7 @@ from typing import Any
 
 from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
 from core.scdfe_control import InstanceLock
+from core.log_paths import packet_log_directory
 from scdfe_c import ScdfeLogger
 
 CHANNEL_TABLE = "fes_scdfe_t_define"
@@ -131,8 +132,10 @@ class TransRuntime:
         # modifying the operator's enable setting.
         self.require_enabled = bool(require_enabled)
         from core.packet_logging import packet_log_switch
-        self.logger = ScdfeLogger(Path(log_dir).resolve() if log_dir else self.db_path.parent / "logs",
+        runtime_log_dir = Path(log_dir).resolve() if log_dir else self.db_path.parent / "logs"
+        self.logger = ScdfeLogger(runtime_log_dir,
                                   process_name=f"scdfe_t-channel-{self.channel_id}",
+                                  packet_directory=packet_log_directory(runtime_log_dir),
                                   packet_switch=packet_log_switch(self.db_path, 't').for_channel(self.channel_id))
         self.server = None
         self.points: dict[tuple[str, int], TransPoint] = {}

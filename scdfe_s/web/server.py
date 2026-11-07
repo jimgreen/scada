@@ -207,13 +207,16 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                               "last_error": status.get("last_error")})
             return self._json(200, {"items": items, "total": len(items)})
         if parts == ["api", "monitor", "logs"]:
-            allowed = {"limit", "service", "level", "keyword"}
+            allowed = {"limit", "service", "level", "keyword", "record"}
             if method != "GET" or set(query) - allowed:
                 raise ApiError(405 if method != "GET" else 400, "日志监控接口参数不正确")
             try:
                 limit = max(1, min(int(query.get("limit", "200")), 1000))
             except ValueError as exc:
                 raise ApiError(400, "limit 必须是整数") from exc
+            record = query.get("record", "runtime") or "runtime"
+            if record not in {"runtime", "packet"}:
+                raise ApiError(400, "记录类型必须是 runtime 或 packet")
             selected = [query["service"]] if query.get("service") else list(services)
             unknown = [name for name in selected if name not in services]
             if unknown:
@@ -222,7 +225,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             keyword = query.get("keyword", "")
             items = []
             for slug in selected:
-                for item in services[slug].logs(limit):
+                for item in services[slug].logs(limit, record):
                     row = {"service": slug, **item}
                     if level and str(row.get("level", "")).upper() != level:
                         continue
@@ -245,9 +248,14 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts == ["api", "iec104", "logs"]:
             if method != "GET":
                 raise ApiError(405, "IEC104 日志接口只支持 GET")
-            if set(query) - {"limit"}:
+            if set(query) - {"limit", "record"}:
                 raise ApiError(400, "未知 IEC104 日志查询参数")
-            return self._json(200, {"items": service.logs(int(query.get("limit", "200")))})
+            record = query.get("record", "runtime") or "runtime"
+            try:
+                items = service.logs(int(query.get("limit", "200")), record)
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from exc
+            return self._json(200, {"items": items, "record": record})
         if parts == ["api", "iec104", "alerts"]:
             if method != "GET":
                 raise ApiError(405, "IEC104 告警接口只支持 GET")
@@ -370,8 +378,13 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"item": service.start() if parts[-1] == "start" else service.stop()})
         if parts == ["api", slug, "logs"]:
             if method != "GET": raise ApiError(405, "日志接口只支持 GET")
-            if set(query) - {"limit"}: raise ApiError(400, "未知日志查询参数")
-            return self._json(200, {"items": service.logs(int(query.get("limit", "200")))})
+            if set(query) - {"limit", "record"}: raise ApiError(400, "未知日志查询参数")
+            record = query.get("record", "runtime") or "runtime"
+            try:
+                items = service.logs(int(query.get("limit", "200")), record)
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from exc
+            return self._json(200, {"items": items, "record": record})
         if parts == ["api", slug, "alerts"]:
             if method != "GET": raise ApiError(405, "告警接口只支持 GET")
             if set(query) - {"limit"}: raise ApiError(400, "未知告警查询参数")
@@ -464,7 +477,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
             if method != "GET":
                 raise ApiError(405, "日志文件接口只支持 GET")
-            return self._json(200, log_browser(self.store.db_path.parent / "logs", "s", len(parts) == 3, query))
+            from core.log_paths import packet_log_directory
+            runtime_directory = self.store.db_path.parent / "logs"
+            return self._json(200, log_browser(runtime_directory, "s", len(parts) == 3, query,
+                                               packet_directory=packet_log_directory(runtime_directory)))
         # Handled routes return None after writing JSON; only False means
         # that dispatch should continue to the next route family.
         if self._monitor_control(parts, query, method) is not False:

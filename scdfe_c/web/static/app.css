@@ -856,6 +856,9 @@ tbody tr:hover .sticky-actions {
   flex: 1;
   min-height: 180px;
 }
+.log-record-tabs { display:flex; gap:6px; margin:0 0 10px; border-bottom:1px solid var(--line,#dfe6ed); }
+.log-record-tab { border:0; border-bottom:2px solid transparent; background:transparent; }
+.log-record-tab[aria-selected="true"] { color:var(--accent,#087f8c); border-bottom-color:var(--accent,#087f8c); font-weight:600; }
 .log-files {
   border: 1px solid var(--line);
   border-radius: 5px;

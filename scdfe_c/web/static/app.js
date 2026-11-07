@@ -1440,6 +1440,7 @@ const monitor = {
 const processRender = { rows: [] };
 const threadRender = { rows: [] };
 const logs = {
+  record: "runtime",
   files: [],
   filtered: [],
   selected: "",
@@ -1996,7 +1997,7 @@ async function loadScdfeLogs(refreshContent = true) {
   try {
     // Build the process menu from the complete index, never from its filtered
     // subset, so another process remains selectable after a filter change.
-    const data = await api("/api/scdfe_c/logs");
+    const data = await api("/api/scdfe_c/logs?record=" + encodeURIComponent(logs.record));
     if (request !== logs.request) return;
     logs.files = data.items;
     const selected = $("#log-process").value;
@@ -2022,7 +2023,9 @@ async function loadScdfeLogs(refreshContent = true) {
       processMenu.innerHTML = processOptions;
       processMenu.value = selected;
     }
-    $("#log-directory").textContent = "日志目录：" + data.directory;
+    $("#log-directory").textContent = (logs.record === "packet" ? "报文目录：" : "运行日志目录：") + data.directory;
+    $("#log-files-label").textContent = logs.record === "packet" ? "报文日志文件" : "运行日志文件";
+    $("#logs-panel h1").textContent = logs.record === "packet" ? "报文日志" : "运行日志";
     showError("#logs-error", null);
     await filterLogs(true, refreshContent);
     markUpdated();
@@ -2141,6 +2144,7 @@ function renderLogTree(items) {
 }
 function logSearchParams(filename) {
   const params = new URLSearchParams({ limit: $("#log-tail").value, ...logProcessFilter() });
+  params.set("record", logs.record);
   for (const [id, key] of [["log-search", "q"], ["log-level", "level"]]) {
     const value = $("#" + id).value.trim();
     if (value) params.set(key, value);
@@ -2179,7 +2183,9 @@ async function readLog(filename = logs.selected, changed = false, cursor = null,
   $("#log-download").disabled = true;
   $("#log-result-prev").disabled = true;
   $("#log-result-next").disabled = true;
-  $("#log-title").textContent = $("#log-scope").value === "all" ? "全部匹配文件 · 日志检索" : filename || "暂无匹配日志";
+  $("#log-title").textContent = $("#log-scope").value === "all"
+    ? "全部匹配文件 · " + (logs.record === "packet" ? "报文" : "运行日志") + "检索"
+    : filename || "暂无匹配日志";
   $("#log-meta").textContent = "正在按条件检索…";
   $("#log-lines").textContent = "正在检索…";
   $("#log-search-info").textContent = "";
@@ -2391,6 +2397,26 @@ $("#thread-next").onclick = () => {
   loadScdfe();
 };
 $("#logs-refresh").onclick = () => loadScdfeLogs(true);
+document.querySelectorAll(".log-record-tab").forEach((tab) => {
+  tab.onclick = () => {
+    const record = tab.dataset.record;
+    if (!record || record === logs.record || logs.loading) return;
+    logs.record = record;
+    logs.files = [];
+    logs.filtered = [];
+    logs.selected = "";
+    logs.offset = 0;
+    logs.cursor = null;
+    logs.history = [];
+    logs.nextCursor = null;
+    logFilesRender.files = [];
+    logFilesRender.selected = null;
+    document.querySelectorAll(".log-record-tab").forEach((node) =>
+      node.setAttribute("aria-selected", String(node.dataset.record === logs.record)));
+    resetLogContent("正在读取日志文件列表…");
+    loadScdfeLogs(true);
+  };
+});
 $("#log-scope").onchange = () => readLog(logs.selected, true);
 $("#log-process").onchange = () => {
   logs.offset = 0;

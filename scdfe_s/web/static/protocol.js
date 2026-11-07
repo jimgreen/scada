@@ -31,6 +31,30 @@ function protocolForm(form) {
 
 (function () {
   "use strict";
+  function initPageTabs() {
+    // The small DOM used by the request-contract regression tests does not
+    // implement querySelectorAll.  In a browser, the same guard keeps this
+    // presentation-only feature independent from protocol data loading.
+    if (typeof document.querySelectorAll !== "function") return;
+    const tabs = Array.from(document.querySelectorAll("[data-page-tab]"));
+    const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+    if (!tabs.length || !panels.length) return;
+    const activate = name => {
+      tabs.forEach(tab => {
+        const active = tab.dataset.pageTab === name;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach(panel => {
+        const active = panel.dataset.tabPanel === name;
+        panel.hidden = !active;
+      });
+    };
+    tabs.forEach(tab => tab.addEventListener("click", () => activate(tab.dataset.pageTab)));
+    const selected = tabs.find(tab => tab.getAttribute("aria-selected") === "true") || tabs[0];
+    activate(selected.dataset.pageTab);
+  }
+  initPageTabs();
   const configs = {
     "modbus-tcp": {slug:"modbus-tcp", fields:["mode","rtu_id","bind_ip","listen_port","remote_host","remote_port","unit_id","response_timeout","connect_timeout","retry_count","keep_alive"]},
     "modbus-tcp-server": {slug:"modbus-tcp-server", fields:["rtu_id","bind_ip","listen_port","unit_id"]},

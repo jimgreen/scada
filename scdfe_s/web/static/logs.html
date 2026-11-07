@@ -11,6 +11,10 @@
 <header></header>
 <main>
 <section class="log-browser" aria-label="日志文件浏览器">
+  <nav class="lb-record-tabs" aria-label="记录类别">
+    <button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button>
+    <button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button>
+  </nav>
   <div class="lb-toolbar">
     <label for="packet-recording-channel">报文保存范围</label><select id="packet-recording-channel" disabled><option value="">默认设置（未单独设置的通道）</option></select>
     <label class="lb-check"><input id="packet-recording" type="checkbox" disabled>保存报文（调试）</label>
@@ -34,7 +38,7 @@
       <div class="lb-reader-head"><div><strong id="lb-name">请选择日志文件</strong><small id="lb-meta">从左侧目录选择文件，或检索全部文件</small></div><button id="lb-export" disabled>导出本批</button></div>
       <div class="lb-reader-tools">
         <label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label>
-        <label>记录<select id="lb-record"><option value="">全部记录</option><option value="packet">仅报文</option><option value="runtime">仅运行日志</option></select></label>
+        <label>当前目录<select id="lb-record"><option value="runtime">运行日志</option><option value="packet">报文日志</option></select></label>
         <label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label>
         <label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label>
         <label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道" title="按报文保存时的通道号筛选；未标记通道的历史报文仅在不过滤时显示"></label>

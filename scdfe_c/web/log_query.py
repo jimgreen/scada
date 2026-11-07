@@ -17,7 +17,7 @@ MAX_RESULT_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 128 * 1024
 CHUNK_SIZE = 64 * 1024
 HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[(" + "|".join(LOG_LEVEL_CODES) + r")\](?:\s|$)")
-PACKET = re.compile(r"\s*报文\s+(RX|TX)\b")
+PACKET = re.compile(r"报文\s+(RX|TX)\b")
 PACKET_CHANNEL = re.compile(r"\s+通道=(0|[1-9][0-9]*)(?=\s)")
 LOG_PATTERNS = {
     "c": LOG_PATTERN,
@@ -179,7 +179,7 @@ def _reverse_lines(stream, end, budget, discard=False, *, max_line_bytes=None, i
             break
 
 
-def search_logs(directory, query, *, family="c"):
+def search_logs(directory, query, *, family="c", packet_directory=None):
     pattern = LOG_PATTERNS[family]
     allowed = {"q", "level", "start", "end", "process", "rtu_id", "filename", "file_query", "limit", "cursor", "record", "direction"}
     if family == "s":
@@ -216,7 +216,14 @@ def search_logs(directory, query, *, family="c"):
     # and timezone conversion for exact boundaries and DST behavior.
     start_day = _local_day(start)
     end_day = _local_day(end)
-    root = Path(directory).resolve()
+    # A PACKET level query is an explicit packet-log request even when a
+    # caller omits the redundant record=packet parameter.  The Web UI always
+    # sends both, while scripts may send only the level filter.
+    packet_query = record == "packet" or (not record and level == "PACKET")
+    if packet_query and packet_directory is not None:
+        root = Path(packet_directory).resolve()
+    else:
+        root = Path(directory).resolve()
     filename = _relative_filename(root, query["filename"], pattern) if query.get("filename") else None
     fingerprint = hashlib.sha256(json.dumps(
         {k: v for k, v in query.items() if k not in {"cursor", "limit"}}, sort_keys=True,
@@ -301,7 +308,7 @@ def search_logs(directory, query, *, family="c"):
                     if line is not None and (not needle or needle in line.casefold()):
                         header = HEADER.match(line)
                         header_level = LOG_LEVEL_CODES[header[2]] if header else ""
-                        packet = (PACKET.match(line, header.end()) if (record or direction or channel is not None)
+                        packet = (PACKET.search(line, header.end()) if (record or direction or channel is not None)
                                   and header_level in {"INFO", "PACKET"} else None)
                         # Historical packets used [日志]; keep their record and
                         # direction filters while new records have their own type.

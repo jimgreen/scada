@@ -276,26 +276,33 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"item": public_control_row(updated)})
         if parts[:3] == ["api", "scdfe_c", "logs"]:
             from scdfe_c import ScdfeLogger
+            from core.log_paths import packet_log_directory
             # ``ensure_control_row`` above already loaded the singleton
             # configuration. Reuse it instead of opening a second SQLite
             # connection merely to resolve the log directory on every poll.
             directory = log_directory(self.store, control_row)
+            packet_directory = packet_log_directory(directory)
+            record = query.get("record", "runtime") or "runtime"
+            if record not in {"runtime", "packet"}:
+                raise ApiError(400, "记录类型必须是 runtime 或 packet")
             if parts == ["api", "scdfe_c", "logs", "search"]:
                 if method != "GET":
                     raise ApiError(405, "日志检索接口只支持 GET")
                 from scdfe_c.web.log_query import search_logs
                 try:
-                    return self._json(200, search_logs(directory, query))
+                    return self._json(200, search_logs(directory, query,
+                                                       packet_directory=packet_directory))
                 except ValueError as exc:
                     raise ApiError(400, str(exc)) from exc
             if len(parts) == 3:
                 if method != "GET":
                     raise ApiError(405, "日志接口只支持 GET")
-                allowed = {"process", "rtu_id"}
+                allowed = {"process", "rtu_id", "record"}
                 if set(query) - allowed:
                     raise ApiError(400, "未知日志查询参数")
-                items = ScdfeLogger.list_files(directory)
-                for key in allowed:
+                items = ScdfeLogger.list_files(directory, record=record,
+                                               packet_directory=packet_directory)
+                for key in ("process", "rtu_id"):
                     if key in query:
                         if key == "rtu_id":
                             try:
@@ -305,17 +312,22 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                         else:
                             expected = query[key]
                         items = [item for item in items if item.get(key) == expected]
-                return self._json(200, {"items": items, "total": len(items), "directory": str(directory)})
+                active_directory = packet_directory if record == "packet" else directory
+                return self._json(200, {"items": items, "total": len(items),
+                                        "directory": str(active_directory), "record": record})
             if len(parts) >= 4 and method == "GET":
                 try:
                     tail = int(query.pop("tail", "200")) if "tail" in query else 200
                 except ValueError as exc:
                     raise ApiError(400, "tail 必须是整数") from exc
+                query.pop("record", None)
                 if query:
                     raise ApiError(400, "未知日志查询参数")
                 try:
                     filename = "/".join(parts[3:])
-                    return self._json(200, {"item": ScdfeLogger.read_file(directory, filename, tail=tail)})
+                    return self._json(200, {"item": ScdfeLogger.read_file(
+                        directory, filename, tail=tail, record=record,
+                        packet_directory=packet_directory)})
                 except (ValueError, FileNotFoundError) as exc:
                     raise ApiError(404, str(exc), code="not_found") from exc
             raise ApiError(405, "日志接口只支持 GET")

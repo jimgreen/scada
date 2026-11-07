@@ -23,6 +23,25 @@ class ServiceFileLogTests(unittest.TestCase):
         path.write_text(message, encoding="utf-8")
         return path
 
+    def packet_file(self, service, hour, message):
+        path = self.root / "packets" / hour[:4] / hour[4:6] / hour[6:8] / hour[9:]
+        path.mkdir(parents=True, exist_ok=True)
+        path /= f"scdfe_s-{service}-{hour}.log"
+        path.write_text(message, encoding="utf-8")
+        return path
+
+    def test_packet_history_uses_packet_tree_and_runtime_history_stays_separate(self):
+        self.file("iec104", "20261104-23", "23:01:00 [日志] runtime\n")
+        packet = self.packet_file("iec104", "20261105-00", "00:01:00 [报文] 报文 RX HEX=01\n")
+        history = ServiceFileLog(self.store, "iec104")
+        self.assertEqual([row["message"] for row in history.recent(record="runtime")], ["runtime"])
+        self.assertEqual([row["message"] for row in history.recent(record="packet")], ["报文 RX HEX=01"])
+        stale = time.time() - 721 * 3600
+        os.utime(packet, (stale, stale))
+        history._next_cleanup = 0
+        history.write("INFO", "cleanup")
+        self.assertFalse(packet.exists())
+
     def test_restored_history_excludes_server_with_same_protocol_prefix(self):
         for protocol in ("modbus-tcp", "modbus-rtu", "can"):
             with self.subTest(protocol=protocol):

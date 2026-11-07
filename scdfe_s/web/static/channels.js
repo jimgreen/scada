@@ -5,6 +5,36 @@
   const names = {yc:"遥测",yx:"遥信",yk:"遥控",yt:"遥调"};
   let selected = null, selectedPoint = null, offset = 0, limit = 100, total = 0, requestId = 0;
   let pointScope = "", channelsRequest = 0, channelRows = [];
+  const pointKinds = Object.keys(names);
+  function activeKind() { return $("#kind-filter")?.value || "yc"; }
+  function pointTableBody(kind = activeKind()) {
+    if (typeof document.querySelectorAll === "function") {
+      for (const page of document.querySelectorAll("[data-point-page]")) {
+        if (page.dataset.pointPage === kind) return page.querySelector("[data-points-body]");
+      }
+    }
+    return $("#points");
+  }
+  function setPointTab(kind) {
+    if (!pointKinds.includes(kind)) kind = "yc";
+    const filter = $("#kind-filter");
+    if (filter) filter.value = kind;
+    if (typeof document.querySelectorAll !== "function") return;
+    document.querySelectorAll("[data-point-tab]").forEach(tab => {
+      const selected = tab.dataset.pointTab === kind;
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+      tab.classList.toggle("active", selected);
+    });
+    document.querySelectorAll("[data-point-page]").forEach(page => {
+      page.hidden = page.dataset.pointPage !== kind;
+      page.classList.toggle("active", page.dataset.pointPage === kind);
+      const body = page.querySelector("[data-points-body]");
+      if (body) {
+        if (page.dataset.pointPage === kind) body.id = "points";
+        else if (body.id === "points") body.removeAttribute("id");
+      }
+    });
+  }
   const keyValue = raw => Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
   const versionHeaders = version => version == null ? {} : {"If-Match":String(version)};
   async function api(path, options) {
@@ -46,7 +76,7 @@
         if (previous !== selected?.rtu_id) { selectedPoint = null; offset = 0; }
         await loadPoints();
       }
-    } catch (error) { if (request === channelsRequest) notice($("#points") ? "#point-message" : "#channel-message", error.message, true); }
+    } catch (error) { if (request === channelsRequest) notice(pointTableBody() ? "#point-message" : "#channel-message", error.message, true); }
   }
   function fillChannel(row) {
     selected = row;
@@ -54,12 +84,14 @@
     showEditor("#channel-editor");
   }
   async function loadPoints() {
-    if (!$("#points")) return;
-    const request = ++requestId, rtu = selected?.rtu_id, kind = $("#kind-filter").value || "yc";
+    const kind = activeKind(), body = pointTableBody(kind);
+    if (!body) return;
+    setPointTab(kind);
+    const request = ++requestId, rtu = selected?.rtu_id;
     const scope = `${rtu}/${kind}`;
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
-      $("#points").innerHTML = '<tr><td colspan="6">正在读取测点…</td></tr>';
+      body.innerHTML = '<tr><td colspan="6">正在读取测点…</td></tr>';
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
     }
     try {
@@ -68,7 +100,7 @@
       total = data.total || 0;
       if (offset > 0 && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / limit) * limit); return loadPoints(); }
       const points = data.items || [];
-      $("#points").innerHTML = points.map(p => `<tr><td>${names[kind]}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.value)}</td><td><button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="6">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      body.innerHTML = points.map(p => `<tr><td>${names[kind]}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.value)}</td><td><button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="6">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
       $("#point-next").disabled = offset + points.length >= total;
@@ -109,7 +141,7 @@
       const owner = selected.rtu_id;
       const result = await api(`/api/channels/${owner}/points/${kind}`, {method:"POST",body:JSON.stringify(body)});
       if (owner !== selected?.rtu_id || $("#point-kind").value !== kind) return;
-      selectedPoint = {...result.item,kind}; $("#kind-filter").value = kind; offset = 0;
+      selectedPoint = {...result.item,kind}; setPointTab(kind); offset = 0;
       await loadPoints(); notice("#point-message", "测点已新增");
     } catch (error) { notice("#point-message", error.message, true); }
   };
@@ -133,20 +165,22 @@
     const url = new URL(location.href); if (selected) url.searchParams.set("rtu_id", selected.rtu_id); else url.searchParams.delete("rtu_id");
     history.replaceState(null, "", url); loadPoints();
   };
-  if ($("#kind-filter")) $("#kind-filter").onchange = () => { selectedPoint = null; offset = 0; $("#point-kind").value = $("#kind-filter").value; loadPoints(); };
+  if ($("#kind-filter")) $("#kind-filter").onchange = () => { selectedPoint = null; offset = 0; setPointTab(activeKind()); $("#point-kind").value = activeKind(); loadPoints(); };
   if ($("#point-limit")) $("#point-limit").onchange = () => { limit = Number($("#point-limit").value); offset = 0; loadPoints(); };
   if ($("#point-prev")) $("#point-prev").onclick = () => { offset = Math.max(0, offset - limit); loadPoints(); };
   if ($("#point-next")) $("#point-next").onclick = () => { offset += limit; loadPoints(); };
   $("#reload").onclick = loadChannels;
   document.addEventListener("click", async event => {
-    const edit = event.target.closest("button[data-edit]"), del = event.target.closest("button[data-delete]"),
+    const tab = event.target.closest("button[data-point-tab]"), edit = event.target.closest("button[data-edit]"), del = event.target.closest("button[data-delete]"),
       pointEdit = event.target.closest("button[data-point-edit]"), pointDelete = event.target.closest("button[data-point-delete]");
     try {
+      if (tab) { selectedPoint = null; offset = 0; setPointTab(tab.dataset.pointTab); $("#point-kind").value = activeKind(); await loadPoints(); return; }
       if (edit) fillChannel(JSON.parse(edit.dataset.edit));
       if (del && confirm("确定删除该通道及其四遥点？")) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; await loadChannels(); }
       if (pointEdit) fillPoint(JSON.parse(pointEdit.dataset.pointEdit));
       if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints(); }
-    } catch (error) { notice($("#points") ? "#point-message" : "#channel-message", error.message, true); }
+    } catch (error) { notice(pointTableBody() ? "#point-message" : "#channel-message", error.message, true); }
   });
+  setPointTab(activeKind());
   loadChannels();
 })();

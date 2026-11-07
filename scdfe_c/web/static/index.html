@@ -243,6 +243,10 @@
           </div>
         </section>
         <section id="logs-panel" class="page-panel" hidden>
+          <nav class="log-record-tabs" aria-label="记录类别">
+            <button type="button" class="row-button log-record-tab" data-record="runtime" aria-selected="true">运行日志</button>
+            <button type="button" class="row-button log-record-tab" data-record="packet" aria-selected="false">报文日志</button>
+          </nav>
           <div class="toolbar">
             <div class="title-group">
               <h1>运行日志</h1>
@@ -272,7 +276,7 @@
           <div id="logs-error" class="error-panel" role="alert" hidden></div>
           <div class="log-workspace">
             <section class="log-files">
-              <div class="panel-label">日志文件</div>
+              <div class="panel-label" id="log-files-label">运行日志文件</div>
               <div
                 id="scdfe-logs"
                 class="log-file-list log-tree"

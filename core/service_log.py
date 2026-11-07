@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import time
 
-from core.log_paths import log_entries
+from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES
 
 _HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[([^]]+)\] (.*)$")
@@ -28,9 +28,11 @@ class ServiceFileLog:
         self.name = f"scdfe_s-{service}"
         self._filename_pattern = re.compile(re.escape(self.name) + r"-\d{8}-\d{2}\.log")
         self.directory = (store.db_path.parent / "logs").resolve()
+        self.packet_directory = packet_log_directory(self.directory)
         from core.packet_logging import packet_log_switch
         self.packet_switch = packet_log_switch(store.db_path, 's')
-        self.logger = ScdfeLogger(self.directory, process_name=self.name)
+        self.logger = ScdfeLogger(self.directory, process_name=self.name,
+                                  packet_directory=self.packet_directory)
         self._active = None
         self._next_cleanup = 0
         self._next_error = 0
@@ -47,24 +49,33 @@ class ServiceFileLog:
             session, self._active = self._active, None
             session.close()
 
-    def _files(self):
+    def _files(self, record="runtime"):
+        if record not in {"runtime", "packet"}:
+            raise ValueError("记录类型无效")
+        root = self.packet_directory if record == "packet" else self.directory
         # Protocol client/server names share a prefix, but never a log file.
-        return (Path(entry.path) for entry, _ in log_entries(self.directory, self.name + "-")
+        return (Path(entry.path) for entry, _ in log_entries(root, self.name + "-")
                 if self._filename_pattern.fullmatch(entry.name))
 
     def write(self, level, message, *, channel_id=None):
         try:
-            if level != 'PACKET' or self.packet_switch.enabled(channel_id):
+            if level == 'PACKET':
+                if self.packet_switch.enabled(channel_id):
+                    self.logger.packet_text(message)
+            else:
                 self.logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
             now = time.monotonic()
             if now >= self._next_cleanup:
                 self._next_cleanup = now + 3600
                 cutoff = time.time() - 720 * 3600
-                files = self._files() if self._startup_files is None else self._startup_files
+                files = [(path, self.directory) for path in
+                         (self._files("runtime") if self._startup_files is None else self._startup_files)]
+                files.extend((path, self.packet_directory) for path in self._files("packet"))
                 self._startup_files = None  # later retention checks must visit the live directory
-                for path in files:
+                for path, root in files:
                     try:
-                        if path.stat().st_mtime < cutoff and path.resolve().is_relative_to(self.directory) and not path.is_symlink():
+                        if (path.stat().st_mtime < cutoff and path.resolve().is_relative_to(root)
+                                and not path.is_symlink()):
                             path.unlink()
                     except OSError:
                         pass
@@ -74,12 +85,13 @@ class ServiceFileLog:
                 self._next_error = now + 60
                 logging.getLogger(__name__).exception("服务日志写入失败: %s", self.name)
 
-    def recent(self, limit=500):
+    def recent(self, limit=500, *, record="runtime"):
         from scdfe_c.web.log_query import _reverse_lines
         items = deque(maxlen=limit)
         if not limit:
             return []
-        files = self._files() if self._startup_files is None else self._startup_files
+        root = self.packet_directory if record == "packet" else self.directory
+        files = self._files(record)
         paths = sorted(files, key=lambda path: (path.stem[-11:], path), reverse=True)
         # At most 4 MiB of recent files, independent of retention duration.
         budget = 4 * 1024 * 1024
@@ -87,7 +99,7 @@ class ServiceFileLog:
             if budget <= 0 or len(items) >= limit:
                 break
             try:
-                if path.is_symlink() or not path.resolve().is_relative_to(self.directory):
+                if path.is_symlink() or not path.resolve().is_relative_to(root):
                     continue
                 day = datetime.strptime(path.stem[-11:], "%Y%m%d-%H")
                 with path.open("rb") as stream:

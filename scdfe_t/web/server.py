@@ -111,7 +111,10 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
             if method != "GET":
                 raise ApiError(405, "日志文件接口只支持 GET")
-            return self._json(200, log_browser(self.service.db_path.parent / "logs", "t", len(parts) == 3, query))
+            from core.log_paths import packet_log_directory
+            runtime_directory = self.service.db_path.parent / "logs"
+            return self._json(200, log_browser(runtime_directory, "t", len(parts) == 3, query,
+                                               packet_directory=packet_log_directory(runtime_directory)))
         if parts == ["api", "health"]:
             if method != "GET":
                 raise ApiError(405, "只支持 GET")
@@ -125,9 +128,15 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             raise ApiError(404, "路径不存在", code="not_found")
         prefix = ["api", "trans"]
         tail = parts[len(prefix):]
-        if not tail or tail[0] not in {"channels", "processes", "logs", "log"}:
+        if not tail or tail[0] not in {"channels", "processes", "logs", "log", "source-catalog"}:
             raise ApiError(404, "路径不存在", code="not_found")
         resource = tail[0]
+        if resource == "source-catalog":
+            if method != "GET" or len(tail) != 1:
+                raise ApiError(405, "源数据目录只支持 GET")
+            if set(query) - {"kind", "rtu_id"} or query.get("kind", "") not in {"yc", "yx", "yk", "yt"}:
+                raise ApiError(400, "源数据目录参数不正确")
+            return self._json(200, self.service.source_catalog(query["kind"], query.get("rtu_id")))
         if resource == "processes":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "进程状态只支持 GET")
@@ -135,19 +144,21 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if resource == "logs":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "日志列表只支持 GET")
-            allowed = {"channel_id", "limit"}
+            allowed = {"channel_id", "limit", "record"}
             if set(query) - allowed:
                 raise ApiError(400, "未知日志查询参数")
             cid = self._id(query["channel_id"]) if query.get("channel_id") else None
             limit = int(query.get("limit", "200"))
-            return self._json(200, self.service.logs(cid, limit))
+            record = query.get("record", "runtime") or "runtime"
+            return self._json(200, self.service._logs_for_record(cid, limit, record))
         if resource == "log":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "日志内容只支持 GET")
             filename = query.get("filename")
             if not filename:
                 raise ApiError(400, "缺少 filename")
-            return self._json(200, self.service.read_log(filename, int(query.get("tail", "300"))))
+            record = query.get("record", "runtime") or "runtime"
+            return self._json(200, self.service.read_log(filename, int(query.get("tail", "300")), record=record))
         # channels collection and channel-scoped resources
         if len(tail) == 1:
             if method == "GET":
@@ -174,6 +185,10 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"item": getattr(self.service, action)(cid)})
         if action != "points":
             raise ApiError(404, "路径不存在", code="not_found")
+        if len(tail) == 4 and tail[3] == "batch":
+            if method != "POST":
+                raise ApiError(405, "批量点映射只支持 POST")
+            return self._json(201, {"items": self.service.create_points_batch(cid, self._body())})
         if len(tail) == 3:
             if method == "GET":
                 if set(query) - {"kind", "limit", "offset"}:

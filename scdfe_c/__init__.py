@@ -45,7 +45,7 @@ from core.scdfe_control import (
     ensure_control_row,
     log_directory,
 )
-from core.log_paths import log_entries
+from core.log_paths import log_entries, packet_log_directory
 from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
 from .web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
 from .writer_ipc import (
@@ -229,33 +229,44 @@ class WorkerStats:
 class ScdfeLogger:
     """多线程/多进程安全的轻量日志写入器。
 
-    每个逻辑进程独立使用一个按小时轮转的文件，例如
+    每个逻辑进程独立使用一个按小时轮转的运行日志文件，例如
     ``2026/10/29/18/scdfe_c-main-20261029-18.log``。通信线程日志文件只使用
     RTU 编号，例如 ``2026/10/29/18/scdfe_c-rtu-7-20261029-18.log``。RTU 和通道编号
     由文件名与数据库定义关联，不再写入每条日志正文。日志类型使用中文标签，且不再
     按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
     日期和小时由文件名提供。普通调用追加后关闭文件；通信线程在 session 中复用
     本线程日志文件，每条记录仍立即 flush，退出时关闭。文件不在进程间共享。
-    主调度线程按小时数定期清理旧文件。
+    报文通过 ``packet_directory`` 写入同样的时间树和文件名，运行日志与报文目录
+    完全分离；未指定该参数的直接调用保留原目录行为。主调度线程按小时数定期清理旧文件。
     """
 
-    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False, packet_switch=None):
+    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False,
+                 packet_switch=None, packet_directory: Path | str | None = None):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
+        # ``packet_directory`` is explicit for managed C/S/T runtimes.  Keep
+        # the historical same-directory fallback for small direct callers and
+        # older integrations that instantiate ScdfeLogger themselves.
+        self.packet_directory = (self.directory if packet_directory is None
+                                 else Path(packet_directory).resolve())
+        self.packet_directory.mkdir(parents=True, exist_ok=True)
         self.console = console
         self.process_name = process_name
         self.packet_switch = packet_switch
         self._write_lock = threading.Lock()
-        self._hour_key = None
-        self._path = None
-        self._stream = None
-        self._stream_identity = None
+        self._hour_keys = {"runtime": None, "packet": None}
+        self._paths = {"runtime": None, "packet": None}
+        self._streams = {"runtime": None, "packet": None}
+        self._stream_identities = {"runtime": None, "packet": None}
         self._sessions = 0
 
-    def _close_stream(self):
-        stream, self._stream = self._stream, None
-        self._stream_identity = None
-        if stream is not None:
+    def _close_stream(self, kind=None):
+        kinds = ("runtime", "packet") if kind is None else (kind,)
+        for stream_kind in kinds:
+            stream, self._streams[stream_kind] = self._streams[stream_kind], None
+            self._stream_identities[stream_kind] = None
+            if stream is None:
+                continue
             stream.close()
 
     @contextmanager
@@ -280,43 +291,47 @@ class ScdfeLogger:
         label = LOG_LEVEL_LABELS.get(level)
         if label is None:
             raise ValueError(f"未知日志级别: {level}")
+        kind = "packet" if level == "PACKET" else "runtime"
+        root = self.packet_directory if kind == "packet" else self.directory
         with self._write_lock:
             # Only the local wall clock is persisted. Sample under the lock so
             # a queued callback cannot reopen the previous hour after rotation.
             now = datetime.now()
             stamp = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
             hour_key = (now.year, now.month, now.day, now.hour)
-            if hour_key != self._hour_key:
-                self._close_stream()
-                directory = self.directory / now.strftime("%Y/%m/%d/%H")
-                if not directory.resolve().is_relative_to(self.directory):
+            if hour_key != self._hour_keys[kind]:
+                self._close_stream(kind)
+                directory = root / now.strftime("%Y/%m/%d/%H")
+                if not directory.resolve().is_relative_to(root):
                     raise OSError("日志文件超出日志目录")
                 directory.mkdir(parents=True, exist_ok=True)
-                self._path = directory / f"{self.process_name}-{now:%Y%m%d-%H}.log"
-                self._hour_key = hour_key
-            if self._stream is not None and os.name != 'nt':
+                self._paths[kind] = directory / f"{self.process_name}-{now:%Y%m%d-%H}.log"
+                self._hour_keys[kind] = hour_key
+            path = self._paths[kind]
+            stream = self._streams[kind]
+            if stream is not None and os.name != 'nt':
                 # Preserve external rotation/removal semantics, including on
                 # POSIX where an open file can be unlinked or replaced. Windows
                 # append handles deny deletion/rename until closed: checking
                 # their path identity for every packet adds expensive I/O.
                 try:
-                    stat = self._path.stat()
+                    stat = path.stat()
                     identity = (stat.st_dev, stat.st_ino)
                 except FileNotFoundError:
                     identity = None
-                if identity != self._stream_identity:
-                    self._close_stream()
+                if identity != self._stream_identities[kind]:
+                    self._close_stream(kind)
             try:
-                if self._stream is None:
-                    if not self._path.resolve().is_relative_to(self.directory):
+                if self._streams[kind] is None:
+                    if not path.resolve().is_relative_to(root):
                         raise OSError("日志文件超出日志目录")
                     try:
-                        self._stream = self._path.open("a", encoding="utf-8", newline="")
+                        self._streams[kind] = path.open("a", encoding="utf-8", newline="")
                     except FileNotFoundError:
-                        self._path.parent.mkdir(parents=True, exist_ok=True)
-                        self._stream = self._path.open("a", encoding="utf-8", newline="")
-                    stat = os.fstat(self._stream.fileno())
-                    self._stream_identity = (stat.st_dev, stat.st_ino)
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        self._streams[kind] = path.open("a", encoding="utf-8", newline="")
+                    stat = os.fstat(self._streams[kind].fileno())
+                    self._stream_identities[kind] = (stat.st_dev, stat.st_ino)
                 for message in messages:
                     if raw_hex:
                         # packet_lines generates the suffix solely from bytes.hex;
@@ -326,10 +341,10 @@ class ScdfeLogger:
                     else:
                         message = sanitize_log_message(message)
                     line = f"{stamp} [{label}] {message}\n"
-                    self._stream.write(line)
+                    self._streams[kind].write(line)
                     if self.console:
                         print(line, end="", flush=True)
-                self._stream.flush()
+                self._streams[kind].flush()
             except Exception:
                 self._close_stream()
                 raise
@@ -346,6 +361,10 @@ class ScdfeLogger:
         from core.packet_trace import packet_lines
         self._emit_lines("normal", packet_lines(direction, data, detail), level="PACKET", raw_hex=True)
 
+    def packet_text(self, message: str) -> None:
+        """Write an already formatted packet record to the packet stream."""
+        self._emit_lines("normal", (message,), level="PACKET")
+
     def alarm(self, message: str) -> None:
         self.emit("alarm", message, level="WARNING")
 
@@ -357,31 +376,42 @@ class ScdfeLogger:
 
     @classmethod
     def cleanup(cls, directory: Path | str, *, retention_hours: int = 720,
-                now: float | None = None, process_name: str | None = None) -> list[Path]:
+                now: float | None = None, process_name: str | None = None,
+                packet_directory: Path | str | None = None) -> list[Path]:
         """清理超过保留小时数的按进程小时日志文件。"""
         if isinstance(retention_hours, bool) or retention_hours < 1:
             raise ValueError("retention_hours 必须是正整数")
-        root = Path(directory).resolve()
-        if not root.is_dir():
-            return []
         cutoff = (time.time() if now is None else now) - retention_hours * 3600
         removed: list[Path] = []
-        for entry, _ in log_entries(root, "scdfe_c-"):
-            path = Path(entry.path)
-            match = LOG_FILE_RE.fullmatch(entry.name)
-            if not match or (process_name is not None and match.group("process") != process_name):
+        roots = [Path(directory).resolve()]
+        if packet_directory is not None:
+            packet_root = Path(packet_directory).resolve()
+            if packet_root != roots[0]:
+                roots.append(packet_root)
+        for root in roots:
+            if not root.is_dir():
                 continue
-            try:
-                if entry.stat(follow_symlinks=False).st_mtime < cutoff and path.resolve().is_relative_to(root):
-                    path.unlink()
-                    removed.append(path)
-            except OSError:
-                # 日志清理失败不能终止采集进程；下次清理继续尝试。
-                continue
+            for entry, _ in log_entries(root, "scdfe_c-"):
+                path = Path(entry.path)
+                match = LOG_FILE_RE.fullmatch(entry.name)
+                if not match or (process_name is not None and match.group("process") != process_name):
+                    continue
+                try:
+                    if entry.stat(follow_symlinks=False).st_mtime < cutoff and path.resolve().is_relative_to(root):
+                        path.unlink()
+                        removed.append(path)
+                except OSError:
+                    # 日志清理失败不能终止采集进程；下次清理继续尝试。
+                    continue
         return removed
 
     @classmethod
-    def list_files(cls, directory: Path | str) -> list[dict[str, Any]]:
+    def list_files(cls, directory: Path | str, *, record: str = "runtime",
+                   packet_directory: Path | str | None = None) -> list[dict[str, Any]]:
+        if record not in {"runtime", "packet"}:
+            raise ValueError("记录类型无效")
+        if record == "packet" and packet_directory is not None:
+            directory = packet_directory
         root = Path(directory).resolve()
         items = []
         if not root.is_dir():
@@ -409,7 +439,12 @@ class ScdfeLogger:
         return sorted(items, key=lambda item: (item["modified_at"], item["name"]), reverse=True)
 
     @classmethod
-    def read_file(cls, directory: Path | str, filename: str, *, tail: int = 200) -> dict[str, Any]:
+    def read_file(cls, directory: Path | str, filename: str, *, tail: int = 200,
+                  record: str = "runtime", packet_directory: Path | str | None = None) -> dict[str, Any]:
+        if record not in {"runtime", "packet"}:
+            raise ValueError("记录类型无效")
+        if record == "packet" and packet_directory is not None:
+            directory = packet_directory
         if not isinstance(filename, str) or not filename.strip():
             raise ValueError("日志文件名无效")
         if not 1 <= tail <= 5000:
@@ -811,7 +846,8 @@ def _batch_writer_entry(
     drain_ack: Any | None = None,
 ) -> None:
     """Dedicated SQLite writer process for all communication-worker updates."""
-    logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer")
+    logger = ScdfeLogger(log_dir, process_name="scdfe_c-db-writer",
+                         packet_directory=packet_log_directory(log_dir))
     pending: list[Mapping[str, Any]] = []
     pending_updates = 0
     connection: sqlite3.Connection | None = None
@@ -1202,6 +1238,7 @@ class ChannelWorker:
         self.writer_queue = writer_queue
         from core.packet_logging import packet_log_switch
         self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
+                                 packet_directory=packet_log_directory(log_dir),
                                  packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
                                  if store is not None else None)
         self.stats = WorkerStats()
@@ -1813,7 +1850,8 @@ class _DebugChannelWorker(ChannelWorker):
                 return True
         if now >= self._next_log_cleanup:
             ScdfeLogger.cleanup(self.logger.directory, retention_hours=self.retention_hours,
-                                process_name=self.logger.process_name)
+                                process_name=self.logger.process_name,
+                                packet_directory=self.logger.packet_directory)
             self._next_log_cleanup = now + 60.0
         return False
 
@@ -1866,6 +1904,7 @@ def run_channel_debug(
             log_dir = log_directory(store, control) if control is not None else store.db_path.parent / "logs"
         from core.packet_logging import packet_log_switch
         logger = ScdfeLogger(log_dir, process_name=_worker_process_name(rtu_id, debug=True), console=True,
+                             packet_directory=packet_log_directory(log_dir),
                              packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id))
         stop_event = stop_event or threading.Event()
         stats = WorkerStats()
@@ -1915,7 +1954,8 @@ def _worker_thread_entry(store: ScadaStore, spec_data: dict[str, Any], log_dir: 
                       retry_interval=retry_interval, stop_event=stop_event,
                       writer_queue=writer_queue).run()
     except Exception as exc:  # noqa: BLE001 - 主调度线程负责拉起并记录异常
-        ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id)).error(
+        ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
+                    packet_directory=packet_log_directory(log_dir)).error(
             f"通信线程异常退出: {exc}"
         )
         # Thread exceptions must not escape into the main scheduler.  The
@@ -1983,7 +2023,8 @@ class ScdfeSupervisor:
         self._next_log_summary = 0.0
         self._next_log_cleanup = 0.0
         self.thread_factory = thread_factory or threading.Thread
-        self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main")
+        self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main",
+                                  packet_directory=packet_log_directory(self.log_dir))
 
     def _maintain_logs(self) -> None:
         """Keep hourly logs active even while communication/writing is idle."""
@@ -1999,7 +2040,8 @@ class ScdfeSupervisor:
             )
             self._next_log_summary = now + PROCESS_LOG_INTERVAL
         if now >= self._next_log_cleanup:
-            removed = ScdfeLogger.cleanup(self.log_dir, retention_hours=self.retention_hours)
+            removed = ScdfeLogger.cleanup(self.log_dir, retention_hours=self.retention_hours,
+                                          packet_directory=self.logger.packet_directory)
             self._next_log_cleanup = now + LOG_CLEANUP_INTERVAL
             if removed:
                 self.logger.process(f"日志清理完成，删除 {len(removed)} 个过期文件")
@@ -2195,7 +2237,8 @@ class ScdfeSupervisor:
         configured = log_directory(self.store, row)
         if self._log_dir_from_control and configured != self.log_dir:
             self.log_dir = configured
-            self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main")
+            self.logger = ScdfeLogger(self.log_dir, process_name="scdfe_c-main",
+                                      packet_directory=packet_log_directory(self.log_dir))
             self._next_log_summary = self._next_log_cleanup = 0.0
             worker_config_changed = True
         return worker_config_changed

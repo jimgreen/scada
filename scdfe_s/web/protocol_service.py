@@ -110,7 +110,10 @@ class ProtocolService:
         if self.CONFIG_NAME and "_server_" in self.CONFIG_NAME and not slug.endswith("-server"):
             slug += "-server"
         self._file_log = ServiceFileLog(store, slug, startup_catalog=startup_catalog)
-        self._logs: deque[dict[str, Any]] = deque(self._file_log.recent(self.LOG_LIMIT), maxlen=self.LOG_LIMIT)
+        initial_logs = self._file_log.recent(self.LOG_LIMIT, record="runtime")
+        initial_logs.extend(self._file_log.recent(self.LOG_LIMIT, record="packet"))
+        initial_logs.sort(key=lambda item: item.get("time", ""))
+        self._logs: deque[dict[str, Any]] = deque(initial_logs[-self.LOG_LIMIT:], maxlen=self.LOG_LIMIT)
         self._alerts: deque[dict[str, Any]] = deque(maxlen=self.ALERT_LIMIT)
         self._connections: deque[dict[str, Any]] = deque(maxlen=100)
         if self._config_error:
@@ -364,9 +367,13 @@ class ProtocolService:
             ).fetchone()
         return int(row[0] or 0)
 
-    def logs(self, limit=200):
+    def logs(self, limit=200, record="runtime"):
+        if record not in {"runtime", "packet"}:
+            raise ValueError("记录类型无效")
         with self._log_lock:
-            return list(self._logs)[-max(1, min(int(limit), self.LOG_LIMIT)):]
+            rows = [item for item in self._logs
+                    if (item.get("level") == "PACKET") == (record == "packet")]
+            return rows[-max(1, min(int(limit), self.LOG_LIMIT)):]
 
     def alerts(self, limit=100):
         with self._log_lock:
