@@ -93,6 +93,9 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 .test-selector-main { display:flex; align-items:center; flex:0 1 350px; min-width:260px; }
 .rtu-picker { flex:1 1 350px; min-width:260px; font-size:12px; color:#526b79; }
 .rtu-picker select { margin-top:5px; font-size:15px; font-weight:600; }
+body[data-points] .point-filters { display:flex; align-items:center; gap:10px; flex:1 1 auto; min-width:280px; }
+body[data-points] .point-filters > label:not(.visually-hidden) { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
+body[data-points] .point-filters > label:not(.visually-hidden) select { width:280px; }
 .test-actions { display:flex; flex:0 0 auto; gap:8px; flex-wrap:wrap; margin-top:0; }
 #test-message { flex-basis:100%; margin:0; }
 .test-metrics { display:grid; grid-template-columns:repeat(6, minmax(110px, 1fr)); gap:9px; margin-bottom:14px; }
