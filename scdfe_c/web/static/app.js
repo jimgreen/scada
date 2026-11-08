@@ -1922,14 +1922,14 @@ function processLabel(name) {
     : name;
 }
 async function loadCommandServerConfig() {
-  const panel = $("#command-server-config-panel");
-  if (!panel) return;
+  const form = $("#command-server-config");
+  if (!form) return;
   try {
     const data = await api("/api/scdfe_c/command-server");
     const row = data.item || {};
     // Keep the row version with the form so concurrent edits are rejected
     // cleanly by the same optimistic-concurrency rule as the data pages.
-    panel.dataset.version = row._version || "";
+    form.dataset.version = row._version || "";
     $("#command-server-host").value = row.bind_host || "127.0.0.1";
     $("#command-server-port").value = row.bind_port || 8890;
     $("#command-server-token").value = row.auth_token || "";
@@ -1942,13 +1942,13 @@ async function loadCommandServerConfig() {
 $("#command-server-config")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = $("#command-server-config-error");
-  const panel = $("#command-server-config-panel");
+  const form = $("#command-server-config");
   error.textContent = "";
   try {
     await api("/api/scdfe_c/command-server", {
       method: "PATCH",
-      headers: panel.dataset.version
-        ? { "If-Match": String(panel.dataset.version) }
+      headers: form.dataset.version
+        ? { "If-Match": String(form.dataset.version) }
         : {},
       body: JSON.stringify({
         bind_host: $("#command-server-host").value.trim(),
@@ -1959,6 +1959,7 @@ $("#command-server-config")?.addEventListener("submit", async (event) => {
     });
     toast("TCP 指令服务配置已保存");
     await loadCommandServerConfig();
+    $("#command-server-config-dialog").close();
   } catch (err) {
     error.textContent = err.message;
   }
@@ -2374,6 +2375,22 @@ window.addEventListener("hashchange", () => {
 });
 $("#scdfe-processes").onclick = () => changeResource("processes");
 $("#scdfe-refresh").onclick = loadScdfe;
+function openConfigDialog(id) {
+  const dialog = $(id);
+  if (dialog && !dialog.open) dialog.showModal();
+}
+function closeConfigDialog(id) {
+  const dialog = $(id);
+  if (dialog?.open) dialog.close();
+}
+$("#open-command-server-config")?.addEventListener("click", () => {
+  loadCommandServerConfig();
+  openConfigDialog("#command-server-config-dialog");
+});
+$("#close-command-server-config")?.addEventListener("click", () => closeConfigDialog("#command-server-config-dialog"));
+$("#cancel-command-server-config")?.addEventListener("click", () => closeConfigDialog("#command-server-config-dialog"));
+$("#open-scdfe-config")?.addEventListener("click", () => openConfigDialog("#scdfe-config-dialog"));
+$("#close-scdfe-config")?.addEventListener("click", () => closeConfigDialog("#scdfe-config-dialog"));
 for (const [id, button, field, low, high] of [
   ["scdfe-worker-delay", "scdfe-save-delay", "worker_start_delay_ms", 0, 60000],
   [

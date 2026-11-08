@@ -132,17 +132,10 @@
           <div id="process-error" class="error-panel" role="alert" hidden></div>
           <div id="process-summary" class="scdfe-status"></div>
           <div id="process-operation" class="process-operation" aria-live="polite" hidden></div>
-          <details class="config-panel" id="command-server-config-panel">
-            <summary>TCP 指令服务配置</summary>
-            <form id="command-server-config" class="scdfe-config">
-              <label>监听地址<input id="command-server-host" required /></label>
-              <label>监听端口<input id="command-server-port" type="number" min="1" max="65535" required /></label>
-              <label>认证令牌<input id="command-server-token" required /></label>
-              <label>日志保留小时<input id="command-server-retention" type="number" min="1" max="87600" required /></label>
-              <button class="button secondary" type="submit">保存配置</button>
-              <span id="command-server-config-error" class="error" role="alert"></span>
-            </form>
-          </details>
+          <div class="config-panel config-entry">
+            <button class="button secondary" id="open-command-server-config" type="button">TCP 指令服务配置</button>
+            <span class="muted">监听地址、端口、认证令牌和日志保留</span>
+          </div>
           <form id="debug-process-form" class="filterbar">
             <label for="debug-rtu">独立调试 RTU</label>
             <input id="debug-rtu" inputmode="numeric" list="rtu-options" placeholder="输入 RTU 编号" required />
@@ -176,34 +169,10 @@
           <div id="scdfe-error" class="error-panel" role="alert" hidden></div>
           <div id="scdfe-status" class="scdfe-status"></div>
           <div id="scdfe-details" class="process-details"></div>
-          <details class="config-panel">
-            <summary>运行参数与日志保留</summary>
-            <div class="scdfe-config">
-              <label
-                >线程启动间隔
-                <input
-                  id="scdfe-worker-delay"
-                  type="number"
-                  min="0"
-                  max="60000"
-                  step="10"
-                />
-                ms</label
-              ><button class="button secondary" id="scdfe-save-delay">
-                保存间隔</button
-              ><label
-                >日志保留
-                <input
-                  id="scdfe-retention-hours"
-                  type="number"
-                  min="1"
-                  max="87600"
-                />
-                小时</label
-              ><button class="button secondary" id="scdfe-save-retention">
-                保存保留时间</button>
-            </div>
-          </details>
+          <div class="config-panel config-entry">
+            <button class="button secondary" id="open-scdfe-config" type="button">运行参数与日志保留</button>
+            <span class="muted">线程启动间隔和日志文件保留时间</span>
+          </div>
           <div class="filterbar">
             <h2>RTU 通信线程</h2>
             <input
@@ -340,6 +309,39 @@
         </section>
       </div>
     </main>
+    <dialog id="command-server-config-dialog" class="config-dialog" aria-labelledby="command-server-config-title">
+      <form id="command-server-config" class="config-dialog-form">
+        <div class="dialog-head">
+          <h2 id="command-server-config-title">TCP 指令服务配置</h2>
+          <button type="button" class="icon-button" id="close-command-server-config" aria-label="关闭 TCP 指令服务配置">×</button>
+        </div>
+        <div class="scdfe-config">
+          <label>监听地址<input id="command-server-host" required /></label>
+          <label>监听端口<input id="command-server-port" type="number" min="1" max="65535" required /></label>
+          <label>认证令牌<input id="command-server-token" required /></label>
+          <label>日志保留小时<input id="command-server-retention" type="number" min="1" max="87600" required /></label>
+        </div>
+        <div class="dialog-foot">
+          <span id="command-server-config-error" class="form-error" role="alert"></span>
+          <button class="button secondary" type="button" id="cancel-command-server-config">取消</button>
+          <button class="button primary" type="submit">保存配置</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="scdfe-config-dialog" class="config-dialog" aria-labelledby="scdfe-config-title">
+      <div class="config-dialog-form">
+        <div class="dialog-head">
+          <h2 id="scdfe-config-title">运行参数与日志保留</h2>
+          <button type="button" class="icon-button" id="close-scdfe-config" aria-label="关闭运行参数配置">×</button>
+        </div>
+        <div class="scdfe-config">
+          <label>线程启动间隔<input id="scdfe-worker-delay" type="number" min="0" max="60000" step="10" /> <span>ms</span></label>
+          <button class="button secondary" id="scdfe-save-delay" type="button">保存间隔</button>
+          <label>日志保留<input id="scdfe-retention-hours" type="number" min="1" max="87600" /> <span>小时</span></label>
+          <button class="button secondary" id="scdfe-save-retention" type="button">保存保留时间</button>
+        </div>
+      </div>
+    </dialog>
     <dialog id="editor" aria-labelledby="form-title">
       <form id="editor-form">
         <div class="dialog-head">
