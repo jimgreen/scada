@@ -4,25 +4,35 @@
   const STORAGE_PREFIX = "scada-layout-size-v2-";
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const configs = [
-    {selector: ".workbench-shell", key: "workbench-sidebar", property: "--workbench-sidebar-width", min: 150, max: 420, axis: "x", className: "wb-shell-resizable"},
-    {selector: ".shell", key: "c-sidebar", property: "--c-sidebar-width", min: 150, max: 420, axis: "x", className: "c-shell-resizable"},
-    {selector: ".lb-workspace", key: "log-files", property: "--log-files-width", min: 190, max: 560, axis: "x", className: "log-workspace-resizable"},
-    {selector: ".log-workspace", key: "legacy-log-files", property: "--legacy-log-files-width", min: 190, max: 560, axis: "x", className: "legacy-log-workspace-resizable"},
-    {selector: ".split", key: "split-first", property: "--split-first-width", min: 240, max: 760, axis: "x", className: "split-resizable"},
+    {selector: ".workbench-shell", key: "workbench-sidebar", property: "--workbench-sidebar-width", min: 150, max: 420, otherMin: 320, axis: "x", className: "wb-shell-resizable"},
+    {selector: ".shell", key: "c-sidebar", property: "--c-sidebar-width", min: 150, max: 420, otherMin: 320, axis: "x", className: "c-shell-resizable"},
+    {selector: ".lb-workspace", key: "log-files", property: "--log-files-width", min: 190, max: 560, otherMin: 320, axis: "x", className: "log-workspace-resizable"},
+    {selector: ".log-workspace", key: "legacy-log-files", property: "--legacy-log-files-width", min: 190, max: 560, otherMin: 320, axis: "x", className: "legacy-log-workspace-resizable"},
+    {selector: ".split", key: "split-first", property: "--split-first-width", min: 240, max: 760, otherMin: 320, axis: "x", className: "split-resizable"},
     /* The S test pages use a two-column .grid.  Only exact two-child grids
        are eligible; form/status grids with many children must stay intact. */
-    {selector: ".grid", key: "grid-first", property: "--grid-first-width", min: 260, max: 760, axis: "x", className: "grid-resizable"},
+    {selector: ".grid", key: "grid-first", property: "--grid-first-width", min: 260, max: 760, otherMin: 320, axis: "x", className: "grid-resizable"},
+    {selector: ".test-body[data-resize-axis=\"y\"]", key: "test-summary-height", property: "--layout-first-height", min: 90, max: 300, axis: "y", className: "layout-resizable-y"},
     {selector: "[data-resize-axis=\"y\"]", key: "custom-height", property: "--layout-first-height", min: 140, max: 900, axis: "y", className: "layout-resizable-y"},
   ];
+  const effectiveMax = (config, element) => {
+    if (config.axis !== "x" || !config.otherMin) return config.max;
+    const width = element.getBoundingClientRect().width;
+    if (!Number.isFinite(width) || width <= 0) return config.max;
+    // Keep enough room for the second panel so an old or oversized saved
+    // value cannot collapse it into an unusable sliver.
+    return Math.min(config.max, Math.max(config.min, width - 8 - config.otherMin));
+  };
+  const clampFor = (config, element, value) => clamp(value, config.min, effectiveMax(config, element));
   const storageKey = (config, index) => `${STORAGE_PREFIX}${location.pathname}:${config.key}:${index}`;
   const clampStored = (config, element, index) => {
     try {
       const value = Number.parseFloat(localStorage.getItem(storageKey(config, index)) ?? localStorage.getItem(STORAGE_PREFIX + config.key));
-      if (Number.isFinite(value)) element.style.setProperty(config.property, `${clamp(value, config.min, config.max)}px`);
+      if (Number.isFinite(value)) element.style.setProperty(config.property, `${clampFor(config, element, value)}px`);
     } catch (_) { /* private browsing or disabled storage */ }
   };
   const setSize = (config, element, value, index) => {
-    const size = clamp(value, config.min, config.max);
+    const size = clampFor(config, element, value);
     element.style.setProperty(config.property, `${size}px`);
     try { localStorage.setItem(storageKey(config, index), String(Math.round(size))); } catch (_) { /* ignore */ }
   };
@@ -52,7 +62,7 @@
     try {
       hidden = localStorage.getItem(`${storageKey(config, index)}:hidden`) === "1";
       const saved = Number.parseFloat(localStorage.getItem(`${storageKey(config, index)}:last`));
-      if (Number.isFinite(saved)) lastSize = clamp(saved, config.min, config.max);
+      if (Number.isFinite(saved)) lastSize = clampFor(config, element, saved);
     } catch (_) { /* ignore */ }
     applyHidden(hidden);
     const begin = (event) => {
@@ -83,7 +93,7 @@
         return;
       }
       if (raw <= 24) {
-        lastSize = clamp(start.size, config.min, config.max);
+        lastSize = clampFor(config, element, start.size);
         hidden = true;
         try { localStorage.setItem(`${storageKey(config, index)}:last`, String(Math.round(lastSize))); } catch (_) { /* ignore */ }
         applyHidden(true);
