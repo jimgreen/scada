@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_t · 四遥数据</title><link rel="stylesheet" href="/static/app.css"></head>
 <body><header><h1>四遥数据</h1></header><main>
-<section class="toolbar"><label>当前通道<select id="selected-channel"><option value="">请选择</option></select></label><button id="refresh">刷新</button><span id="toast" role="status"></span></section>
-<section class="panel points-panel"><div class="panel-head"><h2>四遥测点映射</h2><div class="actions"><label class="visually-hidden">数据类型 <select id="kind-filter" aria-hidden="true" tabindex="-1"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label><button id="new-point" class="primary">新增测点</button><button id="batch-point">批量加入</button></div></div>
+<section class="toolbar points-toolbar"><label>当前通道<select id="selected-channel"><option value="">请选择</option></select></label><label class="visually-hidden">数据类型 <select id="kind-filter" aria-hidden="true" tabindex="-1"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label><span id="toast" role="status"></span><div class="actions toolbar-actions"><button id="new-point" class="primary">新增测点</button><button id="batch-point">批量加入</button><button id="refresh">刷新</button></div></section>
+<section class="panel points-panel"><div class="panel-head"><h2>四遥测点映射</h2></div>
 <nav class="tabs point-tabs" aria-label="四遥数据分页" role="tablist">
   <button type="button" id="point-tab-yc" data-point-tab="yc" role="tab" aria-selected="true" aria-controls="point-page-yc" class="active">遥测 YC</button>
   <button type="button" id="point-tab-yx" data-point-tab="yx" role="tab" aria-selected="false" aria-controls="point-page-yx">遥信 YX</button>
