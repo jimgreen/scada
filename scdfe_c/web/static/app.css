@@ -1039,8 +1039,9 @@ tbody tr:hover .sticky-actions {
 }
 #logs-panel .lb-file-filter select {
   min-width: 0;
+  flex: 1 1 auto;
   width: 100%;
-  max-width: 230px;
+  max-width: none;
 }
 #logs-panel .lb-reader-actions {
   display: flex;

@@ -26,6 +26,7 @@ body.workbench[data-log-module] .workbench-content > .log-browser { background:#
 .log-browser .lb-record-tab[aria-selected=true] { color:#087f8c; border-bottom-color:#087f8c; font-weight:600; }
 .log-browser .lb-record-tab:hover:not(:disabled) { background:#edf4f7; }
 .log-browser .lb-toolbar select { max-width:230px; }
+.log-browser .lb-file-filter > label:first-child select { flex:1 1 auto; width:100%; max-width:none; }
 .log-browser .lb-file-search { flex:1; min-width:200px; }
 .log-browser .lb-file-search input { width:100%; }
 .log-browser .lb-check { white-space:nowrap; }
