@@ -520,6 +520,23 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         self.assertEqual(len(result['items']), 1)
 
+    def test_command_server_runtime_log_is_web_visible(self):
+        from scdfe_c import ScdfeLogger
+        logger = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-command-server')
+        logger.process('command runtime test')
+        status, body = self.call('/api/scdfe_c/logs?process=scdfe_c-command-server')
+        self.assertEqual((status, body['total']), (200, 1))
+        self.assertEqual(body['items'][0]['process'], 'scdfe_c-command-server')
+        filename = body['items'][0]['name']
+        status, result = self.call('/api/scdfe_c/logs/' + filename)
+        self.assertEqual(status, 200)
+        self.assertIn('command runtime test', result['item']['content'])
+        status, result = self.call(
+            '/api/scdfe_c/logs/search?process=scdfe_c-command-server&level=PROCESS&q=runtime'
+        )
+        self.assertEqual(status, 200, result)
+        self.assertEqual(len(result['items']), 1)
+
     def test_scdfe_status_pagination_and_filters_include_all_rtus(self):
         with self.server.store.connection() as connection:
             connection.executemany(

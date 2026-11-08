@@ -129,17 +129,21 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
             try:
                 raw = self.rfile.readline(MAX_LINE + 1)
             except socket.timeout:
+                owner.logger.error("TCP 指令请求读取超时")
                 self._send(owner.error_response("request_timeout", "读取请求超时", 408))
                 return
             if not raw or len(raw) > MAX_LINE:
+                owner.logger.error("TCP 指令请求为空或超过大小限制")
                 self._send(owner.error_response("request_too_large", "请求过大", 413))
                 return
             try:
                 payload = _command_json(raw)
             except (ValueError, RecursionError):
+                owner.logger.error("TCP 指令 JSON 解析失败")
                 self._send(owner.error_response("invalid_json", "请求不是有效 JSON", 400))
                 return
             if not isinstance(payload, dict):
+                owner.logger.error("TCP 指令请求必须是 JSON 对象")
                 self._send(owner.error_response("invalid_request", "请求必须是 JSON 对象", 400))
                 return
             token = payload.pop("token", None)
@@ -187,12 +191,19 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
                 item = owner.submit(request_id, rtu_id, kind, point_no, value)
                 response = {"ok": True, "item": item, "command_status": "pending", "request_id": request_id}
             except WriterRequestError as exc:
+                owner.logger.error(f"TCP 指令处理失败 request_id={request_id}: {exc}")
                 response = owner.error_response(exc.code, str(exc), int(exc.status), request_id=request_id)
             except WriterUnavailable as exc:
+                owner.logger.error(f"TCP 指令写库不可用 request_id={request_id}: {exc}")
                 response = owner.error_response("writer_unavailable", str(exc), 503, request_id=request_id)
             except Exception as exc:  # noqa: BLE001 - isolate one client request
                 owner.logger.error(f"TCP 指令处理失败: {exc}")
                 response = owner.error_response("command_error", str(exc), 500, request_id=request_id)
+            else:
+                owner.logger.process(
+                    f"TCP 指令已受理 request_id={request_id} RTU {rtu_id} "
+                    f"{kind.upper()} 点号 {point_no}"
+                )
             owner.complete_request(request_id, response, fingerprint)
             self._send(response)
         except (BrokenPipeError, ConnectionResetError, OSError):
@@ -255,7 +266,8 @@ class CommandServer:
     def __init__(self, db_path: str | Path = DEFAULT_DB, *, host: str = "127.0.0.1",
                  port: int = 0, token: str | None = None, log_dir: str | Path | None = None,
                  request_timeout: float = REQUEST_TIMEOUT, retention_hours: int = 720,
-                 writer: WriterClient | None = None):
+                 writer: WriterClient | None = None,
+                 logger: ScdfeLogger | None = None):
         self.db_path = Path(db_path).resolve()
         self.host = str(host)
         self.port = int(port)
@@ -271,8 +283,11 @@ class CommandServer:
         if self.request_timeout <= 0:
             raise ValueError("request_timeout 必须为正数")
         runtime_log_dir = Path(log_dir).resolve() if log_dir else self.db_path.parent / "logs"
-        self.logger = ScdfeLogger(runtime_log_dir, process_name="scdfe_c-command-server",
-                                  packet_directory=packet_log_directory(runtime_log_dir))
+        self.logger = logger or ScdfeLogger(
+            runtime_log_dir,
+            process_name="scdfe_c-command-server",
+            packet_directory=packet_log_directory(runtime_log_dir),
+        )
         self.writer = writer or WriterClient(self.db_path, timeout=self.request_timeout)
         self._server: _CommandTCPServer | None = None
         self._thread: threading.Thread | None = None
@@ -292,7 +307,11 @@ class CommandServer:
         if self._server is not None:
             raise RuntimeError("TCP 指令服务已启动")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        server = _CommandTCPServer((self.host, self.port), self)
+        try:
+            server = _CommandTCPServer((self.host, self.port), self)
+        except Exception as exc:
+            self.logger.error(f"TCP 指令服务启动失败: {exc}")
+            raise
         self._server = server
         host, port = server.server_address
         record = {"version": ENDPOINT_VERSION, "host": str(host), "port": int(port),
@@ -302,7 +321,8 @@ class CommandServer:
         try:
             temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
             temporary.replace(endpoint)
-        except Exception:
+        except Exception as exc:
+            self.logger.error(f"TCP 指令服务端点写入失败: {exc}")
             server.server_close()
             self._server = None
             try:
@@ -311,7 +331,17 @@ class CommandServer:
                 pass
             raise
         self._thread = threading.Thread(target=server.serve_forever, name="scdfe-c-command-server", daemon=True)
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception as exc:
+            self.logger.error(f"TCP 指令服务线程启动失败: {exc}")
+            server.server_close()
+            self._server = self._thread = None
+            try:
+                endpoint.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         self.logger.process(f"TCP 指令服务启动，监听 {host}:{port}")
         return self
 
@@ -489,8 +519,16 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
     if not token:
         token = secrets.token_urlsafe(32)
         _update_command_row(store, auth_token=token)
+    runtime_logger = ScdfeLogger(
+        configured_log,
+        process_name="scdfe_c-command-server",
+        packet_directory=packet_log_directory(configured_log),
+    )
+    runtime_logger.process("TCP 指令服务进程启动")
     lock = InstanceLock(db, COMMAND_PROCESS_KEY)
     if not lock.acquire():
+        runtime_logger.error("TCP 指令服务启动失败：本数据库已有 TCP 指令服务实例")
+        runtime_logger.process("TCP 指令服务进程停止")
         raise RuntimeError("本数据库已有 TCP 指令服务实例")
     lease = None
     server = None
@@ -514,7 +552,7 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
         except Exception:
             pass
         server = CommandServer(db, host=host, port=port, token=token, log_dir=configured_log,
-                              retention_hours=retention_hours).start()
+                              retention_hours=retention_hours, logger=runtime_logger).start()
         address = server.address or (host, port)
         _update_command_row(store, bind_host=address[0], bind_port=address[1], process_status=PROCESS_RUNNING,
                             process_pid=os.getpid(), process_heartbeat_time=int(time.time() * 1000))
@@ -541,6 +579,7 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
         return 0
     except Exception as exc:
         failed = True
+        runtime_logger.error(f"TCP 指令服务进程异常退出: {exc}")
         _update_command_row(store, process_status=PROCESS_ERROR, process_pid=0,
                             process_stop_time=int(time.time() * 1000), process_exit_code=-1, process_error=str(exc))
         if lease is not None:
@@ -559,6 +598,9 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
         if not failed:
             _update_command_row(store, process_status=PROCESS_STOPPED, process_pid=0,
                                 process_stop_time=int(time.time() * 1000), process_heartbeat_time=int(time.time() * 1000))
+            runtime_logger.process("TCP 指令服务进程停止")
+        else:
+            runtime_logger.process("TCP 指令服务进程异常停止")
         lock.release()
 
 

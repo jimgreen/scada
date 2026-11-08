@@ -87,6 +87,13 @@ class CommandServerTests(unittest.TestCase):
             self.assertEqual(stopped["process_status"], 0)
             self.assertEqual(stopped["process_pid"], 0)
             self.assertFalse(endpoint_path(db).exists())
+            log_files = list((db.parent / "logs").rglob("scdfe_c-command-server-*.log"))
+            self.assertTrue(log_files)
+            content = "\n".join(path.read_text(encoding="utf-8") for path in log_files)
+            self.assertIn("TCP 指令服务进程启动", content)
+            self.assertIn("TCP 指令服务启动，监听", content)
+            self.assertIn("TCP 指令服务停止", content)
+            self.assertIn("TCP 指令服务进程停止", content)
 
     def test_managed_process_uses_shared_web_log_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,6 +148,11 @@ class CommandServerTests(unittest.TestCase):
             self.assertTrue(yt["ok"])
             self.assertEqual([(x[0], x[1], x[2], x[3]) for x in writer.calls],
                              [(7, "yk", 3, 1), (7, "yt", 4, 12.5)])
+            log_files = list((Path(tmp) / "logs").rglob("scdfe_c-command-server-*.log"))
+            self.assertTrue(log_files)
+            content = "\n".join(path.read_text(encoding="utf-8") for path in log_files)
+            self.assertIn("TCP 指令已受理 request_id=r1", content)
+            self.assertIn("TCP 指令已受理 request_id=r2", content)
 
     def test_request_id_is_idempotent_and_token_is_required(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +218,24 @@ class CommandServerTests(unittest.TestCase):
             self.assertEqual(json.loads(metadata.read_text())["port"], server.address[1])
             server.close()
             self.assertFalse(metadata.exists())
+
+    def test_start_failure_is_written_to_runtime_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "scada.sqlite3"
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            try:
+                server = CommandServer(db, port=listener.getsockname()[1], token="test-token",
+                                       writer=FakeWriter())
+                with self.assertRaises(OSError):
+                    server.start()
+            finally:
+                listener.close()
+            log_files = list((Path(tmp) / "logs").rglob("scdfe_c-command-server-*.log"))
+            self.assertTrue(log_files)
+            content = "\n".join(path.read_text(encoding="utf-8") for path in log_files)
+            self.assertIn("TCP 指令服务启动失败", content)
 
     def test_concurrent_duplicate_request_id_is_submitted_once(self):
         with tempfile.TemporaryDirectory() as tmp:
