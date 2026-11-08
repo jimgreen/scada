@@ -447,6 +447,18 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
   margin-bottom: 10px;
   flex-shrink: 0;
 }
+.data-toolbar {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.data-toolbar > .actions {
+  flex: 0 0 auto;
+}
+.data-toolbar > .global-filters {
+  flex: 1 1 560px;
+  min-width: 320px;
+  margin: 0;
+}
 .page-panel > .toolbar .title-group {
   display: none;
 }

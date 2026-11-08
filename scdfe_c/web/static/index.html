@@ -53,7 +53,7 @@
           aria-label="数据库记录概览"
         ></section>
         <section class="content page-panel" id="data-panel">
-          <div class="toolbar">
+          <div class="toolbar data-toolbar">
             <div class="title-group">
               <h1 id="section-title">RTU 与通道</h1>
             </div>
@@ -63,20 +63,20 @@
                 ＋ 新建 RTU 与通道
               </button>
             </div>
-          </div>
-          <div class="filterbar global-filters">
-            <label class="rtu-picker" id="rtu-picker"
-              >RTU
-              <select id="rtu-filter" aria-label="筛选 RTU 编号">
-                <option value="">全部 RTU</option>
-              </select></label
-            ><datalist id="rtu-options"></datalist
-            ><input
-              id="search"
-              type="search"
-              placeholder="搜索名称、编码或主键…"
-              aria-label="搜索记录"
-            /><button class="row-button" id="clear-filters">清除筛选</button>
+            <div class="filterbar global-filters">
+              <label class="rtu-picker" id="rtu-picker"
+                >RTU
+                <select id="rtu-filter" aria-label="筛选 RTU 编号">
+                  <option value="">全部 RTU</option>
+                </select></label
+              ><datalist id="rtu-options"></datalist
+              ><input
+                id="search"
+                type="search"
+                placeholder="搜索名称、编码或主键…"
+                aria-label="搜索记录"
+              /><button class="row-button" id="clear-filters">清除筛选</button>
+            </div>
           </div>
           <nav class="data-tabs" id="data-tabs" aria-label="数据与定义表">
             <button type="button" data-tab-resource="rtus" class="selected">RTU 与通道</button>
