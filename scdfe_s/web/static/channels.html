@@ -4,7 +4,7 @@
 <body data-channels="1"><header><h1>通道数据</h1></header>
 <main><section class="card">
   <p>这里管理 S 测试库的通道和各规约参数。通信测试页面只浏览配置；与 C 同号的站独立保存，删除不会删除 C 的站。</p>
-  <div class="toolbar"><h2>通道列表</h2><div class="actions"><button id="new-channel" class="primary" type="button">新建通道</button><button id="edit-parameters" type="button" disabled>编辑规约参数</button><button id="reload" type="button">刷新</button></div></div>
+  <div class="toolbar"><div class="toolbar-title"><h2>通道列表</h2><span id="channel-message" class="message" role="status"></span></div><div class="actions"><button id="new-channel" class="primary" type="button">新建通道</button><button id="edit-parameters" type="button" disabled>编辑规约参数</button><button id="reload" type="button">刷新</button></div></div>
   <dialog class="editor-dialog" id="channel-editor" aria-labelledby="channel-editor-title">
     <form id="channel-form" class="data-form" method="dialog">
       <div class="dialog-head"><h2 id="channel-editor-title">新建通道</h2><button type="button" id="close-channel-editor" aria-label="关闭">×</button></div>
@@ -26,6 +26,5 @@
       <div class="form-actions"><button type="button" id="cancel-parameter-editor">取消</button><button class="primary" id="save-parameters" type="submit">保存规约参数</button><button type="button" id="delete-parameters" class="danger" hidden>删除规约参数</button></div>
     </form>
   </dialog>
-  <div id="channel-message" class="message" role="status"></div>
   <div class="table-wrap"><table><thead><tr><th>RTU</th><th>通道</th><th>规约</th><th>名称</th><th>自动通信</th><th>操作</th></tr></thead><tbody id="channels"></tbody></table></div>
 </section></main><script src="/static/channels.js"></script></body></html>

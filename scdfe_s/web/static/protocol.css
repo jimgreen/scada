@@ -6,6 +6,9 @@ header h1 { margin:0; font-size:22px; } header small { opacity:.75; display:bloc
 a { color:#0b7d89; text-decoration:none; } a:hover { text-decoration:underline; }
 main { max-width:1400px; margin:0 auto; padding:22px; }
 .toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:15px; flex-wrap:wrap; }
+.toolbar-title { display:flex; align-items:center; gap:16px; min-width:0; }
+.toolbar-title h2 { margin:0; white-space:nowrap; }
+.toolbar-title .message { margin:0; min-height:0; }
 .communication-card > .toolbar,
 .monitor-card > .toolbar { justify-content:flex-start; }
 .communication-card > .toolbar h2,
