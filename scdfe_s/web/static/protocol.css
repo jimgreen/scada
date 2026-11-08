@@ -93,10 +93,10 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 @media(max-width:560px){ body[data-points] .point-editor { width:calc(100vw - 16px); max-height:92vh; } body[data-points] .point-editor form { max-height:92vh; } body[data-points] .point-editor .point-editor-grid { grid-template-columns:1fr; padding:14px 16px 6px; } body[data-points] .point-editor .dialog-head { padding:13px 16px; } body[data-points] .point-editor .form-actions { padding:10px 16px 13px; } body[data-points] #point-editor-error { margin:0 16px; } }
 .protocol-log-browser { height:min(760px, calc(100vh - 220px)); min-height:430px; }
 .test-selector { display:flex; align-items:center; gap:10px 16px; flex-wrap:wrap; }
-.test-selector-main { display:flex; align-items:center; flex:0 1 350px; min-width:260px; }
-.rtu-picker { flex:1 1 350px; min-width:260px; font-size:12px; color:#526b79; }
-.rtu-picker select { margin-top:5px; font-size:15px; font-weight:600; }
-.test-body { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--layout-first-height,120px) 8px minmax(0,1fr); flex:1 1 auto; min-height:0; }
+.test-selector-main { display:flex; align-items:center; flex:1 1 520px; min-width:320px; }
+.test-selector-main .rtu-picker { display:flex; flex-direction:row; align-items:center; gap:10px; flex:1 1 auto; min-width:0; font-size:12px; color:#526b79; white-space:nowrap; }
+.test-selector-main .rtu-picker select { flex:1 1 auto; min-width:0; margin-top:0; font-size:15px; font-weight:600; }
+.test-body { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
 .test-body-main { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
 .test-body-main > .tab-panel:not([hidden]) { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
 .test-body-main > .tab-panel:not([hidden]) > .grid,
@@ -105,7 +105,6 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 .test-body-main > .tab-panel:not([hidden]) > .grid > .card,
 .test-body-main > .tab-panel:not([hidden]) > .card { display:flex; flex-direction:column; min-height:0; }
 .test-body-main > .tab-panel:not([hidden]) .table-wrap { flex:1 1 auto; min-height:0; max-height:none; }
-.test-body.layout-resizable-y { grid-template-rows:var(--layout-first-height,120px) 8px minmax(0,1fr); }
 body[data-points] .point-filters { display:flex; align-items:center; gap:10px; flex:1 1 auto; min-width:280px; }
 body[data-points] .point-filters > label:not(.visually-hidden) { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
 body[data-points] .point-filters > label:not(.visually-hidden) select { width:280px; }
