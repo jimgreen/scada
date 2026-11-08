@@ -97,6 +97,7 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 .test-selector-main .rtu-picker { display:flex; flex-direction:row; align-items:center; gap:10px; flex:1 1 auto; min-width:0; font-size:12px; color:#526b79; white-space:nowrap; }
 .test-selector-main .rtu-picker select { flex:1 1 auto; min-width:0; margin-top:0; font-size:15px; font-weight:600; }
 .test-body { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.test-body.layout-resizable-y { grid-template-rows:var(--layout-first-height,180px) 8px minmax(0,1fr); }
 .test-summary { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0; overflow:auto; }
 .test-summary > .test-selector { margin:0; flex-shrink:0; }
 .test-summary > .test-metrics { margin:0; flex-shrink:0; }

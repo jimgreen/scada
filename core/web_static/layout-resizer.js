@@ -12,7 +12,10 @@
     /* The S test pages use a two-column .grid.  Only exact two-child grids
        are eligible; form/status grids with many children must stay intact. */
     {selector: ".grid", key: "grid-first", property: "--grid-first-width", min: 260, max: 760, otherMin: 320, axis: "x", className: "grid-resizable"},
-    {selector: ".test-body[data-resize-axis=\"y\"]", key: "test-summary-height", property: "--layout-first-height", min: 90, max: 300, axis: "y", className: "layout-resizable-y"},
+    /* Keep the RTU selector/status strip compact so the log and packet panels
+       get the available height.  It remains user-resizable and can still be
+       dragged to the edge to hide and restore the whole strip. */
+    {selector: ".test-body[data-resize-axis=\"y\"]", key: "test-summary-height", property: "--layout-first-height", min: 90, max: 210, axis: "y", className: "layout-resizable-y"},
     {selector: "[data-resize-axis=\"y\"]", key: "custom-height", property: "--layout-first-height", min: 140, max: 900, axis: "y", className: "layout-resizable-y"},
   ];
   const effectiveMax = (config, element) => {
