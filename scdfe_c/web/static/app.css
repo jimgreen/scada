@@ -814,6 +814,30 @@ tbody tr:hover .sticky-actions {
   gap: 10px;
   margin-bottom: 10px;
 }
+.scdfe-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: 34px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.scdfe-topbar > .actions {
+  flex: 0 0 auto;
+}
+.scdfe-topbar > .process-details {
+  flex: 1 1 300px;
+  min-width: 260px;
+  margin: 0;
+}
+.scdfe-topbar > .config-entry {
+  flex: 0 1 auto;
+  margin: 0;
+}
+.scdfe-topbar > .config-entry .muted {
+  white-space: nowrap;
+}
 .process-operation {
   display: flex;
   flex-wrap: wrap;

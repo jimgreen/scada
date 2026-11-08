@@ -157,22 +157,19 @@
           </div>
         </section>
         <section id="scdfe-panel" class="page-panel" hidden>
-          <div class="toolbar">
-            <div class="title-group">
-              <h1>通信运行监控</h1>
-            </div>
+          <div class="scdfe-topbar">
             <div class="actions">
               <button class="button primary" id="scdfe-processes">进程启停</button
               ><button class="button secondary" id="scdfe-refresh">刷新</button>
             </div>
+            <div id="scdfe-details" class="process-details"></div>
+            <div class="config-panel config-entry">
+              <button class="button secondary" id="open-scdfe-config" type="button">运行参数与日志保留</button>
+              <span class="muted">线程启动间隔和日志文件保留时间</span>
+            </div>
           </div>
           <div id="scdfe-error" class="error-panel" role="alert" hidden></div>
           <div id="scdfe-status" class="scdfe-status"></div>
-          <div id="scdfe-details" class="process-details"></div>
-          <div class="config-panel config-entry">
-            <button class="button secondary" id="open-scdfe-config" type="button">运行参数与日志保留</button>
-            <span class="muted">线程启动间隔和日志文件保留时间</span>
-          </div>
           <div class="filterbar">
             <h2>RTU 通信线程</h2>
             <input
