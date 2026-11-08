@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>scdfe_s · 通信测试</title>
+  <link rel="stylesheet" href="/static/protocol.css">
+  <link rel="stylesheet" href="/static/log-browser.css">
+  <script defer src="/static/log-browser.js"></script>
+</head>
+<body data-log-module="s">
+  <header></header>
+  <main>
+    <section class="card test-selector">
+      <div class="test-selector-main">
+        <label class="rtu-picker">RTU
+          <select id="rtu-select" aria-label="选择 RTU"><option value="">读取 RTU…</option></select>
+        </label>
+      </div>
+      <div class="test-actions">
+        <button id="service-start" class="primary" type="button" disabled>启动规约服务</button>
+        <button id="service-stop" type="button" disabled>停止规约服务</button>
+        <button id="service-poll" type="button" disabled>立即采集</button>
+        <button id="test-refresh" type="button">刷新</button>
+      </div>
+      <div id="test-message" class="message" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="test-metrics" aria-label="RTU 摘要">
+      <div class="metric"><b id="metric-protocol">—</b><span>规约类型</span></div>
+      <div class="metric"><b id="metric-channel">—</b><span>通道号</span></div>
+      <div class="metric"><b id="metric-packet">—</b><span>报文保存</span></div>
+      <div class="metric"><b id="metric-points">—</b><span>四遥点数</span></div>
+      <div class="metric"><b id="metric-running">—</b><span>服务状态</span></div>
+      <div class="metric"><b id="metric-connections">—</b><span>连接数</span></div>
+    </section>
+
+    <nav class="page-tabs test-tabs" aria-label="通信测试页面">
+      <button class="page-tab" type="button" data-page-tab="channel" aria-selected="true">通道配置</button>
+      <button class="page-tab" type="button" data-page-tab="points" aria-selected="false">四遥数据</button>
+      <button class="page-tab" type="button" data-page-tab="connection" aria-selected="false">连接信息</button>
+      <button class="page-tab" type="button" data-page-tab="logs" aria-selected="false">日志报文</button>
+    </nav>
+
+    <section class="tab-panel" data-tab-panel="channel">
+      <div class="grid test-grid">
+        <article class="card"><h2>RTU 与通道</h2><div id="channel-table" class="key-value-table"><p class="muted">请选择 RTU</p></div></article>
+        <article class="card"><h2>规约参数</h2><div id="parameter-table" class="key-value-table"><p class="muted">请选择 RTU</p></div></article>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="points" hidden>
+      <article class="card point-page">
+        <div class="point-tabs-row"><nav class="page-tabs point-tabs" aria-label="四遥类型">
+          <button class="page-tab" type="button" data-point-tab="yc" aria-selected="true">遥测 YC</button>
+          <button class="page-tab" type="button" data-point-tab="yx" aria-selected="false">遥信 YX</button>
+          <button class="page-tab" type="button" data-point-tab="yk" aria-selected="false">遥控 YK</button>
+          <button class="page-tab" type="button" data-point-tab="yt" aria-selected="false">遥调 YT</button>
+        </nav><button id="points-refresh" type="button">刷新</button></div>
+        <div id="point-panels">
+          <section data-point-panel="yc"><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yc"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yc"></div></section>
+          <section data-point-panel="yx" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yx"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yx"></div></section>
+          <section data-point-panel="yk" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yk"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yk"></div></section>
+          <section data-point-panel="yt" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yt"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yt"></div></section>
+        </div>
+      </article>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="connection" hidden>
+      <div class="grid test-grid">
+        <article class="card"><h2>规约服务状态</h2><div id="service-status" class="key-value-table"><p class="muted">请选择 RTU</p></div></article>
+        <article class="card"><h2>连接记录</h2><div id="connection-list" class="log-list">暂无连接</div></article>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="logs" hidden>
+      <section class="log-browser protocol-log-browser" aria-label="日志报文浏览器">
+        <nav class="lb-record-tabs" aria-label="记录类别"><button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button><button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button></nav>
+        <div class="lb-toolbar"><label>日志进程<select id="lb-process"><option value="">全部进程</option></select></label><label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label><button id="lb-refresh" class="primary" type="button">刷新日志</button><label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label><span id="lb-status" role="status" aria-live="polite">读取中…</span></div>
+        <div class="lb-workspace"><aside class="lb-files" aria-label="日志文件目录"><div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div><div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div><div class="lb-file-pager"><button id="lb-files-prev" type="button" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" type="button" aria-label="下一页文件">下一页</button></div></aside><section class="lb-reader" aria-label="日志内容"><div class="lb-reader-head"><div><strong id="lb-name">请选择日志文件</strong><small id="lb-meta">从左侧目录选择文件，或检索全部文件</small></div><button id="lb-export" type="button" disabled>导出本批</button></div><div class="lb-reader-tools"><label>范围<select id="lb-scope"><option value="file">当前文件</option><option value="all">全部匹配文件</option></select></label><label>当前目录<select id="lb-record"><option value="runtime">运行日志</option><option value="packet">报文日志</option></select></label><label>方向<select id="lb-direction"><option value="">全部方向</option><option value="RX">接收 RX</option><option value="TX">发送 TX</option></select></label><label>类型<select id="lb-level"><option value="">全部类型</option><option value="INFO">日志</option><option value="PACKET">报文</option><option value="WARNING">警告</option><option value="ERROR">错误</option><option value="PROCESS">进程</option></select></label><label>报文通道号<input id="lb-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道"></label><label class="lb-keyword">关键字<input id="lb-keyword" type="search" maxlength="256" placeholder="协议、HEX 或日志内容"></label></div><div class="lb-reader-tools lb-time-tools"><label>开始<input id="lb-start" type="time" step="1"></label><label>结束<input id="lb-end" type="time" step="1"></label><button id="lb-apply" type="button">筛选</button><button id="lb-clear" type="button">清除筛选</button><label>每批<select id="lb-limit"><option value="200">200 条</option><option value="1000" selected>1000 条</option><option value="5000">5000 条</option></select></label><label class="lb-check"><input id="lb-wrap" type="checkbox" checked>自动换行</label></div><div id="lb-content" class="lb-content lb-wrap" tabindex="0" aria-label="日志文本"><div class="lb-empty">读取中…</div></div><div class="lb-reader-foot"><span id="lb-result" role="status"></span><div><button id="lb-newer" type="button" disabled>较新一批</button><button id="lb-older" type="button" disabled>较早一批</button></div></div></section></div><div id="lb-directory" class="lb-directory"></div>
+      </section>
+    </section>
+  </main>
+  <script defer src="/static/test.js"></script>
+</body>
+</html>

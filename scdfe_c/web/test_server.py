@@ -467,6 +467,22 @@ class WebTests(unittest.TestCase):
         self.assertNotIn('channel_id', body['item'])
         self.assertEqual(self.call('/api/scdfe_c/logs?channel_id=70')[0], 400)
 
+    def test_packet_log_listing_reports_channel_recording_policy(self):
+        self.rtu()
+        status, body = self.call('/api/scdfe_c/logs?record=packet&rtu_id=1')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['record'], 'packet')
+        self.assertFalse(body['recording_enabled'])
+        self.assertEqual(body['total'], 0)
+
+        status, updated = self.call('/api/rtus/1/channel', 'PATCH', {
+            'packet_recording': 1,
+        })
+        self.assertEqual(status, 200, updated)
+        status, body = self.call('/api/scdfe_c/logs?record=packet&rtu_id=1')
+        self.assertEqual(status, 200)
+        self.assertTrue(body['recording_enabled'])
+
     def test_main_and_writer_hourly_files_can_be_listed_and_searched(self):
         from datetime import datetime
         import scdfe_c as runtime

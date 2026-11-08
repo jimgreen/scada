@@ -124,12 +124,13 @@ class ProcessController:
         pid = int(row["process_pid"] or 0)
         if pid and not process_is_alive(pid):
             # Compare identity so a concurrent registration is never erased.
+            error = str(row.get("process_error") or "进程已退出，未收到正常退出状态")
             with self.store.connection() as connection:
                 connection.execute(
                     f"UPDATE {PROCESS_TABLE} SET process_pid=0, process_status=5, "
                     "process_stop_time=?, process_error=?, process_exit_code=-1, _version=_version+1 "
                     "WHERE process_key=? AND owner_token=? AND process_pid=?",
-                    (now_ms(), "进程已退出，未收到正常退出状态", key, row["owner_token"], pid),
+                    (now_ms(), error, key, row["owner_token"], pid),
                 )
                 connection.commit()
             row = self.store.get_row(PROCESS_TABLE, [key])
@@ -167,18 +168,19 @@ class ProcessController:
                 if not pid or process_is_alive(pid):
                     continue
                 stopped_at = now_ms()
+                error = str(row.get("process_error") or "进程已退出，未收到正常退出状态")
                 result = connection.execute(
                     f"UPDATE {PROCESS_TABLE} SET process_pid=0, process_status=5, "
                     "process_stop_time=?, process_error=?, process_exit_code=-1, _version=_version+1 "
                     "WHERE process_key=? AND owner_token=? AND process_pid=?",
-                    (stopped_at, "进程已退出，未收到正常退出状态", row["process_key"], row["owner_token"], pid),
+                    (stopped_at, error, row["process_key"], row["owner_token"], pid),
                 )
                 if result.rowcount:
                     row.update(
                         process_pid=0,
                         process_status=5,
                         process_stop_time=stopped_at,
-                        process_error="进程已退出，未收到正常退出状态",
+                        process_error=error,
                         process_exit_code=-1,
                         _version=int(row["_version"]) + 1,
                     )
@@ -403,7 +405,13 @@ class ProcessController:
             if key == "writer" and self._row("main")["process_pid"]:
                 # Parent acknowledges pause even when writer is between crash
                 # recovery and registration, closing the transient PID=0 gap.
-                values.update(process_status=3, process_stop_time=0)
+                # If the writer already died, keep a completed stop marker.
+                # Waiting for a zero PID plus a *new* stop timestamp otherwise
+                # leaves the Web operation running until its full timeout.
+                if not pid and int(before.get("process_status") or 0) in {3, 5}:
+                    values.update(process_status=0, process_stop_time=requested_at)
+                else:
+                    values.update(process_status=3, process_stop_time=0)
             self.store.update_row(PROCESS_TABLE, [key], values)
         def stopped():
             row = self._row(key)

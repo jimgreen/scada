@@ -38,7 +38,7 @@ function renderChannels() {
   const rows = state.channels;
   $("#channel-count").textContent = `${rows.length} 个通道`;
   $("#summary").textContent = `运行 ${rows.filter(x => Number(x.process_status) === 2).length} / 总数 ${rows.length}`;
-  const markup = rows.length ? rows.map(x => `<tr class="${id(x) === state.selected ? "selected" : ""}" data-select="${id(x)}"><td>${id(x)}</td><td>${esc(x.name || x.code)}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid || "—"}</td><td class="actions"><a href="/points.html?channel_id=${id(x)}">四遥数据</a><a href="/logs.html?channel_id=${id(x)}">日志与报文</a><button data-edit="${id(x)}">编辑</button><button data-version="${esc(x._version)}" data-delete="${id(x)}" class="danger">删除</button></td></tr>`).join("") : '<tr><td colspan="6" class="muted">暂无转发通道</td></tr>';
+  const markup = rows.length ? rows.map(x => `<tr class="${id(x) === state.selected ? "selected" : ""}" data-select="${id(x)}"><td>${id(x)}</td><td>${esc(x.name || x.code)}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid || "—"}</td><td class="actions"><a href="/points.html?channel_id=${id(x)}">四遥数据</a><a href="/logs.html?channel_id=${id(x)}">日志报文</a><button data-edit="${id(x)}">编辑</button><button data-version="${esc(x._version)}" data-delete="${id(x)}" class="danger">删除</button></td></tr>`).join("") : '<tr><td colspan="6" class="muted">暂无转发通道</td></tr>';
   // Stable refreshes preserve focus and the selected channel.
   if (body.dataset.markup !== markup) { body.innerHTML = markup; body.dataset.markup = markup; }
   renderSelects(); renderDetail();
@@ -110,7 +110,7 @@ async function loadSourceCatalog(){
   const currentRtu=rtu.value||String(state.edit.item?.source_rtu_id||"");
   rtu.innerHTML='<option value="">请选择源 RTU</option>'+response.rtus.map(x=>`<option value="${esc(x.rtu_id)}">${esc(x.rtu_id)} · ${esc(x.name||x.code||"")} · ${esc(x.channel_type||"")}（${esc(x.point_count)}点）</option>`).join("");
   rtu.value=response.rtus.some(x=>String(x.rtu_id)===String(currentRtu))?String(currentRtu):"";
-  const renderPoints=(items)=>{const selected=point.multiple?Array.from(point.selectedOptions||[]).map(x=>x.value):[String(state.edit.item?.source_pnt_no||point.value||"")];point.innerHTML=(point.multiple?"":"<option value=\"\">请选择源点</option>")+items.map(x=>`<option value="${esc(x.pnt_no)}">${esc(x.pnt_no)} · ${esc(x.name||x.code||"")}（值 ${esc(x.value??"")}）</option>`).join("");Array.from(point.options).forEach(o=>{if(selected.includes(o.value))o.selected=true})};
+  const renderPoints=(items)=>{const selected=point.multiple?Array.from(point.selectedOptions||[]).map(x=>x.value):[String(state.edit.item?.source_pnt_no||point.value||"")];const empty=point.multiple&&!items.length?"<option disabled>请选择源 RTU 后加载源点</option>":"";point.innerHTML=empty+(point.multiple?"":"<option value=\"\">请选择源点</option>")+items.map(x=>`<option value="${esc(x.pnt_no)}">${esc(x.pnt_no)} · ${esc(x.name||x.code||"")}（值 ${esc(x.value??"")}）</option>`).join("");Array.from(point.options).forEach(o=>{if(selected.includes(o.value))o.selected=true})};
   const refreshPoints=async()=>{const selectedRtu=rtu.value;if(!selectedRtu){renderPoints([]);return}const detail=await api(`/api/trans/source-catalog?kind=${encodeURIComponent(kind)}&rtu_id=${encodeURIComponent(selectedRtu)}`);state.sourceCatalog=detail;renderPoints(detail.items||[])};
   rtu.onchange=()=>refreshPoints().catch(err=>$("#editor-error").textContent=err.message);
   await refreshPoints();
@@ -123,23 +123,26 @@ function setPointSourceControls(batch){
 }
 async function openEditor(type,item,batch=false){
   state.edit={type,item,channel:item ? id(item) : state.selected};state.batch=Boolean(batch);state.sourceCatalog=null;
-  const protocol=String(item?.protocol||selected()?.protocol||defaults.protocol).toLowerCase();
+    const protocol=String(item?.protocol||selected()?.protocol||defaults.protocol).toLowerCase();
+    const pointKind = item?.kind || activePointKind();
   const fields=type==="channel"?[...channelCommonFields,...channelProtocolFields.iec104,...channelProtocolFields["modbus-tcp"]]:[...pointCommonFields,...pointProtocolFields.iec104,...pointProtocolFields["modbus-tcp"]];
-  $("#editor-title").textContent=`${batch?"批量加入":""}${item?"编辑":"新建"}${type==="channel"?"转发通道":"点映射"}`;
+  $("#editor-title").textContent=batch?"批量新增点映射":`${item?"编辑":"新建"}${type==="channel"?"转发通道":"点映射"}`;
   $("#editor-error").textContent="";
   $("#editor-fields").innerHTML=fields.map(([k,l,t])=>{
     const group=type==="channel"?(channelProtocolFields.iec104.some(x=>x[0]===k)?"iec104":channelProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":""):(pointProtocolFields.iec104.some(x=>x[0]===k)?"iec104":pointProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":"");
     const hidden=batch&&type==="point"&&k==="pnt_no";
-    return `<label${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${input(k,t,item?.[k]??defaults[k]??"",Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)))}</label>`;
+    const value = k === "kind" && type === "point" ? pointKind : (item?.[k] ?? defaults[k] ?? "");
+    return `<label data-field="${k}"${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${input(k,t,value,Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)))}</label>`;
   }).join("");
   if(type==="point")setPointSourceControls(batch);
+  $("#editor").classList.toggle("batch-editor", Boolean(batch));
   $("#editor").showModal();
   $("#editor-fields [name=\"protocol\"]")?.addEventListener("change",setEditorProtocolVisibility);
   $("#editor-fields [name=\"kind\"]")?.addEventListener("change",()=>loadSourceCatalog().catch(err=>$("#editor-error").textContent=err.message));
   setEditorProtocolVisibility();
   if(type==="point")try{await loadSourceCatalog()}catch(err){$("#editor-error").textContent=err.message}
 }
-function readEditorValues(fields){const values={};for(const [k,,t]of fields){const el=$("#editor-fields [name=\"${k}\"]");if(!el||el.disabled||el.value===""||el.closest("label")?.hidden)continue;values[k]=["source_rtu_id","source_pnt_no","pnt_no"].includes(k)?el.value:["number","float","bool"].includes(t)?Number(el.value):el.value}return values}
+function readEditorValues(fields){const values={};for(const [k,,t]of fields){const el=$("#editor-fields [name=\""+k+"\"]");if(!el||el.disabled||el.value===""||el.closest("label")?.hidden)continue;values[k]=["source_rtu_id","source_pnt_no","pnt_no"].includes(k)?el.value:["number","float","bool"].includes(t)?Number(el.value):el.value}return values}
 async function saveEditor(e){
   e.preventDefault();
   const {type,item,channel}=state.edit,fields=editorFields(type),values=readEditorValues(fields);

@@ -14,7 +14,7 @@
       $("#communication-rows").innerHTML = rows.map(x => {
         const status = Number(x.process_status || 0), cid = encodeURIComponent(x.channel_id);
         const heartbeat = x.process_heartbeat_time ? new Date(Number(x.process_heartbeat_time)).toLocaleString() : "—";
-        return `<tr><td>${esc(x.channel_id)} · ${esc(x.name || x.code)}</td><td>${esc(x.protocol)}</td><td>${esc(x.bind_host)}:${esc(x.bind_port)}</td><td><span class="status-badge ${status === 2 ? "running" : status === 5 ? "error" : ""}">${statuses[status] || status}</span></td><td>${esc(x.scan_interval_ms)} ms</td><td>${esc(heartbeat)}</td><td>${esc(x.process_error) || "—"}</td><td><a href="/points.html?channel_id=${cid}">四遥数据</a> · <a href="/processes.html">进程</a> · <a href="/logs.html?channel_id=${cid}">日志与报文</a></td></tr>`;
+        return `<tr><td>${esc(x.channel_id)} · ${esc(x.name || x.code)}</td><td>${esc(x.protocol)}</td><td>${esc(x.bind_host)}:${esc(x.bind_port)}</td><td><span class="status-badge ${status === 2 ? "running" : status === 5 ? "error" : ""}">${statuses[status] || status}</span></td><td>${esc(x.scan_interval_ms)} ms</td><td>${esc(heartbeat)}</td><td>${esc(x.process_error) || "—"}</td><td><a href="/points.html?channel_id=${cid}">四遥数据</a> · <a href="/processes.html">进程</a> · <a href="/logs.html?channel_id=${cid}">日志报文</a></td></tr>`;
       }).join("") || '<tr><td colspan="8" class="muted">暂无转发通道，可前往“通道数据”新建。</td></tr>';
       $("#message").textContent = "";
       $("#message").className = "muted";

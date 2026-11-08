@@ -16,7 +16,7 @@
       <button type="button" class="page-tab" data-page-tab="points" role="tab" aria-selected="false">四遥数据</button>
       <button type="button" class="page-tab" data-page-tab="runtime" role="tab" aria-selected="false">运行状态</button>
       <button type="button" class="page-tab" data-page-tab="connections" role="tab" aria-selected="false">连接监控</button>
-      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志与报文</button>
+      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志报文</button>
     </nav>
     <section class="tab-panel" data-tab-panel="config" role="tabpanel">
       <section class="card"><h2>IEC104 通道配置</h2><form id="config-form"><label>监听地址<input id="bind-ip" required></label><label>监听端口<input id="port" type="number" min="1" max="65535" required></label><label>RTU 编号<input id="rtu-id" type="number" min="1" placeholder="自动选择"></label><label>最大连接数<input id="max-connections" type="number" min="0" required></label><label>周期（毫秒）<input id="tick-rate" type="number" min="1" required></label><div class="form-actions"><button class="primary">保存配置</button></div></form></section>
@@ -36,7 +36,7 @@
     </section>
     <section class="tab-panel" data-tab-panel="runtime" role="tabpanel" hidden><section class="card"><h2>运行状态</h2><section class="status-grid" id="status-grid"></section><pre id="status-json"></pre></section></section>
     <section class="tab-panel" data-tab-panel="connections" role="tabpanel" hidden><section class="card"><h2>连接监控</h2><div id="connections" class="log-list"></div></section></section>
-    <section class="tab-panel" data-tab-panel="logs" role="tabpanel" hidden><section class="card"><h2>日志与报文</h2><div class="log-browser protocol-log-browser">
+    <section class="tab-panel" data-tab-panel="logs" role="tabpanel" hidden><section class="card"><h2>日志报文</h2><div class="log-browser protocol-log-browser">
   <nav class="lb-record-tabs" aria-label="记录类别"><button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button><button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button></nav>
   <div class="lb-toolbar"><label>日志进程<select id="lb-process"><option value="">全部进程</option></select></label><label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label><button id="lb-refresh" class="primary">刷新日志</button><label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label><span id="lb-status" role="status" aria-live="polite">读取中…</span></div>
   <div class="lb-workspace"><aside class="lb-files" aria-label="日志文件目录"><div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div><div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div><div class="lb-file-pager"><button id="lb-files-prev" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" aria-label="下一页文件">下一页</button></div></aside>

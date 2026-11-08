@@ -86,14 +86,14 @@ GET/PATCH/DELETE       /api/channels/{rtu_id}/points/{kind}/{pnt_no}
 `GET /api/monitor/logs`，服务启停使用
 `POST /api/monitor/communications/{service}/start|stop`。
 
-日志页 `/logs` 先用分页标签选择“运行日志”或“报文日志”。左侧按年、月、日、小时展示
-数据库旁对应目录中的文件，右侧读取正文；运行日志只读 `logs/YYYY/MM/DD/HH/`，报文日志
-只读 `packets/YYYY/MM/DD/HH/`，两棵目录树不混写、不共用文件。可选择协议服务、当前文件
-或全部匹配文件，并组合筛选 RX/TX、级别、关键字和时间范围；支持历史分批检索、自动换行、
-跟随最新和导出本批结果。
+日志页 `/logs` 先用分页标签选择“运行日志”或“报文日志”，再选择通信通道。每个通道
+独立生成 `scdfe_s-channel-{channel_id}-YYYYMMDD-HH.log`，左侧按年、月、日、小时展示
+该通道的文件，右侧读取正文；运行日志只读 `logs/YYYY/MM/DD/HH/`，报文日志只读
+`packets/YYYY/MM/DD/HH/`，两棵目录树不混写、不共用文件。可组合筛选 RX/TX、级别、关键字
+和时间范围；支持历史分批检索、自动换行、跟随最新和导出本批结果。
 文件目录接口为 `GET /api/log-files`，正文检索接口为 `GET /api/log-files/search`。
 检索参数包括 `record=runtime|packet`（必须与所选标签一致）、`filename`（相对当前
-`logs/` 或 `packets/` 目录的文件路径）、`process`、`file_query`、`q`、`direction=RX|TX`、
+`logs/` 或 `packets/` 目录的文件路径）、`channel_id`、`process`、`file_query`、`q`、`direction=RX|TX`、
 `level=INFO|PACKET|WARNING|ERROR|PROCESS`、
 `start/end`（带时区的 ISO 8601 时间）、`limit=1..5000` 和 `cursor`。
 使用响应中的 `next_cursor` 继续向前检索；改变筛选条件后应清除游标。
@@ -113,7 +113,7 @@ RX/TX 和关键字筛选，对应接口参数为 `GET /api/log-files/search?reco
 
 绑定 RTU 的 CAN、OPC UA 和 BACnet 服务端通过 `POST /api/<规约>/update/full` 批量更新时，先验证整批，再一次提交数据库。若数据库拒绝其中一个点，整批回滚，协议端不会发布这批值。提交后才向协议端逐点发布；如发布失败，接口会明确报告“数据库已写入”以及第一个未确认的点，可据此核查协议端再重试。未绑定 RTU 的独立模拟不写业务点表。
 
-协议服务运行期间复用当前小时的日志文件句柄，每条记录写完即刷新，日志页可在服务运行中查看；停服时关闭句柄。报文是否写入仍由通道设置决定。
+通信通道运行期间复用当前小时的通道日志文件句柄，每条记录写完即刷新，日志页可在服务运行中查看；停服时关闭句柄。报文是否写入仍由通道设置决定。
 
 ## 命令行通道入口
 

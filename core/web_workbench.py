@@ -7,36 +7,28 @@ ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
           "workbench.js": "application/javascript; charset=utf-8",
           "log-browser.css": "text/css; charset=utf-8",
-          "log-browser.js": "application/javascript; charset=utf-8"}
+          "log-browser.js": "application/javascript; charset=utf-8",
+          "layout-resizer.js": "application/javascript; charset=utf-8"}
 
 S_PAGES = [
     ("运行管理", [
-        ("processes.html", "/processes", "▤", "进程监控", "各协议服务的运行状态与启停"),
+        ("processes.html", "/processes", "▤", "进程监控", "按通信通道展示进程、PID、心跳和运行状态"),
         ("communication.html", "/communication", "◉", "通信监控", "连接、测点数量与通道状态"),
-        ("logs.html", "/logs", "≡", "日志与报文", "按年月日小时浏览运行日志和收发报文文件"),
+        ("logs.html", "/logs", "≡", "日志报文", "按通信通道浏览运行日志和收发报文"),
     ]),
     ("数据与定义", [
         ("channels.html", "/channels", "▦", "通道数据", "维护 RTU、通道和规约定义"),
         ("points.html", "/points", "▥", "四遥数据", "按通道维护遥测、遥信、遥控和遥调"),
     ]),
     ("通信测试", [
-        ("index.html", "/", "▧", "测试总览", "选择主站或服务端进行通信测试"),
-        ("iec104.html", "/iec104", "104", "IEC104", "服务端监听、四遥更新和客户端命令"),
-        ("modbus_tcp.html", "/modbus-tcp", "TCP", "Modbus TCP 主站", "连接设备、采集与命令下发"),
-        ("modbus_tcp_server.html", "/modbus-tcp-server", "TCP", "Modbus TCP 从站", "本地从站监听与读写联调"),
-        ("modbus_rtu.html", "/modbus-rtu", "RTU", "Modbus RTU 主站", "串口配置、采集与命令下发"),
-        ("modbus_rtu_server.html", "/modbus-rtu-server", "RTU", "Modbus RTU 从站", "串口从站与模拟测试"),
-        ("can.html", "/can", "CAN", "CAN 主站", "帧收发、周期采集与总线诊断"),
-        ("can_server.html", "/can-server", "CAN", "CAN 服务端", "自动应答与虚拟总线测试"),
-        ("bacnet_server.html", "/bacnet-server", "BAC", "BACnet 服务端", "服务端对象与四遥点测试"),
-        ("opc_server.html", "/opc-server", "OPC", "OPC UA 服务端", "服务端节点与四遥点测试"),
+        ("test.html", "/test", "▧", "通信测试", "按 RTU 自动匹配规约、四遥、连接和日志"),
     ]),
 ]
 T_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes.html", "▤", "进程监控", "转发进程的启停、心跳和运行状态"),
         ("communication.html", "/communication.html", "◉", "通信监控", "转发通道的监听地址与通信状态"),
-        ("logs.html", "/logs.html", "≡", "日志与报文", "按年月日小时浏览运行日志和收发报文文件"),
+        ("logs.html", "/logs.html", "≡", "日志报文", "按年月日小时浏览运行日志和收发报文文件"),
     ]),
     ("数据与定义", [
         ("channels.html", "/channels.html", "▦", "通道数据", "维护转发通道、规约和监听参数"),
@@ -71,7 +63,8 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
 <div class="side-note">本地数据库<code id="workbench-database">读取中…</code></div></aside>'''
     html = data.decode("utf-8")
     html = html.replace("</head>", '<link rel="stylesheet" href="/static/workbench.css">'
-                        '<script defer src="/static/workbench.js"></script></head>', 1)
+                        '<script defer src="/static/workbench.js"></script>'
+                        '<script defer src="/static/layout-resizer.js"></script></head>', 1)
     html = html.replace("<body", '<body class="workbench"', 1)
     html = re.sub(r"<header\b[^>]*>.*?</header>", lambda _: topbar, html, count=1, flags=re.S)
     # The former horizontal menu is replaced by actual page links in the sidebar.

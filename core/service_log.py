@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import re
+import threading
 import time
 
 from core.log_paths import log_entries, packet_log_directory
@@ -23,47 +24,99 @@ class ServiceFileLog:
             catalog.setdefault(process, []).append(Path(path))
         return catalog
 
-    def __init__(self, store, service, *, startup_catalog=None):
+    def __init__(self, store, service, *, startup_catalog=None, channel_required=False):
         from scdfe_c import ScdfeLogger
         self.name = f"scdfe_s-{service}"
         self._filename_pattern = re.compile(re.escape(self.name) + r"-\d{8}-\d{2}\.log")
+        self._channel_filename_pattern = re.compile(r"scdfe_s-channel-([1-9]\d*)-(\d{8}-\d{2})\.log")
         self.directory = (store.db_path.parent / "logs").resolve()
         self.packet_directory = packet_log_directory(self.directory)
         from core.packet_logging import packet_log_switch
         self.packet_switch = packet_log_switch(store.db_path, 's')
-        self.logger = ScdfeLogger(self.directory, process_name=self.name,
-                                  packet_directory=self.packet_directory)
+        self._lock = threading.RLock()
+        self.channel_required = bool(channel_required)
+        self._channel_id = None
+        self._loggers = {}
+        self.logger = self._logger_for(None)
         self._active = None
         self._next_cleanup = 0
         self._next_error = 0
         self._startup_files = None if startup_catalog is None else startup_catalog.get(self.name, ())
 
+    def _logger_for(self, channel_id):
+        """Return the logger whose file identity is one communication channel."""
+        if channel_id is None:
+            name = self.name
+        else:
+            name = f"scdfe_s-channel-{int(channel_id)}"
+        logger = self._loggers.get(name)
+        if logger is None:
+            from scdfe_c import ScdfeLogger
+            logger = ScdfeLogger(self.directory, process_name=name,
+                                 packet_directory=self.packet_directory)
+            self._loggers[name] = logger
+        return logger
+
+    def bind_channel(self, channel_id):
+        """Bind subsequent runtime and packet records to one channel file."""
+        if channel_id is not None:
+            try:
+                channel_id = int(channel_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("channel_id 必须为正整数") from exc
+            if channel_id < 1:
+                raise ValueError("channel_id 必须为正整数")
+        with self._lock:
+            if self._active is not None and channel_id != self._channel_id:
+                self.end_session()
+            self._channel_id = channel_id
+            self.logger = self._logger_for(channel_id)
+            # A channel has its own history; the shared startup catalogue only
+            # applies to the unbound protocol-manager log.
+            self._startup_files = None
+
+    @property
+    def channel_id(self):
+        return self._channel_id
+
     def start_session(self):
         """Owned by the protocol lifecycle lock; each emit still flushes."""
-        if self._active is None:
-            self._active = ExitStack()
-            self._active.enter_context(self.logger.session())
+        with self._lock:
+            if self._active is None:
+                self._active = ExitStack()
+                self._active.enter_context(self.logger.session())
 
     def end_session(self):
-        if self._active is not None:
-            session, self._active = self._active, None
-            session.close()
+        with self._lock:
+            if self._active is not None:
+                session, self._active = self._active, None
+                session.close()
 
     def _files(self, record="runtime"):
         if record not in {"runtime", "packet"}:
             raise ValueError("记录类型无效")
         root = self.packet_directory if record == "packet" else self.directory
-        # Protocol client/server names share a prefix, but never a log file.
-        return (Path(entry.path) for entry, _ in log_entries(root, self.name + "-")
-                if self._filename_pattern.fullmatch(entry.name))
+        # The active service writes channel files.  Keep the unbound service
+        # file for manager diagnostics and direct callers, but never mix it
+        # with another protocol's channel files.
+        names = ({f"scdfe_s-channel-{self._channel_id}"}
+                 if self._channel_id is not None else {self.name})
+        return (Path(entry.path) for entry, _ in log_entries(root, "scdfe_s-")
+                if any(entry.name.startswith(name + "-") for name in names)
+                and (self._filename_pattern.fullmatch(entry.name)
+                     or self._channel_filename_pattern.fullmatch(entry.name)))
 
     def write(self, level, message, *, channel_id=None):
         try:
+            target_channel = self._channel_id if channel_id is None else channel_id
+            if self.channel_required and target_channel is None:
+                return
+            logger = self._logger_for(target_channel)
             if level == 'PACKET':
-                if self.packet_switch.enabled(channel_id):
-                    self.logger.packet_text(message)
+                if self.packet_switch.enabled(target_channel):
+                    logger.packet_text(message)
             else:
-                self.logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
+                logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
             now = time.monotonic()
             if now >= self._next_cleanup:
                 self._next_cleanup = now + 3600

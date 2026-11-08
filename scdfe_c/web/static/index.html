@@ -6,6 +6,7 @@
     <title>SCADA · 运行工作台</title>
     <link rel="stylesheet" href="/static/app.css" />
     <link rel="stylesheet" href="/static/log-browser.css" />
+    <script defer src="/static/layout-resizer.js"></script>
   </head>
   <body>
     <header class="topbar">
@@ -58,10 +59,8 @@
             </div>
             <div class="actions">
               <button class="button secondary" id="refresh">刷新</button
-              ><button class="button secondary" id="add-channel" hidden>
-                ＋ 新建通道</button
               ><button class="button primary" id="add" disabled>
-                ＋ 新增记录
+                ＋ 新建 RTU 与通道
               </button>
             </div>
           </div>
@@ -280,10 +279,11 @@
                 </div>
                 <div class="lb-reader-actions">
                   <label class="lb-check"><input type="checkbox" id="log-follow">跟随最新</label>
+                  <button id="log-toggle-filters" type="button" aria-expanded="true" aria-controls="log-filter-tools-1 log-filter-tools-2">隐藏筛选</button>
                   <button id="log-download" disabled>导出本批</button>
                 </div>
               </div>
-              <div class="lb-reader-tools">
+              <div class="lb-reader-tools" id="log-filter-tools-1">
                 <label>范围<select id="log-scope" aria-label="日志检索范围">
                   <option value="file">当前文件</option>
                   <option value="all">全部匹配文件</option>
@@ -306,7 +306,7 @@
                 <label>报文通道号<input id="log-channel" type="text" inputmode="numeric" maxlength="19" placeholder="全部通道"></label>
                 <label class="lb-keyword">关键字<input id="log-search" type="search" placeholder="协议、HEX 或日志内容" maxlength="256" aria-label="日志关键词"></label>
               </div>
-              <div class="lb-reader-tools lb-time-tools">
+              <div class="lb-reader-tools lb-time-tools" id="log-filter-tools-2">
                 <label for="log-start">开始 <input id="log-start" type="time" step="1" /></label>
                 <label for="log-end">结束 <input id="log-end" type="time" step="1" /></label>
                 <button id="log-apply">筛选</button>
@@ -387,22 +387,6 @@
           <span class="form-error" id="command-error" role="alert"></span>
           <button type="button" class="button secondary" id="cancel-command">取消</button>
           <button type="submit" class="button primary" id="send-command">确认下发</button>
-        </div>
-      </form>
-    </dialog>
-    <dialog id="channel-select-dialog" aria-labelledby="channel-select-title">
-      <form method="dialog" id="channel-select-form" class="small-dialog">
-        <div class="dialog-head">
-          <div>
-            <h2 id="channel-select-title">选择 RTU</h2>
-          </div>
-          <button class="icon-button" value="cancel" aria-label="关闭选择窗口">×</button>
-        </div>
-        <label class="dialog-select-label" for="channel-select-rtu">RTU</label>
-        <select id="channel-select-rtu" required></select>
-        <div class="dialog-foot">
-          <button type="button" class="button secondary" id="cancel-channel-select">取消</button>
-          <button type="submit" class="button primary">维护通道</button>
         </div>
       </form>
     </dialog>

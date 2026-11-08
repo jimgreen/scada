@@ -524,8 +524,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _static(self, name):
         allowed = {"index.html": "text/html", "api.html": "text/html",
                    "app.css": "text/css", "app.js": "application/javascript",
-                   "log-browser.css": "text/css"}
-        path = ASSET_DIR / name if name == "log-browser.css" else STATIC_DIR / name
+                   "log-browser.css": "text/css",
+                   "layout-resizer.js": "application/javascript"}
+        path = ASSET_DIR / name if name in {"log-browser.css", "layout-resizer.js"} else STATIC_DIR / name
         if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
         self._send(200, allowed[name] + "; charset=utf-8", path.read_bytes())

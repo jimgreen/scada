@@ -41,7 +41,7 @@ _DEFINITION_RUNTIME_COLUMNS = frozenset({
     'man_disable_last_tm', 'lock_begintime', 'lock_holdtime',
     'process_enable', 'process_status', 'process_pid', 'process_start_time',
     'process_stop_time', 'process_heartbeat_time', 'process_exit_code',
-    'process_error',
+    'process_error', 'packet_recording',
 })
 CHANNEL_PARAMETER_TABLES = {
     "iec104": "fes_channel_iec104_define",

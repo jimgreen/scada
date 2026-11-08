@@ -59,7 +59,7 @@ class IEC104Service:
         self._server: IEC104Server | None = None
         self._config_error = None
         self._config = self._load_config()
-        self._file_log = ServiceFileLog(store, "iec104", startup_catalog=startup_catalog)
+        self._file_log = ServiceFileLog(store, "iec104", startup_catalog=startup_catalog, channel_required=True)
         initial_logs = self._file_log.recent(self.LOG_LIMIT, record="runtime")
         initial_logs.extend(self._file_log.recent(self.LOG_LIMIT, record="packet"))
         initial_logs.sort(key=lambda item: item.get("time", ""))
@@ -213,6 +213,9 @@ class IEC104Service:
             if self._server and self._server.running:
                 return self.status()
             try:
+                from core.packet_logging import rtu_channel_id
+                effective_rtu = self._effective_config().get("rtu_id")
+                self._file_log.bind_channel(rtu_channel_id(self.store, effective_rtu))
                 self._file_log.start_session()
                 server = self._build_server()
                 server.start()

@@ -109,7 +109,7 @@ class ProtocolService:
         slug = self.PROTOCOL
         if self.CONFIG_NAME and "_server_" in self.CONFIG_NAME and not slug.endswith("-server"):
             slug += "-server"
-        self._file_log = ServiceFileLog(store, slug, startup_catalog=startup_catalog)
+        self._file_log = ServiceFileLog(store, slug, startup_catalog=startup_catalog, channel_required=True)
         initial_logs = self._file_log.recent(self.LOG_LIMIT, record="runtime")
         initial_logs.extend(self._file_log.recent(self.LOG_LIMIT, record="packet"))
         initial_logs.sort(key=lambda item: item.get("time", ""))
@@ -268,16 +268,17 @@ class ProtocolService:
             if self.running:
                 return self.status()
             try:
-                self._file_log.start_session()
                 if self._engine is not None:
                     self._stop_engine(self._engine)
                 self._latest_values.clear()
                 self._bound_rtu_id = self._config.get("rtu_id") or self._default_rtu_id()
                 self._binding_active = True
+                from core.packet_logging import rtu_channel_id
+                channel = rtu_channel_id(self.store, self._bound_rtu_id)
+                self._file_log.bind_channel(channel)
+                self._file_log.start_session()
                 self._engine = self._build_engine()
                 if hasattr(self._engine, "set_packet_handler"):
-                    from core.packet_logging import rtu_channel_id
-                    channel = rtu_channel_id(self.store, self._bound_rtu_id)
                     self._engine.set_packet_handler(service_packet_recorder(self._record, self._bound_rtu_id, channel))
                 self._start_engine(self._engine)
             except Exception as exc:

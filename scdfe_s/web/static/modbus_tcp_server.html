@@ -5,14 +5,13 @@
       <button type="button" class="page-tab" data-page-tab="config" role="tab" aria-selected="true">通道配置</button>
       <button type="button" class="page-tab" data-page-tab="points" role="tab" aria-selected="false">四遥数据</button>
       <button type="button" class="page-tab" data-page-tab="runtime" role="tab" aria-selected="false">运行状态</button>
-      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志与报文</button>
+      <button type="button" class="page-tab" data-page-tab="logs" role="tab" aria-selected="false">日志报文</button>
     </nav>
     <section class="tab-panel" data-tab-panel="config" role="tabpanel">
       <section class="card"><h2>服务端监听配置</h2><form id="config-form"><label>RTU 编号<input data-field="rtu_id" type="number" min="1"></label><label>监听地址<input data-field="bind_ip"></label><label>监听端口<input data-field="listen_port" type="number" min="1" max="65535"></label><label>从站地址<input data-field="unit_id" type="number" min="1" max="247"></label><div class="form-actions"><button class="primary">保存服务端配置</button></div></form></section>
     </section>
     <section class="tab-panel" data-tab-panel="points" role="tabpanel" hidden>
       <section class="card"><h2>四遥定义与实时值</h2>
-        <form id="add-point"><label>类型<select id="new-kind"><option>yc</option><option>yx</option><option>yt</option><option>yk</option></select></label><label>点号<input id="new-point" type="number" min="1" required></label><label>名称<input id="new-name"></label><div class="form-actions"><button class="primary">新增点</button></div></form>
         <nav class="page-tabs point-tabs" role="tablist" aria-label="四遥子分页">
           <button type="button" class="page-tab" data-point-tab="yc" role="tab" aria-selected="true">遥测 YC</button>
           <button type="button" class="page-tab" data-point-tab="yx" role="tab" aria-selected="false">遥信 YX</button>
@@ -43,7 +42,7 @@
       <section class="card"><h2>运行状态</h2><pre id="status-json"></pre></section>
     </section>
     <section class="tab-panel" data-tab-panel="logs" role="tabpanel" hidden>
-      <section class="card"><h2>日志与报文</h2><div class="log-browser protocol-log-browser">
+      <section class="card"><h2>日志报文</h2><div class="log-browser protocol-log-browser">
   <nav class="lb-record-tabs" aria-label="记录类别">
     <button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button>
     <button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button>

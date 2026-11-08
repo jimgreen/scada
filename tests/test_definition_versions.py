@@ -36,6 +36,13 @@ class DefinitionVersionTests(unittest.TestCase):
         self.assertEqual(definition_version_token(self.store, 7), definition)
         self.assertEqual(command_version_token(self.store, 7), command)
 
+    def test_packet_recording_policy_does_not_force_definition_reload(self):
+        definition = definition_version_token(self.store, 7)
+        self.store.update_row("fes_rtu_define", [7], {"packet_recording": 1})
+        self.assertEqual(definition_version_token(self.store, 7), definition)
+        self.store.update_row("fes_rtu_define", [7], {"packet_recording": 0})
+        self.assertEqual(definition_version_token(self.store, 7), definition)
+
     def test_static_and_command_inputs_advance_only_their_token(self):
         definition = definition_version_token(self.store, 7)
         command = command_version_token(self.store, 7)

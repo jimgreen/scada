@@ -3,6 +3,15 @@
   const $ = (s) => document.querySelector(s);
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const services = ["iec104","modbus-tcp","modbus-tcp-server","modbus-rtu","modbus-rtu-server","can","can-server","opc-server","bacnet-server"];
+  const protocolLabels = {
+    iec104: "IEC 60870-5-104", "modbus-tcp": "Modbus TCP", "modbus-rtu": "Modbus RTU",
+    can: "CAN / CAN-FD", bacnet: "BACnet/IP", opc: "OPC UA",
+  };
+  const serviceByType = {
+    iec104: "iec104", "modbus-tcp": "modbus-tcp", "modbus-rtu": "modbus-rtu",
+    can: "can", bacnet: "bacnet-server", opc: "opc-server",
+  };
+  const statusName = {0:"停止", 1:"启动中", 2:"运行", 3:"停止中", 4:"处理中", 5:"错误"};
   async function api(path, options) {
     const r = await fetch(path, {headers: {"Content-Type":"application/json"}, ...(options || {})});
     const body = await r.json();
@@ -23,24 +32,75 @@
     // selections when the next poll returns the same displayed values.
     if (lastMarkup !== markup) { $(selector).innerHTML = markup; lastMarkup = markup; }
   }
+  function fmt(value, timeOnly = false) {
+    if (!value) return "—";
+    const date = new Date(Number(value));
+    if (Number.isNaN(date.valueOf())) return String(value);
+    const p = n => String(n).padStart(2, "0");
+    const clock = `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+    return timeOnly ? clock : `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${clock}`;
+  }
+  function channelStatus(row, service) {
+    if (service && service.running) return "运行中";
+    const value = Number(row.process_status);
+    return statusName[value] || (value ? String(value) : "已停止");
+  }
   async function loadProcesses() {
     try {
-      const data = await fetchView("/api/monitor/processes");
-      if (!data) return;
-      show("#rows", data.items.map(x => {
-        const s = x.status || {};
-        const action = x.running ? "stop" : "start";
-        return `<tr><td>${esc(x.label)}</td><td>${x.running ? "运行中" : "已停止"}</td><td>${esc(s.rtu_id || s.config && s.config.effective_rtu_id || "")}</td><td>${esc(s.started_at || "")}</td><td>${esc(s.last_error || "")}</td><td><button data-service="${esc(x.name)}" data-action="${action}">${action === "start" ? "启动" : "停止"}</button> <a href="/communication">通信</a></td></tr>`;
-      }).join("") || `<tr><td colspan="6">暂无服务</td></tr>`);
+      const [channels, processData] = await Promise.all([
+        api("/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,code,name,process_status,process_pid,process_start_time,process_stop_time,process_heartbeat_time,process_error,process_enable"),
+        api("/api/monitor/processes"),
+      ]);
+      if (!channels || !processData) return;
+      const servicesByName = new Map((processData.items || []).map(item => [item.name, item]));
+      const rows = (channels.items || []).map(channel => {
+        const serviceName = serviceByType[channel.channel_type];
+        const service = serviceName ? servicesByName.get(serviceName) : null;
+        const status = service?.status || {};
+        const effectiveRtu = status.rtu_id ?? status.config?.effective_rtu_id;
+        const bound = service && String(effectiveRtu ?? "") === String(channel.rtu_id);
+        const running = bound && service.running;
+        const error = bound ? (status.last_error || channel.process_error || "—") : (channel.process_error || "—");
+        const action = bound ? `<button data-service="${esc(serviceName)}" data-action="${running ? "stop" : "start"}">${running ? "停止" : "启动"}</button>` : "";
+        const processName = serviceName ? `scdfe_s-${serviceName}` : "—";
+        return `<tr><td><strong>RTU ${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><span class="cell-sub">通道 ${esc(channel.channel_id ?? "—")} · ${esc(channel.code || "")}</span></td><td class="mono">${esc(processName)}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${esc(channelStatus(channel, bound ? service : null))}</td><td class="mono">${esc(channel.process_pid || "—")}</td><td>${fmt(channel.process_start_time)}</td><td>${fmt(channel.process_heartbeat_time, true)}</td><td title="${esc(error)}">${esc(error)}</td><td>${action} <a href="/communication">通信</a> <a href="/logs?channel_id=${encodeURIComponent(channel.channel_id ?? "")}">日志</a></td></tr>`;
+      }).join("");
+      show("#rows", rows || `<tr><td colspan="9">暂无通信通道</td></tr>`);
+      msg(`共 ${(channels.items || []).length} 个通信通道`);
       msg("");
     } catch (e) { msg(e.message, true); }
   }
   async function loadCommunications() {
     try {
+      const channels = await fetchView("/api/rtus?limit=500&offset=0");
+      if (!channels) return;
       const data = await fetchView("/api/monitor/communications");
       if (!data) return;
-      show("#cards", data.items.map(x => `<section class="card"><h2>${esc(x.label)}</h2><div class="status-grid"><div class="metric"><b>${x.running ? "运行中" : "停止"}</b><span>状态</span></div><div class="metric"><b>${esc(x.open_connections || 0)}</b><span>连接</span></div><div class="metric"><b>${esc(x.point_count || 0)}</b><span>测点</span></div></div><p class="muted">${esc(x.last_error || "无错误")}</p><button data-service="${esc(x.name)}" data-action="${x.running ? "stop" : "start"}">${x.running ? "停止" : "启动"}</button> <a href="/${esc(x.name)}">打开通道页面</a></section>`).join(""));
-      msg("");
+      const serviceStatus = new Map((data.items || []).map(item => [item.name, item]));
+      // The aggregate monitor response remains compatible with older Web
+      // workers. Refresh each bound service status when available so the
+      // table can identify the actual RTU behind a protocol service.
+      await Promise.all([...new Set((channels.items || []).map(item => serviceByType[item.channel_type]).filter(Boolean))].map(async name => {
+        try {
+          const detail = await api(`/api/${encodeURIComponent(name)}/status`);
+          if (detail.item) serviceStatus.set(name, {...serviceStatus.get(name), ...detail.item, name});
+        } catch (_) { /* the aggregate status remains usable */ }
+      }));
+      const rows = (channels.items || []).map(channel => {
+        const serviceName = serviceByType[channel.channel_type];
+        const service = serviceName ? serviceStatus.get(serviceName) : null;
+        const bound = !!service && String(service.rtu_id ?? "") === String(channel.rtu_id);
+        const state = bound ? (service.running ? "运行中" : "已停止") : (service ? "未绑定" : "未配置");
+        const connections = bound ? (service.open_connections ?? 0) : "—";
+        const pointCount = bound ? (service.point_count ?? 0) : "—";
+        const error = bound ? (service.last_error || "无") : (channel.process_error || "—");
+        const action = bound
+          ? `<button data-service="${esc(service.name)}" data-action="${service.running ? "stop" : "start"}">${service.running ? "停止" : "启动"}</button>`
+          : "";
+        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><small class="cell-sub">${esc(channel.code || "")}</small></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && service.running ? "is-running" : ""}">${state}</span></td><td>${esc(connections)}</td><td>${esc(pointCount)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error">${esc(error)}</td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
+      }).join("") || `<tr><td colspan="10" class="empty">暂无通信通道</td></tr>`;
+      show("#communication-rows", rows);
+      msg(`共 ${channels.total ?? (channels.items || []).length} 个通道`);
     } catch (e) { msg(e.message, true); }
   }
   async function loadLogs() {

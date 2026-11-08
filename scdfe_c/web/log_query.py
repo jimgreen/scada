@@ -21,7 +21,11 @@ PACKET = re.compile(r"报文\s+(RX|TX)\b")
 PACKET_CHANNEL = re.compile(r"\s+通道=(0|[1-9][0-9]*)(?=\s)")
 LOG_PATTERNS = {
     "c": LOG_PATTERN,
-    "s": re.compile(r"(?P<process>scdfe_s-(?:iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
+    # S runtime and packet files are owned by a communication channel.  The
+    # protocol service is still present in the process monitor, but it is not
+    # used as the log-file identity because one service can be rebound to
+    # another RTU/channel over its lifetime.
+    "s": re.compile(r"(?P<process>scdfe_s-channel-[1-9]\d*|scdfe_s-(?:iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
     "t": re.compile(r"(?P<process>scdfe_t-channel-[1-9]\d*)-(?P<hour>\d{8}-\d{2})\.log$"),
 }
 
@@ -246,6 +250,10 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                 continue
         if query.get("process") and query["process"] != process:
             continue
+        if (family == "s" and channel is not None
+                and process.startswith("scdfe_s-channel-")
+                and process != f"scdfe_s-channel-{channel}"):
+            continue
         if rtu is not None and process not in {f"scdfe_c-rtu-{rtu}", f"scdfe_c-debug-rtu-{rtu}"}:
             continue
         if file_needle not in relative_name.rsplit("/", 1)[-1].casefold():
@@ -265,7 +273,7 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     needle = keyword.casefold()
     # These exact byte sequences are necessary (but not sufficient) for a
     # match. Keep Unicode casefold and header parsing for every candidate.
-    if channel is not None:
+    if channel is not None and family != "s":
         required = f"通道={channel}".encode()  # the delimiter may be any whitespace
     elif direction:
         required = direction.encode('ascii')
@@ -274,6 +282,9 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     else:
         required = '报文'.encode() if record == 'packet' else None
     for index, (path, relative_name, file_hour) in enumerate(files):
+        process = pattern.fullmatch(Path(relative_name).name).group("process")
+        file_channel = (process.removeprefix("scdfe_s-channel-")
+                        if family == "s" and process.startswith("scdfe_s-channel-") else None)
         try:
             # Retention cleanup may delete files between listing and opening.
             if not Path(path).resolve().is_relative_to(root):
@@ -318,7 +329,7 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                         # datetime conversion. Always reach the scan-budget
                         # checks below, including when nothing matches.
                         owner = PACKET_CHANNEL.match(line, packet.end()) if packet and channel is not None else None
-                        if ((channel is None or (owner and owner[1] == channel))
+                        if ((channel is None or (file_channel == channel) or (owner and owner[1] == channel))
                                 and (not level or header_level == level)
                                 and (not record or is_packet == (record == "packet"))
                                 and (not direction or (packet and packet[1] == direction))):

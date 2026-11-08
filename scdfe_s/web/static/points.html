@@ -7,16 +7,7 @@
   <div class="toolbar"><div class="point-filters">
     <label>当前通道<select id="point-rtu"><option value="">请选择通道</option></select></label>
     <label class="visually-hidden">数据类型<select id="kind-filter" aria-hidden="true" tabindex="-1"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
-  </div><button id="reload">刷新</button></div>
-  <details class="form-panel" id="point-editor"><summary>新增 / 编辑测点</summary>
-    <form id="point-form" class="data-form">
-      <label>类型<select id="point-kind"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
-      <label>点号<input id="point-no" type="number" min="1" required></label>
-      <label>编码<input id="point-code"></label><label>名称<input id="point-name"></label>
-      <label>值<input id="point-value" type="number" step="any" value="0"></label>
-      <div class="form-actions"><button class="primary" type="submit">新增测点</button><button type="button" id="update-point">保存测点</button></div>
-    </form>
-  </details>
+  </div><div class="actions"><button id="new-point" class="primary" type="button">新增测点</button><button id="reload" type="button">刷新</button></div></div>
   <div id="point-message" class="message" role="status"></div>
   <nav class="page-tabs point-tabs" aria-label="四遥数据分页" role="tablist">
     <button type="button" class="page-tab" id="point-tab-yc" data-point-tab="yc" role="tab" aria-selected="true" aria-controls="point-page-yc">遥测 YC</button>
@@ -39,4 +30,18 @@
     </section>
   </div>
   <div class="pager" aria-label="四遥数据分页"><span id="point-page-summary"></span><label>每页<select id="point-limit"><option value="50">50</option><option value="100" selected>100</option><option value="500">500</option></select>条</label><button id="point-prev" disabled>上一页</button><button id="point-next" disabled>下一页</button></div>
-</section></main><script src="/static/channels.js"></script></body></html>
+</section></main>
+<dialog id="point-editor" class="point-editor" aria-labelledby="point-editor-title">
+  <form id="point-form" method="dialog">
+    <div class="dialog-head"><h2 id="point-editor-title">新增测点</h2><button type="button" id="close-point-editor" aria-label="关闭">×</button></div>
+    <div class="point-editor-grid">
+      <label>类型<select id="point-kind" disabled><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
+      <label>点号<input id="point-no" type="number" min="1" required></label>
+      <label>编码<input id="point-code"></label><label>名称<input id="point-name"></label>
+      <label>值<input id="point-value" type="number" step="any" value="0"></label>
+    </div>
+    <p id="point-editor-error" class="error"></p>
+    <div class="form-actions"><button type="button" id="cancel-point-editor">取消</button><button class="primary" id="add-point-submit" type="submit">新增测点</button><button type="button" id="update-point" hidden>保存测点</button></div>
+  </form>
+</dialog>
+<script src="/static/channels.js"></script></body></html>

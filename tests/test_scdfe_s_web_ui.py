@@ -43,6 +43,7 @@ class ScdfeSWebUiTests(unittest.TestCase):
             "/", "/channels", "/points", "/communication", "/processes", "/logs",
             "/static/channels.js", "/static/monitor.js",
             "/static/workbench.css", "/static/workbench.js",
+            "/static/layout-resizer.js",
         ):
             status, payload = self.call("GET", path)
             self.assertEqual(status, 200, path)

@@ -604,8 +604,9 @@ function showView() {
     state.resource === "rtus" ||
     !schema.columns.some((c) => c.eng_name === "rtu_id");
   $("#view-live").hidden = !isPoint;
-  $("#add-channel").hidden = state.resource !== "rtus";
-  $("#add").textContent = state.resource === "rtus" ? "＋ 新建 RTU" : "＋ 新增记录";
+  // RTU and its single channel are one definition. Keep one creation
+  // entrypoint so users cannot accidentally create them in two steps.
+  $("#add").textContent = state.resource === "rtus" ? "＋ 新建 RTU 与通道" : "＋ 新增记录";
   for (const view of ["common", "live", "all"]) {
     $("#view-" + view).classList.toggle("selected", state.view === view);
   }
@@ -1151,22 +1152,6 @@ async function openChannelParameters(row) {
       pathOverride: "/api/rtus/" + encodeURIComponent(row.rtu_id) + "/channel/parameters",
       fetchPath: "/api/rtus/" + encodeURIComponent(row.rtu_id) + "/channel/parameters",
     });
-  } catch (error) {
-    toast(error.message, true);
-  }
-}
-
-async function openChannelChooser() {
-  try {
-    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name,code,channel_type");
-    if (!data.items.length) return toast("请先新建 RTU，再配置通道", true);
-    const select = $("#channel-select-rtu");
-    select.innerHTML = data.items
-      .map((row) => '<option value="' + esc(row.rtu_id) + '">' + esc(
-        String(row.rtu_id) + " · " + (row.name || row.code || "未命名") + " · " + channelTypeLabel(row.channel_type)
-      ) + "</option>")
-      .join("");
-    $("#channel-select-dialog").showModal();
   } catch (error) {
     toast(error.message, true);
   }
@@ -2479,6 +2464,24 @@ function clearLogConditions() {
   for (const id of ["log-search", "log-level", "log-direction", "log-channel", "log-file-query", "log-start", "log-end"])
     $("#" + id).value = "";
 }
+function initLogFilterToggle() {
+  const reader = $("#logs-panel .lb-reader");
+  const toggle = $("#log-toggle-filters");
+  if (!reader || !toggle) return;
+  const key = "scdfe_log_filters_collapsed_c";
+  let collapsed = false;
+  try { collapsed = window.localStorage.getItem(key) === "1"; } catch (_) { /* private mode */ }
+  const apply = (value) => {
+    collapsed = Boolean(value);
+    reader.classList.toggle("is-filters-collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.textContent = collapsed ? "显示筛选" : "隐藏筛选";
+    toggle.title = collapsed ? "显示日志筛选条件" : "隐藏日志筛选条件，扩大内容显示区域";
+    try { window.localStorage.setItem(key, collapsed ? "1" : "0"); } catch (_) { /* private mode */ }
+  };
+  toggle.onclick = () => apply(!collapsed);
+  apply(collapsed);
+}
 $("#log-search").oninput = () => {
   clearTimeout(logs.searchTimer);
   logs.searchTimer = setTimeout(() => readLog(logs.selected, true), 300);
@@ -2517,6 +2520,7 @@ $("#log-download").onclick = () => {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
+initLogFilterToggle();
 $("#refresh").onclick = async () => {
   await loadRows();
   try {
@@ -2527,7 +2531,6 @@ $("#refresh").onclick = async () => {
 };
 $("#add").onclick = () =>
   state.resource === "rtus" ? openNewRtu() : openEditor();
-$("#add-channel").onclick = openChannelChooser;
 $("#editor-form").onsubmit = saveRow;
 $("#close-editor").onclick = $("#cancel-editor").onclick = closeEditor;
 $("#editor").addEventListener("cancel", (event) => {
@@ -2542,17 +2545,6 @@ $("#field-search").oninput = () => {
     });
 };
 $("#close-detail").onclick = () => $("#detail-dialog").close();
-$("#cancel-channel-select").onclick = () => $("#channel-select-dialog").close();
-$("#channel-select-form").onsubmit = (event) => {
-  event.preventDefault();
-  const selected = $("#channel-select-rtu").value;
-  $("#channel-select-dialog").close();
-  const row = state.items.find((item) => String(item.rtu_id) === selected);
-  if (row) return openChannelEditor(row);
-  api("/api/rtus/" + encodeURIComponent(selected))
-    .then((data) => openChannelEditor(data.item))
-    .catch((error) => toast(error.message, true));
-};
 $("#detail-edit").onclick = () => {
   const detail = state.detail;
   $("#detail-dialog").close();

@@ -11,6 +11,13 @@ def log_files(directory, family, query, *, packet_directory=None):
     record = query.get("record", "runtime") or "runtime"
     if record not in {"runtime", "packet"}:
         raise ValueError("记录类型无效")
+    channel = query.get("channel_id")
+    if channel is not None:
+        if (not isinstance(channel, str) or len(channel) > 19 or not channel.isascii() or not channel.isdecimal()
+                or not 0 < int(channel) < 2**63 or str(int(channel)) != channel):
+            raise ValueError("通道编号必须为有效正整数")
+        if family == "s" and query.get("process") and query["process"] != f"scdfe_s-channel-{channel}":
+            raise ValueError("通信通道与日志进程筛选不一致")
     root = Path(packet_directory if record == "packet" and packet_directory is not None else directory).resolve()
     items = []
     prefix = query["process"] + "-" if query.get("process") else f"scdfe_{family}-"
@@ -21,12 +28,19 @@ def log_files(directory, family, query, *, packet_directory=None):
         hour, process = match.group('hour', 'process')
         if query.get("process") and query["process"] != process:
             continue
+        if (family == "s" and channel is not None
+                and process != f"scdfe_s-channel-{channel}"):
+            continue
         try:
             stat = entry.stat(follow_symlinks=False)
         except OSError:
             continue
+        channel_id = None
+        if family == "s" and process.startswith("scdfe_s-channel-"):
+            channel_id = process.removeprefix("scdfe_s-channel-")
         items.append({"name": name, "hour": hour, "process": process,
-                      "size": stat.st_size, "modified_at": int(stat.st_mtime * 1000)})
+                      "channel_id": channel_id, "size": stat.st_size,
+                      "modified_at": int(stat.st_mtime * 1000)})
     items.sort(key=lambda row: (row["hour"], row["name"]), reverse=True)
     return {"items": items, "total": len(items), "directory": str(root), "record": record}
 

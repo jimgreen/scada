@@ -29,6 +29,27 @@ function protocolForm(form) {
   };
 }
 
+// Protocol-test pages are diagnostic views.  Configuration is edited from
+// 数据与定义 -> 通道数据 so a test page cannot accidentally write a service
+// override that is different from the selected RTU definition.
+function lockProtocolConfiguration(form) {
+  if (!form) return;
+  form.classList.add("configuration-readonly");
+  form.dataset.configurationReadonly = "true";
+  form.setAttribute("aria-readonly", "true");
+  form.querySelectorAll("input, select, textarea").forEach(node => {
+    if (node.tagName === "SELECT" || node.type === "checkbox" || node.type === "radio") node.disabled = true;
+    else node.readOnly = true;
+  });
+  form.querySelectorAll("button[type='submit'], .form-actions").forEach(node => {
+    node.hidden = true;
+  });
+  const note = document.createElement("p");
+  note.className = "readonly-hint";
+  note.innerHTML = '配置仅供浏览；请到 <a href="/channels">数据与定义 → 通道数据</a> 修改通道和规约参数。';
+  form.before(note);
+}
+
 (function () {
   "use strict";
   function initPageTabs() {
@@ -88,7 +109,9 @@ function protocolForm(form) {
   if (!cfg) return;  // IEC104 uses its own dashboard and the same form state.
   const $ = (s) => document.querySelector(s);
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-  const form = protocolForm($("#config-form"));
+  const configForm = $("#config-form");
+  const form = protocolForm(configForm);
+  lockProtocolConfiguration(configForm);
   let status = null;
   async function api(path, options = {}) {
     const response = await fetch(path, {headers: {"Content-Type":"application/json", ...(options.headers || {})}, ...options});
@@ -140,7 +163,7 @@ function protocolForm(form) {
       rows.every((r,i) => r[0] === previous[i][0] && r[1] === previous[i][1]);
     if (!stable) {
       body.innerHTML = rows.map(([kind,no,name,value,status,action]) =>
-        `<tr><td>${esc(kind)}</td><td>${esc(no)}</td><td>${esc(name)}</td><td>${esc(value)}</td><td>${esc(status)}</td><td><button data-update="${esc(kind)}" data-point="${esc(no)}">${action}</button> <button data-delete="${esc(kind)}" data-point="${esc(no)}" class="danger">删除</button></td></tr>`).join("") ||
+        `<tr><td>${esc(kind)}</td><td>${esc(no)}</td><td>${esc(name)}</td><td>${esc(value)}</td><td>${esc(status)}</td><td><button data-update="${esc(kind)}" data-point="${esc(no)}">${action}</button></td></tr>`).join("") ||
         '<tr><td colspan="6" class="muted">暂无点定义</td></tr>';
     } else {
       rows.forEach((r,i) => {
@@ -174,7 +197,7 @@ function protocolForm(form) {
       message("");
     }, e => message(e.message, true), background === true);
   }
-  $("#config-form").onsubmit = async (e) => { e.preventDefault(); const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await form.save(() => api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)})); await load(true); message("配置已保存"); } catch (err) { message(err.message, true); } };
+  $("#config-form").onsubmit = async (e) => { e.preventDefault(); if (configForm.dataset.configurationReadonly) { message("配置请到“数据与定义 → 通道数据”修改"); return; } const body = {}; cfg.fields.forEach(name => { const node = $("[data-field='" + name + "']"); if (!node) return; body[name] = fieldValue(name, node); }); try { await form.save(() => api(`/api/${cfg.slug}/config`, {method:"PATCH", body:JSON.stringify(body)})); await load(true); message("配置已保存"); } catch (err) { message(err.message, true); } };
   $("#start").onclick = async () => { try { await api(`/api/${cfg.slug}/start`, {method:"POST", body:"{}"}); await load(true); message("服务已启动"); } catch(e) { message(e.message, true); } };
   $("#stop").onclick = async () => { try { await api(`/api/${cfg.slug}/stop`, {method:"POST", body:"{}"}); await load(true); message("服务已停止"); } catch(e) { message(e.message, true); } };
   $("#refresh").onclick = load;
@@ -185,7 +208,7 @@ function protocolForm(form) {
   if (pointRoot) pointRoot.onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    const kind = b.dataset.update || b.dataset.delete, point = b.dataset.point;
+    const kind = b.dataset.update, point = b.dataset.point;
     try {
       if (b.dataset.update) {
         const command = isCommand(kind);
@@ -200,9 +223,6 @@ function protocolForm(form) {
         await api(path, {method:"POST", body:JSON.stringify(body)});
         await load();
         message(command ? "指令已发送" : "点值已更新");
-      } else {
-        await api(`/api/${cfg.slug}/points/${kind}/${point}`, {method:"DELETE", body:"{}"});
-        await load();
       }
     } catch(err) { message(err.message, true); }
   };
@@ -210,7 +230,7 @@ function protocolForm(form) {
     activePointKind = event.detail.kind;
     renderActivePoints();
   });
-  $("#add-point").onsubmit = async (e) => { e.preventDefault(); const kind = $("#new-kind").value; const pnt_no = keyValue($("#new-point").value); const name = $("#new-name").value; try { await api(`/api/${cfg.slug}/points`, {method:"POST", body:JSON.stringify({kind, pnt_no, name, value:0, status:0})}); message("点定义已新增"); e.target.reset(); await load(); } catch(err) { message(err.message, true); } };
+  if ($("#add-point")) $("#add-point").onsubmit = () => false;
   $("#frame-form")?.addEventListener("submit", async e => { e.preventDefault(); try { const body = {arbitration_id:Number($("#frame-id").value), data:$("#frame-data").value, is_extended_id:Number($("#frame-ext").value)}; await api(`/api/${cfg.slug}/frame`, {method:"POST", body:JSON.stringify(body)}); message("CAN 帧已发送"); await load(); } catch(err) { message(err.message, true); } });
   load(); setInterval(() => { if (!document.hidden) load(true); }, 5000);
 })();

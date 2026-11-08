@@ -82,7 +82,9 @@
     $("#start").disabled = !!status.running;
     $("#stop").disabled = !status.running;
   }
-  const form = protocolForm($("#config-form"));
+  const configForm = $("#config-form");
+  const form = protocolForm(configForm);
+  lockProtocolConfiguration(configForm);
   function load(background = false) {
     return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points?view=table")]), ([status,points]) => {
       render(status.item,points);
@@ -98,6 +100,7 @@
   }
   $("#config-form").onsubmit = async event => {
     event.preventDefault();
+    if (configForm.dataset.configurationReadonly) { message("配置请到“数据与定义 → 通道数据”修改"); return; }
     try {
       await form.save(() => api("/api/iec104/config", {method:"PATCH", body:JSON.stringify({
         bind_ip:$("#bind-ip").value.trim(), port:Number($("#port").value),

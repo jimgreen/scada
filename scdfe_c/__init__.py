@@ -88,6 +88,12 @@ BATCH_WRITER_DRAIN = "__scdfe_c_batch_writer_drain__"
 BATCH_WRITER_INTERVAL = 0.1
 BATCH_WRITER_MAX_BATCH = 500
 BATCH_WRITER_WAL_AUTOCHECKPOINT = 10000
+# SQLite has one WAL writer. Web edits, scdfe_t and the command service can
+# briefly hold that lock; a transient busy result must not kill the dedicated
+# writer process or lose the batch that is waiting to be committed.
+BATCH_WRITER_LOCK_RETRIES = 8
+BATCH_WRITER_LOCK_BACKOFF = 0.2
+BATCH_WRITER_BUSY_TIMEOUT_MS = 1000
 PROCESS_LOG_INTERVAL = 30.0
 LOG_CLEANUP_INTERVAL = 60.0
 WORKER_HEARTBEAT_INTERVAL = 5.0
@@ -145,6 +151,10 @@ RUNTIME_FIELDS = {
     "refresh_time1", "refresh_time2", "refresh_time3",
     "cmd_time", "cmd_handle_time", "cmd_check_id",
     "man_disable_last_tm", "lock_begintime", "lock_holdtime",
+    # Packet capture is a live diagnostic policy.  Its cached switch is read
+    # by the worker while it is running, so changing it must not force a
+    # protocol reconnect or reload the static point definition.
+    "packet_recording",
     *PROCESS_CONTROL_FIELDS,
 }
 
@@ -236,7 +246,7 @@ class ScdfeLogger:
     按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
     日期和小时由文件名提供。普通调用追加后关闭文件；通信线程在 session 中复用
     本线程日志文件，每条记录仍立即 flush，退出时关闭。文件不在进程间共享。
-    报文通过 ``packet_directory`` 写入同样的时间树和文件名，运行日志与报文目录
+    报文通过 ``packet_directory`` 写入同样的时间树和文件名，运行日志报文目录
     完全分离；未指定该参数的直接调用保留原目录行为。主调度线程按小时数定期清理旧文件。
     """
 
@@ -695,11 +705,12 @@ def _flush_batch(
     messages: list[Mapping[str, Any]],
     queue: Any,
     connection: sqlite3.Connection | None = None,
-) -> bool:
+) -> bool | None:
     if not messages:
         return True
     owned_connection = connection is None
     active_connection = connection
+    acknowledge = True
     try:
         # Production messages represent separate acquisition/status updates.
         # They may share one SQLite transaction, but each message must retain
@@ -715,7 +726,7 @@ def _flush_batch(
         )
         if active_connection is None:
             active_connection = store.open_connection()
-        for attempt in range(4):
+        for attempt in range(BATCH_WRITER_LOCK_RETRIES):
             try:
                 active_connection.execute("BEGIN IMMEDIATE")
                 for prepared in prepared_batches:
@@ -726,9 +737,15 @@ def _flush_batch(
             except sqlite3.OperationalError as exc:
                 if active_connection.in_transaction:
                     active_connection.rollback()
-                if attempt == 3 or ("locked" not in str(exc).lower() and "busy" not in str(exc).lower()):
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                     raise
-                time.sleep(0.05 * (attempt + 1))
+                if attempt == BATCH_WRITER_LOCK_RETRIES - 1:
+                    logger.alarm(
+                        f"批量写数据库遇到锁，保留批次稍后重试（消息 {len(messages)}）: {exc}"
+                    )
+                    acknowledge = False
+                    return None
+                time.sleep(BATCH_WRITER_LOCK_BACKOFF * (attempt + 1))
             except Exception:
                 if active_connection.in_transaction:
                     active_connection.rollback()
@@ -737,8 +754,13 @@ def _flush_batch(
         logger.error(f"批量写数据库失败（原始消息 {len(messages)}）: {exc}")
         return False
     finally:
-        for _ in messages:
-            queue.task_done()
+        # A transient lock returns ``None`` and leaves JoinableQueue items
+        # outstanding. The writer loop restores the batch and acknowledges it
+        # only after a later commit; malformed/other failures still release
+        # the queue items before the supervisor rebuilds the writer.
+        if acknowledge:
+            for _ in messages:
+                queue.task_done()
         if owned_connection and active_connection is not None:
             active_connection.close()
 
@@ -858,14 +880,22 @@ def _batch_writer_entry(
     completed_batches = completed_messages = completed_updates = 0
     next_summary = 0.0
 
-    def flush_pending() -> bool:
+    def flush_pending() -> bool | None:
         nonlocal pending, pending_updates
         nonlocal completed_batches, completed_messages, completed_updates
         batch, pending = pending, []
         updates, pending_updates = pending_updates, 0
         if not batch:
             return True
-        if not _flush_batch(store, logger, batch, queue, connection):
+        flush_result = _flush_batch(store, logger, batch, queue, connection)
+        if flush_result is None:
+            # The batch was rolled back because another SQLite connection
+            # temporarily held the write lock. Keep it ahead of newer input so
+            # queue order and JoinableQueue accounting remain exact.
+            pending = batch + pending
+            pending_updates = updates + pending_updates
+            return None
+        if not flush_result:
             return False
         completed_batches += 1
         completed_messages += len(batch)
@@ -886,6 +916,11 @@ def _batch_writer_entry(
         # Keep WAL checkpoints out of the hot commit cadence; the normal
         # SQLite checkpoint policy remains unchanged for other connections.
         connection.execute(f"PRAGMA wal_autocheckpoint={BATCH_WRITER_WAL_AUTOCHECKPOINT}")
+        # Keep each lock attempt bounded. The retry loop above owns the
+        # backoff policy; a 30-second SQLite busy timeout would make a stop or
+        # recovery operation wait several minutes before the same retry logic
+        # can run.
+        connection.execute(f"PRAGMA busy_timeout={BATCH_WRITER_BUSY_TIMEOUT_MS}")
         lease = ProcessLease(store, "writer")
         # Expose the writer through a local authenticated endpoint only after
         # it has claimed the writer identity.  A duplicate process therefore
@@ -930,7 +965,10 @@ def _batch_writer_entry(
             try:
                 message = queue.get(timeout=batch_interval)
             except Empty:
-                if not flush_pending():
+                flush_result = flush_pending()
+                if flush_result is None:
+                    continue
+                if not flush_result:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 continue
             if (isinstance(message, tuple) and len(message) == 2
@@ -941,6 +979,12 @@ def _batch_writer_entry(
                 # late acknowledgement from the next drain request.
                 try:
                     flush_ok = flush_pending()
+                    if flush_ok is None:
+                        # A drain is a FIFO barrier. Leave it in the queue by
+                        # retrying the flush before acknowledging the barrier.
+                        while flush_ok is None:
+                            time.sleep(BATCH_WRITER_LOCK_BACKOFF)
+                            flush_ok = flush_pending()
                     if flush_ok and drain_ack is not None:
                         drain_ack.value = message[1]
                 finally:
@@ -951,6 +995,9 @@ def _batch_writer_entry(
             if message == BATCH_WRITER_STOP:
                 try:
                     flush_ok = flush_pending()
+                    while flush_ok is None:
+                        time.sleep(BATCH_WRITER_LOCK_BACKOFF)
+                        flush_ok = flush_pending()
                 finally:
                     queue.task_done()
                 if not flush_ok:
@@ -959,7 +1006,10 @@ def _batch_writer_entry(
             pending.append(message)
             pending_updates += _batch_message_size(message)
             if pending_updates >= max_batch:
-                if not flush_pending():
+                flush_result = flush_pending()
+                if flush_result is None:
+                    continue
+                if not flush_result:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
     except Exception as exc:  # noqa: BLE001 - parent reports/restarts the writer
         failure = str(exc)
@@ -2082,7 +2132,14 @@ class ScdfeSupervisor:
         self.logger.process("启动批量数据库写入进程")
         deadline = time.monotonic() + 15.0
         while not ready.wait(0.05):
-            if not process.is_alive() or time.monotonic() >= deadline:
+            if not process.is_alive():
+                try:
+                    row = self.store.get_row(PROCESS_TABLE, ["writer"])
+                    detail = row.get("process_error") or f"退出码 {process.exitcode}"
+                except Exception:
+                    detail = f"退出码 {process.exitcode}"
+                raise RuntimeError(f"写库进程未能就绪：{detail}；暂停启动通信线程")
+            if time.monotonic() >= deadline:
                 raise RuntimeError("写库进程未能就绪，暂停启动通信线程")
 
     def _recover_writer_failure(self) -> bool:

@@ -202,6 +202,28 @@ class ProcessMonitorTests(unittest.TestCase):
         supervisor._workers.clear()
         supervisor.stop()
 
+    def test_stop_writer_accepts_a_writer_that_already_crashed(self):
+        # A crashed writer has no PID and may have no fresh stop timestamp.
+        # Stopping it must complete immediately instead of waiting for the
+        # controller timeout while the main process is still alive.
+        ensure_process(self.store, "main")
+        ensure_process(self.store, "writer")
+        self.store.update_row(PROCESS_TABLE, ["main"], {
+            "process_pid": os.getpid(), "process_status": 2,
+        })
+        self.store.update_row(PROCESS_TABLE, ["writer"], {
+            "process_enable": 1, "process_pid": 0, "process_status": 5,
+            "process_stop_time": 0, "process_error": "database is locked",
+        })
+        operation = self.controller.submit({"target": "writer", "action": "stop"})
+        self.controller._thread.join(3)
+        result = self.controller.snapshot()
+        self.assertEqual(result["operation"]["status"], "completed")
+        row = self.row("writer")
+        self.assertEqual(row["process_status"], 0)
+        self.assertGreater(row["process_stop_time"], 0)
+        self.store.update_row(PROCESS_TABLE, ["main"], {"process_pid": 0, "process_status": 0})
+
     def test_invalid_debug_does_not_register_or_change_rtu(self):
         self.loopback()
         for key in ("debug:7", "debug:999"):

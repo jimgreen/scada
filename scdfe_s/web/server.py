@@ -201,6 +201,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 status = service.status()
                 items.append({"name": slug, "label": status.get("label", slug),
                               "running": bool(status.get("running")),
+                              "rtu_id": status.get("rtu_id", status.get("config", {}).get("effective_rtu_id")),
                               "connections": status.get("connections", []),
                               "open_connections": status.get("open_connections", 0),
                               "point_count": status.get("point_count", 0),
@@ -488,7 +489,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return
         if method == "GET":
             if not parts:
-                return self._static("index.html")
+                return self._static("test.html")
+            if parts == ["test"]:
+                return self._static("test.html")
             if parts == ["iec104"]:
                 return self._static("iec104.html")
             if parts == ["modbus-tcp"]:
@@ -647,7 +650,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _static(self, name):
         if name in ASSETS:
             return self._send(200, ASSETS[name], (ASSET_DIR / name).read_bytes())
-        allowed = {"index.html": "text/html", "iec104.html": "text/html", "api.html": "text/html",
+        allowed = {"index.html": "text/html", "test.html": "text/html", "iec104.html": "text/html", "api.html": "text/html",
                    "processes.html": "text/html", "communication.html": "text/html", "logs.html": "text/html",
                    "channels.html": "text/html", "points.html": "text/html",
                    "modbus_tcp.html": "text/html", "modbus_tcp_server.html": "text/html",
@@ -655,7 +658,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                    "can.html": "text/html", "can_server.html": "text/html",
                    "opc_server.html": "text/html", "bacnet_server.html": "text/html",
                    "protocol.css": "text/css",
-                   "protocol.js": "application/javascript", "monitor.js": "application/javascript",
+                   "protocol.js": "application/javascript", "test.js": "application/javascript", "monitor.js": "application/javascript",
                    "iec104.js": "application/javascript", "index.js": "application/javascript",
                    "channels.js": "application/javascript"}
         if name not in allowed or not (STATIC_DIR / name).is_file():

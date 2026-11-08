@@ -487,6 +487,27 @@ class BatchWriterTransactionTests(unittest.TestCase):
         self.assertEqual(connection.commits, 2)
         self.assertEqual(self.acknowledged, 1)
 
+    def test_persistent_busy_lock_keeps_batch_for_a_later_retry(self):
+        class AlwaysBusy:
+            in_transaction = False
+
+            def execute(self, _sql):
+                raise sqlite3.OperationalError("database is locked")
+
+            def rollback(self):
+                return None
+
+        message = self.update(value=26)
+        with patch("scdfe_c.time.sleep"):
+            self.assertIsNone(_flush_batch(self.store, self.logger, [message], self, AlwaysBusy()))
+        # A transient lock is deliberately not acknowledged: the writer loop
+        # restores the same message and retries it after the competing write
+        # lock is released.
+        self.assertEqual(self.acknowledged, 0)
+        self.assertTrue(_flush_batch(self.store, self.logger, [message], self, self.connection))
+        self.assertEqual(self.store.get_row("fes_yc_define", [7, 1])["value"], 26)
+        self.assertEqual(self.acknowledged, 1)
+
     def test_connection_open_failure_acknowledges_batch(self):
         with patch.object(self.store, "open_connection", side_effect=sqlite3.OperationalError("cannot open")):
             self.assertFalse(_flush_batch(self.store, self.logger, [self.update(value=25)], self))

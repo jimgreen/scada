@@ -15,7 +15,8 @@
   // the standalone S/T log page keeps the value empty and shows all files.
   let requestedProcess = new URLSearchParams(location.search).get("process")
     || document.body.dataset.logProcess || "";
-  let files = [], selected = "", filePage = 0, rows = [], renderedTree = "", processOptions = "";
+  let files = [], selected = "", filePage = 0, rows = [], renderedTree = "", processOptions = "", channelOptions = "";
+  let channelCatalog = new Map();
   let cursors = [""], batch = 0, nextCursor = null, searchVersion = 0, listVersion = 0;
   let controller, debounce, busy = false, refreshing = false;
   const closed = new Set();
@@ -26,10 +27,62 @@
     ? (bytes / 1024).toFixed(1) + " KB" : (bytes / 1048576).toFixed(1) + " MB";
   const processName = (name) => module === "s" ? serviceNames[name.replace(/^scdfe_s-/, "")] || name
     : "转发通道 " + name.replace(/^scdfe_t-channel-/, "");
+  const channelName = (file) => {
+    const channelId = file?.channel_id || (String(file?.process || "").match(/^scdfe_s-channel-(\d+)$/)?.[1]);
+    if (!channelId) return processName(file?.process || "");
+    const row = channelCatalog.get(String(channelId));
+    if (!row) return "通信通道 " + channelId;
+    const station = row.name || row.code || "未命名";
+    return `RTU ${row.rtu_id ?? "—"} · ${station} · 通道 ${channelId}`;
+  };
   const status = (text, error = false) => {
     $("status").textContent = text;
     $("status").classList.toggle("lb-error", error);
   };
+  function initFilterToggle() {
+    const reader = document.querySelector(".lb-reader");
+    const head = reader?.querySelector(".lb-reader-head");
+    const tools = reader ? [...reader.querySelectorAll(".lb-reader-tools")] : [];
+    const exportButton = $("export");
+    if (!reader || !head || !tools.length || !exportButton) return;
+    const actions = head.querySelector(".lb-reader-actions") || document.createElement("div");
+    actions.classList.add("lb-reader-actions");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "lb-filter-toggle";
+    toggle.id = "lb-toggle-filters";
+    toggle.setAttribute("aria-controls", tools.map((node, index) => {
+      const id = node.id || ("lb-filter-tools-" + (index + 1));
+      node.id = id;
+      return id;
+    }).join(" "));
+    const followLabel = $("follow")?.closest("label");
+    if (!actions.parentNode) exportButton.replaceWith(actions);
+    if (followLabel && !actions.contains(followLabel)) actions.insertBefore(followLabel, actions.firstChild);
+    if (!actions.contains(toggle)) actions.append(toggle);
+    if (!actions.contains(exportButton)) actions.append(exportButton);
+    // The v2 key intentionally ignores the old expanded default so existing
+    // sessions also open with the compact reader on their next visit.
+    const key = "scdfe_log_filters_collapsed_v2_" + (module || location.port || "default");
+    // Start with the reader expanded and the optional filter rows collapsed so
+    // the log text gets the largest useful area on first open.  The user's
+    // choice is remembered per service and can be changed at any time.
+    let collapsed = true;
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored !== null) collapsed = stored === "1";
+    } catch (_) { /* private mode */ }
+    const apply = (value) => {
+      collapsed = Boolean(value);
+      reader.classList.toggle("is-filters-collapsed", collapsed);
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.textContent = collapsed ? "显示筛选" : "隐藏筛选";
+      toggle.title = collapsed ? "显示日志筛选条件" : "隐藏日志筛选条件，扩大内容显示区域";
+      try { window.localStorage.setItem(key, collapsed ? "1" : "0"); } catch (_) { /* private mode */ }
+    };
+    toggle.addEventListener("click", () => apply(!collapsed));
+    apply(collapsed);
+  }
   async function api(path, signal) {
     const response = await fetch(path, {cache: "no-store", signal});
     const data = await response.json();
@@ -37,19 +90,37 @@
     return data;
   }
   function visibleFiles() {
-    const process = $("process").value, needle = $("file-query").value.trim().toLowerCase();
+    const process = $("process")?.value || "", needle = $("file-query").value.trim().toLowerCase();
+    const channel = $("channel")?.value || "";
     return files.filter((file) => (!process || file.process === process)
+      && (module !== "s" || file.channel_id != null)
+      && (!channel || String(file.channel_id || "") === String(channel))
       && file.name.split("/").pop().toLowerCase().includes(needle));
   }
+  function updateChannels(rows) {
+    channelCatalog = new Map((rows || []).filter((row) => row?.channel_id != null)
+      .map((row) => [String(row.channel_id), row]));
+    const select = $("channel");
+    if (!select) return;
+    const value = select.value;
+    const options = '<option value="">全部通信通道</option>'
+      + [...channelCatalog.values()].sort((a, b) => Number(a.channel_id) - Number(b.channel_id))
+        .map((row) => '<option value="' + esc(row.channel_id) + '">' + esc(
+          `RTU ${row.rtu_id ?? "—"} · ${row.name || row.code || "未命名"} · 通道 ${row.channel_id}`) + '</option>').join("");
+    if (options !== channelOptions) { select.innerHTML = options; channelOptions = options; }
+    if ([...select.options].some((option) => option.value === value)) select.value = value;
+  }
   function updateProcesses() {
-    const value = $("process").value || requestedProcess;
+    const select = $("process");
+    if (!select) return;
+    const value = select.value || requestedProcess;
     const processes = [...new Set(files.map((file) => file.process))].sort((a, b) =>
       a.localeCompare(b, undefined, {numeric: true}));
     if (value && !processes.includes(value)) processes.push(value);
     const options = '<option value="">全部进程</option>'
       + processes.map((name) => '<option value="' + esc(name) + '">' + esc(processName(name)) + "</option>").join("");
-    if (options !== processOptions) { $("process").innerHTML = options; processOptions = options; }
-    $("process").value = value;
+    if (options !== processOptions) { select.innerHTML = options; processOptions = options; }
+    select.value = value;
     requestedProcess = "";
   }
   function renderTree() {
@@ -83,7 +154,7 @@
         + group.files.map((file) => '<button class="lb-file" data-file="' + esc(file.name)
           + '" title="' + esc(file.name) + '" aria-label="' + esc(file.name)
           + '" aria-pressed="' + (selected === file.name) + '"><strong>'
-          + esc(processName(file.process)) + '</strong><small>' + size(file.size) + "</small></button>").join("")
+          + esc(channelName(file)) + '</strong><small>' + size(file.size) + "</small></button>").join("")
         + "</div></details>").join("");
     }
     const tree = $("tree"), scroll = tree.scrollTop;
@@ -161,7 +232,9 @@
     for (const [id, key] of [["process", "process"], ["file-query", "file_query"],
       ["keyword", "q"], ["direction", "direction"], ["level", "level"],
       ["channel", "channel_id"], ["limit", "limit"]]) {
-      const value = $(id).value.trim();
+      const node = $(id);
+      if (!node) continue;
+      const value = node.value.trim();
       if (!value) continue;
       if (module === "t" && key === "process" && /^scdfe_t-channel-([1-9]\d*)$/.test(value)) {
         params.set("channel_id", value.slice("scdfe_t-channel-".length));
@@ -207,7 +280,7 @@
     $("name").textContent = $("scope").value === "all" ? "全部匹配文件" : selected || "请选择日志文件";
     const file = files.find((item) => item.name === selected);
     $("meta").textContent = $("scope").value === "all" ? "跨文件检索 · 按文件小时由新到旧分批读取"
-      : file ? processName(file.process) + " · " + size(file.size) + " · 本批按原文顺序显示" : "当前目录没有匹配文件";
+    : file ? channelName(file) + " · " + size(file.size) + " · 本批按原文顺序显示" : "当前目录没有匹配文件";
     const scroll = $("content").scrollTop;
     try {
       const params = query();
@@ -253,9 +326,13 @@
     refreshing = true;
     status("正在读取文件目录…");
     try {
-      const result = await api("/api/log-files?record=" + encodeURIComponent(activeRecord));
+      const [result, channels] = await Promise.all([
+        api("/api/log-files?record=" + encodeURIComponent(activeRecord)),
+        module === "s" ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc") : Promise.resolve(null),
+      ]);
       if (version !== listVersion) return;
       files = result.items;
+      if (channels) updateChannels(channels.items);
       updateProcesses();
       const previous = selected;
       reconcileSelection($("follow").checked);
@@ -269,6 +346,7 @@
       if (version === listVersion) refreshing = false;
     }
   }
+  initFilterToggle();
   $("refresh").addEventListener("click", () => refresh());
   document.querySelectorAll(".lb-record-tab").forEach((tab) => tab.addEventListener("click", () => {
     const record = tab.dataset.record;
@@ -285,7 +363,7 @@
   }));
   $("files-prev").addEventListener("click", () => { filePage--; renderTree(); });
   $("files-next").addEventListener("click", () => { filePage++; renderTree(); });
-  $("process").addEventListener("change", () => {
+  $("process")?.addEventListener("change", () => {
     selected = ""; filePage = 0; reconcileSelection(); resetSearch();
   });
   $("file-query").addEventListener("input", () => {
@@ -305,7 +383,8 @@
       resetSearch();
     });
   }
-  $("channel")?.addEventListener("input", () => resetSearch(250));
+  $("channel")?.addEventListener("input", () => { filePage = 0; selected = ""; reconcileSelection(); resetSearch(250); });
+  $("channel")?.addEventListener("change", () => { filePage = 0; selected = ""; reconcileSelection(); resetSearch(); });
   $("keyword").addEventListener("input", () => resetSearch(250));
   $("apply").addEventListener("click", () => search());
   $("clear").addEventListener("click", () => {
@@ -340,10 +419,26 @@
     const channel = new URLSearchParams(location.search).get("channel_id");
     if (/^[1-9]\d*$/.test(channel || "")) {
       const option = new Option("转发通道 " + channel, "scdfe_t-channel-" + channel);
-      $("process").add(option);
-      $("process").value = option.value;
+      $("process")?.add(option);
+      if ($("process")) $("process").value = option.value;
     }
   }
+  // Unified S communication-test pages switch the selected protocol without
+  // reloading the shared hourly-file browser.  Keep the browser's own
+  // directory, pagination and search state authoritative while changing only
+  // the process filter.
+  document.addEventListener("scada:log-process", (event) => {
+    const process = String(event.detail?.process || "");
+    requestedProcess = process;
+    const select = $("process");
+    if (!select) return;
+    const option = [...select.options].find((node) => node.value === process);
+    select.value = option ? process : "";
+    selected = "";
+    filePage = 0;
+    reconcileSelection();
+    resetSearch();
+  });
   $("record").value = activeRecord;
   $("direction").disabled = true;
   // The file catalogue is live state, independent of the reader's "follow
