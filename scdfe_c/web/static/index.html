@@ -127,15 +127,11 @@
               <button class="button primary" id="process-all-start">一键启动全部</button>
               <button class="button secondary" id="process-all-stop">一键停止全部</button>
               <button class="button secondary" id="process-refresh">刷新</button>
+              <button class="button secondary" id="open-command-server-config" type="button">TCP 指令服务配置</button>
             </div>
           </div>
           <div id="process-error" class="error-panel" role="alert" hidden></div>
           <div id="process-summary" class="scdfe-status"></div>
-          <div id="process-operation" class="process-operation" aria-live="polite" hidden></div>
-          <div class="config-panel config-entry">
-            <button class="button secondary" id="open-command-server-config" type="button">TCP 指令服务配置</button>
-            <span class="muted">监听地址、端口、认证令牌和日志保留</span>
-          </div>
           <form id="debug-process-form" class="filterbar">
             <label for="debug-rtu">独立调试 RTU</label>
             <input id="debug-rtu" inputmode="numeric" list="rtu-options" placeholder="输入 RTU 编号" required />

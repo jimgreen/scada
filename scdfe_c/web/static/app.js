@@ -1676,18 +1676,6 @@ async function loadProcesses() {
       [data.items.filter((r) => r.process_status === 5).length, "进程异常"],
       [data.items.filter((r) => r.kind === "debug" && r.include_in_all).length, "已选调试"],
     ].map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
-    const op = data.operation;
-    const panel = $("#process-operation");
-    const expanded = panel.querySelector("details")?.open;
-    panel.hidden = !op && !data.busy;
-    panel.classList.toggle("failed", op?.status === "failed");
-    panel.innerHTML = op
-      ? `<b>${esc({ running: "执行中", completed: "已完成", failed: "执行失败" }[op.status])} · ${esc(op.stage)}</b>
-         <span class="muted">开始 ${esc(fmtTime(op.started_at))}${op.finished_at ? " · 结束 " + esc(fmtTime(op.finished_at)) : ""}</span>
-         ${op.error ? `<div role="alert">${esc(op.error)}</div>` : ""}
-         <details${expanded ? " open" : ""}><summary>执行步骤（${op.steps.length}）</summary><ol>${op.steps.map((step) => `<li>${esc(fmtClockTime(step.time))} ${esc(step.message)}</li>`).join("")}</ol></details>`
-      : '';
-    if (data.busy && op?.status !== "running") panel.innerHTML += '<b>其他实例正在操作</b>';
     renderProcesses();
     showError("#process-error", null);
     markUpdated();

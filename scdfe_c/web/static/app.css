@@ -838,19 +838,6 @@ tbody tr:hover .sticky-actions {
 .scdfe-topbar > .config-entry .muted {
   white-space: nowrap;
 }
-.process-operation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 24px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border, #e2e8f0);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.process-operation { flex-direction: column; background: #f0f7ff; }
-.process-operation.failed { background: #fff1f2; color: #9f1239; }
-.process-operation ol { margin: 8px 0; padding-left: 22px; }
-.process-operation details { max-height: 180px; overflow: auto; }
 #process-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 #debug-rtu { flex: 0 1 160px; min-width: 110px; }
 #debug-process-form label { display: flex; align-items: center; gap: 6px; }
