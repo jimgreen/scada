@@ -202,10 +202,6 @@ small,
 .layout-first-hidden > :first-child { display:none !important; }
 .shell.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .lb-workspace.layout-first-hidden,.log-workspace.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
-.layout-stack-resizer { display:block; flex:0 0 8px; width:100%; height:8px; padding:0!important; border:0!important; background:transparent; cursor:row-resize; touch-action:none; }
-.layout-stack-resizer::before { content:""; display:block; height:2px; margin-top:3px; background:#b8c8d3; border-radius:2px; }
-.layout-stack-resizer:hover,.layout-stack-resizer.is-dragging,.layout-stack-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
-.layout-stack-hidden { display:none!important; }
 .layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
 .layout-resizer-x {
   width: 8px;

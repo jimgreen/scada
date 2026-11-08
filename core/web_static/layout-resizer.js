@@ -14,18 +14,6 @@
     {selector: ".grid", key: "grid-first", property: "--grid-first-width", min: 260, max: 760, axis: "x", className: "grid-resizable"},
     {selector: "[data-resize-axis=\"y\"]", key: "custom-height", property: "--layout-first-height", min: 140, max: 900, axis: "y", className: "layout-resizable-y"},
   ];
-  const stackConfigs = [
-    {selector: ".workbench-content > .test-selector", key: "test-selector-height"},
-    {selector: ".workbench-content > .test-metrics", key: "test-metrics-height"},
-    {selector: ".workbench-content > .test-tabs", key: "test-tabs-height"},
-    {selector: ".workbench-content > .tab-panel[data-tab-panel=\"logs\"] .lb-record-tabs", key: "test-log-tabs-height"},
-    {selector: ".workbench-content > .tab-panel[data-tab-panel=\"logs\"] .lb-toolbar", key: "test-log-toolbar-height"},
-    {selector: ".workspace > .summary", key: "c-summary-height"},
-    {selector: ".page-panel > .toolbar", key: "c-toolbar-height"},
-    {selector: ".page-panel > .filterbar", key: "c-filterbar-height"},
-    {selector: ".page-panel > .data-tabs", key: "c-data-tabs-height"},
-    {selector: ".page-panel > .view-tools", key: "c-view-tools-height"},
-  ];
   const storageKey = (config, index) => `${STORAGE_PREFIX}${location.pathname}:${config.key}:${index}`;
   const clampStored = (config, element, index) => {
     try {
@@ -126,59 +114,8 @@
       if (event.key === "End") { setSize(config, element, config.max, index); event.preventDefault(); }
     });
   }
-  function installStack(config, target, index) {
-    if (target.dataset.stackResizerInstalled === "1" || !target.parentElement) return;
-    target.dataset.stackResizerInstalled = "1";
-    const key = {key: config.key, min: 36, max: Math.max(160, Math.round(window.innerHeight * .72))};
-    const handle = document.createElement("button");
-    handle.type = "button";
-    handle.className = "layout-resizer layout-resizer-y layout-stack-resizer";
-    handle.setAttribute("role", "separator");
-    handle.setAttribute("aria-orientation", "horizontal");
-    handle.setAttribute("aria-label", "拖动调整上下区域高度；拖到边缘隐藏上方区域");
-    handle.title = "拖动调整上下区域高度；拖到边缘隐藏，向外拖动恢复";
-    target.after(handle);
-    const storage = storageKey(key, index);
-    let hidden = false, lastSize = 180, start = null, moved = false;
-    try {
-      hidden = localStorage.getItem(`${storage}:hidden`) === "1";
-      const saved = Number.parseFloat(localStorage.getItem(`${storage}:last`));
-      if (Number.isFinite(saved)) lastSize = Math.max(key.min, Math.min(key.max, saved));
-      const size = Number.parseFloat(localStorage.getItem(storage));
-      if (Number.isFinite(size)) lastSize = Math.max(key.min, Math.min(key.max, size));
-    } catch (_) { /* ignore */ }
-    const apply = (value) => {
-      target.classList.toggle("layout-stack-hidden", value);
-      handle.setAttribute("aria-expanded", String(!value));
-      handle.textContent = value ? "⌄" : "⌃";
-      if (!value) { target.style.height = `${lastSize}px`; target.style.flex = `0 0 ${lastSize}px`; }
-      try { localStorage.setItem(`${storage}:hidden`, value ? "1" : "0"); } catch (_) { /* ignore */ }
-    };
-    apply(hidden);
-    const begin = (event) => {
-      if (event.button !== undefined && event.button !== 0) return;
-      start = {pointer:event.clientY, size:target.getBoundingClientRect().height};
-      moved = false; handle.classList.add("is-dragging"); document.body.classList.add("layout-resizing");
-      handle.setPointerCapture?.(event.pointerId); event.preventDefault();
-    };
-    const move = (event) => {
-      if (!start) return;
-      const delta=event.clientY-start.pointer, raw=start.size+delta;
-      if (Math.abs(delta)>3) moved=true;
-      if (hidden) {
-        if (delta>8) { hidden=false; apply(false); target.style.height=`${lastSize}px`; target.style.flex=`0 0 ${lastSize}px`; }
-        event.preventDefault(); return;
-      }
-      if (raw<=24) { lastSize=Math.max(key.min,start.size); hidden=true; try{localStorage.setItem(`${storage}:last`,String(Math.round(lastSize)))}catch(_){} apply(true); event.preventDefault(); return; }
-      lastSize=Math.max(key.min,Math.min(key.max,raw)); target.style.height=`${lastSize}px`; target.style.flex=`0 0 ${lastSize}px`;
-      try{localStorage.setItem(storage,String(Math.round(lastSize)))}catch(_){} event.preventDefault();
-    };
-    const end=()=>{if(!start)return;start=null;handle.classList.remove("is-dragging");document.body.classList.remove("layout-resizing");};
-    handle.addEventListener("pointerdown",begin); handle.addEventListener("pointermove",move); handle.addEventListener("pointerup",end); handle.addEventListener("pointercancel",end);
-  }
   function scan() {
     for (const config of configs) document.querySelectorAll(config.selector).forEach((element, index) => install(config, element, index));
-    for (const config of stackConfigs) document.querySelectorAll(config.selector).forEach((element, index) => installStack(config, element, index));
   }
   scan();
   new MutationObserver(scan).observe(document.body, {childList: true, subtree: true});
