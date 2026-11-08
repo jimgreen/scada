@@ -112,7 +112,6 @@
       if (event.key === "ArrowRight" || event.key === "ArrowDown") { setSize(config, element, current + step, index); event.preventDefault(); }
       if (event.key === "Home") { setSize(config, element, config.min, index); event.preventDefault(); }
       if (event.key === "End") { setSize(config, element, config.max, index); event.preventDefault(); }
-      if (event.key === "Enter" || event.key === " ") { hidden = !hidden; applyHidden(hidden); event.preventDefault(); }
     });
   }
   function scan() {
