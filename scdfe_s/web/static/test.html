@@ -11,29 +11,31 @@
 <body data-log-module="s">
   <header></header>
   <main>
-    <section class="card test-selector">
-      <div class="test-selector-main">
-        <label class="rtu-picker">RTU
-          <select id="rtu-select" aria-label="选择 RTU"><option value="">读取 RTU…</option></select>
-        </label>
-      </div>
-      <div class="test-actions">
-        <button id="service-start" class="primary" type="button" disabled>启动规约服务</button>
-        <button id="service-stop" type="button" disabled>停止规约服务</button>
-        <button id="service-poll" type="button" disabled>立即采集</button>
-        <button id="test-refresh" type="button">刷新</button>
-      </div>
-      <div id="test-message" class="message" role="status" aria-live="polite"></div>
-    </section>
+    <div class="test-body" data-resize-axis="y">
+      <section class="test-summary" aria-label="RTU 选择与状态">
+        <section class="card test-selector">
+          <div class="test-selector-main">
+            <label class="rtu-picker">RTU
+              <select id="rtu-select" aria-label="选择 RTU"><option value="">读取 RTU…</option></select>
+            </label>
+          </div>
+          <div class="test-actions">
+            <button id="service-start" class="primary" type="button" disabled>启动规约服务</button>
+            <button id="service-stop" type="button" disabled>停止规约服务</button>
+            <button id="service-poll" type="button" disabled>立即采集</button>
+            <button id="test-refresh" type="button">刷新</button>
+          </div>
+          <div id="test-message" class="message" role="status" aria-live="polite"></div>
+        </section>
 
-    <div class="test-body">
-      <section class="test-metrics" aria-label="RTU 摘要">
-        <div class="metric"><b id="metric-protocol">—</b><span>规约类型</span></div>
-        <div class="metric"><b id="metric-channel">—</b><span>通道号</span></div>
-        <div class="metric"><b id="metric-packet">—</b><span>报文保存</span></div>
-        <div class="metric"><b id="metric-points">—</b><span>四遥点数</span></div>
-        <div class="metric"><b id="metric-running">—</b><span>服务状态</span></div>
-        <div class="metric"><b id="metric-connections">—</b><span>连接数</span></div>
+        <section class="test-metrics" aria-label="RTU 摘要">
+          <div class="metric"><b id="metric-protocol">—</b><span>规约类型</span></div>
+          <div class="metric"><b id="metric-channel">—</b><span>通道号</span></div>
+          <div class="metric"><b id="metric-packet">—</b><span>报文保存</span></div>
+          <div class="metric"><b id="metric-points">—</b><span>四遥点数</span></div>
+          <div class="metric"><b id="metric-running">—</b><span>服务状态</span></div>
+          <div class="metric"><b id="metric-connections">—</b><span>连接数</span></div>
+        </section>
       </section>
 
       <div class="test-body-main">
