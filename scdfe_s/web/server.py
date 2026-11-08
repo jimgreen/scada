@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+import threading
 from urllib.parse import parse_qs, unquote, urlsplit
 
 if __package__ in (None, ""):
@@ -169,16 +170,31 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             "bacnet-server": self.server.bacnet_server_service,
         }
 
+    def _channel_service_map(self):
+        """Return one protocol service instance for every configured RTU.
+
+        The protocol pages still expose the historical singleton service APIs,
+        but process/communication monitoring must operate at channel scope.
+        Keeping the instances on the HTTP server makes the lifecycle stable
+        across the five-second polling performed by the Web UI.
+        """
+        return self.server.channel_services()
+
     def _monitor_control(self, parts, query, method):
         """Aggregated pages for process, communications and runtime logs."""
         if not parts[:2] == ["api", "monitor"]:
             return False
         services = self._service_map()
+        channel_services = (
+            self._channel_service_map()
+            if len(parts) >= 3 and parts[2] in {"processes", "communications"}
+            else {}
+        )
         if len(parts) == 5 and parts[2] in {"processes", "communications"} and parts[4] in {"start", "stop"}:
             if method != "POST" or query:
                 raise ApiError(405, "进程控制接口只支持 POST")
             slug = parts[3]
-            service = services.get(slug)
+            service = channel_services.get(slug) or services.get(slug)
             if service is None:
                 raise ApiError(404, "服务不存在", code="not_found")
             action = parts[4]
@@ -187,9 +203,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if method != "GET" or query:
                 raise ApiError(405, "进程监控接口只支持 GET")
             items = []
-            for slug, service in services.items():
+            for slug, service in channel_services.items():
                 status = service.status()
                 items.append({"name": slug, "label": status.get("label", slug),
+                              "rtu_id": status.get("rtu_id"),
                               "running": bool(status.get("running")),
                               "status": status})
             return self._json(200, {"items": items, "total": len(items)})
@@ -197,7 +214,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if method != "GET" or query:
                 raise ApiError(405, "通信监控接口只支持 GET")
             items = []
-            for slug, service in services.items():
+            for slug, service in channel_services.items():
                 status = service.status()
                 items.append({"name": slug, "label": status.get("label", slug),
                               "running": bool(status.get("running")),
@@ -677,9 +694,13 @@ class ScadaHTTPServer(ThreadingHTTPServer):
     def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
         self._resources = ExitStack()
         self.store = SimulatorStore(db_path, schema_dir, connection_pool_size=4)
+        self._channel_service_lock = threading.RLock()
+        self._channel_service_cache = {}
+        self._channel_service_history = None
         self._resources.callback(self.store.close)
         try:
             history = ServiceFileLog.startup_catalog(self.store.db_path.parent / "logs")
+            self._channel_service_history = history
             for attr, cls in [('iec104_service', IEC104Service), ('modbus_tcp_service', ModbusTcpService),
                               ('modbus_tcp_server_service', ModbusTcpServerService), ('modbus_rtu_service', ModbusRtuService),
                               ('modbus_rtu_server_service', ModbusRtuServerService), ('can_service', CanService),
@@ -698,6 +719,67 @@ class ScadaHTTPServer(ThreadingHTTPServer):
             self._resources.close()
         finally:
             super().server_close()
+
+    def channel_services(self):
+        """Create/cache one independently controllable service per RTU.
+
+        A protocol service owns its transport worker and log session.  Using a
+        dedicated object per channel prevents one IEC104/Modbus/etc. channel
+        from masking another channel in the monitor and gives every row its
+        own start/stop endpoint.
+        """
+        classes = {
+            "iec104": IEC104Service,
+            "modbus-tcp": ModbusTcpService,
+            "modbus-rtu": ModbusRtuService,
+            "can": CanService,
+            "bacnet": BacnetServerService,
+            "opc": OpcServerService,
+        }
+        with self._channel_service_lock:
+            with self.store.connection() as con:
+                rows = con.execute(
+                    "SELECT rtu_id, channel_type, name FROM fes_rtu_define "
+                    "WHERE channel_type IS NOT NULL ORDER BY rtu_id"
+                ).fetchall()
+                iec_ports = {
+                    int(item[0]): item[1] for item in con.execute(
+                        "SELECT rtu_id, remote_port FROM fes_channel_iec104_define"
+                    ) if item[1]
+                }
+            active = set()
+            for row in rows:
+                rtu_id, channel_type = int(row[0]), str(row[1] or "")
+                cls = classes.get(channel_type)
+                if cls is None:
+                    continue
+                slug = f"{channel_type}-rtu-{rtu_id}"
+                active.add(slug)
+                if slug in self._channel_service_cache:
+                    continue
+                config_path = self.store.db_path.with_name(
+                    f".scdfe_s_{channel_type.replace('-', '_')}_rtu_{rtu_id}.json"
+                )
+                service = cls(self.store, config_path=config_path,
+                              startup_catalog=self._channel_service_history)
+                # This is an in-memory channel binding.  Do not persist a
+                # monitor click into the shared protocol configuration file.
+                service._config["rtu_id"] = rtu_id
+                if hasattr(service, "_configured_fields"):
+                    service._configured_fields.add("rtu_id")
+                if channel_type == "iec104":
+                    # IEC104 test definitions use remote_port as the listen
+                    # port for each independent station.
+                    channel_port = iec_ports.get(rtu_id)
+                    if channel_port:
+                        try:
+                            service._config["port"] = int(channel_port)
+                        except (TypeError, ValueError):
+                            pass
+                self._channel_service_cache[slug] = service
+                self._resources.callback(service.close)
+            return dict((slug, service) for slug, service in self._channel_service_cache.items()
+                        if slug in active)
 
 
 def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
