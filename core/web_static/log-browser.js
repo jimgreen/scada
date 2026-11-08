@@ -15,6 +15,11 @@
   // the standalone S/T log page keeps the value empty and shows all files.
   let requestedProcess = new URLSearchParams(location.search).get("process")
     || document.body.dataset.logProcess || "";
+  // Communication-test pages provide the protocol process and the currently
+  // selected channel.  The channel request is consumed once the catalogue
+  // has loaded; a manual dropdown choice remains authoritative afterwards.
+  let requestedChannel = "";
+  let activeChannel = "", manualProcess = false;
   let files = [], selected = "", filePage = 0, rows = [], renderedTree = "", processOptions = "", channelOptions = "";
   let channelCatalog = new Map();
   let cursors = [""], batch = 0, nextCursor = null, searchVersion = 0, listVersion = 0;
@@ -25,8 +30,14 @@
   })[c]);
   const size = (bytes) => bytes < 1024 ? bytes + " B" : bytes < 1048576
     ? (bytes / 1024).toFixed(1) + " KB" : (bytes / 1048576).toFixed(1) + " MB";
-  const processName = (name) => module === "s" ? serviceNames[name.replace(/^scdfe_s-/, "")] || name
-    : "转发通道 " + name.replace(/^scdfe_t-channel-/, "");
+  const processName = (name) => {
+    if (module === "s") {
+      const channel = String(name || "").match(/^scdfe_s-channel-([1-9]\d*)$/);
+      if (channel) return channelName({process: name, channel_id: channel[1]});
+      return serviceNames[String(name || "").replace(/^scdfe_s-/, "")] || name;
+    }
+    return "转发通道 " + name.replace(/^scdfe_t-channel-/, "");
+  };
   const channelName = (file) => {
     const channelId = file?.channel_id || (String(file?.process || "").match(/^scdfe_s-channel-(\d+)$/)?.[1]);
     if (!channelId) return processName(file?.process || "");
@@ -89,8 +100,39 @@
     if (!response.ok) throw new Error(data.error?.message || data.error || data.message || "读取日志失败");
     return data;
   }
+  function initFileFilter() {
+    const filesPanel = document.querySelector(".lb-files");
+    const select = $("process");
+    const label = select?.closest("label");
+    if (!filesPanel || !label) return;
+    // Standalone /logs already renders this block in the directory panel.
+    // Protocol and communication-test pages render it in the hidden toolbar;
+    // move only the process label so the filter remains available there.
+    let filter = filesPanel.querySelector(".lb-file-filter");
+    if (!filter) {
+      filter = document.createElement("div");
+      filter.className = "lb-file-filter lb-toolbar";
+      filesPanel.insertBefore(filter, filesPanel.firstElementChild);
+    }
+    if (!filter.contains(label)) {
+      if (label.firstChild && label.firstChild.nodeType === Node.TEXT_NODE)
+        label.firstChild.textContent = "文件过滤";
+      label.setAttribute("title", "按进程或当前 RTU 通道过滤日志文件");
+      filter.append(label);
+    }
+  }
   function visibleFiles() {
-    const process = $("process")?.value || "", needle = $("file-query")?.value.trim().toLowerCase() || "";
+    let process = $("process")?.value || "";
+    if (!process && requestedChannel && module === "s") {
+      const channelProcess = `scdfe_s-channel-${requestedChannel}`;
+      // Apply a pending RTU selection immediately, even if the event raced
+      // the first catalogue request.  An empty channel directory is useful
+      // feedback too, so do not silently fall back to another RTU/process.
+      process = channelProcess;
+    } else if (!process) {
+      process = requestedProcess;
+    }
+    const needle = $("file-query")?.value.trim().toLowerCase() || "";
     const channel = $("channel")?.value || "";
     return files.filter((file) => (!process || file.process === process)
       && (module !== "s" || file.channel_id != null)
@@ -113,15 +155,21 @@
   function updateProcesses() {
     const select = $("process");
     if (!select) return;
-    const value = select.value || requestedProcess;
     const processes = [...new Set(files.map((file) => file.process))].sort((a, b) =>
       a.localeCompare(b, undefined, {numeric: true}));
+    const channelProcess = requestedChannel && module === "s"
+      ? `scdfe_s-channel-${requestedChannel}` : "";
+    // A channel request wins over the previous dropdown value when an RTU is
+    // changed.  This is the default the communication-test page promises.
+    const preferred = channelProcess || requestedProcess;
+    const value = (requestedChannel || requestedProcess) ? preferred : select.value;
     if (value && !processes.includes(value)) processes.push(value);
     const options = '<option value="">全部文件</option>'
       + processes.map((name) => '<option value="' + esc(name) + '">' + esc(processName(name)) + "</option>").join("");
     if (options !== processOptions) { select.innerHTML = options; processOptions = options; }
-    select.value = value;
+    select.value = processes.includes(value) ? value : "";
     requestedProcess = "";
+    requestedChannel = "";
   }
   function renderTree() {
     const all = visibleFiles();
@@ -347,6 +395,7 @@
     }
   }
   initFilterToggle();
+  initFileFilter();
   $("refresh").addEventListener("click", () => refresh());
   document.querySelectorAll(".lb-record-tab").forEach((tab) => tab.addEventListener("click", () => {
     const record = tab.dataset.record;
@@ -364,6 +413,10 @@
   $("files-prev").addEventListener("click", () => { filePage--; renderTree(); });
   $("files-next").addEventListener("click", () => { filePage++; renderTree(); });
   $("process")?.addEventListener("change", () => {
+    // A manual choice is persistent; automatic RTU defaults are one-shot.
+    requestedProcess = "";
+    requestedChannel = "";
+    manualProcess = true;
     selected = ""; filePage = 0; reconcileSelection(); resetSearch();
   });
   $("file-query").addEventListener("input", () => {
@@ -429,11 +482,29 @@
   // the process filter.
   document.addEventListener("scada:log-process", (event) => {
     const process = String(event.detail?.process || "");
-    requestedProcess = process;
+    // Older protocol pages only supplied the process.  On the unified test
+    // page the metric is rendered before this event, so it is a safe final
+    // fallback for the selected RTU channel.
+    const metricChannel = document.getElementById("metric-channel")?.textContent?.trim() || "";
+    const channel = String(event.detail?.channel_id ?? metricChannel);
+    if (manualProcess && channel && activeChannel === channel) return;
+    activeChannel = channel;
+    manualProcess = false;
+    requestedChannel = /^[1-9]\d*$/.test(channel) ? channel : "";
+    // Keep the protocol process as metadata, but make the per-channel file
+    // the actual default even when the catalogue has not finished loading.
+    requestedProcess = requestedChannel ? `scdfe_s-channel-${requestedChannel}` : process;
+    // Rebuild the list immediately.  The RTU event can arrive after the
+    // initial catalogue request has completed (or before it has started), so
+    // only changing select.value would otherwise leave the stale “全部文件”
+    // option list visible until the next polling cycle.
+    updateProcesses();
     const select = $("process");
     if (!select) return;
-    const option = [...select.options].find((node) => node.value === process);
-    select.value = option ? process : "";
+    const channelProcess = requestedChannel ? `scdfe_s-channel-${requestedChannel}` : "";
+    const preferred = channelProcess || process;
+    const option = [...select.options].find((node) => node.value === preferred);
+    select.value = option ? preferred : "";
     selected = "";
     filePage = 0;
     reconcileSelection();

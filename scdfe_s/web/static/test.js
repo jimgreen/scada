@@ -93,7 +93,20 @@
       state.channel = channel; state.points = points; state.pages = {yc:0,yx:0,yk:0,yt:0};
       const match = (communications.items || []).find(item => item.name === protocol.service);
       renderPoints(); renderService(status.item || match || {});
-      document.dispatchEvent(new CustomEvent("scada:log-process", {detail:{process:protocol.service ? `scdfe_s-${protocol.service}` : ""}}));
+      // Scope the shared log browser to the RTU currently selected above.
+      // The protocol process remains a fallback for manager-only logs, while
+      // channel files are preferred whenever they exist.
+      document.dispatchEvent(new CustomEvent("scada:log-process", {
+        detail: {
+          process: state.rtu.channel_id != null
+            ? `scdfe_s-channel-${state.rtu.channel_id}`
+            : (protocol.service ? `scdfe_s-${protocol.service}` : ""),
+          // The RTU list already carries the canonical channel_id.  Prefer it
+          // so the default is available even if a protocol endpoint omits the
+          // field in its channel response.
+          channel_id: state.rtu.channel_id ?? state.channel?.item?.channel_id ?? "",
+        },
+      }));
       message("");
     } catch (error) { if (request === state.request) { state.channel = null; message(error.message, true); } }
   }
