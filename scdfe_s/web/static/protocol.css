@@ -99,6 +99,9 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 .point-tabs { margin-top:4px; }
 .point-tabs-row { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
 .point-tabs-row .point-tabs { flex:1; margin:0; }
+.layout-first-hidden > :first-child { display:none !important; }
+.grid.layout-first-hidden,.split.layout-first-hidden,.log-layout.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
+.layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
 @media(max-width:900px){ .test-metrics { grid-template-columns:repeat(3, 1fr); } }
 @media(max-width:560px){ .test-metrics { grid-template-columns:repeat(2, 1fr); } }
 @media(max-height:760px) and (min-width:851px){ .protocol-log-browser { height:calc(100vh - 250px); min-height:460px; } }

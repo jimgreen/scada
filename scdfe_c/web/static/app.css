@@ -199,6 +199,10 @@ small,
   background: #b8c8d3;
   border-radius: 2px;
 }
+.layout-first-hidden > :first-child { display:none !important; }
+.shell.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
+.lb-workspace.layout-first-hidden,.log-workspace.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
+.layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
 .layout-resizer-x {
   width: 8px;
   height: 100%;

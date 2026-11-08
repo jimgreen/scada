@@ -51,12 +51,20 @@
 .workbench .log-workspace.legacy-log-workspace-resizable { grid-template-columns:var(--legacy-log-files-width, 285px) 8px minmax(0,1fr); }
 .layout-resizer { appearance:none; display:block; border:0 !important; border-radius:0 !important; padding:0 !important; margin:0; background:transparent; color:inherit; min-width:0; min-height:0; z-index:3; position:relative; opacity:.7; transition:background .15s ease, opacity .15s ease; }
 .layout-resizer::before { content:""; position:absolute; background:#b8c8d3; border-radius:2px; }
+.layout-resizer { font-size:14px; line-height:1; color:#6f8795; }
+.layout-resizer.layout-resizer-x { writing-mode:vertical-rl; }
+.layout-resizer.layout-resizer-y { font-size:12px; }
 .layout-resizer-x { width:8px; height:100%; cursor:col-resize; touch-action:none; }
 .layout-resizer-x::before { top:0; bottom:0; left:3px; width:2px; }
 .layout-resizer-y { width:100%; height:8px; cursor:row-resize; touch-action:none; }
 .layout-resizer-y::before { left:0; right:0; top:3px; height:2px; }
 .layout-resizer:hover,.layout-resizer:focus-visible,.layout-resizer.is-dragging { background:#087f8c16 !important; opacity:1; }
 .layout-resizer:hover::before,.layout-resizer:focus-visible::before,.layout-resizer.is-dragging::before { background:var(--teal); }
+.layout-first-hidden > :first-child { display:none !important; }
+.workbench-shell.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
+.grid.layout-first-hidden,.split.layout-first-hidden,.lb-workspace.layout-first-hidden,.log-workspace.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
+.layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
+.layout-resizer[aria-expanded="false"]::before { background:var(--teal); }
 body.layout-resizing { cursor:col-resize !important; user-select:none; }
 body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor:row-resize !important; }
 .layout-resizable-y { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--layout-first-height,280px) 8px minmax(0,1fr); }
