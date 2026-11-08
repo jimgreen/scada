@@ -457,14 +457,15 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
 }
 .data-toolbar {
   justify-content: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .data-toolbar > .actions {
   flex: 0 0 auto;
+  margin-left: auto;
 }
 .data-toolbar > .global-filters {
-  flex: 1 1 560px;
-  min-width: 320px;
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
 }
 .page-panel > .toolbar .title-group {
@@ -1654,6 +1655,18 @@ dialog::backdrop {
   .toolbar {
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+  .data-toolbar {
+    flex-wrap: wrap;
+  }
+  .data-toolbar > .global-filters {
+    flex: 1 1 100%;
+    min-width: 100%;
+    order: 1;
+  }
+  .data-toolbar > .actions {
+    order: 2;
+    margin-left: auto;
   }
   .toolbar h1 {
     font-size: 18px;
