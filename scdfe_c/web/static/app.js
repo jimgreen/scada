@@ -1702,9 +1702,13 @@ async function controlProcess(target, action, extra = {}) {
 }
 function openProcessLogs(name) {
   const select = $("#log-process");
-  if (![...select.options].some((option) => option.value === name)) select.add(new Option(processLabel(name), name));
-  select.value = name;
+  // The compact C log page does not expose the process/file toolbar.  A
+  // process-row "日志" action therefore opens the complete runtime index;
+  // otherwise a hidden process value would make the page appear to contain
+  // only that process's files.
+  if (select) select.value = "";
   logs.offset = 0;
+  logs.selected = "";
   return changeResource("logs");
 }
 $("#process-refresh").onclick = loadProcesses;
@@ -1994,7 +1998,7 @@ async function loadScdfeLogs(refreshContent = true) {
     // preserve its option nodes while its membership remains unchanged.
     processes.sort();
     const processOptions =
-      '<option value="">全部进程</option>' +
+      '<option value="">全部文件</option>' +
       processes
         .map(
           (name) =>
@@ -2011,7 +2015,7 @@ async function loadScdfeLogs(refreshContent = true) {
       processMenu.value = selected;
     }
     $("#log-directory").textContent = (logs.record === "packet" ? "报文目录：" : "运行日志目录：") + data.directory;
-    $("#log-status").textContent = "目录已更新 · " + new Date().toLocaleTimeString();
+    if ($("#log-status")) $("#log-status").textContent = "目录已更新 · " + new Date().toLocaleTimeString();
     showError("#logs-error", null);
     await filterLogs(true, refreshContent);
     markUpdated();
@@ -2158,7 +2162,9 @@ function logSearchParams(filename) {
   for (const [id, key] of [["log-search", "q"], ["log-level", "level"],
     ["log-direction", "direction"], ["log-channel", "channel_id"],
     ["log-file-query", "file_query"]]) {
-    const value = $("#" + id).value.trim();
+    const node = $("#" + id);
+    if (!node) continue;
+    const value = node.value.trim();
     if (value) params.set(key, value);
   }
   const start = $("#log-start"), end = $("#log-end");
@@ -2424,7 +2430,7 @@ $("#thread-next").onclick = () => {
   monitor.offset += monitor.limit;
   loadScdfe();
 };
-$("#logs-refresh").onclick = () => loadScdfeLogs(true);
+if ($("#logs-refresh")) $("#logs-refresh").onclick = () => loadScdfeLogs(true);
 document.querySelectorAll(".lb-record-tab").forEach((tab) => {
   tab.onclick = () => {
     const record = tab.dataset.record;
@@ -2466,8 +2472,10 @@ $("#log-next").onclick = () => {
   renderLogFiles();
 };
 function clearLogConditions() {
-  for (const id of ["log-search", "log-level", "log-direction", "log-channel", "log-file-query", "log-start", "log-end"])
-    $("#" + id).value = "";
+  for (const id of ["log-search", "log-level", "log-direction", "log-channel", "log-file-query", "log-start", "log-end"]) {
+    const node = $("#" + id);
+    if (node) node.value = "";
+  }
 }
 function initLogFilterToggle() {
   const reader = $("#logs-panel .lb-reader");
@@ -2491,7 +2499,7 @@ $("#log-search").oninput = () => {
   clearTimeout(logs.searchTimer);
   logs.searchTimer = setTimeout(() => readLog(logs.selected, true), 300);
 };
-$("#log-file-query").oninput = debounce(() => { logs.offset = 0; filterLogs(); }, 250);
+if ($("#log-file-query")) $("#log-file-query").oninput = debounce(() => { logs.offset = 0; filterLogs(); }, 250);
 for (const id of ["log-level", "log-direction", "log-channel", "log-start", "log-end", "log-tail"])
   $("#" + id).onchange = () => readLog(logs.selected, true);
 $("#log-search").onkeydown = (event) => { if (event.key === "Enter") readLog(logs.selected, true); };

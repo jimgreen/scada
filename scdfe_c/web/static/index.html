@@ -211,17 +211,14 @@
             <button type="button" class="lb-record-tab" data-record="runtime" aria-selected="true">运行日志</button>
             <button type="button" class="lb-record-tab" data-record="packet" aria-selected="false">报文日志</button>
           </nav>
-          <div class="lb-toolbar">
-            <label>日志进程<select id="log-process" aria-label="日志进程">
-              <option value="">全部进程</option>
-            </select></label>
-            <label class="lb-file-search">文件名<input id="log-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
-            <button id="logs-refresh" class="primary">刷新日志</button>
-            <span id="log-status" role="status" aria-live="polite">读取中…</span>
-          </div>
           <div id="logs-error" class="error-panel" role="alert" hidden></div>
           <div class="lb-workspace">
             <aside class="lb-files" aria-label="日志文件目录">
+              <div class="lb-file-filter">
+                <label>文件过滤<select id="log-process" aria-label="文件过滤">
+                  <option value="">全部文件</option>
+                </select></label>
+              </div>
               <div class="lb-panel-label"><strong id="log-files-label">日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div>
               <div
                 id="scdfe-logs"

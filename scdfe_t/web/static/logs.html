@@ -14,15 +14,15 @@
     <button class="lb-record-tab" type="button" data-record="runtime" aria-selected="true">运行日志</button>
     <button class="lb-record-tab" type="button" data-record="packet" aria-selected="false">报文日志</button>
   </nav>
-  <div class="lb-toolbar">
-    <label>日志进程<select id="lb-process"><option value="">全部进程</option></select></label>
-    <label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
-    <button id="lb-refresh" class="primary">刷新日志</button>
-    <label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label>
-    <span id="lb-status" role="status" aria-live="polite">读取中…</span>
-  </div>
   <div class="lb-workspace">
     <aside class="lb-files" aria-label="日志文件目录">
+      <div class="lb-file-filter lb-toolbar">
+        <label>文件过滤<select id="lb-process" aria-label="文件过滤"><option value="">全部文件</option></select></label>
+        <label class="lb-file-search">文件名<input id="lb-file-query" type="search" maxlength="256" placeholder="输入文件名关键字"></label>
+        <button id="lb-refresh" class="primary">刷新日志</button>
+        <label class="lb-check"><input id="lb-follow" type="checkbox">跟随最新</label>
+        <span id="lb-status" role="status" aria-live="polite">读取中…</span>
+      </div>
       <div class="lb-panel-label"><strong>日志文件目录</strong><small>年 / 月 / 日 / 小时</small></div>
       <div id="lb-tree" class="lb-tree" aria-label="按时间浏览日志文件"></div>
       <div class="lb-file-pager"><button id="lb-files-prev" aria-label="上一页文件">上一页</button><span id="lb-files-page"></span><button id="lb-files-next" aria-label="下一页文件">下一页</button></div>

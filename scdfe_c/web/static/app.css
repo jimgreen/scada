@@ -1019,8 +1019,28 @@ tbody tr:hover .sticky-actions {
 #logs-panel {
   padding-bottom: 8px;
 }
-#logs-panel > .lb-toolbar {
-  display: none;
+#logs-panel .lb-file-filter {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  flex-shrink: 0;
+}
+#logs-panel .lb-file-filter label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#logs-panel .lb-file-filter select {
+  min-width: 0;
+  width: 100%;
+  max-width: 230px;
 }
 #logs-panel .lb-reader-actions {
   display: flex;

@@ -90,7 +90,7 @@
     return data;
   }
   function visibleFiles() {
-    const process = $("process")?.value || "", needle = $("file-query").value.trim().toLowerCase();
+    const process = $("process")?.value || "", needle = $("file-query")?.value.trim().toLowerCase() || "";
     const channel = $("channel")?.value || "";
     return files.filter((file) => (!process || file.process === process)
       && (module !== "s" || file.channel_id != null)
@@ -117,7 +117,7 @@
     const processes = [...new Set(files.map((file) => file.process))].sort((a, b) =>
       a.localeCompare(b, undefined, {numeric: true}));
     if (value && !processes.includes(value)) processes.push(value);
-    const options = '<option value="">全部进程</option>'
+    const options = '<option value="">全部文件</option>'
       + processes.map((name) => '<option value="' + esc(name) + '">' + esc(processName(name)) + "</option>").join("");
     if (options !== processOptions) { select.innerHTML = options; processOptions = options; }
     select.value = value;
