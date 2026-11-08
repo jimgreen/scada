@@ -1,7 +1,7 @@
 /* Shared mouse/touch/keyboard resizers for the C/S/T workbenches. */
 (() => {
   "use strict";
-  const STORAGE_PREFIX = "scada-layout-size-";
+  const STORAGE_PREFIX = "scada-layout-size-v2-";
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const configs = [
     {selector: ".workbench-shell", key: "workbench-sidebar", property: "--workbench-sidebar-width", min: 150, max: 420, axis: "x", className: "wb-shell-resizable"},
@@ -36,11 +36,12 @@
     handle.className = `layout-resizer layout-resizer-${config.axis}`;
     handle.setAttribute("role", "separator");
     handle.setAttribute("aria-orientation", config.axis === "x" ? "vertical" : "horizontal");
-    handle.setAttribute("aria-label", config.axis === "x" ? "调整左右区域宽度；点击隐藏或显示左侧区域" : "调整上下区域高度；点击隐藏或显示上方区域");
-    handle.title = config.axis === "x" ? "拖动调整左右区域宽度；点击隐藏/显示左侧区域" : "拖动调整上下区域高度；点击隐藏/显示上方区域";
+    handle.setAttribute("aria-label", config.axis === "x" ? "拖动调整左右区域宽度；拖到边缘隐藏左侧区域" : "拖动调整上下区域高度；拖到边缘隐藏上方区域");
+    handle.title = config.axis === "x" ? "拖动调整左右区域宽度；拖到边缘隐藏，向外拖动恢复" : "拖动调整上下区域高度；拖到边缘隐藏，向外拖动恢复";
     element.insertBefore(handle, element.children[1]);
     let start = null;
     let moved = false;
+    let lastSize = config.min;
     const applyHidden = (hidden) => {
       element.classList.toggle("layout-first-hidden", hidden);
       handle.setAttribute("aria-expanded", String(!hidden));
@@ -48,7 +49,11 @@
       try { localStorage.setItem(`${storageKey(config, index)}:hidden`, hidden ? "1" : "0"); } catch (_) { /* ignore */ }
     };
     let hidden = false;
-    try { hidden = localStorage.getItem(`${storageKey(config, index)}:hidden`) === "1"; } catch (_) { /* ignore */ }
+    try {
+      hidden = localStorage.getItem(`${storageKey(config, index)}:hidden`) === "1";
+      const saved = Number.parseFloat(localStorage.getItem(`${storageKey(config, index)}:last`));
+      if (Number.isFinite(saved)) lastSize = clamp(saved, config.min, config.max);
+    } catch (_) { /* ignore */ }
     applyHidden(hidden);
     const begin = (event) => {
       if (event.button !== undefined && event.button !== 0) return;
@@ -65,8 +70,27 @@
     const move = (event) => {
       if (!start) return;
       const current = config.axis === "x" ? event.clientX : event.clientY;
-      if (Math.abs(current - start.pointer) > 3) moved = true;
-      setSize(config, element, start.size + current - start.pointer, index);
+      const delta = current - start.pointer;
+      if (Math.abs(delta) > 3) moved = true;
+      const raw = start.size + delta;
+      if (hidden) {
+        if (delta > 8) {
+          hidden = false;
+          applyHidden(false);
+          setSize(config, element, Math.max(lastSize, Math.min(config.min, raw)), index);
+        }
+        event.preventDefault();
+        return;
+      }
+      if (raw <= 24) {
+        lastSize = clamp(start.size, config.min, config.max);
+        hidden = true;
+        try { localStorage.setItem(`${storageKey(config, index)}:last`, String(Math.round(lastSize))); } catch (_) { /* ignore */ }
+        applyHidden(true);
+        event.preventDefault();
+        return;
+      }
+      setSize(config, element, raw, index);
       event.preventDefault();
     };
     const end = () => {
@@ -79,11 +103,6 @@
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", end);
     handle.addEventListener("pointercancel", end);
-    handle.addEventListener("click", () => {
-      if (moved) { moved = false; return; }
-      hidden = !hidden;
-      applyHidden(hidden);
-    });
     handle.addEventListener("keydown", (event) => {
       const first = element.children[0];
       if (!first) return;
