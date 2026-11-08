@@ -120,7 +120,9 @@ body[data-points] .point-filters > label:not(.visually-hidden) select { width:28
 .point-tabs { margin-top:4px; }
 .point-tabs-row { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
 .point-tabs-row .point-tabs { flex:1; margin:0; }
-.layout-first-hidden > :first-child { display:none !important; }
+/* Keep the first grid item in place while hiding its contents; display:none
+   would move the reader into the divider column. */
+.layout-first-hidden > :first-child { visibility:hidden !important; pointer-events:none !important; min-width:0 !important; min-height:0 !important; overflow:hidden !important; }
 .grid.layout-first-hidden,.split.layout-first-hidden,.log-layout.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }
 @media(max-width:900px){ .test-metrics { grid-template-columns:repeat(3, 1fr); } }

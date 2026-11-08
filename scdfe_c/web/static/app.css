@@ -199,7 +199,15 @@ small,
   background: #b8c8d3;
   border-radius: 2px;
 }
-.layout-first-hidden > :first-child { display:none !important; }
+/* Preserve the hidden grid item so the divider and the reader keep their
+   columns when the first panel is dragged to the edge. */
+.layout-first-hidden > :first-child {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
 .shell.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .lb-workspace.layout-first-hidden,.log-workspace.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .layout-resizer[aria-expanded="false"] { background:#087f8c18; opacity:1; }

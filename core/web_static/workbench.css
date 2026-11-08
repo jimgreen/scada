@@ -60,7 +60,16 @@
 .layout-resizer-y::before { left:0; right:0; top:3px; height:2px; }
 .layout-resizer:hover,.layout-resizer:focus-visible,.layout-resizer.is-dragging { background:#087f8c16 !important; opacity:1; }
 .layout-resizer:hover::before,.layout-resizer:focus-visible::before,.layout-resizer.is-dragging::before { background:var(--teal); }
-.layout-first-hidden > :first-child { display:none !important; }
+/* Keep the hidden panel in the grid.  Removing it with display:none makes
+   CSS grid auto-place the handle and reader into the wrong columns, leaving
+   only an 8px reader and a blank page. */
+.layout-first-hidden > :first-child {
+  visibility:hidden !important;
+  pointer-events:none !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  overflow:hidden !important;
+}
 .workbench-shell.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .grid.layout-first-hidden,.split.layout-first-hidden,.lb-workspace.layout-first-hidden,.log-workspace.layout-first-hidden { grid-template-columns:0 8px minmax(0,1fr) !important; }
 .layout-resizable-y.layout-first-hidden { grid-template-rows:0 8px minmax(0,1fr) !important; }
