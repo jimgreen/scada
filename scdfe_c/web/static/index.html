@@ -132,15 +132,17 @@
           </div>
           <div id="process-error" class="error-panel" role="alert" hidden></div>
           <div id="process-summary" class="scdfe-status"></div>
-          <form id="debug-process-form" class="filterbar">
-            <label for="debug-rtu">独立调试 RTU</label>
-            <input id="debug-rtu" inputmode="numeric" list="rtu-options" placeholder="输入 RTU 编号" required />
-            <label><input id="debug-include" type="checkbox" checked /> 参与一键启动</label>
-            <button class="button secondary" type="submit" id="debug-start">启动调试</button>
-          </form>
-          <div class="filterbar">
-            <h2>运行进程</h2><input id="process-search" type="search" placeholder="筛选进程、RTU 或 PID" aria-label="筛选进程" />
-            <span id="process-count" class="muted"></span>
+          <div class="process-filter-row">
+            <form id="debug-process-form" class="filterbar">
+              <label for="debug-rtu">独立调试 RTU</label>
+              <input id="debug-rtu" inputmode="numeric" list="rtu-options" placeholder="输入 RTU 编号" required />
+              <label><input id="debug-include" type="checkbox" checked /> 参与一键启动</label>
+              <button class="button secondary" type="submit" id="debug-start">启动调试</button>
+            </form>
+            <div class="filterbar process-searchbar">
+              <h2>运行进程</h2><input id="process-search" type="search" placeholder="筛选进程、RTU 或 PID" aria-label="筛选进程" />
+              <span id="process-count" class="muted"></span>
+            </div>
           </div>
           <div class="table-wrap process-table">
             <table><thead><tr>
