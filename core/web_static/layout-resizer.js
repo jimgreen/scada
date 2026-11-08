@@ -15,7 +15,7 @@
     /* Keep the RTU selector/status strip compact so the log and packet panels
        get the available height.  It remains user-resizable and can still be
        dragged to the edge to hide and restore the whole strip. */
-    {selector: ".test-body[data-resize-axis=\"y\"]", key: "test-summary-height", property: "--layout-first-height", min: 90, max: 210, axis: "y", className: "layout-resizable-y"},
+    {selector: ".test-body[data-resize-axis=\"y\"]", key: "test-summary-height-compact-v4", property: "--layout-first-height", min: 90, max: 210, axis: "y", className: "layout-resizable-y"},
     {selector: "[data-resize-axis=\"y\"]", key: "custom-height", property: "--layout-first-height", min: 140, max: 900, axis: "y", className: "layout-resizable-y"},
   ];
   const effectiveMax = (config, element) => {

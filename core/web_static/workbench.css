@@ -78,6 +78,7 @@
 body.layout-resizing { cursor:col-resize !important; user-select:none; }
 body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor:row-resize !important; }
 .layout-resizable-y { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--layout-first-height,280px) 8px minmax(0,1fr); }
+.workbench .test-body.layout-resizable-y { grid-template-rows:var(--layout-first-height,128px) 8px minmax(0,1fr); }
 .workbench .table-wrap { width:100%; max-width:100%; max-height:min(76dvh,900px); min-width:0; overflow:auto; border-color:var(--line); }
 .workbench .workbench-content > .tab-panel:not([hidden]) { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
 .workbench .workbench-content > .tab-panel:not([hidden]) > .grid,
