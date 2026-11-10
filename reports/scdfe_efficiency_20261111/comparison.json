@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-11-11",
+  "workload": {
+    "live_http": "127.0.0.1 ports 8877/8878/8879, HTTP keep-alive, 5 warmups + 40 samples",
+    "runtime_status_scale": "temporary SQLite/WAL database with 2400 snapshots; page filter requests 50 channels",
+    "rtu_pagination_candidate": "temporary SQLite/WAL database with 2400 RTUs and five 500-row pages"
+  },
+  "live_http": [
+    {"module":"scdfe_c","endpoint":"/api/scdfe_c/status?limit=50","before_median_ms":1.0786,"after_median_ms":1.0761,"after_p95_ms":1.2338,"before_p95_ms":1.3106,"before_bytes":22100,"after_bytes":22496},
+    {"module":"scdfe_s","endpoint":"/api/monitor/communications","before_median_ms":14.4328,"after_median_ms":13.24195,"after_p95_ms":27.7806,"before_p95_ms":28.2114,"before_bytes":109204,"after_bytes":109204},
+    {"module":"scdfe_t","endpoint":"/api/trans/status","before_median_ms":0.2683,"after_median_ms":0.2643,"after_p95_ms":0.4867,"before_p95_ms":0.4881,"before_bytes":3468,"after_bytes":2760}
+  ],
+  "database": {
+    "runtime_status_all_2400_ms":24.918,
+    "runtime_status_page_50_ms":3.3057,
+    "reduction_pct":86.73368649169275
+  },
+  "rejected": {
+    "candidate":"C web option pagination with four parallel SQLite requests",
+    "sequential_2400_rows_ms":10.8932,
+    "parallel_2400_rows_ms":32.4477,
+    "change_pct":197.8711489736716,
+    "decision":"reverted; local SQLite contention outweighed concurrency benefit"
+  },
+  "verification": {
+    "focused_pytest":"33 passed",
+    "compileall":"passed: core scdfe_c scdfe_s scdfe_t client server",
+    "javascript_syntax":"passed: scdfe_c/web/static/app.js scdfe_s/web/static/test.js scdfe_t/web/static/app.js",
+    "git_diff_check":"passed",
+    "web_health":"8877/8878/8879 returned status=ok after restart",
+    "full_suite_boundary":"458 passed, 3 skipped, 42 lock-related failures and 3 cleanup errors while the live scdfe_c daemon owned the global lock; one unrelated existing TransRuntime fixture lacked pnt_no"
+  }
+}

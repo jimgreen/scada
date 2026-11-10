@@ -13,7 +13,7 @@
   };
   const pointLabels = {yc:"遥测 YC", yx:"遥信 YX", yk:"遥控 YK", yt:"遥调 YT"};
   const runtimeKeys = new Set(["_version", "raw_value", "raw_status", "raw_time", "refresh_time", "process_status", "process_pid", "process_start_time", "process_stop_time", "process_heartbeat_time", "process_exit_code", "process_error"]);
-  const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0, editingPoint:null};
+  const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0, editingPoint:null, loading:false};
   const PAGE_SIZE = 25;
   const commandKinds = new Set(["yk", "yt"]);
   const rawStatusKinds = new Set(["yc", "yt"]);
@@ -116,9 +116,11 @@
     node.className = `refresh-status${active ? " is-active" : ""}${error ? " is-error" : ""}`;
   }
   async function loadRtu(id) {
+    if (state.loading && state.rtu && String(state.rtu.rtu_id) === String(id)) return;
     const request = ++state.request;
     state.rtu = state.rtus.find(item => String(item.rtu_id) === String(id)) || null;
-    if (!state.rtu) { refreshStatus("请选择 RTU"); return; }
+    if (!state.rtu) { state.loading = false; refreshStatus("请选择 RTU"); return; }
+    state.loading = true;
     const protocol = protocolFor(state.rtu.channel_type);
     state.protocol = protocol; state.service = protocol.service;
     refreshStatus("正在刷新…", true);
@@ -148,6 +150,8 @@
       refreshStatus(`已刷新 ${formatPointTime(Date.now())}`);
     } catch (error) {
       if (request === state.request) { state.channel = null; message(error.message, true); refreshStatus("刷新失败", false, true); }
+    } finally {
+      if (request === state.request) state.loading = false;
     }
   }
   async function loadRtus() {
@@ -225,5 +229,5 @@
   $("#point-update-close").addEventListener("click", closePointUpdate);
   $("#point-update-cancel").addEventListener("click", closePointUpdate);
   $("#point-update-dialog").addEventListener("cancel", () => { state.editingPoint = null; });
-  initTabs(); loadRtus(); setInterval(() => { if (!document.hidden && state.rtu) loadRtu(state.rtu.rtu_id); }, 10000);
+  initTabs(); loadRtus(); setInterval(() => { if (!document.hidden && state.rtu && !state.loading) loadRtu(state.rtu.rtu_id); }, 10000);
 })();

@@ -296,11 +296,28 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                         "process_stop_time": int(time.time() * 1000),
                         "process_heartbeat_time": int(time.time() * 1000),
                     })
-            result = self._list("fes_rtu_define", {"limit": "50", "sort": "rtu_id", **query}, None)
+            result = self._list(
+                "fes_rtu_define",
+                {
+                    "limit": "50",
+                    "sort": "rtu_id",
+                    "fields": (
+                        "rtu_id,name,channel_id,channel_type,process_enable,"
+                        "process_status,process_pid,process_start_time,"
+                        "process_heartbeat_time,process_error"
+                    ),
+                    **query,
+                },
+                None,
+            )
             rows = result["items"]
             runtime_by_channel = {
                 int(row["channel_id"]): row
-                for row in runtime_status_rows(self.store, service_name="scdfe_c")
+                for row in runtime_status_rows(
+                    self.store,
+                    service_name="scdfe_c",
+                    channel_ids=(row.get("channel_id") for row in rows),
+                )
             }
             with self.store.connection() as connection:
                 counts = dict(connection.execute(

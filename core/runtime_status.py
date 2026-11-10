@@ -188,8 +188,14 @@ class RuntimeStatusStore:
 
 
 def runtime_status_rows(store, *, service_name: str | None = None,
-                        channel_id: Any | None = None) -> list[dict[str, Any]]:
-    """Read snapshots with one indexed query for HMI/API projections."""
+                        channel_id: Any | None = None,
+                        channel_ids: Any | None = None) -> list[dict[str, Any]]:
+    """Read snapshots with one indexed query for HMI/API projections.
+
+    ``channel_ids`` keeps paginated multi-RTU monitors from scanning and
+    decoding snapshots for channels that are not present on the current page.
+    The scalar ``channel_id`` form remains the cheaper single-channel path.
+    """
     clauses, params = [], []
     if service_name:
         clauses.append('"service_name"=?')
@@ -197,6 +203,16 @@ def runtime_status_rows(store, *, service_name: str | None = None,
     if channel_id is not None:
         clauses.append('"channel_id"=?')
         params.append(_integer(channel_id))
+    elif channel_ids is not None:
+        ids = []
+        for value in channel_ids:
+            current = _integer(value)
+            if current > 0 and current not in ids:
+                ids.append(current)
+        if not ids:
+            return []
+        clauses.append('"channel_id" IN (' + ','.join('?' for _ in ids) + ')')
+        params.extend(ids)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with store.connection() as connection:
         return [public_runtime_row(row) for row in connection.execute(

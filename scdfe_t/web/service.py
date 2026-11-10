@@ -129,7 +129,15 @@ class TransStore:
 
     def runtime_status(self) -> dict[str, Any]:
         """Return transmission channels with one uniform live-status snapshot."""
-        items = self.channels()
+        status_fields = (
+            "channel_id,name,protocol,process_enable,process_status,process_pid,"
+            "process_start_time,process_stop_time,process_heartbeat_time,"
+            "process_exit_code,process_error,packet_recording"
+        )
+        with self.store.connection() as con:
+            items = [dict(row) for row in con.execute(
+                f"SELECT {status_fields}, _version FROM {CHANNEL_TABLE} ORDER BY channel_id"
+            )]
         snapshots = {
             int(row["channel_id"]): row
             for row in runtime_status_rows(self.store, service_name="scdfe_t")

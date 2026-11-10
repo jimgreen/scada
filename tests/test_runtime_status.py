@@ -34,6 +34,14 @@ class RuntimeStatusTest(unittest.TestCase):
         self.assertEqual(rows[0]["diagnostic"]["unexpected_messages"][0]["type"], 45)
         self.assertEqual(json.loads(rows[0]["diagnostic_json"])["k"], 12)
 
+    def test_multi_channel_filter_reads_only_requested_snapshots(self):
+        status = RuntimeStatusStore(self.store, "scdfe_c", write_interval_ms=0)
+        for channel_id in (7, 8, 9):
+            status.upsert(channel_id, {"state": "running"}, force=True)
+        rows = runtime_status_rows(self.store, service_name="scdfe_c", channel_ids=(9, 7, 7))
+        self.assertEqual([row["channel_id"] for row in rows], [7, 9])
+        self.assertEqual(runtime_status_rows(self.store, service_name="scdfe_c", channel_ids=()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -620,7 +620,7 @@ async function loadRtuOptions() {
     .join("");
 }
 let channelOptionsRequest = 0;
-async function fetchChannelOptions(channelType = "") {
+async function fetchChannelOptions(channelType = "", isCurrent = () => true) {
   const items = [];
   for (let offset = 0; ; ) {
     const filter = channelType
@@ -631,6 +631,7 @@ async function fetchChannelOptions(channelType = "") {
         offset +
         filter,
     );
+    if (!isCurrent()) return null;
     items.push(...data.items);
     offset += data.items.length;
     if (!data.items.length || offset >= data.total) break;
@@ -685,7 +686,7 @@ async function updateRtuChannelOptions(channelType, selected = "") {
     return;
   }
   try {
-    const rows = (await fetchChannelOptions(channelType)) || [];
+    const rows = (await fetchChannelOptions(channelType, () => request === channelOptionsRequest)) || [];
     if (request !== channelOptionsRequest) return;
     select.innerHTML = channelSelectMarkup(rows, selected, channelType);
     select.disabled = false;
