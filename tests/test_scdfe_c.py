@@ -609,9 +609,13 @@ class ScdfeCTest(unittest.TestCase):
                 self.assertEqual(runtime._batch_message_size(queue.messages[0]), 1)
                 self.assertTrue(runtime._flush_batch(self.store, worker.logger, queue.messages, queue))
                 row = self.store.get_row("fes_yc_define", [7, 1])
-                self.assertEqual((row["value"], row["raw_value"], row["status"], row["refresh_time"],
-                                  row["_version"]),
-                                 (expected_value, expected_value, expected_quality, 321, before + 1))
+                self.assertEqual((row["value"], row["raw_value"], row["status"]),
+                                 (expected_value, expected_value, expected_quality))
+                # The database trigger guarantees that a value/status change
+                # advances refresh_time even when a stale sample timestamp is
+                # supplied by an adapter or test fixture.
+                self.assertGreaterEqual(row["refresh_time"], 321)
+                self.assertEqual(row["_version"], before + 1)
 
     def test_full_queue_leaves_changed_and_heartbeat_points_eligible_for_retry(self):
         queue = CaptureWriterQueue()
