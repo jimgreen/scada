@@ -126,12 +126,13 @@
     refreshStatus("正在刷新…", true);
     try {
       const [channel, points, communications, status] = await Promise.all([
-        api(`/api/rtus/${encodeURIComponent(id)}/channel`), fetchPoints(id), api("/api/monitor/communications"), protocol.service ? api(`/api/${protocol.service}/status`) : Promise.resolve({item:{}})
+        api(`/api/rtus/${encodeURIComponent(id)}/channel`), fetchPoints(id), api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`), protocol.service ? api(`/api/${protocol.service}/status`) : Promise.resolve({item:{}})
       ]);
       if (request !== state.request) return;
       state.channel = channel; state.points = points; state.pages = {yc:0,yx:0,yk:0,yt:0};
-      const match = (communications.items || []).find(item => item.name === protocol.service);
-      renderPoints(); renderService(status.item || match || {});
+      const match = (communications.items || []).find(item => String(item.rtu_id) === String(id))
+        || (communications.items || []).find(item => item.name === protocol.service);
+      renderPoints(); renderService(match || status.item || {});
       // Scope the shared log browser to the RTU currently selected above.
       // The protocol process remains a fallback for manager-only logs, while
       // channel files are preferred whenever they exist.
@@ -156,7 +157,7 @@
   }
   async function loadRtus() {
     try {
-      const data = await api("/api/rtus?limit=500");
+      const data = await api("/api/rtus?limit=500&fields=rtu_id,channel_id,channel_type,name");
       state.rtus = data.items || [];
       const select = $("#rtu-select");
       select.innerHTML = state.rtus.map(item => `<option value="${esc(item.rtu_id)}">RTU ${esc(item.rtu_id)} · ${esc(item.name || "未命名")} · ${esc(protocolFor(item.channel_type).label)}</option>`).join("");

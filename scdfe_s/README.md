@@ -83,7 +83,7 @@ GET/PATCH/DELETE       /api/channels/{rtu_id}/points/{kind}/{pnt_no}
 ```
 
 运行监控 API 为 `GET /api/monitor/processes`、`GET /api/monitor/communications`、
-`GET /api/monitor/logs`，服务启停使用
+`GET /api/monitor/communications?rtu_id=<rtu_id>`（仅查询指定 RTU）、`GET /api/monitor/logs`，服务启停使用
 `POST /api/monitor/communications/{service}/start|stop`。
 
 日志页 `/logs` 先用分页标签选择“运行日志”或“报文日志”，再选择通信通道。每个通道

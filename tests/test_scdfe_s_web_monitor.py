@@ -64,6 +64,24 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
             })
         self.assertEqual(_rtu_point_counts(self.store), {1: 3, 2: 1})
 
+    def test_communication_monitor_can_scope_to_one_rtu(self):
+        for rtu_id in (1, 2):
+            self.store.create_row("fes_rtu_define", {
+                "rtu_id": rtu_id, "channel_id": 100 + rtu_id,
+                "channel_type": "iec104", "name": f"RTU-{rtu_id}",
+                "process_enable": 0,
+            })
+        status, payload = self.request(
+            "GET", "/api/monitor/communications?rtu_id=2"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"][0]["rtu_id"], 2)
+        status, _ = self.request(
+            "GET", "/api/monitor/communications?rtu_id=invalid"
+        )
+        self.assertEqual(status, 400)
+
     def test_channel_and_point_crud_alias(self):
         status, payload = self.request("POST", "/api/channels", {
             "rtu_id": 1, "channel_id": 11, "channel_type": "iec104",

@@ -39,21 +39,30 @@ from core.web_logs import log_browser
 from core.runtime_status import now_ms, runtime_status_rows
 
 
-def _rtu_point_counts(store) -> dict[int, int]:
+def _rtu_point_counts(store, *, rtu_ids=None) -> dict[int, int]:
     """Count all four point tables in one read transaction.
 
     Communication and process monitor pages poll every configured RTU at the
     same time. Keeping this aggregation here avoids four queries and one
     SQLite connection per service status call.
     """
+    ids = None if rtu_ids is None else [int(value) for value in rtu_ids]
+    if ids == []:
+        return {}
     with store.connection() as connection:
+        where = " WHERE r.channel_type IS NOT NULL"
+        params = []
+        if ids is not None:
+            where += " AND r.rtu_id IN (" + ",".join("?" for _ in ids) + ")"
+            params.extend(ids)
         rows = connection.execute(
             "SELECT r.rtu_id,"
             " (SELECT COUNT(*) FROM fes_yc_define p WHERE p.rtu_id=r.rtu_id)"
             " + (SELECT COUNT(*) FROM fes_yx_define p WHERE p.rtu_id=r.rtu_id)"
             " + (SELECT COUNT(*) FROM fes_yk_define p WHERE p.rtu_id=r.rtu_id)"
             " + (SELECT COUNT(*) FROM fes_yt_define p WHERE p.rtu_id=r.rtu_id)"
-            " FROM fes_rtu_define r WHERE r.channel_type IS NOT NULL"
+            " FROM fes_rtu_define r" + where,
+            params,
         ).fetchall()
     return {int(row[0]): int(row[1]) for row in rows}
 
@@ -252,14 +261,37 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if not parts[:2] == ["api", "monitor"]:
             return False
         services = self._service_map()
+        requested_rtu_id = None
+        if len(parts) >= 3 and parts[2] == "communications":
+            if set(query) - {"rtu_id"}:
+                raise ApiError(405 if method != "GET" else 400, "通信监控接口参数不正确")
+            if "rtu_id" in query:
+                try:
+                    requested_rtu_id = int(query["rtu_id"])
+                except ValueError as exc:
+                    raise ApiError(400, "rtu_id 必须是整数") from exc
+                if requested_rtu_id <= 0:
+                    raise ApiError(400, "rtu_id 必须是正整数")
         channel_services = (
             self._channel_service_map()
             if len(parts) >= 3 and parts[2] in {"processes", "communications"}
             else {}
         )
+        if requested_rtu_id is not None:
+            suffix = f"-rtu-{requested_rtu_id}"
+            channel_services = {
+                slug: service for slug, service in channel_services.items()
+                if slug.endswith(suffix)
+            }
         point_counts = (
-            _rtu_point_counts(self.store)
-            if len(parts) >= 3 and parts[2] in {"processes", "communications"}
+            _rtu_point_counts(
+                self.store,
+                rtu_ids=[requested_rtu_id] if requested_rtu_id is not None else None,
+            )
+            if parts in (
+                ["api", "monitor", "processes"],
+                ["api", "monitor", "communications"],
+            )
             else None
         )
         if len(parts) == 5 and parts[2] in {"processes", "communications"} and parts[4] in {"start", "stop"}:
@@ -283,23 +315,30 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                               "status": status})
             return self._json(200, {"items": items, "total": len(items)})
         if parts == ["api", "monitor", "communications"]:
-            if method != "GET" or query:
-                raise ApiError(405, "通信监控接口只支持 GET")
-            runtime_by_channel = {
-                int(row["channel_id"]): row
-                for row in runtime_status_rows(self.store, service_name="scdfe_s")
-            }
             # Resolve every RTU-to-channel relation in one read.  The monitor
             # is polled every five seconds; opening one SQLite read connection
             # per protocol service scales poorly once several RTUs are
             # configured.
             with self.store.connection() as connection:
+                relation_sql = "SELECT rtu_id, channel_id FROM fes_rtu_define"
+                relation_params = ()
+                if requested_rtu_id is not None:
+                    relation_sql += " WHERE rtu_id=?"
+                    relation_params = (requested_rtu_id,)
                 channel_by_rtu = {
                     int(row[0]): int(row[1])
                     for row in connection.execute(
-                        "SELECT rtu_id, channel_id FROM fes_rtu_define"
+                        relation_sql, relation_params
                     )
                 }
+            runtime_rows = runtime_status_rows(
+                self.store,
+                service_name="scdfe_s",
+                channel_ids=channel_by_rtu.values() if requested_rtu_id is not None else None,
+            )
+            runtime_by_channel = {
+                int(row["channel_id"]): row for row in runtime_rows
+            }
             items = []
             for slug, service in channel_services.items():
                 status = service.status(point_counts=point_counts)
