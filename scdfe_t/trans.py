@@ -238,7 +238,7 @@ class TransRuntime:
         return diagnostic
 
     def _persist_runtime_status(self, updates: Mapping[str, Any] | None = None,
-                                *, force: bool = False) -> None:
+                                *, force: bool = False, connection=None) -> None:
         protocol, channel_name = self._runtime_metadata()
         values = dict(updates or {})
         self._runtime_state.update(values)
@@ -264,7 +264,7 @@ class TransRuntime:
                 "last_error_time": self._last_error_time,
                 "last_error": error,
                 "diagnostic_json": self._runtime_diagnostic(),
-            }, force=force)
+            }, force=force, connection=connection)
         except Exception as exc:
             self.logger.error(f"写入转发通道运行状态失败: {exc}")
 
@@ -274,21 +274,34 @@ class TransRuntime:
         self._last_error_time = now_ms()
 
     def _update_state(self, **values):
-        self._persist_runtime_status(values, force="process_status" in values and values["process_status"] != 2)
+        connection = None
         try:
-            if values.keys() == {'process_heartbeat_time'}:
-                # A periodic pulse is not an operator edit or a state transition.
-                # Update just this channel in one statement; keep its edit version.
-                with self.store.connection() as con:
+            with self.store.connection() as con:
+                connection = con
+                con.execute("BEGIN IMMEDIATE")
+                self._persist_runtime_status(
+                    values,
+                    force="process_status" in values and values["process_status"] != 2,
+                    connection=con,
+                )
+                if values.keys() == {'process_heartbeat_time'}:
+                    # A periodic pulse is not an operator edit or a state transition.
+                    # Update just this channel in one statement; keep its edit version.
                     updated = con.execute(f'UPDATE {CHANNEL_TABLE} SET process_heartbeat_time=? WHERE channel_id=?',
                                           (values['process_heartbeat_time'], self.channel_id))
                     if not updated.rowcount:
                         raise TransRuntimeError(f'转发通道 {self.channel_id} 不存在')
-                    con.commit()
-            else:
-                self.store.update_row(CHANNEL_TABLE, [self.channel_id], values)
+                else:
+                    # Reuse the store's normal validation/version path while
+                    # keeping the write in the heartbeat transaction.
+                    change = self.store._prepare_update(CHANNEL_TABLE, [self.channel_id], values)
+                    self.store._apply_update(con, change)
+                con.commit()
             return True
         except Exception as exc:
+            if connection is not None and connection.in_transaction:
+                connection.rollback()
+            self._runtime_status.invalidate(self.channel_id)
             self.logger.error(f"写入转发进程状态失败: {exc}")
             return False
 
@@ -453,6 +466,10 @@ class TransRuntime:
         already contain engineering values and normalized single/double states.
         """
         received_at = now_ms()
+        # Native mappings always carry pnt_no.  Keep the command path
+        # compatible with lightweight protocol/test point objects that expose
+        # the source point number instead.
+        point_no = int(getattr(p, "pnt_no", getattr(p, "source_pnt_no", 0)) or 0)
         try:
             value = float(engineering_value)
             if not math.isfinite(value):
@@ -477,10 +494,10 @@ class TransRuntime:
         except OSError:
             logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
         self._command_count += 1
-        self.values[(p.kind, p.pnt_no)] = value
-        self.qualities[(p.kind, p.pnt_no)] = 0
+        self.values[(p.kind, point_no)] = value
+        self.qualities[(p.kind, point_no)] = 0
         self._queue_point_runtime(
-            (p.kind, p.pnt_no), value=value, status=0,
+            (p.kind, point_no), value=value, status=0,
             refresh_time=received_at, command_receive_time=received_at,
         )
         self._flush_point_runtime()

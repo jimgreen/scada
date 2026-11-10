@@ -38,6 +38,8 @@ class ChannelConcurrencyTests(unittest.TestCase):
         self.addCleanup(runtime.store.close)
         runtime._heartbeat()  # initial transition into RUNNING
         row = self.t.get_channel(10)
+        status = runtime._runtime_status.list(channel_id=10)
+        self.assertEqual(status[0]["process_status"], 2)
         with ThreadPoolExecutor(2) as pool:
             with self.t._control(1):
                 runtime._next_heartbeat = 1
@@ -45,6 +47,8 @@ class ChannelConcurrencyTests(unittest.TestCase):
                 result = pool.submit(self.t.update_channel, 10, {'name':'edited'}, row['_version']).result(2)
         self.assertEqual(result['_version'], row['_version'] + 1)
         self.assertEqual(self.t.get_channel(1)['name'], '1')
+        self.assertEqual(runtime._runtime_status.list(channel_id=10)[0]["process_heartbeat_time"],
+                         runtime._runtime_state["process_heartbeat_time"])
 
     def test_old_station_callback_keeps_original_policy_and_search_identity(self):
         store = self.t.store

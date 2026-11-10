@@ -42,6 +42,18 @@ class RuntimeStatusTest(unittest.TestCase):
         self.assertEqual([row["channel_id"] for row in rows], [7, 9])
         self.assertEqual(runtime_status_rows(self.store, service_name="scdfe_c", channel_ids=()), [])
 
+    def test_upsert_reuses_callers_transaction(self):
+        status = RuntimeStatusStore(self.store, "scdfe_t", write_interval_ms=0)
+        with self.store.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.assertTrue(status.upsert(12, {"state": "running"}, force=True, connection=connection))
+            self.assertTrue(connection.in_transaction)
+            connection.rollback()
+        with self.store.connection() as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT 1 FROM fes_channel_runtime_status WHERE service_name='scdfe_t' AND channel_id=12"
+            ).fetchone())
+
 
 if __name__ == "__main__":
     unittest.main()

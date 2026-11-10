@@ -9,7 +9,6 @@ status table into a database bottleneck.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import nullcontext
 from datetime import datetime
 import json
 import math
@@ -165,16 +164,38 @@ class RuntimeStatusStore:
             f'"_version"="{TABLE}"."_version"+1, {assignments}'
         )
         try:
-            context = nullcontext(connection) if connection is not None else self.store.connection()
-            with context as current:
-                current.execute("BEGIN IMMEDIATE")
-                current.execute(sql, values_to_bind)
-                current.commit()
+            if connection is None:
+                with self.store.connection() as current:
+                    current.execute("BEGIN IMMEDIATE")
+                    current.execute(sql, values_to_bind)
+                    current.commit()
+            else:
+                # A caller may group the snapshot with another state write.
+                # Only own the transaction when the supplied connection is
+                # currently idle; an outer transaction must be committed or
+                # rolled back by its owner.
+                current = connection
+                owns_transaction = not current.in_transaction
+                if owns_transaction:
+                    current.execute("BEGIN IMMEDIATE")
+                try:
+                    current.execute(sql, values_to_bind)
+                    if owns_transaction:
+                        current.commit()
+                except Exception:
+                    if owns_transaction and current.in_transaction:
+                        current.rollback()
+                    raise
             return True
         except Exception:
             with self._lock:
                 self._last_write.pop(channel_id, None)
             raise
+
+    def invalidate(self, channel_id: Any) -> None:
+        """Forget a write recorded in a transaction that was later rolled back."""
+        with self._lock:
+            self._last_write.pop(_integer(channel_id), None)
 
     def list(self, *, channel_id: Any | None = None) -> list[dict[str, Any]]:
         sql = f'SELECT * FROM "{TABLE}" WHERE "service_name"=?'
