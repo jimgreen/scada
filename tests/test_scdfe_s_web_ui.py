@@ -107,7 +107,10 @@ class ScdfeSWebUiTests(unittest.TestCase):
         self.assertIn("point-update-dialog", page)
         self.assertIn("point-update-value", page)
         self.assertIn("point-update-status", page)
+        self.assertIn("test-refresh-status", page)
         self.assertIn("showModal", script)
+        self.assertIn("Promise.all", script)
+        self.assertIn("refreshStatus", script)
         self.assertNotIn("window.prompt", script)
 
     def test_api_schemas_and_web_pages_do_not_expose_rdfid(self):

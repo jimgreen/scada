@@ -95,25 +95,33 @@
     $("#service-poll").disabled = !state.service || !item.running || !["modbus-tcp","modbus-rtu","can"].includes(state.service);
   }
   async function fetchPoints(rtuId) {
-    const result = {};
-    for (const kind of ["yc","yx","yk","yt"]) {
+    async function fetchPointKind(kind) {
+      const result = [];
       const fields = pointFields(kind).join(",");
       const first = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=0&fields=${fields}`);
-      result[kind] = first.items || [];
-      for (let offset = result[kind].length; offset < (first.total || result[kind].length); offset += 500) {
+      result.push(...(first.items || []));
+      for (let offset = result.length; offset < (first.total || result.length); offset += 500) {
         const next = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=${offset}&fields=${fields}`);
-        result[kind].push(...(next.items || []));
+        result.push(...(next.items || []));
         if (!(next.items || []).length) break;
       }
+      return [kind, result];
     }
-    return result;
+    return Object.fromEntries(await Promise.all(["yc","yx","yk","yt"].map(fetchPointKind)));
+  }
+  function refreshStatus(text, active = false, error = false) {
+    const node = $("#test-refresh-status");
+    if (!node) return;
+    node.textContent = text;
+    node.className = `refresh-status${active ? " is-active" : ""}${error ? " is-error" : ""}`;
   }
   async function loadRtu(id) {
     const request = ++state.request;
     state.rtu = state.rtus.find(item => String(item.rtu_id) === String(id)) || null;
-    if (!state.rtu) return;
+    if (!state.rtu) { refreshStatus("请选择 RTU"); return; }
     const protocol = protocolFor(state.rtu.channel_type);
     state.protocol = protocol; state.service = protocol.service;
+    refreshStatus("正在刷新…", true);
     try {
       const [channel, points, communications, status] = await Promise.all([
         api(`/api/rtus/${encodeURIComponent(id)}/channel`), fetchPoints(id), api("/api/monitor/communications"), protocol.service ? api(`/api/${protocol.service}/status`) : Promise.resolve({item:{}})
@@ -137,7 +145,10 @@
         },
       }));
       message("");
-    } catch (error) { if (request === state.request) { state.channel = null; message(error.message, true); } }
+      refreshStatus(`已刷新 ${formatPointTime(Date.now())}`);
+    } catch (error) {
+      if (request === state.request) { state.channel = null; message(error.message, true); refreshStatus("刷新失败", false, true); }
+    }
   }
   async function loadRtus() {
     try {
@@ -149,7 +160,7 @@
       const queryId = new URLSearchParams(location.search).get("rtu_id");
       select.value = state.rtus.some(item => String(item.rtu_id) === queryId) ? queryId : String(state.rtus[0].rtu_id);
       await loadRtu(select.value);
-    } catch (error) { message(error.message, true); }
+    } catch (error) { message(error.message, true); refreshStatus("刷新失败", false, true); }
   }
   async function serviceAction(action) {
     if (!state.service) return;

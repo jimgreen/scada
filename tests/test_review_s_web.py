@@ -146,7 +146,7 @@ vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.
     await node('update-channel').onclick(); await settle();
     observed={channelMessage:node('channel-message').textContent};
   } else if(input.scenario === 'points') {
-        set({'point-kind':'yc','point-no':1,'point-name':'JS point','point-value':1.25});
+        set({'point-no':1,'point-name':'JS point','point-value':1.25});
     await submit('point-form');
     const added=writes.find(r => r.path.endsWith('/points/yc') && r.method === 'POST');
     if(added && added.status === 201) {
