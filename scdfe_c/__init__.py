@@ -1807,6 +1807,14 @@ class ChannelWorker:
                                "CLOSED", "CLOSED_AWAIT_OPEN", "CLOSED_AWAIT_RECONNECT",
                                "OPEN_AWAIT_CLOSED",
                            }]
+        # c104 reports the complete connection-state history generated during
+        # connect().  A normal STARTDT handshake can therefore leave a
+        # CLOSED_AWAIT_OPEN entry in the cursor even though the current link
+        # is already OPEN and collect_once() is receiving data.  Do not turn
+        # that historical/transition state into a persistent process error;
+        # protocol errors and unexpected ASDUs remain actionable diagnostics.
+        if bool(getattr(master, "connected", False)):
+            abnormal_states = []
         if not (new_errors or abnormal_states or new_unexpected):
             return
         details = []

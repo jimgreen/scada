@@ -278,6 +278,56 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(pending_worker._sync_commands(), (1, 0))
         self.assertEqual(pending_master.yk, [(1, False)])
 
+    def test_connected_iec104_ignores_handshake_state_history_but_keeps_protocol_errors(self):
+        from types import SimpleNamespace
+
+        master = SimpleNamespace(
+            connected=True,
+            diagnostics={
+                "protocol_errors": [],
+                "connection_states": [{"state": "CLOSED_AWAIT_OPEN"}],
+                "unexpected_messages": [],
+            },
+        )
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "iec104", "测试站"),
+            log_dir=self.root / "logs",
+        )
+        self.addCleanup(worker._close_command_connection)
+        worker._master = master
+
+        worker._record_master_diagnostics(thread_id=123)
+        self.assertEqual(worker.stats.errors, 0)
+        self.assertEqual(self.store.get_row("fes_rtu_define", [7])["process_error"], "")
+
+        master.diagnostics["protocol_errors"].append("invalid APDU")
+        worker._record_master_diagnostics(thread_id=123)
+        self.assertEqual(worker.stats.errors, 1)
+        self.assertIn("无效报文", self.store.get_row("fes_rtu_define", [7])["process_error"])
+
+    def test_disconnected_iec104_reports_abnormal_link_state(self):
+        from types import SimpleNamespace
+
+        worker = ChannelWorker(
+            self.store, ChannelSpec(7, 70, "iec104", "测试站"),
+            log_dir=self.root / "logs",
+        )
+        self.addCleanup(worker._close_command_connection)
+        worker._master = SimpleNamespace(
+            connected=False,
+            diagnostics={
+                "protocol_errors": [],
+                "connection_states": [{"state": "CLOSED_AWAIT_RECONNECT"}],
+                "unexpected_messages": [],
+            },
+        )
+
+        worker._record_master_diagnostics(thread_id=123)
+        row = self.store.get_row("fes_rtu_define", [7])
+        self.assertEqual(worker.stats.errors, 1)
+        self.assertEqual(row["process_status"], runtime.PROCESS_ERROR)
+        self.assertIn("CLOSED_AWAIT_RECONNECT", row["process_error"])
+
     def test_worker_queues_one_batch_for_a_measurement_cycle(self):
         class Queue:
             def __init__(self):
