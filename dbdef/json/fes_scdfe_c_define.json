@@ -43,7 +43,7 @@
       "eng_name": "process_pid",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },

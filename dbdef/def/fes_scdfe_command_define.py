@@ -20,7 +20,7 @@ class fes_scdfe_command_define:
 
     process_status: Optional[int] = field(default=0, metadata={'chn_name': '进程状态', 'eng_name': 'process_status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
-    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '进程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': '', 'default': 0})
+    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '进程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
     process_start_time: Optional[int] = field(default=0, metadata={'chn_name': '启动时间', 'eng_name': 'process_start_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
 
@@ -28,7 +28,7 @@ class fes_scdfe_command_define:
 
     process_heartbeat_time: Optional[int] = field(default=0, metadata={'chn_name': '心跳时间', 'eng_name': 'process_heartbeat_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
 
-    process_exit_code: Optional[int] = field(default=0, metadata={'chn_name': '退出码', 'eng_name': 'process_exit_code', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': '', 'default': 0})
+    process_exit_code: Optional[int] = field(default=0, metadata={'chn_name': '退出码', 'eng_name': 'process_exit_code', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
     process_error: Optional[str] = field(default='', metadata={'chn_name': '错误信息', 'eng_name': 'process_error', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': '', 'default': ''})
 

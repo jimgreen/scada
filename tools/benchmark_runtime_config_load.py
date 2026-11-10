@@ -34,7 +34,7 @@ PROJECTIONS = {
 }
 
 
-def old_load(connection_factory, rtu_id: int, protocol: str) -> dict:
+def old_load(connection_factory, rtu_id: int, channel_id: int, protocol: str) -> dict:
     result = {}
     with connection_factory() as connection:
         connection.row_factory = sqlite3.Row
@@ -48,19 +48,19 @@ def old_load(connection_factory, rtu_id: int, protocol: str) -> dict:
         connection.row_factory = sqlite3.Row
         table = f"fes_channel_{protocol}_point_define"
         for row in connection.execute(
-            f'SELECT * FROM "{table}" WHERE rtu_id=?', (rtu_id,)
+            f'SELECT * FROM "{table}" WHERE channel_id=?', (channel_id,)
         ):
             result.setdefault(row["kind"], {})
             result[row["kind"]].setdefault("maps", []).append(dict(row))
     return result
 
 
-def new_load(connection: sqlite3.Connection, rtu_id: int, protocol: str) -> dict:
+def new_load(connection: sqlite3.Connection, rtu_id: int, channel_id: int, protocol: str) -> dict:
     result = {}
     table, projection = PROJECTIONS[protocol]
     for row in connection.execute(
-        f'SELECT {projection} FROM "{table}" WHERE rtu_id=? ORDER BY kind,pnt_no',
-        (rtu_id,),
+        f'SELECT {projection} FROM "{table}" WHERE channel_id=? ORDER BY kind,pnt_no',
+        (channel_id,),
     ):
         result.setdefault(row["kind"], {})
         result[row["kind"]].setdefault("maps", []).append(dict(row))
@@ -88,9 +88,9 @@ def main() -> int:
     base.row_factory = sqlite3.Row
     base.execute("PRAGMA query_only=ON")
     cases = [
-        (int(row["rtu_id"]), str(row["channel_type"]))
+        (int(row["rtu_id"]), int(row["channel_id"]), str(row["channel_type"]))
         for row in base.execute(
-            "SELECT rtu_id,channel_type FROM fes_rtu_define "
+            "SELECT rtu_id,channel_id,channel_type FROM fes_rtu_define "
             "WHERE channel_type IN ('bacnet','opc') ORDER BY rtu_id"
         )
     ]
@@ -107,15 +107,15 @@ def main() -> int:
     results = []
     for round_no in range(1, args.rounds + 1):
         for variant in (("old", "new") if round_no % 2 else ("new", "old")):
-            for rtu_id, protocol in cases:
+            for rtu_id, channel_id, protocol in cases:
                 started = time.perf_counter()
                 sample = None
                 for _ in range(args.repeat):
                     if variant == "old":
-                        sample = old_load(connection_factory, rtu_id, protocol)
+                        sample = old_load(connection_factory, rtu_id, channel_id, protocol)
                     else:
                         with connection_factory() as connection:
-                            sample = new_load(connection, rtu_id, protocol)
+                            sample = new_load(connection, rtu_id, channel_id, protocol)
                 elapsed = (time.perf_counter() - started) * 1000
                 results.append({
                     "round": round_no, "variant": variant, "rtu_id": rtu_id,
@@ -125,7 +125,7 @@ def main() -> int:
                     "maps": sum(len(value.get("maps", ())) for value in sample.values()),
                 })
     medians = {}
-    for protocol in sorted({protocol for _, protocol in cases}):
+    for protocol in sorted({protocol for _, _, protocol in cases}):
         selected = [row for row in results if row["protocol"] == protocol]
         medians[protocol] = {}
         for variant in ("old", "new"):

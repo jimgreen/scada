@@ -1,16 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
-
-Table: fes_channel_can_define
-Chinese name: CAN通道参数定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
-"""
-
+"""Generated dataclass definition from dbdef/json/fes_channel_can_define.json."""
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
-
 
 @dataclass
 class fes_channel_can_define:
@@ -18,11 +9,11 @@ class fes_channel_can_define:
 
     __tablename__: ClassVar[str] = 'fes_channel_can_define'
     __table_name_chn__: ClassVar[str] = 'CAN通道参数定义表'
-    __primary_keys__: ClassVar[tuple[str, ...]] = ('rtu_id',)
+    __primary_keys__: ClassVar[tuple[str, ...]] = ('channel_id',)
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(
@@ -83,6 +74,36 @@ class fes_channel_can_define:
     is_extended_id: Optional[int] = field(
         default=None,
         metadata={'chn_name': '扩展帧默认值', 'eng_name': 'is_extended_id', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
+    )
+
+    sample_point: Optional[float] = field(
+        default=87.5,
+        metadata={'chn_name': '仲裁段采样点（百分比）', 'eng_name': 'sample_point', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 87.5},
+    )
+
+    data_sample_point: Optional[float] = field(
+        default=80.0,
+        metadata={'chn_name': '数据段采样点（百分比）', 'eng_name': 'data_sample_point', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 80.0},
+    )
+
+    bitrate_switch: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '默认BRS数据相位切换', 'eng_name': 'bitrate_switch', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
+    )
+
+    restart_on_error: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '错误自动恢复', 'eng_name': 'restart_on_error', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
+    )
+
+    bus_off_recovery_ms: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': 'Bus-off恢复等待（毫秒）', 'eng_name': 'bus_off_recovery_ms', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
+    )
+
+    receive_error_frames: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '接收错误帧', 'eng_name': 'receive_error_frames', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
     )
 
 __all__ = ['fes_channel_can_define']

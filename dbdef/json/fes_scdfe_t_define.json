@@ -4,27 +4,255 @@
     "eng_name": "fes_scdfe_t_define"
   },
   "columns": [
-    {"chn_name": "通道编号", "eng_name": "channel_id", "primary_key": true, "data_type": "int", "disp_type": "INT", "disp_menu": ""},
-    {"chn_name": "英文标识", "eng_name": "code", "primary_key": false, "data_type": "str", "disp_type": "STRING", "disp_menu": ""},
-    {"chn_name": "中文名称", "eng_name": "name", "primary_key": false, "data_type": "str", "disp_type": "STRING", "disp_menu": ""},
-    {"chn_name": "转发规约", "eng_name": "protocol", "primary_key": false, "data_type": "str", "disp_type": "单选菜单", "disp_menu": "转发规约", "allowed_values": ["iec104", "modbus-tcp"]},
-    {"chn_name": "绑定主机", "eng_name": "bind_host", "primary_key": false, "data_type": "str", "disp_type": "STRING", "disp_menu": "", "default": "0.0.0.0"},
-    {"chn_name": "绑定端口", "eng_name": "bind_port", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 2404},
-    {"chn_name": "公共地址", "eng_name": "common_address", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 1},
-    {"chn_name": "默认从站地址", "eng_name": "unit_id", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 1},
-    {"chn_name": "数据扫描周期（毫秒）", "eng_name": "scan_interval_ms", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 200},
-    {"chn_name": "全量上送周期（毫秒）", "eng_name": "report_interval_ms", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 1000},
-    {"chn_name": "日志保留小时数", "eng_name": "log_retention_hours", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 720},
-    {"chn_name": "保存报文", "eng_name": "packet_recording", "primary_key": false, "data_type": "int", "disp_type": "单选菜单", "disp_menu": "二值判断", "default": 0},
-    {"chn_name": "参与自动运行", "eng_name": "process_enable", "primary_key": false, "data_type": "int", "disp_type": "单选菜单", "disp_menu": "二值判断", "default": 0},
-    {"chn_name": "进程状态", "eng_name": "process_status", "primary_key": false, "data_type": "int", "disp_type": "INT", "disp_menu": "", "default": 0},
-    {"chn_name": "进程号", "eng_name": "process_pid", "primary_key": false, "data_type": "int", "disp_type": "LONG", "disp_menu": "", "default": 0},
-    {"chn_name": "启动时间", "eng_name": "process_start_time", "primary_key": false, "data_type": "int", "disp_type": "带毫秒的DATETIME", "disp_menu": "", "default": 0},
-    {"chn_name": "停止时间", "eng_name": "process_stop_time", "primary_key": false, "data_type": "int", "disp_type": "带毫秒的DATETIME", "disp_menu": "", "default": 0},
-    {"chn_name": "心跳时间", "eng_name": "process_heartbeat_time", "primary_key": false, "data_type": "int", "disp_type": "带毫秒的DATETIME", "disp_menu": "", "default": 0},
-    {"chn_name": "退出码", "eng_name": "process_exit_code", "primary_key": false, "data_type": "int", "disp_type": "LONG", "disp_menu": "", "default": 0},
-    {"chn_name": "错误信息", "eng_name": "process_error", "primary_key": false, "data_type": "str", "disp_type": "STRING", "disp_menu": "", "default": ""}
+    {
+      "chn_name": "通道编号",
+      "eng_name": "channel_id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "英文标识",
+      "eng_name": "code",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "中文名称",
+      "eng_name": "name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "转发规约",
+      "eng_name": "protocol",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "转发规约",
+      "allowed_values": [
+        "iec104",
+        "modbus-tcp"
+      ]
+    },
+    {
+      "chn_name": "绑定主机",
+      "eng_name": "bind_host",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": "0.0.0.0"
+    },
+    {
+      "chn_name": "绑定端口",
+      "eng_name": "bind_port",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 2404
+    },
+    {
+      "chn_name": "公共地址",
+      "eng_name": "common_address",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 1
+    },
+    {
+      "chn_name": "默认从站地址",
+      "eng_name": "unit_id",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 1
+    },
+    {
+      "chn_name": "数据扫描周期（毫秒）",
+      "eng_name": "scan_interval_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 200
+    },
+    {
+      "chn_name": "全量上送周期（毫秒）",
+      "eng_name": "report_interval_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 1000
+    },
+    {
+      "chn_name": "日志保留小时数",
+      "eng_name": "log_retention_hours",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 720
+    },
+    {
+      "chn_name": "发送窗口 k",
+      "eng_name": "k",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 12
+    },
+    {
+      "chn_name": "接收确认窗口 w",
+      "eng_name": "w",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 8
+    },
+    {
+      "chn_name": "I 帧确认超时 t1（秒）",
+      "eng_name": "t1",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 15.0
+    },
+    {
+      "chn_name": "S 帧确认周期 t2（秒）",
+      "eng_name": "t2",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 10.0
+    },
+    {
+      "chn_name": "TESTFR 周期 t3（秒）",
+      "eng_name": "t3",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 20.0
+    },
+    {
+      "chn_name": "ASDU 最大长度",
+      "eng_name": "max_asdu_length",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 249
+    },
+    {
+      "chn_name": "保存报文",
+      "eng_name": "packet_recording",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "参与自动运行",
+      "eng_name": "process_enable",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "进程状态",
+      "eng_name": "process_status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "进程号",
+      "eng_name": "process_pid",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "启动时间",
+      "eng_name": "process_start_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "停止时间",
+      "eng_name": "process_stop_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "心跳时间",
+      "eng_name": "process_heartbeat_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "退出码",
+      "eng_name": "process_exit_code",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "错误信息",
+      "eng_name": "process_error",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    }
   ],
-  "unique_keys": [["code"]],
-  "indexes": [["protocol"], ["process_enable"], ["process_status"]]
+  "unique_keys": [
+    [
+      "code"
+    ]
+  ],
+  "indexes": [
+    [
+      "protocol"
+    ],
+    [
+      "process_enable"
+    ],
+    [
+      "process_status"
+    ]
+  ]
 }

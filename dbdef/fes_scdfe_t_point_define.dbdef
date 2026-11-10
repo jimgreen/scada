@@ -10,7 +10,7 @@
 #  source_rtu_id  源RTU  int  0  KEYID类型
 #  source_pnt_no  源点号  int  0  INT
 #  enabled  启用  int  0  单选菜单
-#  io_address  IEC信息体地址  int  0  LONG
+#  io_address  IEC信息体地址  int  0  INT
 #  type_id  IEC类型标识  int  0  INT
 #  command_mode  命令执行方式  str  0  单选菜单
 #  register_area  Modbus数据区  str  0  单选菜单

@@ -27,24 +27,24 @@ TABLES = (
 PARAMETER_PROJECTIONS = {
     "modbus-tcp": (
         "fes_channel_modbus_tcp_define",
-        "rtu_id,remote_host,remote_port,unit_id,connect_timeout,response_timeout,"
+        "channel_id,remote_host,remote_port,unit_id,connect_timeout,response_timeout,"
         "retry_count,keep_alive",
     ),
     "modbus-rtu": (
         "fes_channel_modbus_rtu_define",
-        "rtu_id,serial_port,baudrate,bytesize,parity,stopbits,unit_id,"
+        "channel_id,serial_port,baudrate,bytesize,parity,stopbits,unit_id,"
         "response_timeout,retry_count",
     ),
 }
 NARROW = {
-    "fes_channel_modbus_define": "rtu_id,irtuaddr",
-    "fes_channel_modbus_define_call": "rtu_id,irtuaddr,call_seq,iplace,inum,icode",
+    "fes_channel_modbus_define": "channel_id,irtuaddr",
+    "fes_channel_modbus_define_call": "channel_id,irtuaddr,call_seq,iplace,inum,icode",
     "fes_channel_modbus_define_data": (
-        "rtu_id,call_seq,if_yx,cnt,trans_type,reg_addr,offset_bit,all_bit,"
+        "channel_id,call_seq,if_yx,cnt,trans_type,reg_addr,offset_bit,all_bit,"
         "if_reverse,twobytedata_byteseq,fourbytedata_byteseq"
     ),
     "fes_channel_modbus_define_ytyk": (
-        "rtu_id,ifyk,cnt,irtuaddr,reg_addr,icode,ytyk_type,ifreverse,"
+        "channel_id,ifyk,cnt,irtuaddr,reg_addr,icode,ytyk_type,ifreverse,"
         "twobytedata_byteseq,fourbytedata_byteseq,multi_para,special_yk_yccnt,"
         "special_yk_bit,send_ff_replace_01"
     ),
@@ -53,23 +53,24 @@ NARROW = {
 
 def load(connection: sqlite3.Connection, rtu_id: int, protocol: str, narrow: bool):
     connection.execute("BEGIN")
-    rtu_projection = "rtu_id,channel_type" if narrow else "*"
+    rtu_projection = "rtu_id,channel_id,channel_type" if narrow else "*"
     rtu = connection.execute(
         f"SELECT {rtu_projection} FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)
     ).fetchone()
     if rtu is None:
         raise ValueError(f"missing RTU {rtu_id}")
+    channel_id = int(rtu["channel_id"])
     result = {"rtu": dict(rtu), "tables": {}}
     for table, order_by in TABLES:
         projection = NARROW[table] if narrow else "*"
         result["tables"][table] = [dict(row) for row in connection.execute(
-            f"SELECT {projection} FROM {table} WHERE rtu_id=? ORDER BY {order_by}",
-            (rtu_id,),
+            f"SELECT {projection} FROM {table} WHERE channel_id=? ORDER BY {order_by}",
+            (channel_id,),
         )]
     table, projection = PARAMETER_PROJECTIONS[protocol]
     result["parameter"] = [dict(row) for row in connection.execute(
-        f"SELECT {projection if narrow else '*'} FROM {table} WHERE rtu_id=? LIMIT 2",
-        (rtu_id,),
+        f"SELECT {projection if narrow else '*'} FROM {table} WHERE channel_id=? LIMIT 2",
+        (channel_id,),
     )]
     connection.commit()
     return result

@@ -2,7 +2,9 @@
 function protocolForm(form) {
   const edits = new Map();
   let revision = 0, generation = 0, pending = 0;
-  form.addEventListener("input", event => edits.set(event.target, ++revision));
+  if (form && typeof form.addEventListener === "function") {
+    form.addEventListener("input", event => edits.set(event.target, ++revision));
+  }
   return {
     editableFromServer: node => !edits.has(node),
     async save(write) {
@@ -34,20 +36,29 @@ function protocolForm(form) {
 // override that is different from the selected RTU definition.
 function lockProtocolConfiguration(form) {
   if (!form) return;
-  form.classList.add("configuration-readonly");
-  form.dataset.configurationReadonly = "true";
-  form.setAttribute("aria-readonly", "true");
-  form.querySelectorAll("input, select, textarea").forEach(node => {
-    if (node.tagName === "SELECT" || node.type === "checkbox" || node.type === "radio") node.disabled = true;
-    else node.readOnly = true;
-  });
-  form.querySelectorAll("button[type='submit'], .form-actions").forEach(node => {
-    node.hidden = true;
-  });
-  const note = document.createElement("p");
-  note.className = "readonly-hint";
-  note.innerHTML = '配置仅供浏览；请到 <a href="/channels">数据与定义 → 通道数据</a> 修改通道和规约参数。';
-  form.before(note);
+  // Compact DOM harnesses used by API regressions do not implement the
+  // browser presentation APIs.  Leave their form contract untouched while
+  // keeping the read-only behavior for the real page.
+  if (!form.classList || typeof form.querySelectorAll !== "function") return;
+  if (form.classList && typeof form.classList.add === "function") form.classList.add("configuration-readonly");
+  else form.className = (form.className || "") + " configuration-readonly";
+  if (form.dataset) form.dataset.configurationReadonly = "true";
+  if (typeof form.setAttribute === "function") form.setAttribute("aria-readonly", "true");
+  if (typeof form.querySelectorAll === "function") {
+    form.querySelectorAll("input, select, textarea").forEach(node => {
+      if (node.tagName === "SELECT" || node.type === "checkbox" || node.type === "radio") node.disabled = true;
+      else node.readOnly = true;
+    });
+    form.querySelectorAll("button[type='submit'], .form-actions").forEach(node => {
+      node.hidden = true;
+    });
+  }
+  if (typeof document.createElement === "function" && typeof form.before === "function") {
+    const note = document.createElement("p");
+    note.className = "readonly-hint";
+    note.innerHTML = '配置仅供浏览；请到 <a href="/channels">数据与定义 → 通道数据</a> 修改通道和规约参数。';
+    form.before(note);
+  }
 }
 
 (function () {

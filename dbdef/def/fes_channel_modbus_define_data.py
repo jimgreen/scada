@@ -22,7 +22,7 @@ class fes_channel_modbus_define_data:
 
     id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(
@@ -35,9 +35,9 @@ class fes_channel_modbus_define_data:
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     call_seq: Optional[int] = field(
@@ -57,7 +57,7 @@ class fes_channel_modbus_define_data:
 
     trans_type: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '解释方式', 'eng_name': 'trans_type', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': 'MODBUS数据解析类型'},
+        metadata={'chn_name': '解释方式（1..11）', 'eng_name': 'trans_type', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': 'MODBUS数据解析类型', 'allowed_values': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]},
     )
 
     reg_addr: Optional[int] = field(
@@ -82,12 +82,12 @@ class fes_channel_modbus_define_data:
 
     twobytedata_byteseq: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '两字节数据字节顺序', 'eng_name': 'twobytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
+        metadata={'chn_name': '两字节数据字节顺序', 'eng_name': 'twobytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': '', 'allowed_values': [0, 1]},
     )
 
     fourbytedata_byteseq: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '四字节数据字节顺序', 'eng_name': 'fourbytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
+        metadata={'chn_name': '四字节数据字节顺序', 'eng_name': 'fourbytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': '', 'allowed_values': [0, 1, 2, 3]},
     )
 
 __all__ = ['fes_channel_modbus_define_data']

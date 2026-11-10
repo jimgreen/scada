@@ -37,6 +37,7 @@ from core.web_request import RequestBodyMixin
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
+from core.runtime_status import runtime_status_rows
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scada.web")
@@ -157,6 +158,54 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return rtu_id, "parameters" if len(parts) == 4 else parts[4]
         return None
 
+    def _packet_recording(self, parts, query, method):
+        if parts[:2] != ["api", "packet-recording"]:
+            return False
+        if query:
+            raise ApiError(400, "报文记录策略接口不接受查询参数")
+        from core.packet_logging import packet_log_switch, packet_recording_state
+        switch = packet_log_switch(self.store.db_path, "s")
+        if len(parts) == 2:
+            if method == "GET":
+                return self._json(200, packet_recording_state(self.store.db_path, "s"))
+            if method != "PUT":
+                raise ApiError(405, "报文记录策略只支持 GET/PUT")
+            body = self._body()
+            if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+                raise ApiError(400, "enabled 必须是布尔值，且不能包含其他字段")
+            switch.set_enabled(body["enabled"])
+            return self._json(200, packet_recording_state(self.store.db_path, "s"))
+        if len(parts) == 3:
+            raw_channel = parts[2]
+        elif len(parts) == 4 and parts[2] == "channels":
+            raw_channel = parts[3]
+        else:
+            raise ApiError(404, "路径不存在", code="not_found")
+        try:
+            channel_id = int(raw_channel)
+        except ValueError as exc:
+            raise ApiError(400, "channel_id 必须是整数") from exc
+        if channel_id <= 0:
+            raise ApiError(400, "channel_id 必须是正整数")
+        if method == "GET":
+            try:
+                item = switch.channel_snapshot(channel_id)
+            except KeyError as exc:
+                raise ApiError(404, str(exc), code="not_found") from exc
+            return self._json(200, item)
+        if method != "PUT":
+            raise ApiError(405, "通道报文记录策略只支持 GET/PUT")
+        body = self._body()
+        if set(body) != {"enabled"} or (body["enabled"] is not None and type(body["enabled"]) is not bool):
+            raise ApiError(400, "enabled 必须是布尔值或 null，且不能包含其他字段")
+        try:
+            switch.channel_snapshot(channel_id)
+            switch.set_channel(channel_id, body["enabled"])
+            item = switch.channel_snapshot(channel_id)
+        except KeyError as exc:
+            raise ApiError(404, str(exc), code="not_found") from exc
+        return self._json(200, item)
+
     def _service_map(self):
         return {
             "iec104": self.server.iec104_service,
@@ -213,16 +262,42 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts == ["api", "monitor", "communications"]:
             if method != "GET" or query:
                 raise ApiError(405, "通信监控接口只支持 GET")
+            runtime_by_channel = {
+                int(row["channel_id"]): row
+                for row in runtime_status_rows(self.store, service_name="scdfe_s")
+            }
+            # Resolve every RTU-to-channel relation in one read.  The monitor
+            # is polled every five seconds; opening one SQLite read connection
+            # per protocol service scales poorly once several RTUs are
+            # configured.
+            with self.store.connection() as connection:
+                channel_by_rtu = {
+                    int(row[0]): int(row[1])
+                    for row in connection.execute(
+                        "SELECT rtu_id, channel_id FROM fes_rtu_define"
+                    )
+                }
             items = []
             for slug, service in channel_services.items():
                 status = service.status()
+                rtu_id = status.get("rtu_id", status.get("config", {}).get("effective_rtu_id"))
+                runtime = runtime_by_channel.get(channel_by_rtu.get(int(rtu_id))) if rtu_id is not None else None
                 items.append({"name": slug, "label": status.get("label", slug),
                               "running": bool(status.get("running")),
-                              "rtu_id": status.get("rtu_id", status.get("config", {}).get("effective_rtu_id")),
+                              "rtu_id": rtu_id,
                               "connections": status.get("connections", []),
                               "open_connections": status.get("open_connections", 0),
                               "point_count": status.get("point_count", 0),
-                              "last_error": status.get("last_error")})
+                              "last_error": status.get("last_error"),
+                              "rx_count": status.get("rx_count", 0),
+                              "tx_count": status.get("tx_count", 0),
+                              "error_count": status.get("error_count", 0),
+                              "reconnect_count": status.get("reconnect_count", 0),
+                              "last_rx_time": status.get("last_rx_time", 0),
+                              "last_tx_time": status.get("last_tx_time", 0),
+                              "last_error_time": status.get("last_error_time", 0),
+                              "diagnostic": status.get("diagnostic", {}),
+                              "runtime_status": runtime})
             return self._json(200, {"items": items, "total": len(items)})
         if parts == ["api", "monitor", "logs"]:
             allowed = {"limit", "service", "level", "keyword", "record"}
@@ -250,6 +325,38 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                     if keyword and keyword.lower() not in str(row.get("message", "")).lower():
                         continue
                     items.append(row)
+            # A channel service owns the durable file, while the historical
+            # protocol singleton may still be the object selected by this
+            # aggregate endpoint.  Fall back to the bounded file search so a
+            # keyword query sees packets and runtime records emitted by the
+            # live channel process immediately.
+            if keyword and not items:
+                from core.log_paths import packet_log_directory
+                from scdfe_c.web.log_query import search_logs
+                try:
+                    durable = search_logs(
+                        self.store.db_path.parent / "logs",
+                        # Runtime files from older channel workers may carry
+                        # a packet line with an INFO header.  A keyword
+                        # monitor search should still surface that durable
+                        # evidence; an explicit packet view remains strict.
+                        {"q": keyword, "record": "" if record == "runtime" else record,
+                         "level": level,
+                         "limit": str(limit)},
+                        family="s",
+                        packet_directory=packet_log_directory(self.store.db_path.parent / "logs"),
+                    )
+                except ValueError as exc:
+                    raise ApiError(400, str(exc)) from exc
+                for hit in durable.get("items", []):
+                    process = str(hit.get("process") or "")
+                    items.append({
+                        "service": process.removeprefix("scdfe_s-"),
+                        "time": hit.get("time"),
+                        "level": hit.get("level"),
+                        "message": hit.get("text", ""),
+                        "filename": hit.get("filename"),
+                    })
             items.sort(key=lambda row: row.get("time", ""), reverse=True)
             return self._json(200, {"items": items[:limit], "total": len(items[:limit])})
         raise ApiError(404, "监控接口路径不存在", code="not_found")
@@ -457,15 +564,24 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _list(self, table, query, scope):
         columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
+        if "rtu_id" in query and "rtu_id" not in columns and "channel_id" in columns:
+            query = dict(query)
+            query["channel_id"] = self.store.channel_id_for_rtu(query.pop("rtu_id"))
         reserved = {"q", "limit", "offset", "sort", "order", "fields"}
         unknown = set(query) - reserved - set(columns)
         if unknown:
             raise ApiError(400, "未知查询参数", details=sorted(unknown))
         where = {key: value for key, value in query.items() if key not in reserved}
         if scope is not None:
-            if "rtu_id" in where and self.store._coerce(where["rtu_id"], columns["rtu_id"]) != scope:
-                raise ApiError(400, "RTU 过滤条件与路径不一致")
-            where["rtu_id"] = scope
+            if "rtu_id" in columns:
+                if "rtu_id" in where and self.store._coerce(where["rtu_id"], columns["rtu_id"]) != scope:
+                    raise ApiError(400, "RTU 过滤条件与路径不一致")
+                where["rtu_id"] = scope
+            elif "channel_id" in columns and table.startswith("fes_channel_"):
+                channel_id = self.store.channel_id_for_rtu(scope)
+                if "channel_id" in where and int(where["channel_id"]) != channel_id:
+                    raise ApiError(400, "通道过滤条件与路径不一致")
+                where["channel_id"] = channel_id
         try:
             limit, offset = int(query.get("limit", "25")), int(query.get("offset", "0"))
         except ValueError as exc:
@@ -481,6 +597,8 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if self._packet_recording(parts, query, method) is not False:
+            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -506,7 +624,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return
         if method == "GET":
             if not parts:
-                return self._static("test.html")
+                return self._static("index.html")
             if parts == ["test"]:
                 return self._static("test.html")
             if parts == ["iec104"]:
@@ -623,10 +741,16 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if method == "POST" and key is None:
             body = self._body()
             if scope is not None:
-                col = next(c for c in self.store.schema(table)["columns"] if c["eng_name"] == "rtu_id")
-                if "rtu_id" in body and self.store._coerce(body["rtu_id"], col) != scope:
-                    raise ApiError(400, "路径中的 RTU 与请求体不一致")
-                body["rtu_id"] = scope
+                schema_columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
+                if "rtu_id" in schema_columns:
+                    if "rtu_id" in body and self.store._coerce(body["rtu_id"], schema_columns["rtu_id"]) != scope:
+                        raise ApiError(400, "路径中的 RTU 与请求体不一致")
+                    body["rtu_id"] = scope
+                elif "channel_id" in schema_columns and table.startswith("fes_channel_"):
+                    channel_id = self.store.channel_id_for_rtu(scope)
+                    if "channel_id" in body and int(body["channel_id"]) != channel_id:
+                        raise ApiError(400, "路径中的 RTU 与请求体不一致")
+                    body["channel_id"] = channel_id
             return self._json(201, {"item": self.store.create_row(table, body)})
         if method == "PATCH" and key is not None:
             body = self._body()
@@ -744,7 +868,9 @@ class ScadaHTTPServer(ThreadingHTTPServer):
                 ).fetchall()
                 iec_ports = {
                     int(item[0]): item[1] for item in con.execute(
-                        "SELECT rtu_id, remote_port FROM fes_channel_iec104_define"
+                        "SELECT r.rtu_id, p.remote_port "
+                        "FROM fes_rtu_define r JOIN fes_channel_iec104_define p "
+                        "ON p.channel_id=r.channel_id"
                     ) if item[1]
                 }
             active = set()

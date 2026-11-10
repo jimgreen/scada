@@ -170,6 +170,7 @@ class IEC104DoubleRegressionTests(unittest.TestCase):
             finally:
                 client.close()
                 server.stop()
+                store.close()
 
 
 if __name__ == '__main__':

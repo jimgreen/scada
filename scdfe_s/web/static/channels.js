@@ -124,13 +124,17 @@
   function parameterInput(column, value) {
     const name = column.eng_name, label = column.chn_name || name;
     if (column.primary_key || name === "rtu_id") return "";
+    const typeLabel = String(column.disp_type || (column.data_type === "int" ? "INT" : column.data_type || "")) === "LONG"
+      ? "INT"
+      : String(column.disp_type || (column.data_type === "int" ? "INT" : column.data_type || ""));
+    const fieldLabel = `${esc(label)}<small>${esc(name)}${typeLabel ? ` · ${esc(typeLabel)}` : ""}</small>`;
     const menuName = String(column.disp_menu || "");
-    if (menuName.includes("二值")) return `<label>${esc(label)}<select data-parameter-field="${esc(name)}"><option value="0"${Number(value) === 0 ? " selected" : ""}>关闭 / 0</option><option value="1"${Number(value) === 1 ? " selected" : ""}>开启 / 1</option></select></label>`;
-    if (menuName.includes("校验方式")) return `<label>${esc(label)}<select data-parameter-field="${esc(name)}">${["N","E","O"].map(option => `<option value="${option}"${String(value ?? "N") === option ? " selected" : ""}>${option}</option>`).join("")}</select></label>`;
+    if (menuName.includes("二值")) return `<label>${fieldLabel}<select data-parameter-field="${esc(name)}"><option value="0"${Number(value) === 0 ? " selected" : ""}>关闭 / 0</option><option value="1"${Number(value) === 1 ? " selected" : ""}>开启 / 1</option></select></label>`;
+    if (menuName.includes("校验方式")) return `<label>${fieldLabel}<select data-parameter-field="${esc(name)}">${["N","E","O"].map(option => `<option value="${option}"${String(value ?? "N") === option ? " selected" : ""}>${option}</option>`).join("")}</select></label>`;
     const type = column.data_type === "int" || column.data_type === "float" ? "number" : "text";
     const step = column.data_type === "float" ? " step=\"any\"" : "";
     const current = value == null ? (column.default ?? "") : value;
-    return `<label>${esc(label)}<input data-parameter-field="${esc(name)}" type="${type}"${step} value="${esc(current)}"></label>`;
+    return `<label>${fieldLabel}<input data-parameter-field="${esc(name)}" type="${type}"${step} value="${esc(current)}"></label>`;
   }
   function renderParameters(info) {
     const editor = $("#parameter-editor"), fields = $("#parameter-fields");

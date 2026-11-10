@@ -33,7 +33,7 @@
       "eng_name": "pnt_no",
       "primary_key": true,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": ""
     },
     {

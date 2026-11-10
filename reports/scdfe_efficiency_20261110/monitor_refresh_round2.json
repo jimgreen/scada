@@ -1,0 +1,118 @@
+{
+  "generated_at": "2026-11-10T22:00:00+08:00",
+  "workdir": "D:/codex/scada",
+  "scope": [
+    "scdfe_c",
+    "scdfe_s",
+    "scdfe_t",
+    "Web/HMI"
+  ],
+  "changes": [
+    {
+      "module": "scdfe_s",
+      "change": "通信监控聚合接口一次读取 RTU 到 channel_id 的映射；前端移除聚合状态后的重复规约状态请求",
+      "files": [
+        "scdfe_s/web/server.py",
+        "scdfe_s/web/static/monitor.js"
+      ]
+    },
+    {
+      "module": "scdfe_t",
+      "change": "通信页改用 /api/trans/status，并展示连接、收发/错误、心跳和诊断；轮询互斥且相同表格内容不重复重绘",
+      "files": [
+        "scdfe_t/web/static/communication.html",
+        "scdfe_t/web/static/communication.js"
+      ]
+    }
+  ],
+  "benchmarks": [
+    {
+      "module": "scdfe_s",
+      "case": "通信监控一次刷新请求序列",
+      "before": {
+        "median_ms": 5.9003,
+        "requests_per_cycle": 3,
+        "bytes_per_cycle": 41891.5,
+        "sequence": [
+          "GET /api/rtus",
+          "GET /api/monitor/communications",
+          "GET /api/modbus-tcp/status"
+        ]
+      },
+      "after": {
+        "median_ms": 5.2208,
+        "requests_per_cycle": 2,
+        "bytes_per_cycle": 41267.0,
+        "sequence": [
+          "GET /api/rtus",
+          "GET /api/monitor/communications"
+        ]
+      },
+      "latency_reduction_percent": 11.52,
+      "request_reduction_percent": 33.33,
+      "payload_reduction_percent": 1.49
+    },
+    {
+      "module": "scdfe_t",
+      "case": "通信监控状态接口",
+      "before": {
+        "median_ms": 3.9127,
+        "requests_per_cycle": 1,
+        "bytes_per_cycle": 11024.0,
+        "endpoint": "GET /api/trans/processes"
+      },
+      "after": {
+        "median_ms": 0.8977,
+        "requests_per_cycle": 1,
+        "bytes_per_cycle": 21599.0,
+        "endpoint": "GET /api/trans/status"
+      },
+      "latency_reduction_percent": 77.05,
+      "payload_change_percent": 95.92,
+      "payload_change_reason": "新接口同时返回运行计数和诊断快照"
+    },
+    {
+      "module": "scdfe_c",
+      "case": "采集与 YC 缩放热路径",
+      "status": "previous_same_workspace_baseline",
+      "changed_yc_scaling": {
+        "before_ms": 1838.713,
+        "after_ms": 1745.693,
+        "reduction_percent": 5.06
+      },
+      "stable_yc_scaling": {
+        "before_ms": 1010.713,
+        "after_ms": 961.835,
+        "reduction_percent": 4.84
+      },
+      "acquisition_pipeline": {
+        "before_ms": 5219.577,
+        "after_ms": 952.245,
+        "reduction_percent": 81.76
+      },
+      "source": "reports/scdfe_efficiency_20261110/comparison.json"
+    }
+  ],
+  "method": {
+    "database": "isolated temporary SQLite databases",
+    "channels": 20,
+    "http": "HTTP/1.1 persistent connection",
+    "rounds": 12,
+    "discarded_warmup_rounds": 2,
+    "metric": "median wall-clock time per complete refresh sequence"
+  },
+  "verification": {
+    "focused_tests": "20 passed",
+    "full_tests": "515 passed, 1 skipped, 403 subtests passed",
+    "compileall": "passed",
+    "node_syntax": "scdfe_c/scdfe_s/scdfe_t touched JavaScript passed",
+    "git_diff_check": "passed",
+    "browser_smoke": "isolated S/T pages rendered; S showed aggregated status and T showed connection/counters/diagnostics",
+    "production_restart": "not performed; only temporary ports 18878 and 18879 were used"
+  },
+  "limitations": [
+    "S/T measurements are local Web/HMI and SQLite measurements, not field TCP, serial, CAN or device I/O measurements.",
+    "The T after payload is intentionally larger because it includes diagnostic data; latency is the relevant comparison for the richer page.",
+    "C figures are the verified same-workspace baseline from the earlier optimization round; this round changed S/T HMI paths."
+  ]
+}

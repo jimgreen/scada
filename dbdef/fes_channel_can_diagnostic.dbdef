@@ -1,0 +1,32 @@
+<table_info>
+@   table_id     table_name_eng     table_name_chn     app_type     max_record_num     down_load     is_model     module_name
+#   731         fes_channel_can_diagnostic          CAN运行诊断快照表           public/fes/scada 200 1 0 scada
+</table_info>
+<fes_channel_can_diagnostic>
+@   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key     app_type     display_type     menu_name
+#   1             channel_id                         所属通道                          INT       8            1        public/fes/scada KEYID类型
+#   2             bus_state                      总线状态                           STRING     256          0        public/fes/scada STRING         CAN总线状态
+#   3             error_state                    错误状态                           STRING     256          0        public/fes/scada STRING
+#   4             tx_error_count                 发送错误计数                         INT       8            0        public/fes/scada INT
+#   5             rx_error_count                 接收错误计数                         INT       8            0        public/fes/scada INT
+#   6             error_frame_count              错误帧数                           INT       8            0        public/fes/scada INT
+#   7             ack_error_count                ACK错误数                         INT       8            0        public/fes/scada INT
+#   8             crc_error_count                CRC错误数                         INT       8            0        public/fes/scada INT
+#   9             stuff_error_count              位填充错误数                         INT       8            0        public/fes/scada INT
+#   10            bit_error_count                位错误数                           INT       8            0        public/fes/scada INT
+#   11            form_error_count               格式错误数                          INT       8            0        public/fes/scada INT
+#   12            bus_load_pct                   总线负载率（百分比）                     FLOAT      8            0        public/fes/scada FLOAT
+#   13            avg_latency_ms                 平均报文延迟（毫秒）                     FLOAT      8            0        public/fes/scada FLOAT
+#   14            max_latency_ms                 最大报文延迟（毫秒）                     FLOAT      8            0        public/fes/scada FLOAT
+#   15            dropped_frame_count            丢帧数                            INT       8            0        public/fes/scada INT
+#   16            received_frame_count           接收报文数                          INT       8            0        public/fes/scada INT
+#   17            transmitted_frame_count        发送报文数                          INT       8            0        public/fes/scada INT
+#   18            auto_recovery_count            自动恢复次数                         INT       8            0        public/fes/scada INT
+#   19            temperature_c                  采集温度（摄氏度）                      FLOAT      8            0        public/fes/scada FLOAT
+#   20            emi_level                      电磁干扰指标                         FLOAT      8            0        public/fes/scada FLOAT
+#   21            termination_ohms               终端电阻（欧姆）                       FLOAT      8            0        public/fes/scada FLOAT
+#   22            waveform_ref                   物理层波形引用                        STRING     256          0        public/fes/scada STRING
+#   23            last_error                     最后错误                           STRING     256          0        public/fes/scada STRING
+#   24            last_error_time                最后错误时间                         INT       8            0        public/fes/scada INT
+#   25            sampled_at                     采样时间                           INT       8            0        public/fes/scada INT
+</fes_channel_can_diagnostic>

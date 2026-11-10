@@ -40,7 +40,10 @@ with ModbusTcpMaster("127.0.0.1", port=1502, unit_id=1, rtu_id=7) as master:
     master.write_single_coil(0, True)
 ```
 
-地址使用线上零基地址。旧 `scdfe_c/CRtuModbusTcpEx.cpp` 的 `irtuaddr` 是从站地址，`rtu_id` 只用于点表筛选。
+地址默认使用线上零基地址。若设备文档使用 1、10001、30001 或 40001 等参考地址，
+在对应召唤、遥调遥控或 `scdfe_t` 转发点定义中填写 `address_base`；运行时会在发包前
+转换为线上零基地址。旧 `scdfe_c/CRtuModbusTcpEx.cpp` 的 `irtuaddr` 是从站地址，
+`rtu_id` 只用于点表筛选。
 
 `ModbusTcpMaster` 是面向主站任务的入口，支持配置驱动采集和周期轮询：
 

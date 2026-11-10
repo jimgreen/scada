@@ -16,6 +16,7 @@ from typing import Any
 from weakref import WeakValueDictionary
 
 from core.scdfe_control import InstanceLock
+from core.runtime_status import runtime_status_rows, state_for
 from scdfe_c.web.process_control import runtime_python
 from scdfe_c.web.service import ApiError, DEFAULT_DB, KIND_TABLES, SCHEMA_DIR, ScadaStore
 
@@ -122,6 +123,42 @@ class TransStore:
         with self.store.connection() as con:
             rows = con.execute(f"SELECT * FROM {CHANNEL_TABLE} ORDER BY channel_id").fetchall()
         return self.store._public_rows(rows, columns)
+
+    def runtime_status(self) -> dict[str, Any]:
+        """Return transmission channels with one uniform live-status snapshot."""
+        items = self.channels()
+        snapshots = {
+            int(row["channel_id"]): row
+            for row in runtime_status_rows(self.store, service_name="scdfe_t")
+        }
+        for item in items:
+            channel_id = int(item["channel_id"])
+            snapshot = snapshots.get(channel_id)
+            if snapshot is None:
+                process_status = int(item.get("process_status") or 0)
+                error = str(item.get("process_error") or "")
+                snapshot = {
+                    "service_name": "scdfe_t",
+                    "channel_id": channel_id,
+                    "protocol": item.get("protocol", ""),
+                    "channel_name": item.get("name") or item.get("code") or "",
+                    "state": state_for(process_status, process_status == 2, error),
+                    "running": int(process_status == 2),
+                    "connection_state": "unknown",
+                    "process_status": process_status,
+                    "process_pid": item.get("process_pid", 0),
+                    "process_start_time": item.get("process_start_time", 0),
+                    "process_stop_time": item.get("process_stop_time", 0),
+                    "process_heartbeat_time": item.get("process_heartbeat_time", 0),
+                    "process_error": error,
+                    "rx_count": 0, "tx_count": 0, "error_count": 0,
+                    "dropped_count": 0, "reconnect_count": 0,
+                    "last_rx_time": 0, "last_tx_time": 0,
+                    "last_error_time": 0, "last_error": error,
+                    "diagnostic_json": "{}", "diagnostic": {}, "sampled_at": 0,
+                }
+            item["runtime_status"] = snapshot
+        return {"items": items, "total": len(items)}
 
     def get_channel(self, channel_id: Any) -> dict[str, Any]:
         return self.store.get_row(CHANNEL_TABLE, self._channel_key(channel_id))
@@ -500,7 +537,10 @@ class TransStore:
         return rows
 
     def logs(self, channel_id: Any | None = None, limit: int = 200, *, record: str = "runtime") -> dict[str, Any]:
-        return self._logs_for_record(channel_id, limit, record)
+        # Keep the historical ``TransStore.logs(stub)`` call usable for
+        # read-only log checks.  The stub only needs a resolved db_path; the
+        # normal instance path still dispatches through its bound method.
+        return TransStore._logs_for_record(self, channel_id, limit, record)
 
     def _logs_for_record(self, channel_id: Any | None, limit: int, record: str) -> dict[str, Any]:
         if record not in {"runtime", "packet"}:

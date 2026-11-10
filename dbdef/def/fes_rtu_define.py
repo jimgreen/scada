@@ -62,7 +62,7 @@ class fes_rtu_define:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '通道标识', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': '', 'required': True},
+        metadata={'chn_name': '通道标识', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'required': True},
     )
 
     channel_type: Optional[str] = field(
@@ -88,7 +88,7 @@ class fes_rtu_define:
 
     process_pid: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     process_start_time: Optional[int] = field(

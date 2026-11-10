@@ -95,8 +95,13 @@ class WebTests(unittest.TestCase):
     def test_catalog_and_empty_application(self):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
-        self.assertEqual(len(body['items']), 26)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 432)
+        self.assertEqual(len(body['items']), 32)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 594)
+        self.assertTrue({
+            'fes_channel_can_diagnostic', 'fes_channel_can_frame_define',
+            'fes_channel_can_j1939_define', 'fes_channel_can_uds_define',
+            'fes_channel_canopen_service_define', 'fes_channel_runtime_status',
+        }.issubset({s['head']['eng_name'] for s in body['items']}))
         mapping = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_scdfe_t_point_define')
         self.assertNotIn('source_kind', {column['eng_name'] for column in mapping['columns']})
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')
@@ -213,11 +218,28 @@ class WebTests(unittest.TestCase):
             name = schema['head']['eng_name']
             if name in {'fes_rtu_define', 'fes_process_define', 'fes_scdfe_c_define'}:
                 continue
-            row = {c['eng_name']: 1 for c in schema['columns'] if c['primary_key']}
+            row = {}
+            for column in schema['columns']:
+                if not column['primary_key']:
+                    continue
+                if column.get('allowed_values'):
+                    value = column['allowed_values'][0]
+                elif column['data_type'] == 'str':
+                    value = f"test_{column['eng_name']}"
+                else:
+                    value = 1
+                row[column['eng_name']] = value
             if any(c['eng_name'] == 'rtu_id' for c in schema['columns']):
                 row['rtu_id'] = 1
             if 'kind' in row:
                 row['kind'] = 'yc'
+            for column in schema['columns']:
+                column_name = column['eng_name']
+                if column.get('required') and column_name not in row:
+                    if column.get('allowed_values'):
+                        row[column_name] = column['allowed_values'][0]
+                    else:
+                        row[column_name] = 'test' if column['data_type'] == 'str' else 1
             # scdfe_t mappings deliberately require an explicit source point;
             # keep the generic schema CRUD test representative of the current
             # validation contract instead of relying on removed forward-era
@@ -315,7 +337,7 @@ class WebTests(unittest.TestCase):
         })
         self.assertEqual(status, 201, body)
         self.assertGreater(body['item']['id'], 0)
-        self.assertEqual(body['item']['rtu_id'], 8)
+        self.assertEqual(body['item']['channel_id'], 8)
         self.assertEqual(self.call('/api/rtus/8/channel', 'PATCH', {
             'channel_type': 'modbus-tcp',
         })[0], 409)
@@ -347,7 +369,8 @@ class WebTests(unittest.TestCase):
             status, body = self.call(f'/api/rtus/{rtu_id}/channel/parameters', 'POST', values)
             self.assertEqual(status, 201, body)
             self.assertIsInstance(body['item']['id'], int)
-            self.assertEqual(body['item']['rtu_id'], rtu_id)
+            self.assertEqual(body['item']['channel_id'], rtu_id * 10)
+            self.assertNotIn('rtu_id', body['item'])
         self.call('/api/rtus', 'POST', {
             'rtu_id': 12, 'channel_id': 120, 'channel_type': 'opc',
         })
@@ -365,13 +388,50 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.call('/not-api/rtus/1', 'DELETE')[0], 404)
         self.assertEqual(self.call('/api/rtus/1/points/yc/1/extra')[0], 404)
 
-    def test_removed_channel_routes_and_legacy_table_names_are_not_aliases(self):
-        # RTU and channel are a single resource now.  Removed routes and the
-        # former protocol table names must not resolve through compatibility
-        # aliases.
+    def test_channel_directory_uses_protocol_type_and_channel_id(self):
+        status, body = self.call('/api/channels', 'POST', {
+            'channel_id': 1, 'channel_type': 'iec104',
+            'code': 'C104', 'name': 'IEC 通道',
+        })
+        self.assertEqual(status, 201, body)
+        status, body = self.call('/api/channels', 'POST', {
+            'channel_id': 1, 'channel_type': 'modbus-tcp',
+            'code': 'C1', 'name': 'Modbus 通道',
+        })
+        self.assertEqual(status, 201, body)
+        self.assertEqual(self.call('/api/channels', 'POST', {
+            'channel_id': 1, 'channel_type': 'iec104',
+        })[0], 409)
+        page = self.call(
+            '/api/channels?limit=1&offset=1&sort=channel_id&order=desc'
+            '&fields=channel_id,channel_type,code,name'
+        )[1]
+        self.assertEqual((page['total'], page['items'][0]['channel_type']), (2, 'modbus-tcp'))
+        self.assertEqual(self.call('/api/channels?q=Modbus')[1]['total'], 1)
+        self.assertEqual(
+            self.call('/api/channels/iec104/1')[1]['item']['channel_type'],
+            'iec104',
+        )
+        self.assertEqual(self.call('/api/channels/1')[0], 409)
+        self.assertEqual(self.call('/api/channels/iec104/1/parameters')[0], 200)
+        status, body = self.call('/api/channels/iec104/1/parameters', 'PATCH', {
+            'rtu_addr': 1,
+        }, {'If-Match': str(self.call('/api/channels/iec104/1/parameters')[1]['item']['_version'])})
+        self.assertEqual(status, 200, body)
+        status, body = self.call('/api/rtus', 'POST', {
+            'rtu_id': 7, 'channel_id': 1, 'channel_type': 'iec104',
+        })
+        self.assertEqual(status, 201, body)
+        self.assertEqual(self.call('/api/rtus', 'POST', {
+            'rtu_id': 8, 'channel_id': 1, 'channel_type': 'can',
+        })[0], 201)
+        item = self.call('/api/channels/iec104/1')[1]['item']
+        self.assertEqual((item['rtu_id'], item['parameter_ready']), (7, 1))
+        self.assertEqual(self.call('/api/channels/iec104/1', 'DELETE')[0], 409)
+        self.assertEqual(self.call('/api/channels/modbus-tcp/1', 'DELETE')[0], 200)
+
+    def test_removed_legacy_channel_table_names_are_not_aliases(self):
         for path in (
-            '/api/channels',
-            '/api/channels/1',
             '/api/tables/fes_channel_define/schema',
             '/api/tables/fes_iec104_define/schema',
             '/api/tables/fes_modbus_define/schema',

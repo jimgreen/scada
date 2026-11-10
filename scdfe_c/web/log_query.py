@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import re
 
-from core.log_paths import log_entries
+from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN
 
 MAX_SCAN_BYTES = 4 * 1024 * 1024
@@ -224,8 +224,23 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     # caller omits the redundant record=packet parameter.  The Web UI always
     # sends both, while scripts may send only the level filter.
     packet_query = record == "packet" or (not record and level == "PACKET")
-    if packet_query and packet_directory is not None:
-        root = Path(packet_directory).resolve()
+    if packet_query:
+        # Direct library callers historically omitted packet_directory.  The
+        # managed Web handlers pass it explicitly, while this inference keeps
+        # searches correct for CLI callers without another configuration knob.
+        # Only a production ``logs`` directory has an unambiguous sibling
+        # packet directory.  Arbitrary temporary directories are also used by
+        # direct callers and must retain their historical in-place behavior.
+        base = Path(directory)
+        if packet_directory is not None:
+            root = Path(packet_directory).resolve()
+        else:
+            candidate = packet_log_directory(base)
+            filename = query.get("filename")
+            candidate_file = candidate / filename if isinstance(filename, str) else None
+            use_candidate = (base.name.lower() == "logs" or
+                             candidate_file is not None and candidate_file.is_file())
+            root = (candidate if use_candidate and candidate.is_dir() else base).resolve()
     else:
         root = Path(directory).resolve()
     filename = _relative_filename(root, query["filename"], pattern) if query.get("filename") else None

@@ -76,7 +76,7 @@
       "eng_name": "io_address",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -88,6 +88,20 @@
       "disp_type": "INT",
       "disp_menu": "",
       "default": 0
+    },
+    {
+      "chn_name": "IEC时间标签",
+      "eng_name": "time_tag",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "单选菜单",
+      "disp_menu": "IEC104时间标签",
+      "allowed_values": [
+        "NONE",
+        "CP24Time2a",
+        "CP56Time2a"
+      ],
+      "default": "NONE"
     },
     {
       "chn_name": "命令执行方式",
@@ -124,6 +138,22 @@
       "data_type": "int",
       "disp_type": "INT",
       "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "Modbus地址基准（0/1/10001/30001/40001）",
+      "eng_name": "address_base",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "allowed_values": [
+        0,
+        1,
+        10001,
+        30001,
+        40001
+      ],
       "default": 0
     },
     {

@@ -18,11 +18,11 @@ class fes_channel_modbus_tcp_define:
 
     __tablename__: ClassVar[str] = 'fes_channel_modbus_tcp_define'
     __table_name_chn__: ClassVar[str] = 'MODBUS-TCP通道参数定义表'
-    __primary_keys__: ClassVar[tuple[str, ...]] = ('rtu_id',)
+    __primary_keys__: ClassVar[tuple[str, ...]] = ('channel_id',)
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(

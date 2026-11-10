@@ -8,7 +8,7 @@ the SQLite write lock.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import math
 import os
@@ -23,17 +23,20 @@ from typing import Any
 
 from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore
 from core.scdfe_control import InstanceLock
+from core.iec104_protocol import IEC104ProtocolConfig
 from core.log_paths import packet_log_directory
 from scdfe_c import ScdfeLogger
+from core.runtime_status import RuntimeStatusStore, now_ms, state_for
+from client.modbus_tcp import normalize_modbus_address
 
 CHANNEL_TABLE = "fes_scdfe_t_define"
 POINT_TABLE = "fes_scdfe_t_point_define"
 KINDS = {"yc", "yx", "yk", "yt"}
 _SOURCE_FIELDS = ("channel_id", "pnt_no", "kind", "source_rtu_id", "source_pnt_no")
 _WIRE_FIELDS = {
-    "iec104": _SOURCE_FIELDS + ("io_address", "type_id", "command_mode"),
+    "iec104": _SOURCE_FIELDS + ("io_address", "type_id", "time_tag", "command_mode"),
     "modbus-tcp": _SOURCE_FIELDS + ("register_area", "address", "data_type", "byte_order",
-                                    "word_order", "scale", "offset"),
+                                    "word_order", "scale", "offset", "address_base"),
 }
 
 
@@ -60,6 +63,7 @@ class TransSpec:
     scan_interval: float
     report_interval_ms: int = 1000
     log_retention_hours: int = 720
+    protocol_config: IEC104ProtocolConfig = field(default_factory=IEC104ProtocolConfig)
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "TransSpec":
@@ -67,12 +71,14 @@ class TransSpec:
         if protocol not in {"iec104", "modbus-tcp"}:
             raise ValueError("转发规约只能是 iec104 或 modbus-tcp")
         port = _get(row, "bind_port", 2404 if protocol == "iec104" else 1502)
+        protocol_config = IEC104ProtocolConfig.from_mapping(row)
         return cls(int(row["channel_id"]), protocol,
                    str(_get(row, "bind_host", "0.0.0.0")), int(port),
                    int(_get(row, "common_address", 1)), int(_get(row, "unit_id", 1)),
                    max(.05, _float(_get(row, "scan_interval_ms", 200), 200) / 1000),
                    max(50, int(_get(row, "report_interval_ms", 1000))),
-                   max(1, int(_get(row, "log_retention_hours", 720))))
+                   max(1, int(_get(row, "log_retention_hours", 720))),
+                   protocol_config)
 
 
 @dataclass(frozen=True)
@@ -85,9 +91,11 @@ class TransPoint:
     enabled: bool
     io_address: int | None
     type_id: int | None
+    time_tag: str
     command_mode: str
     register_area: str
     address: int
+    address_base: int
     data_type: str
     byte_order: str
     word_order: str
@@ -101,14 +109,18 @@ class TransPoint:
             raise ValueError("转发点类型必须是 yc/yx/yk/yt")
         io = _get(row, "io_address")
         typ = _get(row, "type_id")
+        address = int(_get(row, "address", int(row["pnt_no"]) - 1))
+        address_base = int(_get(row, "address_base", 0))
+        normalize_modbus_address(address, address_base, name="address")
         return cls(int(row["channel_id"]), int(row["pnt_no"]), kind,
                    int(_get(row, "source_rtu_id", 0)),
                    int(_get(row, "source_pnt_no", row["pnt_no"])),
                    bool(_get(row, "enabled", 1)),
-                   None if io in (None, 0) else int(io), None if typ in (None, 0) else int(typ),
+                    None if io in (None, 0) else int(io), None if typ in (None, 0) else int(typ),
+                    str(_get(row, "time_tag", "NONE")),
                    str(_get(row, "command_mode", "DIRECT")),
                    str(_get(row, "register_area", "holding")).lower(),
-                   int(_get(row, "address", int(row["pnt_no"]) - 1)),
+                   address, address_base,
                    str(_get(row, "data_type", "float32")).lower(),
                    str(_get(row, "byte_order", "big")).lower(),
                    str(_get(row, "word_order", "big")).lower(),
@@ -136,6 +148,7 @@ class TransRuntime:
         self.logger = ScdfeLogger(runtime_log_dir,
                                   process_name=f"scdfe_t-channel-{self.channel_id}",
                                   packet_directory=packet_log_directory(runtime_log_dir),
+                                  runtime_packet_compat=self.require_enabled,
                                   packet_switch=packet_log_switch(self.db_path, 't').for_channel(self.channel_id))
         self.server = None
         self.points: dict[tuple[str, int], TransPoint] = {}
@@ -155,8 +168,107 @@ class TransRuntime:
         self._next_heartbeat = 0.0
         self._log_retention = None
         self._next_cleanup = 0.0
+        self._runtime_status = RuntimeStatusStore(self.store, "scdfe_t")
+        self._runtime_protocol = ""
+        self._runtime_channel_name = ""
+        self._cycles = 0
+        self._rx_count = 0
+        self._tx_count = 0
+        self._error_count = 0
+        self._reconnect_count = 0
+        self._last_rx_time = 0
+        self._last_tx_time = 0
+        self._last_error_time = 0
+        self._last_error = ""
+        self._command_count = 0
+        self._runtime_state = {
+            "process_status": 0, "process_pid": 0,
+            "process_start_time": 0, "process_stop_time": 0,
+            "process_heartbeat_time": 0, "process_exit_code": 0,
+            "process_error": "",
+        }
+
+    def _runtime_metadata(self) -> tuple[str, str]:
+        if self._runtime_protocol and self._runtime_channel_name:
+            return self._runtime_protocol, self._runtime_channel_name
+        try:
+            with self.store.connection() as connection:
+                row = connection.execute(
+                    f"SELECT protocol, name FROM {CHANNEL_TABLE} WHERE channel_id=?",
+                    (self.channel_id,),
+                ).fetchone()
+            if row is not None:
+                self._runtime_protocol = str(row[0] or "")
+                self._runtime_channel_name = str(row[1] or "")
+        except Exception:
+            pass
+        return self._runtime_protocol, self._runtime_channel_name
+
+    def _runtime_diagnostic(self) -> dict[str, Any]:
+        server = self.server
+        diagnostic: dict[str, Any] = {
+            "cycles": self._cycles,
+            "source_reads": self._rx_count,
+            "published_updates": self._tx_count,
+            "command_count": self._command_count,
+            "reconnect_count": self._reconnect_count,
+            "server_running": bool(server and getattr(server, "running", False)),
+            "open_connections": int(getattr(server, "open_connection_count", 0) or 0),
+        }
+        if server is not None:
+            for name in ("unit_id", "host", "port"):
+                value = getattr(server, name, None)
+                if value is not None:
+                    diagnostic[name] = value
+            errors = getattr(server, "protocol_errors", None)
+            if errors is not None:
+                diagnostic["protocol_errors"] = [str(item) for item in errors[-20:]]
+            unexpected = getattr(server, "unexpected_messages", None)
+            if unexpected is not None:
+                diagnostic["unexpected_messages"] = list(unexpected[-20:])
+            protocol = getattr(server, "protocol_config", None)
+            if protocol is not None and hasattr(protocol, "as_dict"):
+                diagnostic["protocol_config"] = protocol.as_dict()
+        return diagnostic
+
+    def _persist_runtime_status(self, updates: Mapping[str, Any] | None = None,
+                                *, force: bool = False) -> None:
+        protocol, channel_name = self._runtime_metadata()
+        values = dict(updates or {})
+        self._runtime_state.update(values)
+        status = int(self._runtime_state.get("process_status") or 0)
+        error = str(self._runtime_state.get("process_error") or self._last_error or "")
+        running = status == 2
+        try:
+            self._runtime_status.upsert(self.channel_id, {
+                **self._runtime_state,
+                "protocol": protocol,
+                "channel_name": channel_name,
+                "state": state_for(status, running, error),
+                "running": int(running),
+                "connection_state": "listening" if running and self.server is not None else (
+                    "retrying" if status == 5 else "disconnected"
+                ),
+                "rx_count": self._rx_count,
+                "tx_count": self._tx_count,
+                "error_count": self._error_count,
+                "reconnect_count": self._reconnect_count,
+                "last_rx_time": self._last_rx_time,
+                "last_tx_time": self._last_tx_time,
+                "last_error_time": self._last_error_time,
+                "last_error": error,
+                "diagnostic_json": self._runtime_diagnostic(),
+            }, force=force)
+        except Exception as exc:
+            self.logger.error(f"写入转发通道运行状态失败: {exc}")
+
+    def _runtime_error(self, message: Any) -> None:
+        self._error_count += 1
+        self._last_error = str(message)
+        self._last_error_time = now_ms()
 
     def _update_state(self, **values):
+        self._persist_runtime_status(values, force="process_status" in values and values["process_status"] != 2)
         try:
             if values.keys() == {'process_heartbeat_time'}:
                 # A periodic pulse is not an operator edit or a state transition.
@@ -186,9 +298,8 @@ class TransRuntime:
     def load(self):
         with self.store.connection() as con:
             con.execute('BEGIN')
-            channel = con.execute(f"SELECT channel_id,protocol,bind_host,bind_port,common_address,unit_id,scan_interval_ms,"
-                                  f"report_interval_ms,log_retention_hours "
-                                  f"FROM {CHANNEL_TABLE} WHERE channel_id=?", (self.channel_id,)).fetchone()
+            channel = con.execute(f"SELECT * FROM {CHANNEL_TABLE} WHERE channel_id=?",
+                                  (self.channel_id,)).fetchone()
             if channel is None:
                 raise TransRuntimeError(f"转发通道 {self.channel_id} 不存在")
             spec = TransSpec.from_row(dict(channel))
@@ -200,7 +311,8 @@ class TransRuntime:
         # Compare the effective wire definition directly. Display names, the
         # other protocol's settings and runtime heartbeats do not close peers.
         address = spec.common_address if spec.protocol == 'iec104' else spec.unit_id
-        signature = (spec.protocol, spec.bind_host, spec.bind_port, address, rows)
+        signature = (spec.protocol, spec.bind_host, spec.bind_port, address,
+                     tuple(spec.protocol_config.as_dict().items()), rows)
         if self._definition_cache is None or self._definition_cache[0] != signature:
             points = tuple(TransPoint.from_row(dict(zip(fields, row))) for row in rows)
             self._definition_cache = (signature, points)
@@ -277,6 +389,7 @@ class TransRuntime:
             self._writer_client().submit_command(p.source_rtu_id, p.kind,
                                                  p.source_pnt_no, value, timeout=5)
         except Exception as exc:
+            self._runtime_error(exc)
             try:
                 self.logger.error(f"转发命令写库失败: {exc}")
             except OSError:
@@ -288,6 +401,7 @@ class TransRuntime:
             self.logger.normal("收到命令并提交写库")
         except OSError:
             logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
+        self._command_count += 1
         return True
 
     def build_server(self, spec, points):
@@ -300,14 +414,16 @@ class TransRuntime:
         if spec.protocol == "iec104":
             from server.iec104_server import IEC104Server
             server = IEC104Server(ip=spec.bind_host, port=spec.bind_port,
-                                  common_address=spec.common_address, tick_rate_ms=50)
+                                  common_address=spec.common_address, tick_rate_ms=50,
+                                  **spec.protocol_config.as_dict())
             server.set_packet_handler(self.logger.packet)
             for key, p in self.points.items():
                 handler = (lambda event, point=p: self.command(point, event.value)) if p.kind in {"yk", "yt"} else None
                 value, quality = initial_samples.get(key, (0, 128))
                 try:
                     server.add_point(p.kind, p.pnt_no, data_type=p.type_id, value=value,
-                                     io_address=p.io_address, command_mode=p.command_mode,
+                                     io_address=p.io_address, time_tag=p.time_tag,
+                                     command_mode=p.command_mode,
                                      command_handler=handler)
                 except (TypeError, ValueError, OverflowError, IndexError) as exc:
                     # A malformed source value must not take down unrelated
@@ -362,10 +478,15 @@ class TransRuntime:
         # database signature. The run loop passes the already loaded definition so
         # it does not issue a second full definition query after rebuilding.
         self.signature = signature if signature is not None else self.load()[2]
+        self._runtime_protocol = spec.protocol
+        self._reconnect_count += 1
         self.logger.process(f"转发通道启动，规约={spec.protocol}")
 
     def refresh(self):
         current = self._read_sources(self._scan_plan, True)
+        if current:
+            self._rx_count += len(current)
+            self._last_rx_time = now_ms()
         if getattr(type(self.server), "update_many", None) is not None:
             changes = []
             for key, (value, quality) in current.items():
@@ -377,14 +498,18 @@ class TransRuntime:
                 try:
                     errors = self.server.update_many(changes)
                 except Exception as exc:
+                    self._runtime_error(exc)
                     self.logger.error(f"Modbus 扫描发布未确认: {exc}")
                     return  # Retry unconfirmed values on the next scan.
                 for kind, no, value in changes:
                     key = (kind, no)
                     if key in errors:
+                        self._runtime_error(errors[key])
                         self.logger.error(f"转发点 {kind}/{no} 更新失败: {errors[key]}")
                     else:
                         self.values[key], self.qualities[key] = current[key]
+                        self._tx_count += 1
+                        self._last_tx_time = now_ms()
             return
         for key, point in self.points.items():
             if point.kind not in {"yc", "yx"}:
@@ -420,7 +545,10 @@ class TransRuntime:
                         self.server.update(point.kind, point.pnt_no, value)
                 self.values[key] = value
                 self.qualities[key] = quality
+                self._tx_count += 1
+                self._last_tx_time = now_ms()
             except Exception as exc:
+                self._runtime_error(exc)
                 self.logger.error(f"转发点更新失败: {exc}")
 
     def _enabled(self):
@@ -498,6 +626,7 @@ class TransRuntime:
                     self.refresh()
                     last_scan = time.monotonic()
                     cycles += 1
+                    self._cycles = cycles
                 self._heartbeat()
                 if max_cycles is not None and cycles >= max_cycles:
                     break
@@ -510,6 +639,7 @@ class TransRuntime:
             return cycles
         except Exception as exc:
             self.failed = True
+            self._runtime_error(exc)
             self._update_state(process_status=5, process_pid=0, process_stop_time=int(time.time() * 1000),
                                process_exit_code=-1, process_error=str(exc))
             self.logger.error(f"转发通道异常退出: {exc}")

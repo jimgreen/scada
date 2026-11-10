@@ -55,7 +55,7 @@
         <section class="content page-panel" id="data-panel">
           <div class="toolbar data-toolbar">
             <div class="title-group">
-              <h1 id="section-title">RTU 与通道</h1>
+              <h1 id="section-title">通道定义</h1>
             </div>
             <div class="filterbar global-filters">
               <label class="rtu-picker" id="rtu-picker"
@@ -64,6 +64,7 @@
                   <option value="">全部 RTU</option>
                 </select></label
               ><datalist id="rtu-options"></datalist
+              ><datalist id="channel-options"></datalist
               ><input
                 id="search"
                 type="search"
@@ -74,12 +75,13 @@
             <div class="actions">
               <button class="button secondary" id="refresh">刷新</button
               ><button class="button primary" id="add" disabled>
-                ＋ 新建 RTU 与通道
+                ＋ 新建通道
               </button>
             </div>
           </div>
           <nav class="data-tabs" id="data-tabs" aria-label="数据与定义表">
-            <button type="button" data-tab-resource="rtus" class="selected">RTU 与通道</button>
+            <button type="button" data-tab-resource="channels" class="selected">通道定义</button>
+            <button type="button" data-tab-resource="rtus">RTU 定义</button>
             <button type="button" data-tab-resource="yc">遥测</button>
             <button type="button" data-tab-resource="yx">遥信</button>
             <button type="button" data-tab-resource="yt">遥调</button>
@@ -191,9 +193,11 @@
                   <th>通道 / 规约</th>
                   <th>自动通信</th>
                   <th>线程状态</th>
+                  <th>连接状态</th>
                   <th>线程 ID</th>
-                  <th>最近心跳</th>
-                  <th>错误信息</th>
+                  <th>收 / 发 / 错</th>
+                  <th>最近心跳 / 采样</th>
+                  <th>诊断 / 错误信息</th>
                   <th class="sticky-actions">操作</th>
                 </tr>
               </thead>

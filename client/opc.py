@@ -174,12 +174,12 @@ class _OpcUaProtocol(PacketTrace):
 
     CHANNEL_TYPE = "opc"
     PROTOCOL_NAME = "OPC UA"
-    _STORE_RTU_PROJECTION = "rtu_id,channel_type"
+    _STORE_RTU_PROJECTION = "rtu_id,channel_id,channel_type"
     _STORE_DEFINITION_PROJECTION = (
-        "rtu_id,opc_user,opc_pwd,opc_domain,opc_name"
+        "channel_id,opc_user,opc_pwd,opc_domain,opc_name"
     )
     _STORE_POINT_QUERY = """
-        SELECT p.rtu_id, p.kind, p.pnt_no, m.rtu_id AS mapping_owner, m.node_id, m.data_type, m.value_attribute,
+        SELECT p.rtu_id, p.kind, p.pnt_no, m.channel_id AS mapping_owner, m.node_id, m.data_type, m.value_attribute,
                m.quality_attribute, m.deadband
         FROM (
             SELECT rtu_id, 'yc' AS kind, pnt_no FROM fes_yc_define WHERE rtu_id=?
@@ -191,7 +191,7 @@ class _OpcUaProtocol(PacketTrace):
             SELECT rtu_id, 'yt' AS kind, pnt_no FROM fes_yt_define WHERE rtu_id=?
         ) AS p
         LEFT JOIN fes_channel_opc_point_define AS m
-          ON m.rtu_id=? AND m.kind=p.kind AND m.pnt_no=p.pnt_no
+          ON m.channel_id=? AND m.kind=p.kind AND m.pnt_no=p.pnt_no
         ORDER BY CASE p.kind WHEN 'yc' THEN 1 WHEN 'yx' THEN 2
                              WHEN 'yk' THEN 3 ELSE 4 END, p.pnt_no
     """
@@ -253,13 +253,14 @@ class _OpcUaProtocol(PacketTrace):
             channel_type = rtu["channel_type"]
             if channel_type != cls.CHANNEL_TYPE:
                 raise ValueError(f"RTU {rtu_id} 不是 {cls.PROTOCOL_NAME} 通道 {cls.CHANNEL_TYPE}")
+            channel_id = int(rtu["channel_id"])
             definition_table = "fes_channel_opc_define"
             definitions = [dict(r) for r in connection.execute(
                 f"SELECT {cls._STORE_DEFINITION_PROJECTION} FROM {definition_table} "
-                "WHERE rtu_id=? ORDER BY id LIMIT 2", (rtu_id,))]
+                "WHERE channel_id=? ORDER BY id LIMIT 2", (channel_id,))]
             channel = dict(rtu)
             rows = [dict(r) for r in connection.execute(
-                cls._STORE_POINT_QUERY, (rtu_id, rtu_id, rtu_id, rtu_id, rtu_id))]
+                cls._STORE_POINT_QUERY, (rtu_id, rtu_id, rtu_id, rtu_id, channel_id))]
         if len(definitions) != 1:
             raise ValueError(f"RTU {rtu_id} 需要唯一 OPC 通道定义，实际找到 {len(definitions)} 条")
         for row in rows:

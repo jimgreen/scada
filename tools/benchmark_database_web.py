@@ -28,17 +28,25 @@ def _candidate_overview(self: ScadaStore, rtu_id=None):
     parts = []
     params = []
     for name in names:
-        scoped = rtu_id is not None and any(
-            column["eng_name"] == "rtu_id" for column in self.schema(name)["columns"]
-        )
+        fields = {column["eng_name"] for column in self.schema(name)["columns"]}
+        if rtu_id is None:
+            scope_sql, scope_value = "", None
+        elif "rtu_id" in fields:
+            scope_sql, scope_value = " WHERE rtu_id=?", rtu_id
+        elif name.startswith("fes_channel_") and "channel_id" in fields:
+            scope_sql, scope_value = (
+                " WHERE channel_id=(SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?)", rtu_id
+            )
+        else:
+            scope_sql, scope_value = "", None
         parts.append(
             "SELECT ? AS table_name, COUNT(*) AS row_count FROM "
             + quote_identifier(name)
-            + (" WHERE rtu_id=?" if scoped else "")
+            + scope_sql
         )
         params.append(name)
-        if scoped:
-            params.append(rtu_id)
+        if scope_value is not None:
+            params.append(scope_value)
     with self.connection() as connection:
         connection.execute("BEGIN")
         count_rows = connection.execute(" UNION ALL ".join(parts), params).fetchall()
@@ -79,7 +87,7 @@ def _candidate_channel_for_rtu(self: ScadaStore, rtu_id):
             )
             rows = connection.execute(
                 f"SELECT * FROM {quote_identifier(parameter_canonical)} "
-                f"WHERE rtu_id=? ORDER BY {ordering} LIMIT 2", (rtu_id,)
+                f"WHERE channel_id=? ORDER BY {ordering} LIMIT 2", (item["channel_id"],)
             ).fetchall()
             if len(rows) > 1:
                 raise ApiError(

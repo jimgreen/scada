@@ -32,7 +32,7 @@ class ProtocolStoreProjectionTests(unittest.TestCase):
 
     def test_rtu_projection_is_minimal_and_shared_shape(self):
         for adapter in (_BacnetProtocol, _OpcUaProtocol, IEC104Master, IEC104Server, CanMaster):
-            self.assertEqual(adapter._STORE_RTU_PROJECTION, "rtu_id,channel_type")
+            self.assertEqual(adapter._STORE_RTU_PROJECTION, "rtu_id,channel_id,channel_type")
 
     def test_joined_bacnet_and_opc_point_queries_keep_mapping_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -49,7 +49,7 @@ class ProtocolStoreProjectionTests(unittest.TestCase):
             })
             with store.connection() as connection:
                 rows = [dict(row) for row in connection.execute(
-                    _BacnetProtocol._STORE_POINT_QUERY, (7, 7, 7, 7, 7))]
+                    _BacnetProtocol._STORE_POINT_QUERY, (7, 7, 7, 7, 70))]
             self.assertEqual([(row["kind"], row["pnt_no"]) for row in rows],
                              [("yc", 1), ("yx", 2), ("yk", 3), ("yt", 4)])
             self.assertEqual((rows[0]["object_type"], rows[0]["instance"]),

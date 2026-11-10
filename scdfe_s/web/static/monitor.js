@@ -45,6 +45,10 @@
     const value = Number(row.process_status);
     return statusName[value] || (value ? String(value) : "已停止");
   }
+  function runtimeLabel(runtime, fallback) {
+    const names = {unknown: "未知", stopped: "已停止", starting: "启动中", running: "运行中", stopping: "停止中", error: "错误", degraded: "降级"};
+    return runtime && runtime.state ? (names[runtime.state] || runtime.state) : fallback;
+  }
   async function loadProcesses() {
     try {
       const [channels, processData] = await Promise.all([
@@ -82,29 +86,25 @@
       if (!data) return;
       const serviceStatus = new Map((data.items || []).map(item => [item.name, item]));
       const serviceByRtu = new Map((data.items || []).filter(item => item.rtu_id != null).map(item => [String(item.rtu_id), item]));
-      // The aggregate monitor response remains compatible with older Web
-      // workers. Refresh each bound service status when available so the
-      // table can identify the actual RTU behind a protocol service.
-      await Promise.all([...new Set((channels.items || []).map(item => serviceByType[item.channel_type]).filter(Boolean))].map(async name => {
-        try {
-          const detail = await api(`/api/${encodeURIComponent(name)}/status`);
-          if (detail.item) serviceStatus.set(name, {...serviceStatus.get(name), ...detail.item, name});
-        } catch (_) { /* the aggregate status remains usable */ }
-      }));
       const rows = (channels.items || []).map(channel => {
         const fallbackName = serviceByType[channel.channel_type];
         const service = serviceByRtu.get(String(channel.rtu_id)) || (fallbackName ? serviceStatus.get(fallbackName) : null);
         const serviceName = service?.name || fallbackName;
         const bound = !!service && String(service.rtu_id ?? channel.rtu_id) === String(channel.rtu_id);
         const state = bound ? (service.running ? "运行中" : "已停止") : (service ? "未绑定" : "未配置");
-        const connections = bound ? (service.open_connections ?? 0) : "—";
+        const runtime = bound ? (service.runtime_status || {}) : {};
+        const connections = bound ? (service.open_connections ?? runtime.diagnostic?.open_connections ?? 0) : "—";
         const pointCount = bound ? (service.point_count ?? 0) : "—";
-        const error = bound ? (service.last_error || "无") : (channel.process_error || "—");
+        const error = bound ? (runtime.last_error || service.last_error || "无") : (channel.process_error || "—");
+        const counts = bound ? [runtime.rx_count ?? service.rx_count ?? 0, runtime.tx_count ?? service.tx_count ?? 0, runtime.error_count ?? service.error_count ?? 0, runtime.reconnect_count ?? service.reconnect_count ?? 0].join(" / ") : "—";
+        const traffic = bound ? `${fmt(runtime.last_rx_time ?? service.last_rx_time)} / ${fmt(runtime.last_tx_time ?? service.last_tx_time)}` : "—";
+        const diagnostic = runtime.diagnostic || service.diagnostic || {};
+        const diagnosticText = Object.keys(diagnostic).length ? `诊断字段 ${Object.keys(diagnostic).length} 项` : "暂无诊断";
         const action = bound
           ? `<button data-service="${esc(service.name)}" data-action="${service.running ? "stop" : "start"}">${service.running ? "停止" : "启动"}</button>`
           : "";
-        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><small class="cell-sub">${esc(channel.code || "")}</small></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && service.running ? "is-running" : ""}">${state}</span></td><td>${esc(connections)}</td><td>${esc(pointCount)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error">${esc(error)}</td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
-      }).join("") || `<tr><td colspan="10" class="empty">暂无通信通道</td></tr>`;
+        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><small class="cell-sub">${esc(channel.code || "")}</small></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
+      }).join("") || `<tr><td colspan="12" class="empty">暂无通信通道</td></tr>`;
       show("#communication-rows", rows);
       msg(`共 ${channels.total ?? (channels.items || []).length} 个通道`);
     } catch (e) { msg(e.message, true); }

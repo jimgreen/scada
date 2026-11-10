@@ -63,7 +63,7 @@
       "eng_name": "process_pid",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -99,7 +99,7 @@
       "eng_name": "process_exit_code",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },

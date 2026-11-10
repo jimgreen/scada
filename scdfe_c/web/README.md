@@ -2,6 +2,15 @@
 
 `scdfe_c/web` 只提供 RTU、通道、四遥定义、协议辅助表、主进程、通信线程、数据库写进程和运行日志管理。服务端/主站通信测试页面与接口位于独立的 `scdfe_s/web`，默认端口为 8878。
 
+## 通道与 RTU 定义
+
+工作台默认先打开“通道定义”，再打开“RTU 定义”。通道目录通过
+\`GET/POST/PATCH/DELETE /api/channels\` 管理，通道的复合身份是
+\`(channel_type, channel_id)\`：先按规约类型选择对应的 \`fes_channel_*_define\`
+表，再按 \`channel_id\` 定位记录。RTU 创建时同时提交 \`channel_type\` 和
+\`channel_id\`，服务端按该复合键校验绑定。通道和 RTU 两页分别保存搜索、RTU
+筛选、排序和分页状态。
+
 ## 概览与 RTU 选择
 
 工作台顶部使用 `GET /api/overview?view=summary`，只统计 RTU 和四遥点表。不带 `view` 的 `GET /api/overview` 继续返回全部表计数和所有通道类型的数量。RTU 下拉框按页加载，超过 500 个站时也可选择后续站点。
@@ -24,7 +33,7 @@ Set-Location D:\codex\scada
 
 ## 管理范围
 
-- RTU 与通道的一对一配置、协议参数和辅助表维护；
+- 独立维护通道定义、RTU 定义、协议参数和辅助表；
 - 遥测、遥信、遥控、遥调定义及在线命令下发；
 - `scdfe_c` 自动守护、单 RTU 调试、主进程、数据库写进程和 TCP 指令服务进程控制；
 - TCP 指令服务接收认证的 YK/YT JSON 指令，写库成功后由通信线程继续下发；
@@ -38,6 +47,9 @@ Set-Location D:\codex\scada
 ```text
 GET/PATCH /api/rtus/{rtu_id}/channel
 GET/POST/PATCH/DELETE /api/rtus/{rtu_id}/channel/parameters
+GET/POST /api/channels
+GET/PATCH/DELETE /api/channels/{channel_type}/{channel_id}
+GET/POST/PATCH/DELETE /api/channels/{channel_type}/{channel_id}/parameters
 GET/POST/PATCH/DELETE /api/rtus/{rtu_id}/points/{yc|yx|yk|yt}
 POST /api/rtus/{rtu_id}/commands/{yk|yt}/{pnt_no}
 GET /api/processes

@@ -9,7 +9,7 @@
       "eng_name": "id",
       "primary_key": true,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": ""
     },
     {
@@ -45,12 +45,13 @@
       "disp_menu": "二值判断"
     },
     {
-      "chn_name": "所属RTU",
-      "eng_name": "rtu_id",
+      "chn_name": "所属通道",
+      "eng_name": "channel_id",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "required": true
     },
     {
       "chn_name": "点号",
@@ -77,12 +78,34 @@
       "disp_menu": ""
     },
     {
+      "chn_name": "地址基准（0/1/10001/30001/40001）",
+      "eng_name": "address_base",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "allowed_values": [
+        0,
+        1,
+        10001,
+        30001,
+        40001
+      ],
+      "default": 0
+    },
+    {
       "chn_name": "功能码",
       "eng_name": "icode",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",
-      "disp_menu": ""
+      "disp_menu": "",
+      "allowed_values": [
+        5,
+        6,
+        15,
+        16
+      ]
     },
     {
       "chn_name": "遥调遥控数据类型",
@@ -90,7 +113,16 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "单选菜单",
-      "disp_menu": "MODBUS遥调遥控类型"
+      "disp_menu": "MODBUS遥调遥控类型",
+      "allowed_values": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
     },
     {
       "chn_name": "遥信是否取反",
@@ -106,7 +138,11 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "UCHAR",
-      "disp_menu": ""
+      "disp_menu": "",
+      "allowed_values": [
+        0,
+        1
+      ]
     },
     {
       "chn_name": "四字节数据字节顺序",
@@ -114,7 +150,13 @@
       "primary_key": false,
       "data_type": "int",
       "disp_type": "UCHAR",
-      "disp_menu": ""
+      "disp_menu": "",
+      "allowed_values": [
+        0,
+        1,
+        2,
+        3
+      ]
     },
     {
       "chn_name": "乘系数",
@@ -149,5 +191,11 @@
       "disp_menu": "二值判断"
     }
   ],
-  "unique_keys": [["rtu_id", "ifyk", "cnt"]]
+  "unique_keys": [
+    [
+      "channel_id",
+      "ifyk",
+      "cnt"
+    ]
+  ]
 }

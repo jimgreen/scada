@@ -37,7 +37,7 @@ class fes_ytyk_message:
 
     pnt_no: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     name: Optional[str] = field(

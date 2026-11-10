@@ -39,7 +39,10 @@ class CanServer(PacketTrace):
 
     def __init__(self, *, interface="virtual", channel="scada-can-server",
                  bitrate=500000, data_bitrate=2000000, fd=False,
-                 receive_own_messages=False, receive_timeout=0.1,
+                 receive_own_messages=False, sample_point=None,
+                 data_sample_point=None, bitrate_switch=False,
+                 receive_error_frames=False, restart_on_error=False,
+                 bus_off_recovery_ms=0, receive_timeout=0.1,
                  request_id=None, response_id=None, response_data="",
                  points: Iterable[Mapping[str, Any]] | None = None,
                  simulation=False, on_log: Callable[[str, str], Any] | None = None):
@@ -49,6 +52,12 @@ class CanServer(PacketTrace):
         self.data_bitrate = int(data_bitrate)
         self.fd = bool(fd)
         self.receive_own_messages = bool(receive_own_messages)
+        self.sample_point = sample_point
+        self.data_sample_point = data_sample_point
+        self.bitrate_switch = bool(bitrate_switch)
+        self.receive_error_frames = bool(receive_error_frames)
+        self.restart_on_error = bool(restart_on_error)
+        self.bus_off_recovery_ms = int(bus_off_recovery_ms)
         self.receive_timeout = float(receive_timeout)
         self.request_id = None if request_id in (None, "") else int(request_id)
         self.response_id = None if response_id in (None, "") else int(response_id)
@@ -131,6 +140,14 @@ class CanServer(PacketTrace):
                 "bitrate": self.bitrate,
                 "receive_own_messages": self.receive_own_messages,
             }
+            if self.sample_point is not None:
+                kwargs["sample_point"] = self.sample_point
+            if self.data_sample_point is not None:
+                kwargs["data_sample_point"] = self.data_sample_point
+            if self.receive_error_frames:
+                kwargs["receive_error_frames"] = True
+            if self.restart_on_error:
+                kwargs["restart_ms"] = self.bus_off_recovery_ms
             if self.fd:
                 kwargs["fd"] = True
                 kwargs["data_bitrate"] = self.data_bitrate
@@ -185,12 +202,14 @@ class CanServer(PacketTrace):
         }
 
     def send_frame(self, arbitration_id: int, data: bytes | bytearray | str,
-                   *, is_extended_id=False, log_direction="TX"):
+                   *, is_extended_id=False, bitrate_switch=None, log_direction="TX"):
         if not self.connected:
             raise CanServerError("CAN 服务端未启动")
         payload = bytes.fromhex(str(data).replace(" ", "")) if isinstance(data, str) else bytes(data)
         message = can.Message(arbitration_id=int(arbitration_id), data=payload,
-                              is_extended_id=bool(is_extended_id), is_fd=self.fd)
+                              is_extended_id=bool(is_extended_id), is_fd=self.fd,
+                              bitrate_switch=(self.bitrate_switch if bitrate_switch is None
+                                              else bool(bitrate_switch)))
         bus = self._bus
         try:
             bus.send(message)

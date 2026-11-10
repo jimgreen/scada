@@ -1,0 +1,254 @@
+{
+  "head": {
+    "chn_name": "通信通道运行状态快照表",
+    "eng_name": "fes_channel_runtime_status"
+  },
+  "columns": [
+    {
+      "chn_name": "服务实例",
+      "eng_name": "service_name",
+      "primary_key": true,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "通道编号",
+      "eng_name": "channel_id",
+      "primary_key": true,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": ""
+    },
+    {
+      "chn_name": "规约",
+      "eng_name": "protocol",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "通道名称",
+      "eng_name": "channel_name",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "运行状态",
+      "eng_name": "state",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "运行状态",
+      "default": "unknown",
+      "allowed_values": [
+        "unknown",
+        "stopped",
+        "starting",
+        "running",
+        "stopping",
+        "error",
+        "degraded"
+      ]
+    },
+    {
+      "chn_name": "运行标志",
+      "eng_name": "running",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "连接状态",
+      "eng_name": "connection_state",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "连接状态",
+      "default": "unknown"
+    },
+    {
+      "chn_name": "进程状态",
+      "eng_name": "process_status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "进程号",
+      "eng_name": "process_pid",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "启动时间",
+      "eng_name": "process_start_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "停止时间",
+      "eng_name": "process_stop_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "心跳时间",
+      "eng_name": "process_heartbeat_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "退出码",
+      "eng_name": "process_exit_code",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "进程错误",
+      "eng_name": "process_error",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "接收计数",
+      "eng_name": "rx_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "发送计数",
+      "eng_name": "tx_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "错误计数",
+      "eng_name": "error_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "丢失计数",
+      "eng_name": "dropped_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "重连计数",
+      "eng_name": "reconnect_count",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "最近接收时间",
+      "eng_name": "last_rx_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "最近发送时间",
+      "eng_name": "last_tx_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "最后错误时间",
+      "eng_name": "last_error_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "最后错误",
+      "eng_name": "last_error",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": ""
+    },
+    {
+      "chn_name": "诊断详情 JSON",
+      "eng_name": "diagnostic_json",
+      "primary_key": false,
+      "data_type": "str",
+      "disp_type": "STRING",
+      "disp_menu": "",
+      "default": "{}"
+    },
+    {
+      "chn_name": "采样时间",
+      "eng_name": "sampled_at",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    }
+  ],
+  "indexes": [
+    [
+      "protocol"
+    ],
+    [
+      "state"
+    ],
+    [
+      "sampled_at"
+    ],
+    [
+      "channel_id"
+    ]
+  ]
+}

@@ -1,7 +1,7 @@
 """Modbus TCP 主站；协议通信交给 pyModbusTCP。
 
 参考 scdfe_c/CRtuModbusTcpEx.cpp 的召唤、数据解释、遥调遥控字段。
-地址使用线上零基地址，例如文档 40001 通常传 0；不会自动减 40001。
+配置地址可以使用零基地址或常见参考地址基准；发送到 Modbus 设备前统一转换为线上零基地址。
 本文件的私有协议层为 TCP/RTU 共用的应用层点表适配，不实现协议帧。
 """
 from collections.abc import Callable, Mapping
@@ -14,7 +14,12 @@ import threading
 from typing import NamedTuple
 from core.packet_trace import PacketTrace
 
-__all__ = ['ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point']
+__all__ = [
+    'ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point',
+    'normalize_modbus_address',
+]
+
+_ADDRESS_BASES = frozenset((0, 1, 10001, 30001, 40001))
 
 _READ_METHODS = {
     1: 'read_coils',
@@ -53,6 +58,28 @@ def integer(value, name, lo, hi):
     if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
         raise ValueError(f'{name} 必须是 {lo}..{hi} 的整数，实际为 {value!r}')
     return value
+
+
+def normalize_modbus_address(address, address_base=0, *, name='address'):
+    """Convert a configured Modbus reference address to its wire address.
+
+    ``address_base=0`` means that ``address`` is already zero based.  The
+    other accepted bases are the usual one based/reference ranges, so for
+    example ``40001`` with base ``40001`` becomes wire address ``0``.
+    Keeping this conversion at the protocol boundary prevents the database,
+    forwarding server and direct APIs from applying different offsets.
+    """
+    integer(address_base, 'address_base', 0, 40001)
+    if address_base not in _ADDRESS_BASES:
+        raise ValueError(
+            f'address_base 必须是 0、1、10001、30001 或 40001，实际为 {address_base!r}'
+        )
+    integer(address, name, 0, 65535)
+    if address_base and address < address_base:
+        raise ValueError(f'{name}={address!r} 小于地址基准 {address_base}')
+    normalized = address - address_base
+    integer(normalized, f'{name}（线上地址）', 0, 65535)
+    return normalized
 
 
 def boolean(value):
@@ -211,7 +238,8 @@ class _ModbusOperations(PacketTrace):
         return self._invoke('write_multiple_registers', address, values, self._unit(unit_id))
 
     def _check_definition(self, row, is_yk):
-        if self.rtu_id is not None and field(row, 'rtu_id') != self.rtu_id:
+        row_rtu_id = field(row, 'rtu_id')
+        if self.rtu_id is not None and row_rtu_id is not None and row_rtu_id != self.rtu_id:
             raise ValueError('命令所属 RTU 与客户端不一致')
         if field(row, 'ifyk', int(is_yk)) != int(is_yk):
             raise ValueError('ifyk 与命令类型不一致')
@@ -239,14 +267,17 @@ class _ModbusOperations(PacketTrace):
 
     def _write_words(self, row, fc, words):
         kwargs = dict(unit_id=field(row, 'irtuaddr', self.unit_id))
+        address = normalize_modbus_address(
+            field(row, 'reg_addr'), field(row, 'address_base', 0), name='reg_addr'
+        )
         if fc == 6 and len(words) == 1:
-            return self.write_single_register(field(row, 'reg_addr'), words[0], **kwargs)
+            return self.write_single_register(address, words[0], **kwargs)
         if fc == 16:
-            return self.write_multiple_registers(field(row, 'reg_addr'), words, **kwargs)
+            return self.write_multiple_registers(address, words, **kwargs)
         raise ValueError('寄存器命令只支持 06（单寄存器）或 16（多寄存器）')
 
     def _write_yk_definition(self, definition, close, *, current_value=None):
-        """标准 05 线圈或 06/16 寄存器遥控；特殊位控制显式传入当前寄存器值。
+        """标准 05/15 线圈或 06/16 寄存器遥控；特殊位控制显式传入当前寄存器值。
 
         current_value 的新鲜度由调用者保证；跨设备读改写不具备原子性。
         不支持旧设备在 05 中携带非 FF00/0000 的私有编码。
@@ -255,11 +286,18 @@ class _ModbusOperations(PacketTrace):
         on = boolean(close) ^ bool(field(definition, 'ifreverse', 0))
         fc = field(definition, 'icode', 0) or 5
         typ = field(definition, 'ytyk_type', 6)
-        if fc == 5:
+        if fc in (5, 15):
             if typ == 7:
                 raise ValueError('特殊位控制必须明确配置功能码 06 或 16')
-            return self.write_single_coil(field(definition, 'reg_addr'), on,
-                                          unit_id=field(definition, 'irtuaddr', self.unit_id))
+            address = normalize_modbus_address(
+                field(definition, 'reg_addr'), field(definition, 'address_base', 0),
+                name='reg_addr'
+            )
+            if fc == 5:
+                return self.write_single_coil(address, on,
+                                              unit_id=field(definition, 'irtuaddr', self.unit_id))
+            return self.write_multiple_coils(address, [on],
+                                             unit_id=field(definition, 'irtuaddr', self.unit_id))
         little = field(definition, 'twobytedata_byteseq', 0) > 0
         if typ == 7:
             bit = integer(field(definition, 'special_yk_bit'), 'special_yk_bit', 0, 15)
@@ -388,21 +426,21 @@ class _ModbusMasterOperations:
     # become part of every communication worker's configuration snapshot.
     _STORE_PROJECTIONS = {
         "fes_channel_modbus_define":
-            "rtu_id,irtuaddr",
+            "channel_id,irtuaddr",
         "fes_channel_modbus_define_call":
-            "rtu_id,irtuaddr,call_seq,iplace,inum,icode",
+            "channel_id,irtuaddr,call_seq,iplace,address_base,inum,icode",
         "fes_channel_modbus_define_data":
-            "rtu_id,call_seq,if_yx,cnt,trans_type,reg_addr,offset_bit,all_bit,"
+            "channel_id,call_seq,if_yx,cnt,trans_type,reg_addr,offset_bit,all_bit,"
             "if_reverse,twobytedata_byteseq,fourbytedata_byteseq",
         "fes_channel_modbus_define_ytyk":
-            "rtu_id,ifyk,cnt,irtuaddr,reg_addr,icode,ytyk_type,ifreverse,"
+            "channel_id,ifyk,cnt,irtuaddr,reg_addr,address_base,icode,ytyk_type,ifreverse,"
             "twobytedata_byteseq,fourbytedata_byteseq,multi_para,special_yk_yccnt,"
             "special_yk_bit,send_ff_replace_01",
         "fes_channel_modbus_tcp_define":
-            "rtu_id,remote_host,remote_port,unit_id,connect_timeout,"
+            "channel_id,remote_host,remote_port,unit_id,connect_timeout,"
             "response_timeout,retry_count,keep_alive",
         "fes_channel_modbus_rtu_define":
-            "rtu_id,serial_port,baudrate,bytesize,parity,stopbits,unit_id,"
+            "channel_id,serial_port,baudrate,bytesize,parity,stopbits,unit_id,"
             "response_timeout,retry_count",
     }
 
@@ -431,13 +469,14 @@ class _ModbusMasterOperations:
         with store.connection() as connection:
             connection.execute('BEGIN')
             rtu = connection.execute(
-                'SELECT rtu_id, channel_type FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,),
+                'SELECT rtu_id, channel_id, channel_type FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,),
             ).fetchone()
             if rtu is None:
                 raise ValueError(f'RTU {rtu_id} 不存在')
             channel_type = rtu['channel_type']
             if channel_type != cls.CHANNEL_TYPE:
                 raise ValueError(f'RTU {rtu_id} 不是 {cls.PROTOCOL_NAME} 通道 {cls.CHANNEL_TYPE}')
+            channel_id = int(rtu['channel_id'])
             tables = {}
             for table in ('fes_channel_modbus_define',
                           'fes_channel_modbus_define_call', 'fes_channel_modbus_define_data',
@@ -448,13 +487,13 @@ class _ModbusMasterOperations:
                     'fes_channel_modbus_define_data': 'call_seq, id',
                     'fes_channel_modbus_define_ytyk': 'id',
                 }[table]
-                tables[table] = [dict(row) for row in connection.execute(
+                tables[table] = [dict(row, rtu_id=rtu_id) for row in connection.execute(
                     f'SELECT {cls._STORE_PROJECTIONS[table]} FROM {table} '
-                    f'WHERE rtu_id=? ORDER BY {order_by}', (rtu_id,),
+                    f'WHERE channel_id=? ORDER BY {order_by}', (channel_id,),
                 )]
             rows = [dict(row) for row in connection.execute(
                 f'SELECT {cls._STORE_PROJECTIONS[cls.PARAMETER_TABLE]} '
-                f'FROM {cls.PARAMETER_TABLE} WHERE rtu_id=? LIMIT 2', (rtu_id,),
+                f'FROM {cls.PARAMETER_TABLE} WHERE channel_id=? LIMIT 2', (channel_id,),
             )]
             if len(rows) > 1:
                 raise ValueError(f'RTU {rtu_id} 需要唯一 {cls.PARAMETER_TABLE} 参数定义，实际找到 {len(rows)} 条')
@@ -507,7 +546,11 @@ class _ModbusMasterOperations:
     def _scoped_rows(self, rows):
         rows = list(rows)
         if self.rtu_id is not None:
-            rows = [row for row in rows if field(row, 'rtu_id') == self.rtu_id]
+            # Rows loaded from the database are already scoped by channel_id.
+            # Keep accepting legacy in-memory rows carrying rtu_id, but do not
+            # discard the new channel-owned rows because they have no RTU FK.
+            rows = [row for row in rows
+                    if field(row, 'rtu_id') is None or field(row, 'rtu_id') == self.rtu_id]
         return rows
 
     def configure(self, calls, points, definitions=()):
@@ -515,7 +558,8 @@ class _ModbusMasterOperations:
         calls, points, definitions = [deepcopy(self._scoped_rows(rows))
                                       for rows in (calls, points, definitions)]
         plan = self._build_poll_plan(calls, points)
-        ids = {field(row, 'rtu_id') for row in calls + points + definitions}
+        ids = {field(row, 'rtu_id') for row in calls + points + definitions
+               if field(row, 'rtu_id') is not None}
         if len(ids) > 1:
             raise ValueError('一个主站只配置一个 RTU；请指定 rtu_id 过滤点表')
         command_index = {}
@@ -523,7 +567,10 @@ class _ModbusMasterOperations:
             key = (integer(field(row, 'ifyk'), 'ifyk', 0, 1),
                    integer(field(row, 'cnt'), 'cnt', 0, 2**31 - 1))
             self._unit(field(row, 'irtuaddr'))
-            self._range(field(row, 'reg_addr'), 1, 1)
+            address = normalize_modbus_address(
+                field(row, 'reg_addr'), field(row, 'address_base', 0), name='reg_addr'
+            )
+            self._range(address, 1, 1)
             if key in command_index:
                 raise ValueError(f'重复遥控/遥调定义: {key}')
             command_index[key] = row
@@ -541,6 +588,8 @@ class _ModbusMasterOperations:
             if seq in call_by_seq:
                 raise ValueError(f'重复 call_seq={seq}')
             address = field(call, 'iplace')
+            address_base = field(call, 'address_base', 0)
+            address = normalize_modbus_address(address, address_base, name='iplace')
             count = field(call, 'inum')
             fc = field(call, 'icode')
             if fc not in (1, 2, 3, 4):
@@ -550,20 +599,27 @@ class _ModbusMasterOperations:
             _ModbusOperations._range(address, count, 2000 if fc < 3 else 125)
             # Keep None as a default-unit reference; read() resolves the
             # current unit_id, just as it does for explicit read requests.
-            call_by_seq[seq] = (field(call, 'rtu_id'), address, count, fc,
-                                field(call, 'irtuaddr'), [])
+            call_by_seq[seq] = (field(call, 'rtu_id'), address, address_base,
+                                count, fc, field(call, 'irtuaddr'), [])
         point_keys = set()
         for point in points:
             seq = integer(field(point, 'call_seq'), 'call_seq', 0, 2**31 - 1)
             if seq not in call_by_seq:
                 raise ValueError(f'数据点没有对应召唤行: call_seq={seq}')
-            _, address, count, fc, _, matched = call_by_seq[seq]
+            _, address, address_base, count, fc, _, matched = call_by_seq[seq]
             number = integer(field(point, 'cnt'), 'cnt', 0, 2**31 - 1)
             key = (bool(field(point, 'if_yx', fc < 3)), number)
             if key in point_keys:
                 raise ValueError(f'重复遥测/遥信点号: {key}')
             point_keys.add(key)
-            reg_addr = field(point, 'reg_addr')
+            reg_addr = normalize_modbus_address(
+                field(point, 'reg_addr'),
+                # Point rows are deliberately relative to their owning call.
+                # This keeps one address convention for every point in a
+                # request and avoids a hidden per-point offset.
+                address_base,
+                name='reg_addr'
+            )
             integer(reg_addr, 'reg_addr', address, address + count - 1)
             offset = reg_addr - address
             if fc >= 3:
@@ -578,7 +634,7 @@ class _ModbusMasterOperations:
         if len(ids) > 1:
             raise ValueError('一个主站只采集一个 RTU；请指定 rtu_id 过滤点表')
         return tuple((rtu_id, seq, address, count, fc, unit, tuple(matched))
-                     for seq, (rtu_id, address, count, fc, unit, matched)
+                     for seq, (rtu_id, address, _address_base, count, fc, unit, matched)
                      in sorted(call_by_seq.items()))
 
     def _execute_poll_plan(self, plan):
@@ -650,11 +706,13 @@ class _ModbusMasterOperations:
         integer(point_no, 'point_no', 0, 2**31 - 1)
         if definitions is None:
             row = self._command_index.get((is_yk, point_no))
-            if row is None or (self.rtu_id is not None and field(row, 'rtu_id') != self.rtu_id):
+            if row is None or (self.rtu_id is not None
+                               and field(row, 'rtu_id') is not None
+                               and field(row, 'rtu_id') != self.rtu_id):
                 raise ValueError(f'点号 {point_no} 没有唯一的 Modbus 命令定义')
             return row
         scoped = self._scoped_rows(definitions)
-        if len({field(row, 'rtu_id') for row in scoped}) > 1:
+        if len({field(row, 'rtu_id') for row in scoped if field(row, 'rtu_id') is not None}) > 1:
             raise ValueError('多个 RTU 的命令定义需要指定 rtu_id')
         matches = [row for row in scoped
                    if field(row, 'cnt') == point_no and field(row, 'ifyk') == is_yk]

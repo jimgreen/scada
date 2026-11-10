@@ -104,7 +104,57 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _schema(self, table):
         return {"item": self.service.store.catalog.public(table)}
 
+    def _packet_recording(self, parts, query, method):
+        if parts[:2] != ["api", "packet-recording"]:
+            return False
+        if query:
+            raise ApiError(400, "报文记录策略接口不接受查询参数")
+        from core.packet_logging import packet_log_switch, packet_recording_state
+        switch = packet_log_switch(self.service.db_path, "t")
+        if len(parts) == 2:
+            if method == "GET":
+                return self._json(200, packet_recording_state(self.service.db_path, "t"))
+            if method != "PUT":
+                raise ApiError(405, "报文记录策略只支持 GET/PUT")
+            body = self._body()
+            if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+                raise ApiError(400, "enabled 必须是布尔值，且不能包含其他字段")
+            switch.set_enabled(body["enabled"])
+            return self._json(200, packet_recording_state(self.service.db_path, "t"))
+        if len(parts) == 3:
+            raw_channel = parts[2]
+        elif len(parts) == 4 and parts[2] == "channels":
+            raw_channel = parts[3]
+        else:
+            raise ApiError(404, "路径不存在", code="not_found")
+        try:
+            channel_id = int(raw_channel)
+        except ValueError as exc:
+            raise ApiError(400, "channel_id 必须是整数") from exc
+        if channel_id <= 0:
+            raise ApiError(400, "channel_id 必须是正整数")
+        if method == "GET":
+            try:
+                item = switch.channel_snapshot(channel_id)
+            except KeyError as exc:
+                raise ApiError(404, str(exc), code="not_found") from exc
+            return self._json(200, item)
+        if method != "PUT":
+            raise ApiError(405, "通道报文记录策略只支持 GET/PUT")
+        body = self._body()
+        if set(body) != {"enabled"} or (body["enabled"] is not None and type(body["enabled"]) is not bool):
+            raise ApiError(400, "enabled 必须是布尔值或 null，且不能包含其他字段")
+        try:
+            switch.channel_snapshot(channel_id)
+            switch.set_channel(channel_id, body["enabled"])
+            item = switch.channel_snapshot(channel_id)
+        except KeyError as exc:
+            raise ApiError(404, str(exc), code="not_found") from exc
+        return self._json(200, item)
+
     def _api(self, method, parts, query):
+        if self._packet_recording(parts, query, method) is not False:
+            return
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
             if method != "GET":
                 raise ApiError(405, "日志文件接口只支持 GET")
@@ -125,9 +175,13 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             raise ApiError(404, "路径不存在", code="not_found")
         prefix = ["api", "trans"]
         tail = parts[len(prefix):]
-        if not tail or tail[0] not in {"channels", "processes", "logs", "log", "source-catalog"}:
+        if not tail or tail[0] not in {"channels", "status", "processes", "logs", "log", "source-catalog"}:
             raise ApiError(404, "路径不存在", code="not_found")
         resource = tail[0]
+        if resource == "status":
+            if method != "GET" or len(tail) != 1 or query:
+                raise ApiError(405, "转发运行状态接口只支持 GET")
+            return self._json(200, self.service.runtime_status())
         if resource == "source-catalog":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "源数据目录只支持 GET")

@@ -19,6 +19,7 @@ else:
     from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
+from core.runtime_status import runtime_status_rows
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR
@@ -132,6 +133,28 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return parts[2], parts[4] if len(parts) == 5 else None, None
         raise ApiError(404, "路径不存在", code="not_found")
 
+    def _channel_definition_endpoint(self, parts):
+        """Return (channel_type, channel_id, section) for channel definitions."""
+        if parts[:2] != ["api", "channels"]:
+            return None
+        if len(parts) == 3:
+            channel_type, raw_channel_id, section = None, parts[2], None
+        elif len(parts) == 4 and parts[3] == "parameters":
+            channel_type, raw_channel_id, section = None, parts[2], "parameters"
+        elif len(parts) in (4, 5):
+            channel_type, raw_channel_id = parts[2], parts[3]
+            section = parts[4] if len(parts) == 5 else None
+        else:
+            raise ApiError(404, "路径不存在", code="not_found")
+        try:
+            channel_id = int(raw_channel_id)
+        except ValueError as exc:
+            raise ApiError(400, "channel_id 必须是整数") from exc
+        if channel_id <= 0:
+            raise ApiError(400, "channel_id 必须是正整数")
+        self.store.get_channel_definition(channel_id, channel_type)
+        return channel_type, channel_id, section
+
     def _rtu_id(self, raw):
         return self.store._key_values("fes_rtu_define", raw)["rtu_id"]
 
@@ -142,6 +165,54 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         rtu_id = self._rtu_id(parts[2])
         self.store.get_row("fes_rtu_define", [rtu_id])
         return rtu_id, parts[4] if len(parts) == 5 else None
+
+    def _packet_recording(self, parts, query, method):
+        if parts[:2] != ["api", "packet-recording"]:
+            return False
+        if query:
+            raise ApiError(400, "报文记录策略接口不接受查询参数")
+        from core.packet_logging import packet_log_switch, packet_recording_state
+        switch = packet_log_switch(self.store.db_path, "c")
+        if len(parts) == 2:
+            if method == "GET":
+                return self._json(200, packet_recording_state(self.store.db_path, "c"))
+            if method != "PUT":
+                raise ApiError(405, "报文记录策略只支持 GET/PUT")
+            body = self._body()
+            if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+                raise ApiError(400, "enabled 必须是布尔值，且不能包含其他字段")
+            switch.set_enabled(body["enabled"])
+            return self._json(200, packet_recording_state(self.store.db_path, "c"))
+        if len(parts) == 3:
+            raw_channel = parts[2]
+        elif len(parts) == 4 and parts[2] == "channels":
+            raw_channel = parts[3]
+        else:
+            raise ApiError(404, "路径不存在", code="not_found")
+        try:
+            channel_id = int(raw_channel)
+        except ValueError as exc:
+            raise ApiError(400, "channel_id 必须是整数") from exc
+        if channel_id <= 0:
+            raise ApiError(400, "channel_id 必须是正整数")
+        if method == "GET":
+            try:
+                item = switch.channel_snapshot(channel_id)
+            except KeyError as exc:
+                raise ApiError(404, str(exc), code="not_found") from exc
+            return self._json(200, item)
+        if method != "PUT":
+            raise ApiError(405, "通道报文记录策略只支持 GET/PUT")
+        body = self._body()
+        if set(body) != {"enabled"} or (body["enabled"] is not None and type(body["enabled"]) is not bool):
+            raise ApiError(400, "enabled 必须是布尔值或 null，且不能包含其他字段")
+        try:
+            switch.channel_snapshot(channel_id)
+            switch.set_channel(channel_id, body["enabled"])
+            item = switch.channel_snapshot(channel_id)
+        except KeyError as exc:
+            raise ApiError(404, str(exc), code="not_found") from exc
+        return self._json(200, item)
 
     def _scdfe_control(self, parts, query, method):
         """Dedicated control/status/log routes for the scdfe_c supervisor."""
@@ -227,6 +298,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                     })
             result = self._list("fes_rtu_define", {"limit": "50", "sort": "rtu_id", **query}, None)
             rows = result["items"]
+            runtime_by_channel = {
+                int(row["channel_id"]): row
+                for row in runtime_status_rows(self.store, service_name="scdfe_c")
+            }
             with self.store.connection() as connection:
                 counts = dict(connection.execute(
                     "SELECT COUNT(*) AS total, "
@@ -251,6 +326,8 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 "process_start_time": row.get("process_start_time"),
                 "process_heartbeat_time": row.get("process_heartbeat_time"),
                 "process_error": row.get("process_error"),
+                "runtime_status": runtime_by_channel.get(int(row["channel_id"]))
+                if row.get("channel_id") is not None else None,
             } for row in rows]
             return self._json(200, {"item": control, "rtus": rtus, "counts": counts,
                                     "total": result["total"], "limit": result["limit"],
@@ -348,15 +425,24 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _list(self, table, query, scope):
         columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
+        if "rtu_id" in query and "rtu_id" not in columns and "channel_id" in columns:
+            query = dict(query)
+            query["channel_id"] = self.store.channel_id_for_rtu(query.pop("rtu_id"))
         reserved = {"q", "limit", "offset", "sort", "order", "fields"}
         unknown = set(query) - reserved - set(columns)
         if unknown:
             raise ApiError(400, "未知查询参数", details=sorted(unknown))
         where = {key: value for key, value in query.items() if key not in reserved}
         if scope is not None:
-            if "rtu_id" in where and self.store._coerce(where["rtu_id"], columns["rtu_id"]) != scope:
-                raise ApiError(400, "RTU 过滤条件与路径不一致")
-            where["rtu_id"] = scope
+            if "rtu_id" in columns:
+                if "rtu_id" in where and self.store._coerce(where["rtu_id"], columns["rtu_id"]) != scope:
+                    raise ApiError(400, "RTU 过滤条件与路径不一致")
+                where["rtu_id"] = scope
+            elif "channel_id" in columns and table.startswith("fes_channel_"):
+                channel_id = self.store.channel_id_for_rtu(scope)
+                if "channel_id" in where and int(where["channel_id"]) != channel_id:
+                    raise ApiError(400, "通道过滤条件与路径不一致")
+                where["channel_id"] = channel_id
         try:
             limit, offset = int(query.get("limit", "25")), int(query.get("offset", "0"))
         except ValueError as exc:
@@ -368,10 +454,36 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                                     limit=limit, offset=offset, sort=query.get("sort"),
                                     order=query.get("order", "asc"), fields=fields)
 
+    def _list_channels(self, query):
+        reserved = {"q", "limit", "offset", "sort", "order", "fields"}
+        allowed = {"channel_id", "channel_type", "rtu_id", "bound"}
+        unknown = set(query) - reserved - allowed
+        if unknown:
+            raise ApiError(400, "未知查询参数", details=sorted(unknown))
+        try:
+            limit, offset = int(query.get("limit", "25")), int(query.get("offset", "0"))
+        except ValueError as exc:
+            raise ApiError(400, "limit 和 offset 必须是整数") from exc
+        fields = None
+        if "fields" in query:
+            fields = [name.strip() for name in query["fields"].split(",")]
+        where = {key: value for key, value in query.items() if key in allowed}
+        return self.store.list_channels(
+            where=where,
+            search=query.get("q", ""),
+            limit=limit,
+            offset=offset,
+            sort=query.get("sort"),
+            order=query.get("order", "asc"),
+            fields=fields,
+        )
+
     def _dispatch(self):
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if self._packet_recording(parts, query, method) is not False:
+            return
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -411,6 +523,25 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if parts == ["api", "schemas"]:
                 items = self.store.schemas()
                 return self._json(200, {"items": items, "total": len(items)})
+            if parts == ["api", "channels"]:
+                return self._json(200, self._list_channels(query))
+            channel_definition = self._channel_definition_endpoint(parts)
+            if channel_definition is not None:
+                channel_type, channel_id, section = channel_definition
+                if query:
+                    raise ApiError(400, "单个通道查询不接受过滤参数")
+                if section is None:
+                    return self._json(200, {"item": self.store.get_channel_definition(
+                        channel_id, channel_type
+                    )})
+                if section == "parameters":
+                    info = self.store.channel_definition_parameters(channel_id, channel_type)
+                    return self._json(200, {
+                        "parameter_table": info["parameter_table"],
+                        "parameter_schema": info["parameter_schema"],
+                        "item": info["parameter"],
+                    })
+                raise ApiError(404, "通道子资源不存在", code="not_found")
             if len(parts) in (3, 4) and parts[:2] == ["api", "tables"] and (len(parts) == 3 or parts[3] == "schema"):
                 return self._json(200, {"schema": self.store.catalog.public(parts[2])})
             if parts == ["api", "overview"]:
@@ -433,6 +564,51 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                         "item": info["parameter"],
                     })
                 raise ApiError(404, "通道子资源不存在", code="not_found")
+        if parts == ["api", "channels"]:
+            if query:
+                raise ApiError(400, "写操作不接受查询参数")
+            if method == "POST":
+                return self._json(201, {"item": self.store.create_channel_definition(self._body())})
+            raise ApiError(405, "通道目录只支持 POST")
+        channel_definition = self._channel_definition_endpoint(parts)
+        if channel_definition is not None:
+            channel_type, channel_id, section = channel_definition
+            if query:
+                raise ApiError(400, "写操作不接受查询参数")
+            if section is None:
+                if method == "PATCH":
+                    return self._json(200, {"item": self.store.update_channel_definition(
+                        channel_id, channel_type, self._body(), self._if_match()
+                    )})
+                if method == "DELETE":
+                    return self._json(200, self.store.delete_channel_definition(
+                        channel_id, channel_type, self._if_match()
+                    ))
+                raise ApiError(405, "单个通道只支持 PATCH 或 DELETE")
+            if section != "parameters":
+                raise ApiError(404, "通道子资源不存在", code="not_found")
+            info = self.store.channel_definition_parameters(channel_id, channel_type)
+            parameter_table = info["parameter_table"]
+            if not parameter_table:
+                raise ApiError(409, "该通道类型没有参数定义表", code="unsupported_channel_type")
+            if method == "POST":
+                body = self._body()
+                body["channel_id"] = channel_id
+                primary_keys = self.store.catalog.public(parameter_table)["primary_keys"]
+                return self._json(201, {"item": self.store.create_row(
+                    parameter_table, body, allocate_key=primary_keys == ["id"]
+                )})
+            if info["parameter"] is None:
+                raise ApiError(404, "该通道尚未配置参数定义", code="not_found")
+            parameter_key = [info["parameter"][key] for key in self.store.catalog.public(parameter_table)["primary_keys"]]
+            if method == "PATCH":
+                return self._json(200, {"item": self.store.update_row(
+                    parameter_table, parameter_key, self._body(), self._if_match()
+                )})
+            if method == "DELETE":
+                self.store.delete_row(parameter_table, parameter_key, self._if_match())
+                return self._json(200, {"deleted": True})
+            raise ApiError(405, "通道参数只支持 POST、PATCH 或 DELETE")
         channel_endpoint = self._channel_endpoint(parts)
         if channel_endpoint is None:
             table, key, scope = self._route(parts)
@@ -481,11 +657,19 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             raise ApiError(405, "运行控制表仅允许通过专用控制接口修改")
         if method == "POST" and key is None:
             body = self._body()
+            if table == "fes_rtu_define":
+                return self._json(201, {"item": self.store.create_rtu(body)})
             if scope is not None:
-                col = next(c for c in self.store.schema(table)["columns"] if c["eng_name"] == "rtu_id")
-                if "rtu_id" in body and self.store._coerce(body["rtu_id"], col) != scope:
-                    raise ApiError(400, "路径中的 RTU 与请求体不一致")
-                body["rtu_id"] = scope
+                schema_columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
+                if "rtu_id" in schema_columns:
+                    if "rtu_id" in body and self.store._coerce(body["rtu_id"], schema_columns["rtu_id"]) != scope:
+                        raise ApiError(400, "路径中的 RTU 与请求体不一致")
+                    body["rtu_id"] = scope
+                elif "channel_id" in schema_columns and table.startswith("fes_channel_"):
+                    channel_id = self.store.channel_id_for_rtu(scope)
+                    if "channel_id" in body and int(body["channel_id"]) != channel_id:
+                        raise ApiError(400, "路径中的 RTU 与请求体不一致")
+                    body["channel_id"] = channel_id
             return self._json(201, {"item": self.store.create_row(table, body)})
         if method == "PATCH" and key is not None:
             body = self._body()

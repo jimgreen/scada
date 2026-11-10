@@ -9,7 +9,7 @@
       "eng_name": "id",
       "primary_key": true,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": ""
     },
     {
@@ -37,12 +37,13 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "所属RTU",
-      "eng_name": "rtu_id",
+      "chn_name": "所属通道",
+      "eng_name": "channel_id",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "KEYID类型",
-      "disp_menu": ""
+      "disp_menu": "",
+      "required": true
     },
     {
       "chn_name": "绑定本端IP",
@@ -89,7 +90,7 @@
   ],
   "unique_keys": [
     [
-      "rtu_id"
+      "channel_id"
     ]
   ]
 }

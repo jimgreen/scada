@@ -22,7 +22,7 @@ class fes_ytyk_check_define:
 
     id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': 'ID', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': 'ID', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     name: Optional[str] = field(
@@ -32,7 +32,7 @@ class fes_ytyk_check_define:
 
     judge_count: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '判断数量', 'eng_name': 'judge_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '判断数量', 'eng_name': 'judge_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     judge_app_name1: Optional[str] = field(

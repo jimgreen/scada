@@ -1,0 +1,27 @@
+<table_info>
+@   table_id     table_name_eng     table_name_chn     app_type     max_record_num     down_load     is_model     module_name
+#   729         fes_channel_can_j1939_define            J1939报文定义表           public/fes/scada 200 1 0 scada
+</table_info>
+<fes_channel_can_j1939_define>
+@   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key     app_type     display_type     menu_name
+#   1             id                             标识                             INT       8            1        public/fes/scada INT
+#   2             channel_id                         所属通道                          INT       8            0        public/fes/scada KEYID类型
+#   3             code                           英文标识                           STRING     256          0        public/fes/scada STRING
+#   4             name                           中文名称                           STRING     256          0        public/fes/scada STRING
+#   5             pgn                            PGN                            INT       8            0        public/fes/scada INT
+#   6             source_address                 源地址                            INT       8            0        public/fes/scada INT
+#   7             destination_address            目标地址                           INT       8            0        public/fes/scada INT
+#   8             priority                       优先级                            INT       8            0        public/fes/scada INT
+#   9             data_page                      数据页                            INT       8            0        public/fes/scada INT
+#   10            extended_data_page             扩展数据页                          INT       8            0        public/fes/scada INT
+#   11            direction                      方向                             STRING     256          0        public/fes/scada STRING         CAN方向
+#   12            message_type                   报文类型                           STRING     256          0        public/fes/scada STRING         J1939报文类型
+#   13            dm_number                      DM编号                           INT       8            0        public/fes/scada INT
+#   14            transport_protocol             传输协议                           STRING     256          0        public/fes/scada STRING         J1939传输协议
+#   15            multi_packet                   多包传输                           INT       8            0        public/fes/scada 单选菜单           二值判断
+#   16            data_length                    数据长度                           INT       8            0        public/fes/scada INT
+#   17            data_hex                       数据HEX                          STRING     256          0        public/fes/scada STRING
+#   18            period_ms                      周期（毫秒）                         INT       8            0        public/fes/scada INT
+#   19            packet_timeout_ms              分包超时（毫秒）                       INT       8            0        public/fes/scada INT
+#   20            enabled                        启用                             INT       8            0        public/fes/scada 单选菜单           二值判断
+</fes_channel_can_j1939_define>

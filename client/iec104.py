@@ -12,6 +12,7 @@ import time
 from typing import NamedTuple
 
 from core.iec104_values import binary_command_value, double_to_binary
+from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu
 from core.packet_trace import PacketTrace
 
 try:
@@ -70,10 +71,31 @@ class IEC104Master(PacketTrace):
     DEFAULT_BASE = {'yc': 0x4001, 'yx': 0x01, 'yk': 0x6001, 'yt': 0x6201}
     PACKET_PROTOCOL = "IEC104 APDU"
     TYPE_NAMES = {
-        'yx': ('M_SP_NA_1', 'M_DP_NA_1'),
+        'yx': ('M_SP_NA_1', 'M_DP_NA_1', 'M_ST_NA_1'),
         'yc': ('M_ME_NC_1', 'M_ME_NB_1', 'M_ME_NA_1'),
         'yk': ('C_SC_NA_1', 'C_DC_NA_1'),
         'yt': ('C_SE_NC_1', 'C_SE_NB_1', 'C_SE_NA_1'),
+    }
+    TYPE_IDS = {
+        'yx': {
+            1: 'M_SP_NA_1', 2: 'M_SP_TA_1', 30: 'M_SP_TB_1',
+            3: 'M_DP_NA_1', 4: 'M_DP_TA_1', 31: 'M_DP_TB_1',
+            5: 'M_ST_NA_1', 6: 'M_ST_TA_1', 32: 'M_ST_TB_1',
+        },
+        'yc': {
+            9: 'M_ME_NA_1', 10: 'M_ME_TA_1', 34: 'M_ME_TD_1', 21: 'M_ME_ND_1',
+            11: 'M_ME_NB_1', 12: 'M_ME_TB_1', 35: 'M_ME_TE_1',
+            13: 'M_ME_NC_1', 14: 'M_ME_TC_1', 36: 'M_ME_TF_1',
+        },
+        'yk': {
+            45: 'C_SC_NA_1', 58: 'C_SC_TA_1',
+            46: 'C_DC_NA_1', 59: 'C_DC_TA_1',
+        },
+        'yt': {
+            48: 'C_SE_NA_1', 61: 'C_SE_TA_1',
+            49: 'C_SE_NB_1', 62: 'C_SE_TB_1',
+            50: 'C_SE_NC_1', 63: 'C_SE_TC_1',
+        },
     }
     # Public point tables may use the compact 1/2/3 selectors used by the
     # legacy project or the IEC 60870-5-104 type identifiers themselves.
@@ -83,17 +105,19 @@ class IEC104Master(PacketTrace):
         'yk': {45: 1, 46: 2},
         'yt': {48: 1, 49: 2, 50: 3},
     }
-    _STORE_RTU_PROJECTION = 'rtu_id,channel_type'
+    _STORE_RTU_PROJECTION = 'rtu_id,channel_id,channel_type'
     _STORE_DEFINITION_PROJECTION = (
-        'rtu_id,rtu_addr,ycbegin_addr,yxbegin_addr,ykbegin_addr,ytbegin_addr,'
-        'yx_data_type,yk_excute_type,yc_data_type,yt_excute_type,remote_host,remote_port'
+        'channel_id,rtu_addr,ycbegin_addr,yxbegin_addr,ykbegin_addr,ytbegin_addr,'
+        'yx_data_type,yk_excute_type,yc_data_type,yt_excute_type,remote_host,remote_port,'
+        'k,w,t1,t2,t3,max_asdu_length'
     )
 
     def __init__(self, host, port=2404, *, common_address=1, rtu_id=None,
                  master_address=1, ycbegin_addr=0x4001, yxbegin_addr=1,
                  ykbegin_addr=0x6001, ytbegin_addr=0x6201,
                  yx_data_type=1, yc_data_type=1, yk_execute_type=1,
-                 yt_execute_type=2, command_timeout_ms=10000,
+                  yt_execute_type=2, command_timeout_ms=10000, k=12, w=8,
+                  t1=15.0, t2=10.0, t3=20.0, max_asdu_length=249,
                  init='ALL'):
         _require_c104()
         if not isinstance(host, str) or not host:
@@ -116,6 +140,10 @@ class IEC104Master(PacketTrace):
         self.yc_data_type = int(yc_data_type)
         self.yk_execute_type = int(yk_execute_type)
         self.yt_execute_type = int(yt_execute_type)
+        self.protocol = IEC104ProtocolConfig(
+            k=int(k), w=int(w), t1=float(t1), t2=float(t2), t3=float(t3),
+            max_asdu_length=int(max_asdu_length),
+        )
         self._client = c104.Client(command_timeout_ms=int(command_timeout_ms))
         init_enum = getattr(c104.Init, str(init).upper(), None) if isinstance(init, str) else init
         if init_enum is None:
@@ -124,6 +152,7 @@ class IEC104Master(PacketTrace):
         self._connection = self._client.add_connection(host, port=self.port, init=init_enum)
         if self._connection is None:
             raise IEC104Error(f'创建 {host}:{port} 连接失败')
+        self.protocol.apply(self._connection.protocol_parameters)
         self._station = self._connection.add_station(common_address=self.common_address)
         if self._station is None:
             raise IEC104Error(f'创建公共地址 {self.common_address} 失败')
@@ -143,6 +172,34 @@ class IEC104Master(PacketTrace):
         # sample.  The fallback path refreshes this cache if a custom/test
         # point supplies a different Python value type later.
         self._point_value_converters = {}
+        self._protocol_errors = []
+        self._connection_states = []
+        self._unexpected_messages = []
+        self._connection.on_state_change(self._on_state_change)
+        self._connection.on_unexpected_message(self._on_unexpected_message)
+
+    def _on_state_change(self, connection: c104.Connection,
+                         state: c104.ConnectionState) -> None:
+        with self._lock:
+            self._connection_states.append({
+                'state': getattr(state, 'name', str(state)),
+                'time': datetime.now(timezone.utc),
+            })
+            del self._connection_states[:-1000]
+
+    def _on_unexpected_message(self, connection: c104.Connection,
+                               message: c104.IncomingMessage,
+                               cause: c104.Umc) -> None:
+        item = {
+            'common_address': int(getattr(message, 'common_address', 0)),
+            'io_address': int(getattr(message, 'io_address', 0)),
+            'type': str(getattr(message, 'type', '')),
+            'cause': str(cause),
+            'time': datetime.now(timezone.utc),
+        }
+        with self._lock:
+            self._unexpected_messages.append(item)
+            del self._unexpected_messages[:-1000]
 
     @classmethod
     def from_channel(cls, channel, definition=None, **kwargs):
@@ -152,7 +209,14 @@ class IEC104Master(PacketTrace):
         kwargs.setdefault('master_address', field(definition, 'rtu_addr', 1))
         kwargs.setdefault('common_address', kwargs.pop('common_address', field(definition, 'rtu_addr', 1)))
         for name in ('ycbegin_addr', 'yxbegin_addr', 'ykbegin_addr', 'ytbegin_addr',
-                     'yx_data_type', 'yc_data_type', 'yk_execute_type', 'yt_execute_type'):
+                     'yx_data_type', 'yc_data_type'):
+            if name not in kwargs:
+                kwargs[name] = field(definition, name, None)
+        for source, target in (('yk_excute_type', 'yk_execute_type'),
+                               ('yt_excute_type', 'yt_execute_type')):
+            if target not in kwargs:
+                kwargs[target] = field(definition, source, None)
+        for name in ('k', 'w', 't1', 't2', 't3', 'max_asdu_length'):
             if name not in kwargs:
                 kwargs[name] = field(definition, name, None)
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -179,15 +243,16 @@ class IEC104Master(PacketTrace):
             channel_type = rtu['channel_type']
             if channel_type != 'iec104':
                 raise ValueError(f'RTU {rtu_id} 不是 IEC104 通道')
+            channel_id = int(rtu['channel_id'])
             definitions = [dict(row) for row in connection.execute(
                 f'SELECT {cls._STORE_DEFINITION_PROJECTION} '
-                'FROM fes_channel_iec104_define WHERE rtu_id=? ORDER BY id LIMIT 2', (rtu_id,),
+                'FROM fes_channel_iec104_define WHERE channel_id=? ORDER BY id LIMIT 2', (channel_id,),
             )]
             mappings = [dict(row) for row in connection.execute(
-                'SELECT rtu_id, kind, pnt_no, io_address, type_id, report_ms, '
+                'SELECT channel_id, kind, pnt_no, io_address, type_id, time_tag, report_ms, '
                 'command_mode, qualifier, related_io_address, related_io_autoreturn '
-                'FROM fes_channel_iec104_point_define WHERE rtu_id=? '
-                'ORDER BY kind, pnt_no', (rtu_id,),
+                'FROM fes_channel_iec104_point_define WHERE channel_id=? '
+                'ORDER BY kind, pnt_no', (channel_id,),
             )]
             points = []
             for table, kind in (('fes_yc_define', 'yc'), ('fes_yx_define', 'yx'),
@@ -209,7 +274,7 @@ class IEC104Master(PacketTrace):
             if mapped:
                 # Protocol point definitions are authoritative for address and
                 # type.  Keep the four遥 row as the source of name/value limits.
-                for name in ('io_address', 'type_id', 'report_ms',
+                for name in ('io_address', 'type_id', 'time_tag', 'report_ms',
                              'command_mode', 'qualifier', 'related_io_address',
                              'related_io_autoreturn'):
                     if mapped.get(name) is not None:
@@ -229,14 +294,55 @@ class IEC104Master(PacketTrace):
         state = self._connection.is_connected
         return bool(state() if callable(state) else state)
 
+    @property
+    def protocol_parameters(self):
+        return self._connection.protocol_parameters
+
+    @property
+    def protocol_config(self):
+        return self.protocol.as_dict()
+
+    @property
+    def protocol_errors(self):
+        with self._lock:
+            return list(self._protocol_errors)
+
+    @property
+    def connection_states(self):
+        with self._lock:
+            return list(self._connection_states)
+
+    @property
+    def unexpected_messages(self):
+        with self._lock:
+            return list(self._unexpected_messages)
+
+    @property
+    def diagnostics(self):
+        return {
+            'protocol_errors': self.protocol_errors,
+            'connection_states': self.connection_states,
+            'unexpected_messages': self.unexpected_messages,
+        }
+
     def set_packet_handler(self, handler):
         super().set_packet_handler(handler)
         def receive(connection: c104.Connection, data: bytes) -> None:
+            self._inspect_apdu(data)
             self._packet("RX", data, f"peer={connection.ip}:{connection.port}")
         def send(connection: c104.Connection, data: bytes) -> None:
+            self._inspect_apdu(data)
             self._packet("TX", data, f"peer={connection.ip}:{connection.port}")
         self._connection.on_receive_raw(receive)
         self._connection.on_send_raw(send)
+
+    def _inspect_apdu(self, data):
+        try:
+            parse_apdu(data, max_asdu_length=self.protocol.max_asdu_length)
+        except IEC104ProtocolError as exc:
+            with self._lock:
+                self._protocol_errors.append(str(exc))
+                del self._protocol_errors[:-1000]
 
     @property
     def connection(self):
@@ -282,6 +388,16 @@ class IEC104Master(PacketTrace):
             self._client.stop()
             self._started = False
 
+    def test_fr(self, *, with_time=True, wait_for_response=True):
+        """Send a TESTFR request and wait for its confirmation if requested."""
+        if not self.connected:
+            raise IEC104Error('未连接，请先 connect()')
+        if not self._connection.test(
+                self.common_address, with_time=bool(with_time),
+                wait_for_response=bool(wait_for_response)):
+            raise IEC104Error('TESTFR 测试帧失败')
+        return True
+
     def __enter__(self):
         return self.connect()
 
@@ -306,28 +422,56 @@ class IEC104Master(PacketTrace):
             raise ValueError('信息体地址早于配置起始地址')
         return number
 
-    def _type(self, kind, data_type=None):
+    def _type(self, kind, data_type=None, time_tag=None):
         if data_type is None:
-            data_type = self.yx_data_type if kind == 'yx' else self.yc_data_type if kind == 'yc' else 3
-        data_type = self.IEC_TYPE_SELECTORS.get(kind, {}).get(int(data_type), data_type)
-        choices = self.TYPE_NAMES[kind]
-        if kind == 'yx':
-            return getattr(c104.Type, choices[1 if int(data_type or 1) == 2 else 0])
-        if kind == 'yc':
-            return getattr(c104.Type, choices[{1: 0, 2: 1, 3: 2}.get(int(data_type or 1), 0)])
-        if kind == 'yk':
-            return getattr(c104.Type, choices[1 if int(data_type or 1) == 2 else 0])
-        if kind == 'yt':
-            return getattr(c104.Type, choices[{1: 2, 2: 1, 3: 0}.get(int(data_type or 3), 0)])
-        raise ValueError('未知点类型')
+            if kind == 'yx':
+                data_type = self.yx_data_type
+            elif kind == 'yc':
+                data_type = self.yc_data_type
+            elif kind == 'yk':
+                data_type = self.yk_execute_type
+            else:
+                data_type = self.yt_execute_type
+        data_type = self._canonical_type_id(kind, data_type, time_tag)
+        try:
+            return getattr(c104.Type, self.TYPE_IDS[kind][data_type])
+        except KeyError as exc:
+            raise ValueError(f'{kind} 不支持 data_type={data_type}') from exc
 
-    def add_point(self, kind, point_no, *, data_type=None, report_ms=0,
+    @staticmethod
+    def _canonical_type_id(kind, data_type, time_tag=None):
+        data_type = int(data_type)
+        compact = {
+            # Legacy point tables used 1=single and 2=double.  Keep both 2
+            # and 3 as the compact double selector; explicit CP24/CP56
+            # choices use their full IEC type IDs in the mapping table.
+            'yx': {1: 1, 2: 3, 3: 3},
+            'yc': {1: 13, 2: 11, 3: 9},
+            'yk': {1: 45, 2: 46},
+            'yt': {1: 48, 2: 49, 3: 50},
+        }
+        canonical = compact.get(kind, {}).get(data_type, data_type)
+        if not time_tag or str(time_tag).upper() in {'', 'NONE'}:
+            return canonical
+        tag = str(time_tag).upper().replace('-', '')
+        tagged = {
+            'CP24TIME2A': {
+                'yx': {1: 2, 3: 4, 5: 6}, 'yc': {9: 10, 11: 12, 13: 14},
+                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
+            },
+            'CP56TIME2A': {
+                'yx': {1: 30, 3: 31, 5: 32}, 'yc': {9: 34, 11: 35, 13: 36},
+            },
+        }
+        return tagged.get(tag, {}).get(kind, {}).get(canonical, canonical)
+
+    def add_point(self, kind, point_no, *, data_type=None, time_tag='NONE', report_ms=0,
                   io_address=None):
         """注册远端点；收到报文时 c104 自动更新 Point.info/value。"""
         ioa = self.point_address(kind, point_no) if io_address is None else int(io_address)
         if not 1 <= ioa <= 0xFFFFFF:
             raise ValueError('信息体地址必须在 1..0xffffff')
-        typ = self._type(kind, data_type)
+        typ = self._type(kind, data_type, time_tag)
         with self._lock:
             point = self._station.get_point(io_address=ioa)
             if point is not None and point.type != typ:
@@ -360,6 +504,7 @@ class IEC104Master(PacketTrace):
                 raise ValueError(f'重复 IEC104 点 {key}')
             seen.add(key)
             self.add_point(kind, point_no, data_type=field(row, 'data_type', field(row, 'type_id')),
+                           time_tag=field(row, 'time_tag', 'NONE'),
                            report_ms=field(row, 'report_ms', 0),
                            io_address=field(row, 'io_address'))
             self._point_definitions[key] = row
@@ -389,36 +534,42 @@ class IEC104Master(PacketTrace):
             raise IEC104Error('对时命令失败')
         return True
 
-    def _write_yk_command(self, point_no, value, *, double=None, select_execute=None, qualifier=None):
+    def _write_yk_command(self, point_no, value, *, double=None, select_execute=None,
+                          qualifier=None, recorded_at=None):
         value = binary_command_value(value)
         definition = self._point_definitions.get(('yk', int(point_no)), {})
+        type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
+        canonical_type = self._canonical_type_id('yk', type_id)
         if double is None:
-            type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
-            double = self.IEC_TYPE_SELECTORS['yk'].get(type_id, type_id) == 2
+            double = canonical_type in {46, 59}
         if select_execute is None:
             mode = str(field(definition, 'command_mode', '') or '').upper()
             select_execute = mode in {'SELECT_AND_EXECUTE', 'SELECT-AND-EXECUTE', 'SELECT'}
         if qualifier is None:
             qualifier = field(definition, 'qualifier')
-        point = self._point('yk', point_no, data_type=2 if double else 1)
+        wire_type = canonical_type if canonical_type in {45, 46, 58, 59} else (46 if double else 45)
+        point = self._point('yk', point_no, data_type=wire_type)
         mode = c104.CommandMode.SELECT_AND_EXECUTE if select_execute else c104.CommandMode.DIRECT
         point.command_mode = mode
+        qoc = c104.Qoc.NONE if qualifier is None else (
+            qualifier if isinstance(qualifier, c104.Qoc) else c104.Qoc(int(qualifier)))
         if double:
             state = c104.Double.ON if bool(value) else c104.Double.OFF
-            point.info = c104.DoubleCmd(state=state, qualifier=qualifier or c104.Qoc.NONE)
+            point.info = c104.DoubleCmd(state=state, qualifier=qoc, recorded_at=recorded_at)
         else:
-            point.info = c104.SingleCmd(on=bool(value), qualifier=qualifier or c104.Qoc.NONE)
+            point.info = c104.SingleCmd(on=bool(value), qualifier=qoc, recorded_at=recorded_at)
         if not point.transmit(c104.Cot.ACTIVATION):
             raise IEC104Error(f'遥控点 {point_no} 未被 c104 接受')
         return self.value('yk', point_no)
 
-    def _write_yt_command(self, point_no, value, *, data_type=None, qualifier=None):
+    def _write_yt_command(self, point_no, value, *, data_type=None, qualifier=None,
+                           recorded_at=None):
         # 旧 CRtu104::TxdData_2SETPNT 使用 0x32（短浮点）设点；
         # 因而遥调未显式指定类型时沿用短浮点，而非遥测配置。
         definition = self._point_definitions.get(('yt', int(point_no)), {})
         data_type = field(definition, 'data_type', field(definition, 'type_id', 3)) if data_type is None else data_type
         data_type = 3 if data_type is None else int(data_type)
-        data_type = self.IEC_TYPE_SELECTORS['yt'].get(data_type, data_type)
+        data_type = self._canonical_type_id('yt', data_type)
         if qualifier is None:
             qualifier = field(definition, 'qualifier', 0)
         point = self._point('yt', point_no, data_type=data_type)
@@ -428,12 +579,19 @@ class IEC104Master(PacketTrace):
                                   or (not mode and self.yt_execute_type == 1))
                               else c104.CommandMode.DIRECT)
         q = c104.UInt7(int(qualifier))
-        if data_type == 1:
-            point.info = c104.NormalizedCmd(target=c104.NormalizedFloat(float(value)), qualifier=q)
-        elif data_type == 2:
-            point.info = c104.ScaledCmd(target=c104.Int16(int(value)), qualifier=q)
+        if data_type in {48, 61}:
+            point.info = c104.NormalizedCmd(
+                target=c104.NormalizedFloat(float(value)), qualifier=q,
+                recorded_at=recorded_at)
+        elif data_type in {49, 62}:
+            point.info = c104.ScaledCmd(
+                target=c104.Int16(int(value)), qualifier=q,
+                recorded_at=recorded_at)
+        elif data_type in {50, 63}:
+            point.info = c104.ShortCmd(target=float(value), qualifier=q,
+                                       recorded_at=recorded_at)
         else:
-            point.info = c104.ShortCmd(target=float(value), qualifier=q)
+            raise ValueError(f'yt 不支持 data_type={data_type}')
         if not point.transmit(c104.Cot.ACTIVATION):
             raise IEC104Error(f'遥调点 {point_no} 未被 c104 接受')
         return self.value('yt', point_no)
@@ -542,12 +700,42 @@ class IEC104Master(PacketTrace):
             event.wait(interval)
         return cycles
 
-    def send_yk_point(self, point_no, value, *, double=None, select_execute=None, qualifier=None):
+    def send_yk_point(self, point_no, value, *, double=None, select_execute=None,
+                      qualifier=None, recorded_at=None):
         return self._write_yk_command(point_no, value, double=double,
-                                       select_execute=select_execute, qualifier=qualifier)
+                                       select_execute=select_execute, qualifier=qualifier,
+                                       recorded_at=recorded_at)
 
-    def send_yt_point(self, point_no, value, *, data_type=None, qualifier=0):
-        return self._write_yt_command(point_no, value, data_type=data_type, qualifier=qualifier)
+    def send_yt_point(self, point_no, value, *, data_type=None, qualifier=0, recorded_at=None):
+        return self._write_yt_command(point_no, value, data_type=data_type,
+                                       qualifier=qualifier, recorded_at=recorded_at)
+
+    def cancel_yk_point(self, point_no, value, *, double=None, qualifier=None,
+                        recorded_at=None):
+        """Cancel a pending control using the IEC 104 deactivation cause."""
+        value = binary_command_value(value)
+        definition = self._point_definitions.get(('yk', int(point_no)), {})
+        type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
+        canonical_type = self._canonical_type_id('yk', type_id)
+        double = canonical_type in {46, 59} if double is None else bool(double)
+        wire_type = canonical_type if canonical_type in {45, 46, 58, 59} else (46 if double else 45)
+        point = self._point('yk', point_no, data_type=wire_type)
+        mode = str(field(definition, 'command_mode', '') or '').upper()
+        point.command_mode = (c104.CommandMode.SELECT_AND_EXECUTE
+                              if mode in {'SELECT_AND_EXECUTE', 'SELECT-AND-EXECUTE', 'SELECT'}
+                              else c104.CommandMode.DIRECT)
+        qoc = c104.Qoc.NONE if qualifier is None else (
+            qualifier if isinstance(qualifier, c104.Qoc) else c104.Qoc(int(qualifier)))
+        if double:
+            point.info = c104.DoubleCmd(
+                state=c104.Double.ON if value else c104.Double.OFF,
+                qualifier=qoc, recorded_at=recorded_at)
+        else:
+            point.info = c104.SingleCmd(on=bool(value), qualifier=qoc,
+                                        recorded_at=recorded_at)
+        if not point.transmit(c104.Cot.DEACTIVATION):
+            raise IEC104Error(f'撤销遥控点 {point_no} 未被 c104 接受')
+        return self.value('yk', point_no)
 
     def snapshot(self):
         with self._lock:

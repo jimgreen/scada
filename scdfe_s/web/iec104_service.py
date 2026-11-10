@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime, timezone
 import json
+import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -16,9 +18,14 @@ from typing import Any
 
 from server.iec104_server import IEC104Command, IEC104Server
 from functools import partial
+from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError
 from core.packet_trace import service_packet_recorder
+from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
 from scdfe_s.web.configuration import apply_config, write_config
+
+
+LOG = logging.getLogger(__name__)
 
 
 class IEC104ServiceError(RuntimeError):
@@ -43,6 +50,12 @@ class IEC104Service:
         "tick_rate_ms": 100,
         "select_timeout_ms": 10000,
         "max_connections": 0,
+        "k": 12,
+        "w": 8,
+        "t1": 15.0,
+        "t2": 10.0,
+        "t3": 20.0,
+        "max_asdu_length": 249,
     }
     LOG_LIMIT = 500
     ALERT_LIMIT = 200
@@ -69,6 +82,14 @@ class IEC104Service:
         self._started_at: int | None = None
         self._stopped_at: int | None = None
         self._last_error: str | None = self._config_error
+        self._rx_count = 0
+        self._tx_count = 0
+        self._error_count = 0
+        self._reconnect_count = 0
+        self._last_rx_time = 0
+        self._last_tx_time = 0
+        self._last_error_time = 0
+        self._runtime_status = RuntimeStatusStore(store, "scdfe_s")
         if self._config_error:
             self._record("ERROR", self._config_error, alert=True)
         self._record("INFO", "服务管理器已就绪")
@@ -107,6 +128,10 @@ class IEC104Service:
             raise IEC104ServiceError("tick_rate_ms 和 select_timeout_ms 必须为正数")
         if max_connections < 0:
             raise IEC104ServiceError("max_connections 不能为负数")
+        try:
+            protocol = IEC104ProtocolConfig.from_mapping(config)
+        except (TypeError, ValueError, IEC104ProtocolError) as exc:
+            raise IEC104ServiceError(f"IEC104 协议参数无效: {exc}") from exc
         rtu_id = config.get("rtu_id")
         if rtu_id in (None, "", 0, "0"):
             rtu_id = None
@@ -124,13 +149,25 @@ class IEC104Service:
             "tick_rate_ms": tick_rate_ms,
             "select_timeout_ms": select_timeout_ms,
             "max_connections": max_connections,
+            **protocol.as_dict(),
         }
 
     def _record(self, level: str, message: str, *, alert: bool = False, details: Any = None, channel_id=None) -> None:
         item = {"time": _iso_now(), "level": level, "message": str(message)}
         if details is not None:
             item["details"] = details
+        sampled_at = now_ms()
         with self._log_lock:
+            if level == "PACKET":
+                if "报文 RX" in str(message):
+                    self._rx_count += 1
+                    self._last_rx_time = sampled_at
+                elif "报文 TX" in str(message):
+                    self._tx_count += 1
+                    self._last_tx_time = sampled_at
+            elif level == "ERROR":
+                self._error_count += 1
+                self._last_error_time = sampled_at
             self._logs.append(item)
             self._file_log.write(level, message, channel_id=channel_id)
             if alert:
@@ -199,6 +236,12 @@ class IEC104Service:
             tick_rate_ms=config["tick_rate_ms"],
             select_timeout_ms=config["select_timeout_ms"],
             max_connections=config["max_connections"],
+            k=config["k"],
+            w=config["w"],
+            t1=config["t1"],
+            t2=config["t2"],
+            t3=config["t3"],
+            max_asdu_length=config["max_asdu_length"],
             command_handlers=handlers,
         )
         server.set_connect_handler(self._on_connect)
@@ -227,6 +270,7 @@ class IEC104Service:
             self._server = server
             self._started_at = _now_ms()
             self._stopped_at = None
+            self._reconnect_count += 1
             self._last_error = None
             self._record(
                 "INFO",
@@ -424,7 +468,25 @@ class IEC104Service:
     def _on_command(self, event: IEC104Command, rtu_id=None) -> bool:
         value = event.value
         try:
-            table, key, fields = self._point_update(event.kind, event.point_no, value, rtu_id)
+            table, key = self._row_for_point(event.kind, event.point_no, rtu_id)
+            cause_name = str(getattr(event.cause, "name", event.cause)).upper()
+            if event.selected:
+                item = self.store.get_row(table, key)
+                self._record(
+                    "INFO",
+                    f"收到{event.kind}命令选择 点号={event.point_no} 值={value} OA={event.originator_address}",
+                    details={"item": item, "cause": str(event.cause)},
+                )
+                return True
+            if cause_name.endswith("DEACTIVATION"):
+                item = self.store.get_row(table, key)
+                self._record(
+                    "INFO",
+                    f"收到{event.kind}命令撤销 点号={event.point_no} 值={value} OA={event.originator_address}",
+                    details={"item": item, "cause": str(event.cause)},
+                )
+                return True
+            fields = self._point_update(event.kind, event.point_no, value, rtu_id)[2]
             fields["cmd_handle_time"] = fields["refresh_time"]
             item = self.store.update_row(table, key, fields)
             self._record(
@@ -439,13 +501,61 @@ class IEC104Service:
             self._record("ERROR", f"处理 {event.kind}/{event.point_no} 命令失败: {exc}", alert=True)
             return False
 
+    def _persist_runtime_status(self, item: dict[str, Any], *, force: bool = False) -> None:
+        rtu_id = item.get("rtu_id")
+        if rtu_id is None:
+            return
+        try:
+            with self.store.connection() as connection:
+                row = connection.execute(
+                    "SELECT channel_id, name FROM fes_rtu_define WHERE rtu_id=?",
+                    (int(rtu_id),),
+                ).fetchone()
+            channel_id = int(row[0] or rtu_id) if row else int(rtu_id)
+            channel_name = str(row[1] or "") if row else ""
+            error = str(item.get("last_error") or "")
+            diagnostic = {
+                "label": "IEC104 服务端",
+                "config": item.get("config", {}),
+                "protocol_config": item.get("protocol_config", {}),
+                "open_connections": item.get("open_connections", 0),
+                "active_connections": item.get("active_connections", 0),
+                "point_count": item.get("point_count", 0),
+                "protocol_errors": item.get("protocol_errors", []),
+                "unexpected_messages": item.get("unexpected_messages", []),
+            }
+            self._runtime_status.upsert(channel_id, {
+                "protocol": "iec104",
+                "channel_name": channel_name,
+                "state": state_for(2 if item.get("running") else 0, item.get("running"), error),
+                "running": int(bool(item.get("running"))),
+                "connection_state": "listening" if item.get("running") else "disconnected",
+                "process_status": 2 if item.get("running") else 0,
+                "process_pid": os.getpid() if item.get("running") else 0,
+                "process_start_time": int(item.get("started_at") or 0),
+                "process_stop_time": int(item.get("stopped_at") or 0),
+                "process_heartbeat_time": now_ms(),
+                "process_error": error,
+                "rx_count": self._rx_count,
+                "tx_count": self._tx_count,
+                "error_count": self._error_count,
+                "reconnect_count": self._reconnect_count,
+                "last_rx_time": self._last_rx_time,
+                "last_tx_time": self._last_tx_time,
+                "last_error_time": self._last_error_time,
+                "last_error": error,
+                "diagnostic_json": diagnostic,
+            }, force=force)
+        except Exception:
+            LOG.exception("写入 IEC104 通道运行状态失败: rtu_id=%s", rtu_id)
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             server = self._server
             config = self.config()
             with self._log_lock:
                 connections = list(self._connections)
-            return {
+            item = {
                 "running": bool(server and server.running),
                 "config": config,
                 "rtu_id": getattr(server, "rtu_id", None) if server else config.get("effective_rtu_id"),
@@ -453,11 +563,26 @@ class IEC104Service:
                 "open_connections": int(server.open_connection_count) if server else 0,
                 "active_connections": int(server.active_connection_count) if server else 0,
                 "point_count": server.point_count if server else 0,
+                "protocol_config": (server.protocol_config if server else {
+                    key: config[key] for key in ("k", "w", "t1", "t2", "t3", "max_asdu_length")
+                }),
+                "protocol_errors": ([str(item) for item in getattr(server, "protocol_errors", [])]
+                                    if server else []),
+                "unexpected_messages": (server.unexpected_messages if server else []),
                 "started_at": self._started_at,
                 "stopped_at": self._stopped_at,
                 "last_error": self._last_error,
                 "connections": connections,
+                "rx_count": self._rx_count,
+                "tx_count": self._tx_count,
+                "error_count": self._error_count,
+                "reconnect_count": self._reconnect_count,
+                "last_rx_time": self._last_rx_time,
+                "last_tx_time": self._last_tx_time,
+                "last_error_time": self._last_error_time,
             }
+            self._persist_runtime_status(item)
+            return item
 
     def points(self, kind: str | None = None, *, table_view=False) -> list[dict[str, Any]]:
         config = self._effective_config()
@@ -471,16 +596,20 @@ class IEC104Service:
         rows: list[dict[str, Any]] = []
         with self.store.connection() as connection:
             connection.execute("BEGIN")
+            channel_row = connection.execute(
+                "SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)
+            ).fetchone()
+            channel_id = channel_row[0] if channel_row else None
             if table_view:
                 for item in kinds:
                     rows.extend(dict(row) for row in connection.execute(
                         f"SELECT ? AS kind,p._version,p.rtu_id,p.pnt_no,p.value,p.status,m.io_address,m.type_id "
                         f"FROM {tables[item]} p LEFT JOIN fes_channel_iec104_point_define m "
-                        "ON m.rtu_id=p.rtu_id AND m.kind=? AND m.pnt_no=p.pnt_no "
-                        "WHERE p.rtu_id=? ORDER BY p.pnt_no", (item, item, rtu_id)))
+                        "ON m.channel_id=? AND m.kind=? AND m.pnt_no=p.pnt_no "
+                        "WHERE p.rtu_id=? ORDER BY p.pnt_no", (item, channel_id, item, rtu_id)))
                 return rows
-            sql = "SELECT * FROM fes_channel_iec104_point_define WHERE rtu_id=?"
-            params = (rtu_id,)
+            sql = "SELECT * FROM fes_channel_iec104_point_define WHERE channel_id=?"
+            params = (channel_id,)
             if kind:
                 sql += " AND kind=?"
                 params += (kind,)
@@ -496,7 +625,7 @@ class IEC104Service:
                     value["kind"] = item
                     value.update({
                         key: mapped_value for key, mapped_value in mappings.get((item, int(value["pnt_no"])), {}).items()
-                        if key not in {"_version", "rtu_id", "kind", "pnt_no"}
+                        if key not in {"_version", "channel_id", "kind", "pnt_no"}
                     })
                     rows.append(value)
         return rows
@@ -565,7 +694,10 @@ class IEC104Service:
             })
         return result
 
-    def logs(self, limit: int = 200, record: str = "runtime") -> list[dict[str, Any]]:
+    def logs(self, limit: int = 200, record: str | None = None) -> list[dict[str, Any]]:
+        if record is None:
+            with self._log_lock:
+                return list(self._logs)[-max(1, min(int(limit), self.LOG_LIMIT)):]
         if record not in {"runtime", "packet"}:
             raise ValueError("记录类型无效")
         with self._log_lock:

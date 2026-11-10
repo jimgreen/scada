@@ -47,6 +47,7 @@ from core.scdfe_control import (
 )
 from core.log_paths import log_entries, packet_log_directory
 from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
+from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from .web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
 from .writer_ipc import (
     WriterClient, WriterIpcServer, WriterRequest, WriterRequestError, WriterUnavailable,
@@ -251,7 +252,8 @@ class ScdfeLogger:
     """
 
     def __init__(self, directory: Path | str, *, process_name: str, console: bool = False,
-                 packet_switch=None, packet_directory: Path | str | None = None):
+                 packet_switch=None, packet_directory: Path | str | None = None,
+                 runtime_packet_compat: bool = False):
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         # ``packet_directory`` is explicit for managed C/S/T runtimes.  Keep
@@ -263,12 +265,18 @@ class ScdfeLogger:
         self.console = console
         self.process_name = process_name
         self.packet_switch = packet_switch
+        self.runtime_packet_compat = bool(runtime_packet_compat)
         self._write_lock = threading.Lock()
         self._hour_keys = {"runtime": None, "packet": None}
         self._paths = {"runtime": None, "packet": None}
         self._streams = {"runtime": None, "packet": None}
         self._stream_identities = {"runtime": None, "packet": None}
         self._sessions = 0
+
+    @property
+    def _stream(self):
+        """Compatibility alias for the pre packet/runtime split logger."""
+        return self._streams["runtime"]
 
     def _close_stream(self, kind=None):
         kinds = ("runtime", "packet") if kind is None else (kind,)
@@ -369,7 +377,13 @@ class ScdfeLogger:
         if self.packet_switch is not None and not self.packet_switch.enabled():
             return
         from core.packet_trace import packet_lines
-        self._emit_lines("normal", packet_lines(direction, data, detail), level="PACKET", raw_hex=True)
+        lines = tuple(packet_lines(direction, data, detail))
+        self._emit_lines("normal", lines, level="PACKET", raw_hex=True)
+        if self.runtime_packet_compat:
+            # Managed C/T processes historically exposed packet lines under
+            # their runtime log filename. Keep that read path available while
+            # the authoritative packet copy remains in ``packets/``.
+            self._emit_lines("normal", lines, level="INFO")
 
     def packet_text(self, message: str) -> None:
         """Write an already formatted packet record to the packet stream."""
@@ -1102,9 +1116,18 @@ def _definition_digest(
             digest.update(table.encode("utf-8"))
             digest.update(b"\0")
             order_clause = f" ORDER BY {order_by}" if order_by else ""
+            schema_columns = {column["eng_name"] for column in store.schema(table)["columns"]}
+            if "rtu_id" in schema_columns:
+                scope_clause = "WHERE rtu_id=?"
+            elif table.startswith("fes_channel_") and "channel_id" in schema_columns:
+                scope_clause = (
+                    "WHERE channel_id=(SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?)"
+                )
+            else:
+                scope_clause = ""
             for row in cursor.execute(
                 f"SELECT {projection} FROM {quote_identifier(table)} "
-                f"WHERE rtu_id=?{order_clause}", (rtu_id,),
+                f"{scope_clause}{order_clause}", (rtu_id,) if scope_clause else (),
             ):
                 encoded = encode(row).encode("utf-8")
                 digest.update(len(encoded).to_bytes(8, "big"))
@@ -1289,6 +1312,7 @@ class ChannelWorker:
         from core.packet_logging import packet_log_switch
         self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
                                  packet_directory=packet_log_directory(log_dir),
+                                 runtime_packet_compat=True,
                                  packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
                                  if store is not None else None)
         self.stats = WorkerStats()
@@ -1301,6 +1325,14 @@ class ChannelWorker:
         self._command_connection: sqlite3.Connection | None = None
         self._measurement_cache: dict[tuple[str, int], tuple[Any, Any, int, float]] = {}
         self._yc_scaling: dict[int, tuple[Any, Any]] | None = None
+        self._master_diagnostic_cursor = (0, 0, 0)
+        self._runtime_status = RuntimeStatusStore(store, "scdfe_c") if store is not None else None
+        self._runtime_state = {
+            "process_status": PROCESS_STOPPED, "process_pid": 0,
+            "process_start_time": 0, "process_stop_time": 0,
+            "process_heartbeat_time": 0, "process_exit_code": 0,
+            "process_error": "",
+        }
 
     def _load_yc_scaling(self) -> None:
         """Load once per connection/definition reload, never once per point."""
@@ -1308,10 +1340,13 @@ class ChannelWorker:
             scaling = {}
         else:
             with self.store.connection() as connection:
-                scaling = {int(row[0]): (row[1], row[2]) for row in connection.execute(
-                    "SELECT pnt_no, COALESCE(raw_base, 0.0), COALESCE(raw_scale, 1.0) "
-                    "FROM fes_yc_define WHERE rtu_id=?", (self.spec.rtu_id,),
-                )}
+                scaling = {
+                    int(row[0]): (float(row[1]), float(row[2]))
+                    for row in connection.execute(
+                        "SELECT pnt_no, COALESCE(raw_base, 0.0), COALESCE(raw_scale, 1.0) "
+                        "FROM fes_yc_define WHERE rtu_id=?", (self.spec.rtu_id,),
+                    )
+                }
         self._yc_scaling = scaling
         self._measurement_cache.clear()
 
@@ -1424,6 +1459,7 @@ class ChannelWorker:
             raise ValueError(f"不允许写入通信线程字段: {sorted(unknown)}")
         if not updates:
             return
+        self._persist_runtime_status(updates)
         if self.writer_queue is not None:
             self.writer_queue.put({
                 "op": "update", "table": "fes_rtu_define",
@@ -1438,6 +1474,48 @@ class ChannelWorker:
             connection.execute(
                 sql, (*updates.values(), self.spec.rtu_id),
             )
+
+    def _persist_runtime_status(self, updates: Mapping[str, Any]) -> None:
+        runtime = self._runtime_status
+        if runtime is None:
+            return
+        self._runtime_state.update(updates)
+        status = int(self._runtime_state.get("process_status") or 0)
+        error = str(self._runtime_state.get("process_error") or "")
+        values = {
+            **self._runtime_state,
+            "protocol": self.spec.channel_type,
+            "channel_name": self.spec.name or self.spec.channel_type,
+            "state": state_for(status, status == PROCESS_RUNNING, error),
+            "running": int(status == PROCESS_RUNNING),
+            "connection_state": "connected" if status == PROCESS_RUNNING else (
+                "retrying" if status == PROCESS_ERROR else "disconnected"
+            ),
+            "rx_count": int(self.stats.updated_yc + self.stats.updated_yx),
+            "tx_count": int(self.stats.sent_yk + self.stats.sent_yt),
+            "error_count": int(self.stats.errors),
+            "diagnostic_json": {
+                "cycles": self.stats.cycles,
+                "updated_yc": self.stats.updated_yc,
+                "updated_yx": self.stats.updated_yx,
+                "sent_yk": self.stats.sent_yk,
+                "sent_yt": self.stats.sent_yt,
+                "errors": self.stats.errors,
+                "channel_type": self.spec.channel_type,
+            },
+            "last_error": error,
+            "last_error_time": now_ms() if error else 0,
+            "process_heartbeat_time": int(self._runtime_state.get("process_heartbeat_time") or now_ms()),
+        }
+        try:
+            runtime.upsert(
+                self.spec.channel_id,
+                values,
+                force="process_status" in updates and status != PROCESS_RUNNING,
+                connection=self._command_connection,
+            )
+        except Exception as exc:  # diagnostics must not interrupt communication
+            self.logger.error(f"写入通道运行状态失败: {exc}")
 
     def _queue_measurements(self, pending: dict[tuple[str, int], tuple[Any, Any, int, float]],
                             changed: set[tuple[str, int]], now: int) -> None:
@@ -1526,7 +1604,7 @@ class ChannelWorker:
                 if kind == "yc":
                     raw_value = float(value)
                     base, scale = scaling.get(point_no, (0.0, 1.0))
-                    engineering_value = float(base) + float(scale) * raw_value
+                    engineering_value = base + scale * raw_value
                     if not math.isfinite(raw_value) or not math.isfinite(engineering_value):
                         raise ValueError(f"YC {point_no} 原始值或工程值不是有限数")
                 elif value is None:
@@ -1708,6 +1786,47 @@ class ChannelWorker:
             finally:
                 self._master = None
 
+    def _record_master_diagnostics(self, thread_id: int) -> None:
+        """Persist new IEC104 transport errors without breaking acquisition."""
+        master = self._master
+        if master is None:
+            return
+        diagnostics = getattr(master, "diagnostics", None)
+        if not isinstance(diagnostics, Mapping):
+            return
+        errors = list(diagnostics.get("protocol_errors", ()))
+        states = list(diagnostics.get("connection_states", ()))
+        unexpected = list(diagnostics.get("unexpected_messages", ()))
+        old_errors, old_states, old_unexpected = self._master_diagnostic_cursor
+        new_errors = errors[old_errors:]
+        new_states = states[old_states:]
+        new_unexpected = unexpected[old_unexpected:]
+        self._master_diagnostic_cursor = (len(errors), len(states), len(unexpected))
+        abnormal_states = [item for item in new_states
+                           if str(item.get("state", "")).upper() in {
+                               "CLOSED", "CLOSED_AWAIT_OPEN", "CLOSED_AWAIT_RECONNECT",
+                               "OPEN_AWAIT_CLOSED",
+                           }]
+        if not (new_errors or abnormal_states or new_unexpected):
+            return
+        details = []
+        if new_errors:
+            details.append(f"无效报文 {len(new_errors)} 条: {new_errors[-1]}")
+        if abnormal_states:
+            details.append(f"链路状态 {abnormal_states[-1].get('state')}")
+        if new_unexpected:
+            details.append(f"异常 ASDU {len(new_unexpected)} 条")
+        message = "IEC104 通信异常：" + "；".join(details)
+        self.stats.errors += len(new_errors) + len(abnormal_states) + len(new_unexpected)
+        self.logger.error(message)
+        try:
+            self._write_process_state(
+                process_status=PROCESS_ERROR, process_pid=thread_id,
+                process_heartbeat_time=_now_ms(), process_error=message,
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics cannot stop polling
+            self.logger.error(f"写入 IEC104 异常状态失败: {exc}")
+
     def _stop_requested(self) -> bool:
         return self.stop_event.is_set()
 
@@ -1747,6 +1866,7 @@ class ChannelWorker:
                     self._last_signature = current_signature
                     self._load_yc_scaling()
                     self._master = self.master_factory(self.store, self.spec)
+                    self._master_diagnostic_cursor = (0, 0, 0)
                     if hasattr(self._master, "set_packet_handler"):
                         self._master.set_packet_handler(self.logger.packet)
                     self._master.connect()
@@ -1775,6 +1895,7 @@ class ChannelWorker:
                                 self.logger.process("检测到通道或四遥定义变化，退出并请求重载")
                                 return self.stats
                         values = self._master.collect_once()
+                        self._record_master_diagnostics(thread_id)
                         yc, yx = self._sync_measurements(values)
                         sent_yk, sent_yt = self._sync_commands()
                         self.stats.cycles += 1

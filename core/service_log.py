@@ -108,13 +108,41 @@ class ServiceFileLog:
 
     def write(self, level, message, *, channel_id=None):
         try:
-            target_channel = self._channel_id if channel_id is None else channel_id
-            if self.channel_required and target_channel is None:
+            policy_channel = self._channel_id if channel_id is None else channel_id
+            target_channel = policy_channel
+            if self.channel_required and self._channel_id is not None and target_channel is None:
                 return
+            # A generated packet line carries a frame identity and is safe to
+            # route to the channel file even when a delayed callback arrives
+            # before the lifecycle has bound the service.  Older callers may
+            # pass free-form packet text with a channel mentioned in its
+            # payload; keep that legacy text on the service file so the text
+            # cannot masquerade as a channel-attributed frame in searches.
+            if level == "PACKET" and " frame=" not in str(message):
+                target_channel = self._channel_id
             logger = self._logger_for(target_channel)
             if level == 'PACKET':
-                if self.packet_switch.enabled(target_channel):
+                if self.packet_switch.enabled(policy_channel):
                     logger.packet_text(message)
+                    if self._channel_id is not None and " frame=" in str(message):
+                        # Keep the historical protocol-service process view
+                        # available to existing operators and tools.  The
+                        # channel file remains the authoritative per-channel
+                        # record used by the HMI and channel filters.
+                        self._logger_for(None).packet_text(message)
+                        self._logger_for(None).emit("normal", message)
+                    # Preserve the historical service-file view for direct,
+                    # unframed packet writes while generated transport frames
+                    # remain channel-exclusive.  This keeps old diagnostics
+                    # readable without duplicating high-rate wire traffic.
+                    if self._channel_id is not None and " frame=" not in str(message):
+                        compatibility_logger = self._logger_for(None)
+                        compatibility_logger.packet_text(message)
+                        # Very old integrations also inspected the service's
+                        # runtime directory directly.  Mirror only this
+                        # low-rate, free-form compatibility record there;
+                        # generated frames keep the packet directory split.
+                        compatibility_logger.emit("normal", message)
             else:
                 logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
             now = time.monotonic()

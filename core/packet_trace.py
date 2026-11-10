@@ -11,6 +11,12 @@ def packet_lines(direction, data, detail=""):
     """Keep every byte; split large TCP chunks into bounded readable lines."""
     payload = bytes(data)
     detail = str(detail).replace("\r", " ").replace("\n", " ")
+    if "IEC104 APDU" in detail:
+        try:
+            from core.iec104_protocol import describe_apdu
+            detail = f"{detail} {describe_apdu(payload)}"
+        except (ImportError, ValueError):
+            detail = f"{detail} IEC104 invalid-apdu"
     count = max(1, (len(payload) + 1023) // 1024)
     packet_id = next(_packet_ids)
     for part in range(count):

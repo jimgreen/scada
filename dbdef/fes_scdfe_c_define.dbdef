@@ -4,20 +4,20 @@
 </table_info>
 <fes_scdfe_c_define>
 @ column_id column_name_eng column_name_chn data_type data_length is_key app_type display_type menu_name reference_display reference_flag reference_table is_model column_special
-# 1 id 固定编号 LONG 8 1 scada INT '' 0 0 0 0 0
+# 1 id 固定编号 INT 8 1 scada INT '' 0 0 0 0 0
 # 2 name 名称 STRING 1024 0 scada STRING '' 0 0 0 0 0
-# 3 process_enable 主进程启用 LONG 8 0 scada 单选菜单 二值判断 0 0 0 0 0
-# 5 process_status 主进程状态 LONG 8 0 scada INT '' 0 0 0 0 0
-# 6 process_pid 主进程号 LONG 8 0 scada LONG '' 0 0 0 0 0
-# 7 process_start_time 主进程启动时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
-# 8 process_stop_time 主进程停止时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
-# 10 process_heartbeat_time 主进程心跳时间 LONG 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
-# 11 process_exit_code 主进程退出码 LONG 8 0 scada INT '' 0 0 0 0 0
+# 3 process_enable 主进程启用 INT 8 0 scada 单选菜单 二值判断 0 0 0 0 0
+# 5 process_status 主进程状态 INT 8 0 scada INT '' 0 0 0 0 0
+# 6 process_pid 主进程号 INT 8 0 scada INT '' 0 0 0 0 0
+# 7 process_start_time 主进程启动时间 INT 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 8 process_stop_time 主进程停止时间 INT 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 10 process_heartbeat_time 主进程心跳时间 INT 8 0 scada 带毫秒的DATETIME '' 0 0 0 0 0
+# 11 process_exit_code 主进程退出码 INT 8 0 scada INT '' 0 0 0 0 0
 # 13 process_error 主进程错误信息 STRING 1024 0 scada STRING '' 0 0 0 0 0
 # 14 log_dir 日志目录（相对数据库目录） STRING 1024 0 scada STRING '' 0 0 0 0 0
-# 15 log_retention_hours 日志保留小时数 LONG 8 0 scada INT '' 0 0 0 0 0
-# 16 scan_interval_ms 主进程扫描周期（毫秒） LONG 8 0 scada INT '' 0 0 0 0 0
-# 17 poll_interval_ms 通讯采集周期（毫秒） LONG 8 0 scada INT '' 0 0 0 0 0
-# 18 retry_interval_ms 失败重试周期（毫秒） LONG 8 0 scada INT '' 0 0 0 0 0
-# 19 worker_start_delay_ms 通信线程启动间隔（毫秒） LONG 8 0 scada INT '' 0 0 0 0 0
+# 15 log_retention_hours 日志保留小时数 INT 8 0 scada INT '' 0 0 0 0 0
+# 16 scan_interval_ms 主进程扫描周期（毫秒） INT 8 0 scada INT '' 0 0 0 0 0
+# 17 poll_interval_ms 通讯采集周期（毫秒） INT 8 0 scada INT '' 0 0 0 0 0
+# 18 retry_interval_ms 失败重试周期（毫秒） INT 8 0 scada INT '' 0 0 0 0 0
+# 19 worker_start_delay_ms 通信线程启动间隔（毫秒） INT 8 0 scada INT '' 0 0 0 0 0
 </fes_scdfe_c_define>

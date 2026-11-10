@@ -87,17 +87,40 @@ class _CanTransport(PacketTrace):
 
     def __init__(self, *, interface='virtual', channel=None, bitrate=500000,
                  data_bitrate=None, fd=False, receive_own_messages=False,
+                 sample_point=None, data_sample_point=None,
+                 bitrate_switch=False, receive_error_frames=False,
+                 restart_on_error=False, bus_off_recovery_ms=0,
                  auto_start=True, filters=None, **kwargs):
         _require_can()
         if not isinstance(interface, str) or not interface:
             raise ValueError('interface 必须是 python-can 支持的字符串')
         if bitrate is not None and (not isinstance(bitrate, int) or bitrate <= 0):
             raise ValueError('bitrate 必须是正整数')
+        if sample_point is not None and (not isinstance(sample_point, (int, float)) or not 0 < sample_point <= 100):
+            raise ValueError('sample_point 必须在 0 到 100 之间')
+        if data_sample_point is not None and (not isinstance(data_sample_point, (int, float)) or not 0 < data_sample_point <= 100):
+            raise ValueError('data_sample_point 必须在 0 到 100 之间')
+        if isinstance(bus_off_recovery_ms, bool) or not isinstance(bus_off_recovery_ms, int) or bus_off_recovery_ms < 0:
+            raise ValueError('bus_off_recovery_ms 必须是非负整数')
         self.interface, self.channel, self.bitrate, self.fd = interface, channel, bitrate, fd
+        self.sample_point = sample_point
+        self.data_sample_point = data_sample_point
+        self.bitrate_switch = bool(bitrate_switch)
+        self.receive_error_frames = bool(receive_error_frames)
+        self.restart_on_error = bool(restart_on_error)
+        self.bus_off_recovery_ms = bus_off_recovery_ms
         options = dict(interface=interface, channel=channel, bitrate=bitrate,
                        receive_own_messages=receive_own_messages, **kwargs)
         if data_bitrate is not None:
             options['data_bitrate'] = data_bitrate
+        if sample_point is not None:
+            options['sample_point'] = sample_point
+        if data_sample_point is not None:
+            options['data_sample_point'] = data_sample_point
+        if receive_error_frames:
+            options['receive_error_frames'] = True
+        if restart_on_error:
+            options['restart_ms'] = bus_off_recovery_ms
         if fd:
             options['fd'] = True
         options = {k: v for k, v in options.items() if v is not None}
@@ -248,14 +271,17 @@ class CanMaster(_CanTransport):
     和可选 matcher 匹配；未匹配报文保留供 recv/collect_once 读取。
     同一实例的接收/请求串行执行，应用不应再直接用 bus.recv 或另建 Notifier。
     """
-    _STORE_RTU_PROJECTION = 'rtu_id,channel_type'
+    _STORE_RTU_PROJECTION = 'rtu_id,channel_id,channel_type'
     _STORE_PARAMETER_PROJECTION = (
-        'rtu_id,interface,channel,bitrate,data_bitrate,fd,receive_own_messages'
+        'channel_id,interface,channel,bitrate,data_bitrate,fd,receive_own_messages,'
+        'sample_point,data_sample_point,bitrate_switch,receive_error_frames,'
+        'restart_on_error,bus_off_recovery_ms'
     )
     _STORE_POINT_PROJECTION = (
-        'rtu_id,kind,pnt_no,frame_id,tx_frame_id,response_id,is_extended_id,is_fd,'
+        'channel_id,kind,pnt_no,frame_id,tx_frame_id,response_id,is_extended_id,is_fd,'
         'byte_offset,bit_offset,bit_length,value_type,byte_order,scale,offset,'
-        'quality_byte_offset,quality_mask,tx_data_hex,response_data_hex'
+        'quality_byte_offset,quality_mask,tx_data_hex,response_data_hex,dlc,period_ms,'
+        'bitrate_switch,enabled,dbc_message_name,dbc_signal_name,unit,is_signed'
     )
 
     def __init__(self, *, rtu_id=None, auto_start=False, **kwargs):
@@ -290,14 +316,15 @@ class CanMaster(_CanTransport):
                 raise ValueError(f'RTU {rtu_id} 不存在')
             if rtu['channel_type'] != 'can':
                 raise ValueError(f'RTU {rtu_id} 不是 CAN 通道')
+            channel_id = int(rtu['channel_id'])
             rows = [dict(row) for row in connection.execute(
                 f'SELECT {cls._STORE_PARAMETER_PROJECTION} '
-                'FROM fes_channel_can_define WHERE rtu_id=? LIMIT 2', (rtu_id,),
+                'FROM fes_channel_can_define WHERE channel_id=? LIMIT 2', (channel_id,),
             )]
             point_rows = [dict(row) for row in connection.execute(
                 f'SELECT {cls._STORE_POINT_PROJECTION} '
-                'FROM fes_channel_can_point_define WHERE rtu_id=? '
-                'ORDER BY kind, pnt_no', (rtu_id,)
+                'FROM fes_channel_can_point_define WHERE channel_id=? AND COALESCE(enabled, 1)=1 '
+                'ORDER BY kind, pnt_no', (channel_id,)
             )]
         if len(rows) > 1:
             raise ValueError(f'RTU {rtu_id} 需要唯一 CAN 参数定义，实际找到 {len(rows)} 条')
@@ -306,7 +333,9 @@ class CanMaster(_CanTransport):
         bus_channel = kwargs.pop('channel', parameter.get('channel'))
         if not interface:
             raise ValueError('CAN 参数需要 interface，例如 virtual、socketcan 或 pcan')
-        for name in ('bitrate', 'data_bitrate', 'fd', 'receive_own_messages'):
+        for name in ('bitrate', 'data_bitrate', 'fd', 'receive_own_messages',
+                     'sample_point', 'data_sample_point', 'bitrate_switch',
+                     'receive_error_frames', 'restart_on_error', 'bus_off_recovery_ms'):
             if parameter.get(name) is not None and name not in kwargs:
                 kwargs[name] = parameter[name]
         if 'filters' not in kwargs:
@@ -395,6 +424,15 @@ class CanMaster(_CanTransport):
             raise ValueError('CAN float 必须使用 bit_offset=0 且 bit_length=32 或 64')
         cls._hex_bytes(row.get('tx_data_hex'), 'tx_data_hex')
         cls._hex_bytes(row.get('response_data_hex'), 'response_data_hex')
+        dlc = row.get('dlc')
+        if dlc is not None:
+            if (isinstance(dlc, bool) or not isinstance(dlc, int)
+                    or not 0 <= dlc <= (64 if row.get('is_fd') else 8)):
+                raise ValueError('CAN dlc 超出当前帧格式范围')
+        period_ms = row.get('period_ms')
+        if (period_ms is not None and
+                (isinstance(period_ms, bool) or not isinstance(period_ms, int) or period_ms < 0)):
+            raise ValueError('CAN period_ms 必须是非负整数')
         row.update(kind=kind, pnt_no=point_no, frame_id=frame_id,
                    byte_offset=byte_offset, bit_offset=bit_offset,
                    bit_length=bit_length, byte_order=str(row.get('byte_order') or 'big'),
@@ -602,7 +640,9 @@ class CanMaster(_CanTransport):
             raise ValueError(f"CAN {row['kind']}/{row['pnt_no']} 缺少 tx_frame_id")
         payload = self._hex_bytes(row.get('tx_data_hex'), 'tx_data_hex')
         if not payload:
-            payload = bytearray(8 if bool(row.get('is_fd')) is False else 64)
+            payload = bytearray(row.get('dlc') or (8 if bool(row.get('is_fd')) is False else 64))
+        if row.get('dlc') is not None and len(payload) < int(row['dlc']):
+            payload.extend(b'\x00' * (int(row['dlc']) - len(payload)))
         bits = int(row['bit_length'])
         start, offset = int(row['byte_offset']), int(row['bit_offset'])
         order = row.get('byte_order', 'big')
@@ -613,7 +653,10 @@ class CanMaster(_CanTransport):
             if not wait_response:
                 return self.send(int(tx_id), payload,
                                  is_extended_id=bool(row.get('is_extended_id', False)),
-                                 is_fd=bool(row.get('is_fd', False)))
+                                 is_fd=bool(row.get('is_fd', False)),
+                                 bitrate_switch=(bool(row['bitrate_switch'])
+                                                 if row.get('bitrate_switch') is not None
+                                                 else self.bitrate_switch))
             response_id = row.get('response_id')
             if response_id is None:
                 raise ValueError(f"CAN {row['kind']}/{row['pnt_no']} 未配置 response_id")
@@ -629,6 +672,9 @@ class CanMaster(_CanTransport):
                 timeout=response_timeout, matcher=matcher,
                 is_extended_id=bool(row.get('is_extended_id', False)),
                 is_fd=bool(row.get('is_fd', False)),
+                bitrate_switch=(bool(row['bitrate_switch'])
+                                if row.get('bitrate_switch') is not None
+                                else self.bitrate_switch),
             )
 
         if row['value_type'] == 'float' and not offset and bits in (32, 64):

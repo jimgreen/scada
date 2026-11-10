@@ -27,7 +27,7 @@ class fes_yk_define:
 
     pnt_no: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(
@@ -142,7 +142,7 @@ class fes_yk_define:
 
     cmd_check_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '五防定义表ID', 'eng_name': 'cmd_check_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '五防定义表ID', 'eng_name': 'cmd_check_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
 __all__ = ['fes_yk_define']

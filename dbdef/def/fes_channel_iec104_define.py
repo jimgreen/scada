@@ -22,7 +22,7 @@ class fes_channel_iec104_define:
 
     id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(
@@ -40,9 +40,9 @@ class fes_channel_iec104_define:
         metadata={'chn_name': 'RDFID', 'eng_name': 'rdfid', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     rtu_addr: Optional[int] = field(
@@ -109,5 +109,17 @@ class fes_channel_iec104_define:
         default=2404,
         metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
+
+    k: Optional[int] = field(default=12, metadata={'chn_name': '发送窗口 k', 'eng_name': 'k', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
+
+    w: Optional[int] = field(default=8, metadata={'chn_name': '接收确认窗口 w', 'eng_name': 'w', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
+
+    t1: Optional[float] = field(default=15.0, metadata={'chn_name': 'I 帧确认超时 t1（秒）', 'eng_name': 't1', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    t2: Optional[float] = field(default=10.0, metadata={'chn_name': 'S 帧确认周期 t2（秒）', 'eng_name': 't2', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    t3: Optional[float] = field(default=20.0, metadata={'chn_name': 'TESTFR 周期 t3（秒）', 'eng_name': 't3', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    max_asdu_length: Optional[int] = field(default=249, metadata={'chn_name': 'ASDU 最大长度', 'eng_name': 'max_asdu_length', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
 
 __all__ = ['fes_channel_iec104_define']

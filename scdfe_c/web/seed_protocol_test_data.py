@@ -251,10 +251,10 @@ def _point_values(spec: dict, rtu_id: int, kind: str, number: int,
     return result
 
 
-def _parameter_values(spec: dict, rtu_id: int, identifier: int) -> dict:
+def _parameter_values(spec: dict, channel_id: int, identifier: int) -> dict:
     key = spec["key"]
     code = f"{PREFIX}_{_key_token(spec)}_PARAM"
-    base = {"code": code, "rdfid": code, "name": f"{spec['name']}参数", "rtu_id": rtu_id}
+    base = {"code": code, "rdfid": code, "name": f"{spec['name']}参数", "channel_id": channel_id}
     if key == "iec104":
         base.update(id=identifier, remote_host=spec["channel"], remote_port=spec["port"],
                     rtu_addr=1, ycbegin_addr=0x4001, yxbegin_addr=1,
@@ -282,14 +282,14 @@ def _parameter_values(spec: dict, rtu_id: int, identifier: int) -> dict:
     return base
 
 
-def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
+def _add_modbus_tables(connection, store: ScadaStore, spec: dict, channel_id: int,
                        ids: dict[str, int], pending, indexes):
     key = spec["key"]
     prefix = f"{PREFIX}_{_key_token(spec)}"
     channel_code = f"{prefix}_CHANNEL"
-    channel_id = _id_for_code(connection, "fes_channel_modbus_define", channel_code, ids, indexes)
+    definition_id = _id_for_code(connection, "fes_channel_modbus_define", channel_code, ids, indexes)
     _add_record(store, pending, "fes_channel_modbus_define", {
-        "id": channel_id, "rtu_id": rtu_id, "code": channel_code,
+        "id": definition_id, "channel_id": channel_id, "code": channel_code,
         "rdfid": channel_code, "name": f"{spec['name']}Modbus通道",
         "irtuaddr": 3 if key == "modbus-tcp" else 4,
     }, indexes)
@@ -303,7 +303,7 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         call_code = f"{prefix}_CALL_{seq}"
         call_id = _id_for_code(connection, "fes_channel_modbus_define_call", call_code, ids, indexes)
         _add_record(store, pending, "fes_channel_modbus_define_call", {
-            "id": call_id, "rtu_id": rtu_id, "code": call_code,
+            "id": call_id, "channel_id": channel_id, "code": call_code,
             "name": f"{spec['name']}召唤{seq}", "irtuaddr": 3 if key == "modbus-tcp" else 4,
             "call_seq": seq, "iplace": start, "inum": count, "icode": function_code,
         }, indexes)
@@ -311,7 +311,7 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         data_code = f"{prefix}_YC_DATA_{number:03d}"
         data_id = _id_for_code(connection, "fes_channel_modbus_define_data", data_code, ids, indexes)
         _add_record(store, pending, "fes_channel_modbus_define_data", {
-            "id": data_id, "rtu_id": rtu_id, "code": data_code,
+            "id": data_id, "channel_id": channel_id, "code": data_code,
             "name": f"{spec['name']}遥测映射{number:03d}",
             "call_seq": 0 if number <= 125 else (number - 1) // 125 + 1,
             "if_yx": 0, "cnt": number, "trans_type": 2, "reg_addr": number - 1,
@@ -320,7 +320,7 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         data_code = f"{prefix}_YX_DATA_{number:03d}"
         data_id = _id_for_code(connection, "fes_channel_modbus_define_data", data_code, ids, indexes)
         _add_record(store, pending, "fes_channel_modbus_define_data", {
-            "id": data_id, "rtu_id": rtu_id, "code": data_code,
+            "id": data_id, "channel_id": channel_id, "code": data_code,
             "name": f"{spec['name']}遥信映射{number:03d}", "call_seq": 1,
             "if_yx": 1, "cnt": number, "trans_type": 8, "reg_addr": number - 1,
         }, indexes)
@@ -328,7 +328,7 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         command_code = f"{prefix}_YK_CMD_{number:03d}"
         command_id = _id_for_code(connection, "fes_channel_modbus_define_ytyk", command_code, ids, indexes)
         _add_record(store, pending, "fes_channel_modbus_define_ytyk", {
-            "id": command_id, "rtu_id": rtu_id, "code": command_code,
+            "id": command_id, "channel_id": channel_id, "code": command_code,
             "name": f"{spec['name']}遥控映射{number:03d}", "ifyk": 1, "cnt": number,
             "irtuaddr": 3 if key == "modbus-tcp" else 4, "reg_addr": number - 1,
             "icode": 5, "ytyk_type": 1,
@@ -337,14 +337,14 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, rtu_id: int,
         command_code = f"{prefix}_YT_CMD_{number:03d}"
         command_id = _id_for_code(connection, "fes_channel_modbus_define_ytyk", command_code, ids, indexes)
         _add_record(store, pending, "fes_channel_modbus_define_ytyk", {
-            "id": command_id, "rtu_id": rtu_id, "code": command_code,
+            "id": command_id, "channel_id": channel_id, "code": command_code,
             "name": f"{spec['name']}遥调映射{number:03d}", "ifyk": 0, "cnt": number,
             "irtuaddr": 3 if key == "modbus-tcp" else 4, "reg_addr": 200 + number,
             "icode": 6, "ytyk_type": 2,
         }, indexes)
 
 
-def _add_protocol_point_maps(store: ScadaStore, spec: dict, rtu_id: int,
+def _add_protocol_point_maps(store: ScadaStore, spec: dict, rtu_id: int, channel_id: int,
                              pending, indexes):
     """Persist protocol-native addresses/layouts for every four遥 point."""
     table = PROTOCOL_POINT_TABLES.get(spec["key"])
@@ -353,7 +353,7 @@ def _add_protocol_point_maps(store: ScadaStore, spec: dict, rtu_id: int,
     for kind, count in COUNTS.items():
         for number in range(1, count + 1):
             values = {
-                "rtu_id": rtu_id, "kind": kind, "pnt_no": number,
+                "channel_id": channel_id, "kind": kind, "pnt_no": number,
             }
             if spec["key"] == "iec104":
                 base = {"yc": 0x4001, "yx": 0x0001,
@@ -422,6 +422,7 @@ def seed_protocol_test_data(store: ScadaStore, *, replicas: int = RTU_REPLICAS) 
                     added[RTU_TABLE] += 1
                 else:
                     rtu_id = existing["rtu_id"]
+                    channel_id = existing["channel_id"]
                 for kind, count in COUNTS.items():
                     table = f"fes_{kind}_define"
                     for number in range(1, count + 1):
@@ -441,11 +442,11 @@ def seed_protocol_test_data(store: ScadaStore, *, replicas: int = RTU_REPLICAS) 
                 else:
                     identifier = None
                 if _add_record(store, pending, spec["parameter_table"],
-                               _parameter_values(spec, rtu_id, identifier), indexes):
+                               _parameter_values(spec, channel_id, identifier), indexes):
                     added[spec["parameter_table"]] += 1
-                _add_protocol_point_maps(store, spec, rtu_id, pending, indexes)
+                _add_protocol_point_maps(store, spec, rtu_id, channel_id, pending, indexes)
                 if spec["key"] in {"modbus-tcp", "modbus-rtu"}:
-                    _add_modbus_tables(connection, store, spec, rtu_id, ids, pending, indexes)
+                    _add_modbus_tables(connection, store, spec, channel_id, ids, pending, indexes)
             # Derive all insertion counts from the final pending batch. This also
             # keeps repeat execution at zero when every TEST_PROTO code exists.
             counts = Counter(table for table, _ in pending)

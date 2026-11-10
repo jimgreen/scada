@@ -26,7 +26,7 @@
       "eng_name": "target_rtu",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -35,7 +35,7 @@
       "eng_name": "process_enable",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -44,7 +44,7 @@
       "eng_name": "include_in_all",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 1
     },
@@ -53,7 +53,7 @@
       "eng_name": "process_status",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -62,7 +62,7 @@
       "eng_name": "process_pid",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -71,7 +71,7 @@
       "eng_name": "parent_pid",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },
@@ -107,7 +107,7 @@
       "eng_name": "process_exit_code",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": "",
       "default": 0
     },

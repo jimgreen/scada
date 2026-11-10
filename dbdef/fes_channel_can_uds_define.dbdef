@@ -1,0 +1,26 @@
+<table_info>
+@   table_id     table_name_eng     table_name_chn     app_type     max_record_num     down_load     is_model     module_name
+#   730         fes_channel_can_uds_define              UDS诊断服务定义表           public/fes/scada 200 1 0 scada
+</table_info>
+<fes_channel_can_uds_define>
+@   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key     app_type     display_type     menu_name
+#   1             id                             标识                             INT       8            1        public/fes/scada INT
+#   2             channel_id                         所属通道                          INT       8            0        public/fes/scada KEYID类型
+#   3             code                           英文标识                           STRING     256          0        public/fes/scada STRING
+#   4             name                           中文名称                           STRING     256          0        public/fes/scada STRING
+#   5             request_id                     请求ID                           INT       8            0        public/fes/scada INT
+#   6             response_id                    响应ID                           INT       8            0        public/fes/scada INT
+#   7             is_extended_id                 扩展帧                            INT       8            0        public/fes/scada 单选菜单           二值判断
+#   8             session_type                   诊断会话                           STRING     256          0        public/fes/scada STRING         UDS诊断会话
+#   9             service_type                   服务类型                           STRING     256          0        public/fes/scada STRING         UDS服务
+#   10            service_id                     服务ID                           INT       8            0        public/fes/scada INT
+#   11            subfunction                    子功能                            INT       8            0        public/fes/scada INT
+#   12            did                            DID                            INT       8            0        public/fes/scada INT
+#   13            routine_id                     Routine ID                     INT       8            0        public/fes/scada INT
+#   14            dtc_group                      DTC组                           INT       8            0        public/fes/scada INT
+#   15            request_data_hex               请求数据HEX                        STRING     256          0        public/fes/scada STRING
+#   16            response_mask_hex              响应匹配掩码HEX                      STRING     256          0        public/fes/scada STRING
+#   17            period_ms                      周期（毫秒）                         INT       8            0        public/fes/scada INT
+#   18            timeout_ms                     超时（毫秒）                         INT       8            0        public/fes/scada INT
+#   19            enabled                        启用                             INT       8            0        public/fes/scada 单选菜单           二值判断
+</fes_channel_can_uds_define>

@@ -1,13 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
-
-Table: fes_channel_can_point_define
-Chinese name: CAN四遥报文解析表
-"""
-
+"""Generated dataclass definition from dbdef/json/fes_channel_can_point_define.json."""
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
-
 
 @dataclass
 class fes_channel_can_point_define:
@@ -15,11 +9,11 @@ class fes_channel_can_point_define:
 
     __tablename__: ClassVar[str] = 'fes_channel_can_point_define'
     __table_name_chn__: ClassVar[str] = 'CAN四遥报文解析表'
-    __primary_keys__: ClassVar[tuple[str, ...]] = ('rtu_id', 'kind', 'pnt_no')
+    __primary_keys__: ClassVar[tuple[str, ...]] = ('channel_id', 'kind', 'pnt_no')
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
     )
 
     kind: Optional[str] = field(
@@ -34,17 +28,17 @@ class fes_channel_can_point_define:
 
     frame_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '接收帧ID', 'eng_name': 'frame_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '接收帧ID', 'eng_name': 'frame_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     tx_frame_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '发送帧ID', 'eng_name': 'tx_frame_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '发送帧ID', 'eng_name': 'tx_frame_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     response_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '应答帧ID', 'eng_name': 'response_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '应答帧ID', 'eng_name': 'response_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     is_extended_id: Optional[int] = field(
@@ -110,6 +104,46 @@ class fes_channel_can_point_define:
     response_data_hex: Optional[str] = field(
         default=None,
         metadata={'chn_name': '应答匹配HEX', 'eng_name': 'response_data_hex', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    dlc: Optional[int] = field(
+        default=None,
+        metadata={'chn_name': 'DLC', 'eng_name': 'dlc', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+    )
+
+    period_ms: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '信号周期（毫秒）', 'eng_name': 'period_ms', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
+    )
+
+    bitrate_switch: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': 'BRS数据相位切换', 'eng_name': 'bitrate_switch', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
+    )
+
+    enabled: Optional[int] = field(
+        default=1,
+        metadata={'chn_name': '启用', 'eng_name': 'enabled', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 1},
+    )
+
+    dbc_message_name: Optional[str] = field(
+        default=None,
+        metadata={'chn_name': 'DBC报文名称', 'eng_name': 'dbc_message_name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    dbc_signal_name: Optional[str] = field(
+        default=None,
+        metadata={'chn_name': 'DBC信号名称', 'eng_name': 'dbc_signal_name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    unit: Optional[str] = field(
+        default=None,
+        metadata={'chn_name': '工程单位', 'eng_name': 'unit', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+    )
+
+    is_signed: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '有符号信号', 'eng_name': 'is_signed', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
     )
 
 __all__ = ['fes_channel_can_point_define']

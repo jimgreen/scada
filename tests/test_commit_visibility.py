@@ -86,6 +86,7 @@ class CommitVisibilityTests(unittest.TestCase):
         self.assertEqual(stale.exception.code,'version_conflict')
     def test_high_iec_common_address_is_usable_on_the_wire(self):
         trans=TransStore(self.db)
+        self.addCleanup(trans.store.close)
         port=free_port(); base=dict(code='HIGH',protocol='iec104',bind_port=port,bind_host='127.0.0.1')
         row=trans.create_channel({**base,'common_address':60000})
         self.assertEqual(row['common_address'],60000)

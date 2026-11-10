@@ -99,6 +99,19 @@ class TransWebReviewTests(unittest.TestCase):
         self.assertEqual(catalog["items"][0]["pnt_no"], 3)
         self.assertEqual(catalog["items"][0]["name"], "母线电压")
 
+    def test_runtime_status_projection_contains_diagnostic_snapshot(self):
+        server = self.http_server()
+        status, payload = self.request(server, "/api/trans/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["total"], 1)
+        item = payload["items"][0]
+        self.assertEqual(item["channel_id"], 1)
+        self.assertIn("runtime_status", item)
+        runtime = item["runtime_status"]
+        self.assertEqual(runtime["service_name"], "scdfe_t")
+        self.assertIn("diagnostic", runtime)
+        self.assertIn("rx_count", runtime)
+
     def test_batch_point_mapping_allocates_forward_numbers(self):
         self.service.store.create_row("fes_rtu_define", {
             "rtu_id": 7, "channel_id": 70, "channel_type": "iec104", "name": "源站",

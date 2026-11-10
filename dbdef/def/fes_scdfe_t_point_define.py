@@ -23,15 +23,19 @@ class fes_scdfe_t_point_define:
 
     enabled: Optional[int] = field(default=1, metadata={'chn_name': '启用', 'eng_name': 'enabled', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
 
-    io_address: Optional[int] = field(default=0, metadata={'chn_name': 'IEC信息体地址', 'eng_name': 'io_address', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''})
+    io_address: Optional[int] = field(default=0, metadata={'chn_name': 'IEC信息体地址', 'eng_name': 'io_address', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
 
     type_id: Optional[int] = field(default=0, metadata={'chn_name': 'IEC类型标识', 'eng_name': 'type_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
+
+    time_tag: Optional[str] = field(default='NONE', metadata={'chn_name': 'IEC时间标签', 'eng_name': 'time_tag', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'IEC104时间标签', 'allowed_values': ['NONE', 'CP24Time2a', 'CP56Time2a']})
 
     command_mode: Optional[str] = field(default='DIRECT', metadata={'chn_name': '命令执行方式', 'eng_name': 'command_mode', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': '命令执行方式', 'allowed_values': ['DIRECT', 'SELECT_AND_EXECUTE']})
 
     register_area: Optional[str] = field(default='holding', metadata={'chn_name': 'Modbus数据区', 'eng_name': 'register_area', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'Modbus数据区', 'allowed_values': ['coil', 'discrete', 'holding', 'input']})
 
     address: Optional[int] = field(default=0, metadata={'chn_name': 'Modbus地址', 'eng_name': 'address', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
+
+    address_base: Optional[int] = field(default=0, metadata={'chn_name': 'Modbus地址基准（0/1/10001/30001/40001）', 'eng_name': 'address_base', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'allowed_values': [0, 1, 10001, 30001, 40001], 'default': 0})
 
     data_type: Optional[str] = field(default='float32', metadata={'chn_name': '数据类型', 'eng_name': 'data_type', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'Modbus数据类型', 'allowed_values': ['bool', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'float64', 'uint64', 'int64']})
 

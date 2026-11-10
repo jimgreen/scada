@@ -157,10 +157,10 @@ class MasterStoreTests(unittest.TestCase):
         with self.store.connection() as con:
             con.execute('BEGIN IMMEDIATE')
             con.executemany('INSERT INTO fes_channel_modbus_define_call '
-                            '(id,rtu_id,irtuaddr,call_seq,iplace,inum,icode) VALUES (?,7,9,?,?,?,3)',
+                            '(id,channel_id,irtuaddr,call_seq,iplace,inum,icode) VALUES (?,70,9,?,?,?,3)',
                             [(seq + 1, seq, seq * 125, min(125, 501 - seq * 125)) for seq in range(5)])
             con.executemany('INSERT INTO fes_channel_modbus_define_data '
-                            '(id,rtu_id,call_seq,cnt,reg_addr,trans_type) VALUES (?,7,?,?,?,2)',
+                            '(id,channel_id,call_seq,cnt,reg_addr,trans_type) VALUES (?,70,?,?,?,2)',
                             [(i + 1, i // 125, i + 1, i) for i in range(501)])
             con.commit()
         self.store.create_row('fes_channel_modbus_define_ytyk', {

@@ -99,9 +99,9 @@ def station_inputs(store):
             "SELECT * FROM fes_rtu_define WHERE channel_type IN ('modbus-tcp','modbus-rtu') ORDER BY rtu_id")]
         for station in stations:
             station['calls'] = [dict(row) for row in connection.execute(
-                'SELECT * FROM fes_channel_modbus_define_call WHERE rtu_id=? ORDER BY call_seq', (station['rtu_id'],))]
+                'SELECT * FROM fes_channel_modbus_define_call WHERE channel_id=? ORDER BY call_seq', (station['channel_id'],))]
             station['points'] = [dict(row) for row in connection.execute(
-                'SELECT * FROM fes_channel_modbus_define_data WHERE rtu_id=? ORDER BY id', (station['rtu_id'],))]
+                'SELECT * FROM fes_channel_modbus_define_data WHERE channel_id=? ORDER BY id', (station['channel_id'],))]
             rng = random.Random(f"modbus-poll:20261102:{station['rtu_id']}")
             frames = []
             bits = [bool(rng.randrange(2)) for _ in range(1000)]

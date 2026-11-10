@@ -17,7 +17,7 @@ class fes_scdfe_c_define:
 
     process_status: Optional[int] = field(default=0, metadata={'chn_name': '主进程状态', 'eng_name': 'process_status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
-    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '主进程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': '', 'default': 0})
+    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '主进程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0})
 
     process_start_time: Optional[int] = field(default=0, metadata={'chn_name': '主进程启动时间', 'eng_name': 'process_start_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0})
 

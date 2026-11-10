@@ -5,12 +5,13 @@
   },
   "columns": [
     {
-      "chn_name": "所属RTU",
-      "eng_name": "rtu_id",
+      "chn_name": "所属通道",
+      "eng_name": "channel_id",
       "primary_key": true,
       "data_type": "int",
       "disp_type": "KEYID类型",
-      "disp_menu": ""
+      "disp_menu": "",
+      "required": true
     },
     {
       "chn_name": "英文标识",
@@ -107,11 +108,65 @@
       "data_type": "int",
       "disp_type": "单选菜单",
       "disp_menu": "二值判断"
+    },
+    {
+      "chn_name": "仲裁段采样点（百分比）",
+      "eng_name": "sample_point",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 87.5
+    },
+    {
+      "chn_name": "数据段采样点（百分比）",
+      "eng_name": "data_sample_point",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 80.0
+    },
+    {
+      "chn_name": "默认BRS数据相位切换",
+      "eng_name": "bitrate_switch",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "错误自动恢复",
+      "eng_name": "restart_on_error",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
+    },
+    {
+      "chn_name": "Bus-off恢复等待（毫秒）",
+      "eng_name": "bus_off_recovery_ms",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "接收错误帧",
+      "eng_name": "receive_error_frames",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "单选菜单",
+      "disp_menu": "二值判断",
+      "default": 0
     }
   ],
   "unique_keys": [
     [
-      "rtu_id"
+      "channel_id"
     ]
   ]
 }

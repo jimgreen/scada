@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import threading
 
 from core.iec104_values import binary_command_value, double_to_binary
+from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu
 from core.packet_trace import PacketTrace
 
 try:
@@ -71,10 +72,31 @@ class IEC104Server(PacketTrace):
 
     DEFAULT_BASE = {'yc': 0x4001, 'yx': 0x01, 'yk': 0x6001, 'yt': 0x6201}
     TYPE_NAMES = {
-        'yx': ('M_SP_NA_1', 'M_DP_NA_1'),
+        'yx': ('M_SP_NA_1', 'M_DP_NA_1', 'M_ST_NA_1'),
         'yc': ('M_ME_NC_1', 'M_ME_NB_1', 'M_ME_NA_1'),
         'yk': ('C_SC_NA_1', 'C_DC_NA_1'),
         'yt': ('C_SE_NC_1', 'C_SE_NB_1', 'C_SE_NA_1'),
+    }
+    TYPE_IDS = {
+        'yx': {
+            1: 'M_SP_NA_1', 2: 'M_SP_TA_1', 30: 'M_SP_TB_1',
+            3: 'M_DP_NA_1', 4: 'M_DP_TA_1', 31: 'M_DP_TB_1',
+            5: 'M_ST_NA_1', 6: 'M_ST_TA_1', 32: 'M_ST_TB_1',
+        },
+        'yc': {
+            9: 'M_ME_NA_1', 10: 'M_ME_TA_1', 34: 'M_ME_TD_1', 21: 'M_ME_ND_1',
+            11: 'M_ME_NB_1', 12: 'M_ME_TB_1', 35: 'M_ME_TE_1',
+            13: 'M_ME_NC_1', 14: 'M_ME_TC_1', 36: 'M_ME_TF_1',
+        },
+        'yk': {
+            45: 'C_SC_NA_1', 58: 'C_SC_TA_1',
+            46: 'C_DC_NA_1', 59: 'C_DC_TA_1',
+        },
+        'yt': {
+            48: 'C_SE_NA_1', 61: 'C_SE_TA_1',
+            49: 'C_SE_NB_1', 62: 'C_SE_TB_1',
+            50: 'C_SE_NC_1', 63: 'C_SE_TC_1',
+        },
     }
     IEC_TYPE_SELECTORS = {
         'yx': {1: 1, 3: 2},
@@ -82,16 +104,18 @@ class IEC104Server(PacketTrace):
         'yk': {45: 1, 46: 2},
         'yt': {48: 1, 49: 2, 50: 3},
     }
-    _STORE_RTU_PROJECTION = 'rtu_id,channel_type'
+    _STORE_RTU_PROJECTION = 'rtu_id,channel_id,channel_type'
     _STORE_DEFINITION_PROJECTION = (
-        'rtu_id,rtu_addr,ycbegin_addr,yxbegin_addr,ykbegin_addr,ytbegin_addr,'
-        'yx_data_type,yk_excute_type,yc_data_type,yt_excute_type'
+        'channel_id,rtu_addr,ycbegin_addr,yxbegin_addr,ykbegin_addr,ytbegin_addr,'
+                'yx_data_type,yk_excute_type,yc_data_type,yt_excute_type,'
+        'k,w,t1,t2,t3,max_asdu_length'
     )
 
     def __init__(self, *, ip='0.0.0.0', port=2404, common_address=1,
                  ycbegin_addr=0x4001, yxbegin_addr=1, ykbegin_addr=0x6001,
                  ytbegin_addr=0x6201, tick_rate_ms=100, select_timeout_ms=10000,
-                 max_connections=0, rtu_id=None):
+                 max_connections=0, rtu_id=None, k=12, w=8, t1=15.0,
+                 t2=10.0, t3=20.0, max_asdu_length=249):
         _require_c104()
         if not isinstance(ip, str) or not ip:
             raise ValueError('ip 必须是非空字符串')
@@ -107,6 +131,10 @@ class IEC104Server(PacketTrace):
         self.tick_rate_ms = int(tick_rate_ms)
         self.rtu_id = rtu_id
         self.common_address = int(common_address)
+        self.protocol = IEC104ProtocolConfig(
+            k=int(k), w=int(w), t1=float(t1), t2=float(t2), t3=float(t3),
+            max_asdu_length=int(max_asdu_length),
+        )
         self.base = {
             'yc': int(ycbegin_addr) or self.DEFAULT_BASE['yc'],
             'yx': int(yxbegin_addr) or self.DEFAULT_BASE['yx'],
@@ -128,7 +156,10 @@ class IEC104Server(PacketTrace):
         self._handlers = {}
         self._commands = {}
         self._errors = []
+        self._unexpected_messages = []
         self._lock = threading.RLock()
+        self.protocol.apply(self._server.protocol_parameters)
+        self._server.on_unexpected_message(self._on_unexpected_message)
 
     @classmethod
     def from_channel(cls, channel, definition=None, **kwargs):
@@ -138,6 +169,9 @@ class IEC104Server(PacketTrace):
             return field(row, name, default)
         kwargs.setdefault('rtu_id', value(channel, 'rtu_id'))
         kwargs.setdefault('common_address', value(definition, 'rtu_addr', 1))
+        for name in ('k', 'w', 't1', 't2', 't3', 'max_asdu_length'):
+            if name not in kwargs and value(definition, name) is not None:
+                kwargs[name] = value(definition, name)
         for name in ('ycbegin_addr', 'yxbegin_addr', 'ykbegin_addr', 'ytbegin_addr'):
             if name not in kwargs and value(definition, name) is not None:
                 kwargs[name] = value(definition, name)
@@ -161,15 +195,16 @@ class IEC104Server(PacketTrace):
                 raise ValueError(f'RTU {rtu_id} 不存在')
             if rtu['channel_type'] != 'iec104':
                 raise ValueError(f'RTU {rtu_id} 不是 IEC104 通道')
+            channel_id = int(rtu['channel_id'])
             definitions = [dict(row) for row in connection.execute(
                 f'SELECT {cls._STORE_DEFINITION_PROJECTION} '
-                'FROM fes_channel_iec104_define WHERE rtu_id=? ORDER BY id LIMIT 2', (rtu_id,),
+                'FROM fes_channel_iec104_define WHERE channel_id=? ORDER BY id LIMIT 2', (channel_id,),
             )]
             mappings = [dict(row) for row in connection.execute(
-                'SELECT rtu_id, kind, pnt_no, io_address, type_id, report_ms, '
+                'SELECT channel_id, kind, pnt_no, io_address, type_id, time_tag, report_ms, '
                 'command_mode, qualifier, related_io_address, related_io_autoreturn '
-                'FROM fes_channel_iec104_point_define WHERE rtu_id=? '
-                'ORDER BY kind, pnt_no', (rtu_id,),
+                'FROM fes_channel_iec104_point_define WHERE channel_id=? '
+                'ORDER BY kind, pnt_no', (channel_id,),
             )]
             points = []
             for table, kind in (('fes_yc_define', 'yc'), ('fes_yx_define', 'yx'),
@@ -187,7 +222,7 @@ class IEC104Server(PacketTrace):
             row = dict(point)
             mapped = mapping_index.get(key)
             if mapped:
-                for name in ('io_address', 'type_id', 'report_ms', 'command_mode',
+                for name in ('io_address', 'type_id', 'time_tag', 'report_ms', 'command_mode',
                              'qualifier', 'related_io_address', 'related_io_autoreturn'):
                     if mapped.get(name) is not None:
                         row[name] = mapped[name]
@@ -204,6 +239,7 @@ class IEC104Server(PacketTrace):
             server.add_point(
                 kind, point_no,
                 data_type=field(row, 'data_type', field(row, 'type_id')),
+                time_tag=field(row, 'time_tag', 'NONE'),
                 value=field(row, 'value'), report_ms=int(field(row, 'report_ms', 0) or 0),
                 io_address=field(row, 'io_address'),
                 related_io_address=field(row, 'related_io_address'),
@@ -231,12 +267,30 @@ class IEC104Server(PacketTrace):
         return int(self._server.open_connection_count)
 
     @property
+    def protocol_parameters(self):
+        return self._server.protocol_parameters
+
+    @property
+    def protocol_config(self):
+        return self.protocol.as_dict()
+
+    @property
     def active_connection_count(self):
         return int(self._server.active_connection_count)
 
     @property
     def last_error(self):
         return self._errors[-1] if self._errors else None
+
+    @property
+    def protocol_errors(self):
+        with self._lock:
+            return list(self._errors)
+
+    @property
+    def unexpected_messages(self):
+        with self._lock:
+            return list(self._unexpected_messages)
 
     def __enter__(self):
         self.start()
@@ -273,6 +327,7 @@ class IEC104Server(PacketTrace):
                 raise TypeError('on_receive 必须可调用')
 
             def receive(server: c104.Server, data: bytes) -> None:
+                self._inspect_apdu(data)
                 on_receive(data)
             self._server.on_receive_raw(receive)
         if on_send is not None:
@@ -280,8 +335,29 @@ class IEC104Server(PacketTrace):
                 raise TypeError('on_send 必须可调用')
 
             def send(server: c104.Server, data: bytes) -> None:
+                self._inspect_apdu(data)
                 on_send(data)
             self._server.on_send_raw(send)
+
+    def _inspect_apdu(self, data):
+        try:
+            parse_apdu(data, max_asdu_length=self.protocol.max_asdu_length)
+        except IEC104ProtocolError as exc:
+            with self._lock:
+                self._errors.append(exc)
+                del self._errors[:-1000]
+
+    def _on_unexpected_message(self, server: c104.Server,
+                               message: c104.IncomingMessage,
+                               cause: c104.Umc) -> None:
+        item = {
+            'common_address': int(getattr(message, 'common_address', 0)),
+            'io_address': int(getattr(message, 'io_address', 0)),
+            'type': str(getattr(message, 'type', '')),
+            'cause': str(cause),
+        }
+        with self._lock:
+            self._unexpected_messages.append(item)
 
     def set_packet_handler(self, handler):
         super().set_packet_handler(handler)
@@ -320,25 +396,40 @@ class IEC104Server(PacketTrace):
             raise ValueError('信息体地址早于配置起始地址')
         return number
 
-    def _type(self, kind, data_type=None):
+    def _type(self, kind, data_type=None, time_tag=None):
         if kind not in self.TYPE_NAMES:
             raise ValueError('kind 必须是 yc/yx/yk/yt')
         if data_type is None:
             data_type = 1 if kind in ('yx', 'yc', 'yk') else 3
-        data_type = self.IEC_TYPE_SELECTORS.get(kind, {}).get(int(data_type), data_type)
+        data_type = self._canonical_type_id(kind, data_type, time_tag)
+        try:
+            return getattr(c104.Type, self.TYPE_IDS[kind][data_type])
+        except KeyError as exc:
+            raise ValueError(f'{kind} 不支持 data_type={data_type}') from exc
+
+    @classmethod
+    def _canonical_type_id(cls, kind, data_type, time_tag=None):
         data_type = int(data_type)
-        choices = self.TYPE_NAMES[kind]
-        if kind == 'yx':
-            index = 1 if data_type == 2 else 0
-        elif kind == 'yc':
-            index = {1: 0, 2: 1, 3: 2}.get(data_type)
-        elif kind == 'yk':
-            index = 1 if data_type == 2 else 0
-        else:
-            index = {1: 2, 2: 1, 3: 0}.get(data_type)
-        if index is None:
-            raise ValueError(f'{kind} 不支持 data_type={data_type}')
-        return getattr(c104.Type, choices[index])
+        compact = {
+            'yx': {1: 1, 2: 3, 3: 3},
+            'yc': {1: 13, 2: 11, 3: 9},
+            'yk': {1: 45, 2: 46},
+            'yt': {1: 48, 2: 49, 3: 50},
+        }
+        canonical = compact.get(kind, {}).get(data_type, data_type)
+        if not time_tag or str(time_tag).upper() in {'', 'NONE'}:
+            return canonical
+        tag = str(time_tag).upper().replace('-', '')
+        tagged = {
+            'CP24TIME2A': {
+                'yx': {1: 2, 3: 4, 5: 6}, 'yc': {9: 10, 11: 12, 13: 14},
+                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
+            },
+            'CP56TIME2A': {
+                'yx': {1: 30, 3: 31, 5: 32}, 'yc': {9: 34, 11: 35, 13: 36},
+            },
+        }
+        return tagged.get(tag, {}).get(kind, {}).get(canonical, canonical)
 
     @staticmethod
     def _plain(value):
@@ -357,36 +448,37 @@ class IEC104Server(PacketTrace):
 
     @staticmethod
     def _as_value(kind, data_type, value):
-        data_type = IEC104Server.IEC_TYPE_SELECTORS.get(kind, {}).get(
-            int(data_type or (1 if kind in ('yx', 'yc', 'yk') else 3)),
-            int(data_type or (1 if kind in ('yx', 'yc', 'yk') else 3)),
+        data_type = IEC104Server._canonical_type_id(
+            kind, data_type or (1 if kind in ('yx', 'yc', 'yk') else 3)
         )
         if kind == 'yx':
-            if int(data_type or 1) == 2:
+            if int(data_type) in {3, 4, 31}:
                 if isinstance(value, c104.Double):
                     return value
                 return c104.Double.ON if int(value) else c104.Double.OFF
+            if int(data_type) in {5, 6, 32}:
+                return c104.Int7(int(value))
             return bool(value)
         if kind == 'yc':
-            typ = int(data_type or 1)
-            if typ == 1:
+            typ = int(data_type)
+            if typ in {13, 14, 36}:
                 return float(value)
-            if typ == 2:
+            if typ in {11, 12, 35}:
                 return c104.Int16(int(value))
-            if typ == 3:
+            if typ in {9, 10, 21, 34}:
                 return c104.NormalizedFloat(float(value))
         if kind == 'yk':
             value = binary_command_value(value)
-            if int(data_type or 1) == 2:
+            if int(data_type) in {46, 59}:
                 return c104.Double.ON if value else c104.Double.OFF
             return value
         if kind == 'yt':
-            typ = int(data_type or 3)
-            if typ == 1:
+            typ = int(data_type)
+            if typ in {48, 61}:
                 return c104.NormalizedFloat(float(value))
-            if typ == 2:
+            if typ in {49, 62}:
                 return c104.Int16(int(value))
-            if typ == 3:
+            if typ in {50, 63}:
                 return float(value)
         raise ValueError(f'不支持 {kind} data_type={data_type}')
 
@@ -398,7 +490,7 @@ class IEC104Server(PacketTrace):
             raise ValueError('cause 必须是 c104.Cot 或其名称')
         return cause
 
-    def add_point(self, kind, point_no, *, data_type=None, value=None, report_ms=0,
+    def add_point(self, kind, point_no, *, data_type=None, time_tag='NONE', value=None, report_ms=0,
                   io_address=None,
                   related_io_address=None, related_io_autoreturn=False,
                   command_mode='DIRECT', command_handler=None):
@@ -409,7 +501,7 @@ class IEC104Server(PacketTrace):
         report_ms = int(report_ms or 0)
         if report_ms < 0 or (report_ms and report_ms % self.tick_rate_ms):
             raise ValueError('report_ms 必须为 0 或 tick_rate_ms 的正整数倍')
-        typ = self._type(kind, data_type)
+        typ = self._type(kind, data_type, time_tag)
         mode = command_mode if not isinstance(command_mode, str) else getattr(
             c104.CommandMode, command_mode.upper(), None)
         if mode is None:
@@ -437,7 +529,7 @@ class IEC104Server(PacketTrace):
                     raise ValueError(f'点 {kind}/{point_no} 初值无效: {exc}') from exc
             self._points[(kind, point_no)] = point
             self._point_types[(kind, point_no)] = (
-                self.IEC_TYPE_SELECTORS.get(kind, {}).get(int(data_type), int(data_type))
+                self._canonical_type_id(kind, data_type)
                 if data_type is not None else None
             )
             if command_handler is not None and kind in ('yk', 'yt'):
@@ -454,7 +546,7 @@ class IEC104Server(PacketTrace):
                 raise ValueError('批量点定义缺少 kind')
             result.append(self.add_point(
                 kind, int(field(row, 'pnt_no')),
-                data_type=field(row, 'data_type', field(row, 'type_id')), value=field(row, 'value'),
+                data_type=field(row, 'data_type', field(row, 'type_id')), time_tag=field(row, 'time_tag', 'NONE'), value=field(row, 'value'),
                 report_ms=int(field(row, 'report_ms', 0)),
                 io_address=field(row, 'io_address'),
                 related_io_address=field(row, 'related_io_address'),

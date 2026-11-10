@@ -21,19 +21,19 @@ CASES = {
     "iec104": {
         "rtu": 2,
         "mapping": ("fes_channel_iec104_point_define",
-                    "rtu_id,kind,pnt_no,io_address,type_id,report_ms,command_mode,qualifier,"
+                    "channel_id,kind,pnt_no,io_address,type_id,report_ms,command_mode,qualifier,"
                     "related_io_address,related_io_autoreturn"),
     },
     "bacnet": {
         "rtu": 6,
         "mapping": ("fes_channel_bacnet_point_define",
-                    "rtu_id,kind,pnt_no,object_type,instance,property_identifier,"
+                    "channel_id,kind,pnt_no,object_type,instance,property_identifier,"
                     "quality_property,priority,array_index"),
     },
     "opc": {
         "rtu": 7,
         "mapping": ("fes_channel_opc_point_define",
-                    "rtu_id,kind,pnt_no,node_id,data_type,value_attribute,quality_attribute,deadband"),
+                    "channel_id,kind,pnt_no,node_id,data_type,value_attribute,quality_attribute,deadband"),
     },
 }
 POINT_TABLES = ("fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define")
@@ -43,16 +43,18 @@ def load(connection, protocol, optimized):
     spec = CASES[protocol]
     rtu_id = spec["rtu"]
     rows = []
-    rtu_projection = "rtu_id,channel_type" if optimized else "*"
-    rows.extend(dict(row) for row in connection.execute(
-        f"SELECT {rtu_projection} FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)))
+    rtu_projection = "rtu_id,channel_id,channel_type" if optimized else "*"
+    rtu_row = connection.execute(
+        f"SELECT {rtu_projection} FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)).fetchone()
+    rows.append(dict(rtu_row))
+    channel_id = int(rtu_row["channel_id"])
     definition_table = f"fes_channel_{protocol}_define"
     rows.extend(dict(row) for row in connection.execute(
-        f"SELECT * FROM {definition_table} WHERE rtu_id=? ORDER BY id", (rtu_id,)))
+        f"SELECT * FROM {definition_table} WHERE channel_id=? ORDER BY id", (channel_id,)))
     mapping_table, mapping_projection = spec["mapping"]
     rows.extend(dict(row) for row in connection.execute(
         f"SELECT {mapping_projection if optimized else '*'} FROM {mapping_table} "
-        "WHERE rtu_id=? ORDER BY kind,pnt_no", (rtu_id,)))
+        "WHERE channel_id=? ORDER BY kind,pnt_no", (channel_id,)))
     for table in POINT_TABLES:
         if optimized:
             projection = "pnt_no,value" if protocol == "iec104" else "pnt_no"

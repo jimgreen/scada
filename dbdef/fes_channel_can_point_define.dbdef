@@ -1,0 +1,34 @@
+<table_info>
+@   table_id     table_name_eng     table_name_chn     app_type     max_record_num     down_load     is_model     module_name
+#   726         fes_channel_can_point_define        CAN四遥报文解析表           public/fes/scada 200 1 0 scada
+</table_info>
+<fes_channel_can_point_define>
+@   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key     app_type     display_type     menu_name
+#   1             channel_id                         所属通道                          INT       8            1        public/fes/scada KEYID类型
+#   2             kind                           点类型                            STRING     256          1        public/fes/scada STRING
+#   3             pnt_no                         点号                             INT       8            1        public/fes/scada INT
+#   4             frame_id                       接收帧ID                          INT       8            0        public/fes/scada INT
+#   5             tx_frame_id                    发送帧ID                          INT       8            0        public/fes/scada INT
+#   6             response_id                    应答帧ID                          INT       8            0        public/fes/scada INT
+#   7             is_extended_id                 扩展帧                            INT       8            0        public/fes/scada 单选菜单           二值判断
+#   8             is_fd                          CAN-FD                         INT       8            0        public/fes/scada 单选菜单           二值判断
+#   9             byte_offset                    字节偏移                           INT       8            0        public/fes/scada INT
+#   10            bit_offset                     位偏移                            INT       8            0        public/fes/scada INT
+#   11            bit_length                     位长度                            INT       8            0        public/fes/scada INT
+#   12            value_type                     值类型                            STRING     256          0        public/fes/scada STRING
+#   13            byte_order                     字节序                            STRING     256          0        public/fes/scada STRING
+#   14            scale                          乘系数                            FLOAT      8            0        public/fes/scada FLOAT
+#   15            offset                         加偏移                            FLOAT      8            0        public/fes/scada FLOAT
+#   16            quality_byte_offset            质量字节偏移                         INT       8            0        public/fes/scada INT
+#   17            quality_mask                   质量码掩码                          INT       8            0        public/fes/scada INT
+#   18            tx_data_hex                    发送报文模板HEX                      STRING     256          0        public/fes/scada STRING
+#   19            response_data_hex              应答匹配HEX                        STRING     256          0        public/fes/scada STRING
+#   20            dlc                            DLC                            INT       8            0        public/fes/scada INT
+#   21            period_ms                      信号周期（毫秒）                       INT       8            0        public/fes/scada INT
+#   22            bitrate_switch                 BRS数据相位切换                      INT       8            0        public/fes/scada 单选菜单           二值判断
+#   23            enabled                        启用                             INT       8            0        public/fes/scada 单选菜单           二值判断
+#   24            dbc_message_name               DBC报文名称                        STRING     256          0        public/fes/scada STRING
+#   25            dbc_signal_name                DBC信号名称                        STRING     256          0        public/fes/scada STRING
+#   26            unit                           工程单位                           STRING     256          0        public/fes/scada STRING
+#   27            is_signed                      有符号信号                          INT       8            0        public/fes/scada 单选菜单           二值判断
+</fes_channel_can_point_define>

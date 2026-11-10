@@ -31,13 +31,25 @@ class fes_scdfe_t_define:
 
     log_retention_hours: Optional[int] = field(default=720, metadata={'chn_name': '日志保留小时数', 'disp_type': 'INT', 'disp_menu': ''})
 
+    k: Optional[int] = field(default=12, metadata={'chn_name': '发送窗口 k', 'disp_type': 'INT', 'disp_menu': ''})
+
+    w: Optional[int] = field(default=8, metadata={'chn_name': '接收确认窗口 w', 'disp_type': 'INT', 'disp_menu': ''})
+
+    t1: Optional[float] = field(default=15.0, metadata={'chn_name': 'I 帧确认超时 t1（秒）', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    t2: Optional[float] = field(default=10.0, metadata={'chn_name': 'S 帧确认周期 t2（秒）', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    t3: Optional[float] = field(default=20.0, metadata={'chn_name': 'TESTFR 周期 t3（秒）', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    max_asdu_length: Optional[int] = field(default=249, metadata={'chn_name': 'ASDU 最大长度', 'disp_type': 'INT', 'disp_menu': ''})
+
     packet_recording: Optional[int] = field(default=0, metadata={'chn_name': '保存报文', 'eng_name': 'packet_recording', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
 
     process_enable: Optional[int] = field(default=0, metadata={'chn_name': '参与自动运行', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
 
     process_status: Optional[int] = field(default=0, metadata={'chn_name': '进程状态', 'disp_type': 'INT', 'disp_menu': ''})
 
-    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '进程号', 'disp_type': 'LONG', 'disp_menu': ''})
+    process_pid: Optional[int] = field(default=0, metadata={'chn_name': '进程号', 'disp_type': 'INT', 'disp_menu': ''})
 
     process_start_time: Optional[int] = field(default=0, metadata={'chn_name': '启动时间', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''})
 
@@ -45,7 +57,7 @@ class fes_scdfe_t_define:
 
     process_heartbeat_time: Optional[int] = field(default=0, metadata={'chn_name': '心跳时间', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''})
 
-    process_exit_code: Optional[int] = field(default=0, metadata={'chn_name': '退出码', 'disp_type': 'LONG', 'disp_menu': ''})
+    process_exit_code: Optional[int] = field(default=0, metadata={'chn_name': '退出码', 'disp_type': 'INT', 'disp_menu': ''})
 
     process_error: Optional[str] = field(default='', metadata={'chn_name': '错误信息', 'disp_type': 'STRING', 'disp_menu': ''})
 

@@ -9,7 +9,7 @@
       "eng_name": "id",
       "primary_key": true,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": ""
     },
     {
@@ -25,7 +25,7 @@
       "eng_name": "judge_count",
       "primary_key": false,
       "data_type": "int",
-      "disp_type": "LONG",
+      "disp_type": "INT",
       "disp_menu": ""
     },
     {

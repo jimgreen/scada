@@ -12,12 +12,15 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import math
+import os
 from pathlib import Path
 import threading
 import time
 from typing import Any
 from core.packet_trace import service_packet_recorder
+from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
 from scdfe_s.web.configuration import apply_config, write_config
 
@@ -33,6 +36,9 @@ from server.modbus_server import (
     ModbusTcpServer,
 )
 from server.opc_server import OpcUaServer, OpcUaServerSimulator
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -106,6 +112,14 @@ class ProtocolService:
         self._started_at: int | None = None
         self._stopped_at: int | None = None
         self._last_error: str | None = self._config_error
+        self._rx_count = 0
+        self._tx_count = 0
+        self._error_count = 0
+        self._reconnect_count = 0
+        self._last_rx_time = 0
+        self._last_tx_time = 0
+        self._last_error_time = 0
+        self._runtime_status = RuntimeStatusStore(store, "scdfe_s")
         slug = self.PROTOCOL
         if self.CONFIG_NAME and "_server_" in self.CONFIG_NAME and not slug.endswith("-server"):
             slug += "-server"
@@ -180,9 +194,20 @@ class ProtocolService:
         item = {"time": _iso_now(), "level": level, "message": str(message)}
         if details is not None:
             item["details"] = details
+        sampled_at = now_ms()
         # Transport callbacks must never wait for the lifecycle lock while a
         # caller holds that lock and joins the transport's receiver thread.
         with self._log_lock:
+            if level == "PACKET":
+                if "报文 RX" in str(message):
+                    self._rx_count += 1
+                    self._last_rx_time = sampled_at
+                elif "报文 TX" in str(message):
+                    self._tx_count += 1
+                    self._last_tx_time = sampled_at
+            elif level == "ERROR":
+                self._error_count += 1
+                self._last_error_time = sampled_at
             self._logs.append(item)
             self._file_log.write(level, message, channel_id=channel_id)
             if alert:
@@ -246,8 +271,14 @@ class ProtocolService:
         with self.store.connection() as con:
             con.execute("BEGIN")
             rtu_id = self._configured_rtu(con)
-            row = None if rtu_id is None else con.execute(
-                f"SELECT * FROM {table} WHERE rtu_id=? LIMIT 1", (rtu_id,)).fetchone()
+            channel_id = None
+            if rtu_id is not None:
+                owner = con.execute(
+                    "SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)
+                ).fetchone()
+                channel_id = owner[0] if owner else None
+            row = None if channel_id is None else con.execute(
+                f"SELECT * FROM {table} WHERE channel_id=? LIMIT 1", (channel_id,)).fetchone()
         parameter = dict(row) if row else {}
         config = dict(self._config)
         for name, value in parameter.items():
@@ -295,12 +326,73 @@ class ProtocolService:
                 raise ProtocolServiceError(str(exc)) from exc
             self._started_at = _now_ms()
             self._stopped_at = None
+            self._reconnect_count += 1
             self._last_error = None
             self._record("INFO", f"{self.LABEL} 服务已启动 ({self._config.get('mode')})")
             return self.status()
 
     def _start_engine(self, engine):
         engine.connect()
+
+    def _runtime_channel(self, rtu_id):
+        if rtu_id is None:
+            return None, ""
+        try:
+            with self.store.connection() as connection:
+                row = connection.execute(
+                    "SELECT channel_id, name FROM fes_rtu_define WHERE rtu_id=?",
+                    (int(rtu_id),),
+                ).fetchone()
+            if row is None:
+                return int(rtu_id), ""
+            return int(row[0] or rtu_id), str(row[1] or "")
+        except Exception:
+            return int(rtu_id), ""
+
+    @staticmethod
+    def _engine_diagnostic(engine):
+        value = getattr(engine, "diagnostics", None) if engine is not None else None
+        return _json_value(value) if isinstance(value, Mapping) else {}
+
+    def _persist_runtime_status(self, item, *, force=False):
+        channel_id, channel_name = self._runtime_channel(item.get("rtu_id"))
+        if channel_id is None:
+            return
+        diagnostic = {
+            "label": item.get("label"),
+            "config": item.get("config", {}),
+            "connections": item.get("connections", []),
+            "open_connections": item.get("open_connections", 0),
+            "point_count": item.get("point_count", 0),
+            "engine": self._engine_diagnostic(self._engine),
+        }
+        error = str(item.get("last_error") or "")
+        values = {
+            "protocol": item.get("protocol", self.PROTOCOL),
+            "channel_name": channel_name,
+            "state": state_for(2 if item.get("running") else 0, item.get("running"), error),
+            "running": int(bool(item.get("running"))),
+            "connection_state": "connected" if item.get("running") else "disconnected",
+            "process_status": 2 if item.get("running") else 0,
+            "process_pid": os.getpid() if item.get("running") else 0,
+            "process_start_time": int(item.get("started_at") or 0),
+            "process_stop_time": int(item.get("stopped_at") or 0),
+            "process_heartbeat_time": now_ms(),
+            "process_error": error,
+            "rx_count": self._rx_count,
+            "tx_count": self._tx_count,
+            "error_count": self._error_count,
+            "reconnect_count": self._reconnect_count,
+            "last_rx_time": self._last_rx_time,
+            "last_tx_time": self._last_tx_time,
+            "last_error_time": self._last_error_time,
+            "last_error": error,
+            "diagnostic_json": diagnostic,
+        }
+        try:
+            self._runtime_status.upsert(channel_id, values, force=force)
+        except Exception:
+            LOG.exception("写入 scdfe_s 通道运行状态失败: channel_id=%s", channel_id)
 
     def stop(self):
         with self._lock:
@@ -337,7 +429,7 @@ class ProtocolService:
             connection_count = int(getattr(engine, "connections", 0)) if engine else 0
             config = self.config()
             rtu_id = config.get("effective_rtu_id")
-            return {
+            item = {
                 "protocol": self.PROTOCOL,
                 "label": self.LABEL,
                 "running": self.running,
@@ -353,7 +445,17 @@ class ProtocolService:
                 # point tables must not materialise every point row just to
                 # render one integer; use one aggregate query instead.
                 "point_count": self._point_count(rtu_id),
+                "rx_count": self._rx_count,
+                "tx_count": self._tx_count,
+                "error_count": self._error_count,
+                "reconnect_count": self._reconnect_count,
+                "last_rx_time": self._last_rx_time,
+                "last_tx_time": self._last_tx_time,
+                "last_error_time": self._last_error_time,
+                "diagnostic": self._engine_diagnostic(engine),
             }
+            self._persist_runtime_status(item)
+            return item
 
     def _point_count(self, rtu_id) -> int:
         if rtu_id is None:
@@ -368,7 +470,10 @@ class ProtocolService:
             ).fetchone()
         return int(row[0] or 0)
 
-    def logs(self, limit=200, record="runtime"):
+    def logs(self, limit=200, record=None):
+        if record is None:
+            with self._log_lock:
+                return list(self._logs)[-max(1, min(int(limit), self.LOG_LIMIT)):]
         if record not in {"runtime", "packet"}:
             raise ValueError("记录类型无效")
         with self._log_lock:
@@ -938,6 +1043,8 @@ class CanServerService(StandaloneServerService):
         "rtu_id": None, "mode": "server", "simulation": 1, "interface": "virtual",
         "channel": "scada-can-server", "bitrate": 500000, "data_bitrate": 2000000,
         "fd": 0, "receive_own_messages": 1, "receive_timeout": 0.1,
+        "sample_point": 87.5, "data_sample_point": 80.0, "bitrate_switch": 0,
+        "restart_on_error": 0, "bus_off_recovery_ms": 0, "receive_error_frames": 0,
         "request_id": 256, "response_id": 257, "response_data": "01 00",
     }
 
@@ -951,6 +1058,15 @@ class CanServerService(StandaloneServerService):
                 raise ProtocolServiceError(f"{key} 必须大于 0")
         config["fd"] = _boolean(config.get("fd", 0), "fd")
         config["receive_own_messages"] = _boolean(config.get("receive_own_messages", 1), "receive_own_messages")
+        for key in ("sample_point", "data_sample_point"):
+            config[key] = float(config.get(key, 87.5 if key == "sample_point" else 80.0))
+            if not 0 < config[key] <= 100:
+                raise ProtocolServiceError(f"{key} 必须在 0 到 100 之间")
+        for key in ("bitrate_switch", "restart_on_error", "receive_error_frames"):
+            config[key] = _boolean(config.get(key, 0), key)
+        config["bus_off_recovery_ms"] = int(config.get("bus_off_recovery_ms", 0))
+        if config["bus_off_recovery_ms"] < 0:
+            raise ProtocolServiceError("bus_off_recovery_ms 必须是非负整数")
         config["receive_timeout"] = float(config.get("receive_timeout", 0.1))
         if config["receive_timeout"] <= 0:
             raise ProtocolServiceError("receive_timeout 必须大于 0")
@@ -974,6 +1090,11 @@ class CanServerService(StandaloneServerService):
         return cls(interface=config["interface"], channel=config["channel"], bitrate=config["bitrate"],
                    data_bitrate=config["data_bitrate"], fd=bool(config["fd"]),
                    receive_own_messages=bool(config["receive_own_messages"]),
+                   sample_point=config["sample_point"], data_sample_point=config["data_sample_point"],
+                   bitrate_switch=bool(config["bitrate_switch"]),
+                   restart_on_error=bool(config["restart_on_error"]),
+                   bus_off_recovery_ms=config["bus_off_recovery_ms"],
+                   receive_error_frames=bool(config["receive_error_frames"]),
                    receive_timeout=config["receive_timeout"], request_id=config["request_id"],
                    response_id=config["response_id"], response_data=config["response_data"],
                    points=points, on_log=self._record)
@@ -981,7 +1102,8 @@ class CanServerService(StandaloneServerService):
     def send_frame(self, arbitration_id, data, *, extended=None):
         if not self.running:
             raise ProtocolServiceError("CAN 服务端未启动")
-        return self._engine.send_frame(arbitration_id, data, is_extended_id=extended)
+        return self._engine.send_frame(arbitration_id, data, is_extended_id=extended,
+                                       bitrate_switch=bool(self.config().get("bitrate_switch", 0)))
 
 
 class OpcServerService(StandaloneServerService):
@@ -1051,6 +1173,8 @@ class CanService(ProtocolService):
     DEFAULT_CONFIG = {
         "rtu_id": None, "mode": "master", "interface": "virtual", "channel": "scada-can",
         "bitrate": 500000, "data_bitrate": 2000000, "fd": 0, "receive_own_messages": 1,
+        "sample_point": 87.5, "data_sample_point": 80.0, "bitrate_switch": 0,
+        "restart_on_error": 0, "bus_off_recovery_ms": 0, "receive_error_frames": 0,
         "receive_timeout": 0.1, "retry_count": 0, "is_extended_id": 0,
     }
 
@@ -1063,6 +1187,15 @@ class CanService(ProtocolService):
             if config[key] <= 0: raise ProtocolServiceError(f"{key} 必须大于 0")
         config["fd"] = _boolean(config.get("fd", 0), "fd")
         config["receive_own_messages"] = _boolean(config.get("receive_own_messages", 1), "receive_own_messages")
+        for key in ("sample_point", "data_sample_point"):
+            config[key] = float(config.get(key, 87.5 if key == "sample_point" else 80.0))
+            if not 0 < config[key] <= 100:
+                raise ProtocolServiceError(f"{key} 必须在 0 到 100 之间")
+        for key in ("bitrate_switch", "restart_on_error", "receive_error_frames"):
+            config[key] = _boolean(config.get(key, 0), key)
+        config["bus_off_recovery_ms"] = int(config.get("bus_off_recovery_ms", 0))
+        if config["bus_off_recovery_ms"] < 0:
+            raise ProtocolServiceError("bus_off_recovery_ms 必须是非负整数")
         config["is_extended_id"] = _boolean(config.get("is_extended_id", 0), "is_extended_id")
         config["receive_timeout"] = float(config.get("receive_timeout", 0.1))
         if config["receive_timeout"] <= 0: raise ProtocolServiceError("receive_timeout 必须大于 0")
@@ -1075,6 +1208,11 @@ class CanService(ProtocolService):
         options = dict(interface=config["interface"], channel=config["channel"],
                        bitrate=config["bitrate"], data_bitrate=config["data_bitrate"],
                        fd=bool(config["fd"]), receive_own_messages=bool(config["receive_own_messages"]),
+                       sample_point=config["sample_point"], data_sample_point=config["data_sample_point"],
+                       bitrate_switch=bool(config["bitrate_switch"]),
+                       restart_on_error=bool(config["restart_on_error"]),
+                       bus_off_recovery_ms=config["bus_off_recovery_ms"],
+                       receive_error_frames=bool(config["receive_error_frames"]),
                        auto_start=False)
         if rtu_id is not None:
             return CanMaster.from_store(self.store, int(rtu_id), **options)
@@ -1091,8 +1229,17 @@ class CanService(ProtocolService):
             try:
                 payload = bytes.fromhex(str(data).replace(" ", ""))
                 effective = self.config()
-                self._engine.send(int(arbitration_id), payload, is_extended_id=bool(
-                    effective["is_extended_id"] if extended is None else _boolean(extended, "is_extended_id")))
+                send_options = {
+                    "is_extended_id": bool(effective["is_extended_id"] if extended is None
+                                             else _boolean(extended, "is_extended_id")),
+                }
+                if effective["fd"]:
+                    send_options["is_fd"] = True
+                if effective["bitrate_switch"]:
+                    send_options["bitrate_switch"] = True
+                self._engine.send(
+                    int(arbitration_id), payload, **send_options,
+                )
             except Exception as exc:
                 self._record("ERROR", f"CAN 发帧失败: {exc}", alert=True)
                 raise ProtocolServiceError(str(exc)) from exc

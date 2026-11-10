@@ -16,10 +16,10 @@
 #  log_retention_hours  日志保留小时数  int  0  INT
 #  process_enable  参与自动运行  int  0  单选菜单
 #  process_status  进程状态  int  0  INT
-#  process_pid  进程号  int  0  LONG
+#  process_pid  进程号  int  0  INT
 #  process_start_time  启动时间  int  0  带毫秒的DATETIME
 #  process_stop_time  停止时间  int  0  带毫秒的DATETIME
 #  process_heartbeat_time  心跳时间  int  0  带毫秒的DATETIME
-#  process_exit_code  退出码  int  0  LONG
+#  process_exit_code  退出码  int  0  INT
 #  process_error  错误信息  str  0  STRING
 </fes_scdfe_t_define>

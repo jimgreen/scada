@@ -44,6 +44,7 @@ form .wide, .form-actions { grid-column:1 / -1; } .form-actions { display:flex; 
 .parameter-editor .data-form { margin-top:12px; }
 .parameter-fields { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px 14px; }
 .parameter-fields label { min-width:0; }
+.parameter-fields label small { display:block; margin-top:3px; color:#8495a4; font-size:10px; font-weight:400; }
 @media(max-width:900px){ .parameter-fields { grid-template-columns:repeat(2, minmax(160px, 1fr)); } }
 @media(max-width:560px){ .parameter-fields { grid-template-columns:1fr; } }
 .table-wrap { overflow:auto; max-height:min(76dvh,900px); border:1px solid #d9e2e6; border-radius:5px; } table { border-collapse:collapse; width:100%; font-size:12px; } th,td { padding:6px 8px; border-bottom:1px solid #e8eef1; text-align:left; white-space:nowrap; } th { position:sticky; top:0; background:#f3f7f9; color:#627b88; }

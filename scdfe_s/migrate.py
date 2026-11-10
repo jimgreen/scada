@@ -52,7 +52,9 @@ def copy_definitions(source, destination):
                     if name == "fes_rtu_define":
                         # An RTU placeholder with neither identity nor protocol is not a channel.
                         where = " WHERE channel_id IS NOT NULL OR channel_type IS NOT NULL"
-                    elif unbound and src.execute(f"SELECT 1 FROM {table} WHERE rtu_id IN ({unbound_sql}) LIMIT 1").fetchone():
+                    elif unbound and "rtu_id" in source_cols and src.execute(
+                            f"SELECT 1 FROM {table} WHERE rtu_id IN ({unbound_sql}) LIMIT 1"
+                    ).fetchone():
                         raise ValueError(f"无通道的 RTU 有关联数据（{name}），迁移已取消，请先在源副本补全通道定义")
                     read = src.execute(f"SELECT {columns} FROM {table}{where}")
                     counts[name] = dst.executemany(

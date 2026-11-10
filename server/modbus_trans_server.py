@@ -19,6 +19,7 @@ from typing import Any
 from pymodbus.constants import ExcCodes
 from pymodbus.simulator import DataType, SimData, SimDevice
 
+from client.modbus_tcp import normalize_modbus_address
 from .modbus_server import ModbusAsyncServer, ModbusTcpServer
 
 __all__ = ["ModbusTcpTransServer"]
@@ -46,8 +47,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
     ``points`` is an iterable of database mapping rows.  The row names match
     ``fes_scdfe_t_point_define``: ``kind``, ``pnt_no``, ``source_pnt_no``,
     ``register_area``, ``address``, ``data_type``, ``byte_order``,
-    ``word_order``, ``scale`` and ``offset``.  ``pnt_no`` is accepted as a
-    fallback for hand-written configurations.  ``command_handler`` is called
+    ``word_order``, ``scale``, ``offset`` and ``address_base``.  ``pnt_no`` is
+    accepted as a fallback for hand-written configurations.  ``command_handler`` is called
     for YK/YT writes as ``handler(kind, pnt_no, engineering_value)``. The
     transmission point identifies its complete source RTU/point mapping;
     returning ``False`` (or raising) produces a Modbus server exception and the
@@ -106,11 +107,14 @@ class ModbusTcpTransServer(ModbusTcpServer):
         area = _text(row.get("register_area"), _KIND_DEFAULT_AREA[kind])
         if area not in _AREA_TO_INDEX:
             raise ValueError(f"不支持 Modbus 区域: {area}")
-        address = int(row.get("address", point_no - 1))
-        if not 0 <= address <= 65535:
-            raise ValueError("Modbus address 必须在 0..65535")
+        address_base = int(row.get("address_base", 0))
+        address = normalize_modbus_address(
+            int(row.get("address", point_no - 1)), address_base, name="address"
+        )
         dtype = _text(row.get("data_type"), "bool" if kind in {"yx", "yk"} else "int16")
         size = self._TYPE_SIZES.get(dtype, 1) if area in {"holding", "input"} else 1
+        if address + size > 65536:
+            raise ValueError("Modbus 地址范围超过 65535")
         key = (kind, point_no)
         if key in self._mappings:
             raise ValueError(f"重复转发点 {kind}/{point_no}")
@@ -118,7 +122,7 @@ class ModbusTcpTransServer(ModbusTcpServer):
             if (area, address + offset) in self._by_address:
                 raise ValueError(f"Modbus 地址冲突 {area}/{address + offset}")
         row.update(kind=kind, pnt_no=point_no, source_pnt_no=source_point_no, register_area=area,
-                   address=address, data_type=dtype, size=size,
+                   address=address, address_base=address_base, data_type=dtype, size=size,
                    scale=_number(row.get("scale"), 1.0), offset=_number(row.get("offset"), 0.0),
                    byte_order=_text(row.get("byte_order"), "big"),
                    word_order=_text(row.get("word_order"), "big"))

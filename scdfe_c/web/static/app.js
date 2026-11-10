@@ -5,7 +5,7 @@ const state = {
   schemas: new Map(),
   tableGroups: { parameters: [], helpers: [] },
   groupSelection: {},
-  resource: "rtus",
+  resource: "channels",
   rtu: "",
   view: "common",
   offset: 0,
@@ -18,13 +18,31 @@ const state = {
   request: 0,
   saving: false,
   loading: false,
+  listStates: {},
 };
 const resources = {
-  rtus: ["fes_rtu_define", "RTU 与通道"],
+  channels: ["channels", "通道定义"],
+  rtus: ["fes_rtu_define", "RTU 定义"],
   yc: ["fes_yc_define", "遥测点表"],
   yx: ["fes_yx_define", "遥信点表"],
   yt: ["fes_yt_define", "遥调点表"],
   yk: ["fes_yk_define", "遥控点表"],
+};
+const channelSchema = {
+  head: { eng_name: "channels", chn_name: "通道定义" },
+  primary_keys: ["channel_type", "channel_id"],
+  columns: [
+    { chn_name: "通道标识", eng_name: "channel_id", primary_key: true, data_type: "int", disp_type: "INT" },
+    { chn_name: "通道类型", eng_name: "channel_type", primary_key: true, data_type: "str", disp_type: "STRING", allowed_values: ["iec104", "modbus-rtu", "modbus-tcp", "can", "bacnet", "opc"] },
+    { chn_name: "英文标识", eng_name: "code", data_type: "str", disp_type: "STRING" },
+    { chn_name: "中文名称", eng_name: "name", data_type: "str", disp_type: "STRING" },
+    { chn_name: "保存报文", eng_name: "packet_recording", data_type: "int", disp_type: "INT" },
+    { chn_name: "绑定 RTU", eng_name: "rtu_id", data_type: "int", disp_type: "INT" },
+    { chn_name: "RTU 编号", eng_name: "rtu_code", data_type: "str", disp_type: "STRING" },
+    { chn_name: "RTU 名称", eng_name: "rtu_name", data_type: "str", disp_type: "STRING" },
+    { chn_name: "已绑定", eng_name: "bound", data_type: "int", disp_type: "INT" },
+    { chn_name: "参数已配置", eng_name: "parameter_ready", data_type: "int", disp_type: "INT" },
+  ],
 };
 const pointKinds = ["yc", "yx", "yt", "yk"];
 const parameterTables = {
@@ -51,11 +69,19 @@ const rtuRuntimeFields = [
   "process_error",
 ];
 const common = {
+  channels: [
+    "channel_id",
+    "channel_type",
+    "code",
+    "name",
+    "packet_recording",
+    "rtu_id",
+    "rtu_name",
+    "parameter_ready",
+  ],
   rtus: [
     "rtu_id",
     "name",
-    "channel_id",
-    "channel_type",
     "process_enable",
     "process_status",
     "process_pid",
@@ -121,6 +147,11 @@ function channelTypeLabel(value) {
       custom: "自定义",
     }[value] || value
   );
+}
+
+function schemaTypeLabel(column) {
+  const value = String(column?.disp_type || "");
+  return value === "LONG" ? "INT" : value;
 }
 
 // Protocol auxiliary tables have constraints that are more specific than the
@@ -500,16 +531,21 @@ function pathFor(ctx, row = null) {
       : "/api/points/" + ctx.resource;
   } else if (ctx.resource === "rtus") {
     url = "/api/rtus";
+  } else if (ctx.resource === "channels") {
+    url = "/api/channels";
   } else {
     url =
       "/api/tables/" + encodeURIComponent(ctx.schema.head.eng_name) + "/rows";
   }
   if (row) {
-    const key =
-      pointKinds.includes(ctx.resource) && ctx.rtu
+    if (ctx.resource === "channels") {
+      url += "/" + encodeURIComponent(row.channel_type) + "/" + encodeURIComponent(row.channel_id);
+    } else {
+      const key = pointKinds.includes(ctx.resource) && ctx.rtu
         ? String(row.pnt_no)
         : keyOf(row, ctx.schema);
-    url += "/" + encodeURIComponent(key);
+      url += "/" + encodeURIComponent(key);
+    }
   }
   return url;
 }
@@ -517,7 +553,7 @@ function pathFor(ctx, row = null) {
 async function refreshSummary() {
   const data = await api("/api/overview?view=summary");
   const names = [
-    ["fes_rtu_define", "RTU/通道"],
+    ["fes_rtu_define", "RTU"],
     ["fes_yc_define", "遥测"],
     ["fes_yx_define", "遥信"],
     ["fes_yt_define", "遥调"],
@@ -576,6 +612,31 @@ async function loadRtuOptions() {
     )
     .join("");
 }
+let channelOptionsRequest = 0;
+async function loadChannelOptions() {
+  const request = ++channelOptionsRequest;
+  const items = [];
+  for (let offset = 0; ; ) {
+    const data = await api(
+      "/api/channels?limit=500&sort=channel_id&fields=channel_id,channel_type,code,name&offset=" +
+        offset,
+    );
+    if (request !== channelOptionsRequest) return;
+    items.push(...data.items);
+    offset += data.items.length;
+    if (!data.items.length || offset >= data.total) break;
+  }
+  $("#channel-options").innerHTML = items
+    .map(
+      (row) =>
+        '<option value="' +
+        esc(row.channel_id) +
+        '" label="' +
+        esc(channelTypeLabel(row.channel_type) + " · " + (row.name || row.code || "未命名")) +
+        '"></option>',
+    )
+    .join("");
+}
 function tableGroup(resource) {
   return Object.keys(state.tableGroups).find((group) =>
     state.tableGroups[group].includes(resource),
@@ -604,9 +665,12 @@ function showView() {
     state.resource === "rtus" ||
     !schema.columns.some((c) => c.eng_name === "rtu_id");
   $("#view-live").hidden = !isPoint;
-  // RTU and its single channel are one definition. Keep one creation
-  // entrypoint so users cannot accidentally create them in two steps.
-  $("#add").textContent = state.resource === "rtus" ? "＋ 新建 RTU 与通道" : "＋ 新增记录";
+  $("#add").textContent =
+    state.resource === "channels"
+      ? "＋ 新建通道"
+      : state.resource === "rtus"
+        ? "＋ 新建 RTU"
+        : "＋ 新增记录";
   for (const view of ["common", "live", "all"]) {
     $("#view-" + view).classList.toggle("selected", state.view === view);
   }
@@ -820,15 +884,17 @@ function renderTable() {
           (state.resource === "rtus"
             ? '<button class="row-button" data-rtu-params="' +
               index +
-              '">RTU参数</button><button class="row-button" data-channel="' +
+              '">RTU参数</button><button class="row-button" data-channel-view="' +
               index +
-              '">通道维护</button><button class="row-button" data-channel-params="' +
-              index +
-              '">通道参数</button><button class="row-button" data-points="' +
+              '">查看通道</button><button class="row-button" data-points="' +
               index +
               '">四遥</button><button class="row-button" data-rtu-log="' +
               esc(item.rtu_id) +
               '">日志</button>'
+            : state.resource === "channels"
+              ? '<button class="row-button" data-channel-params="' +
+                index +
+                '">协议参数</button>'
             : "") +
           '<button class="row-button delete" data-delete="' +
           index +
@@ -959,6 +1025,15 @@ $("#table-body").onclick = (event) => {
     state.view = "live";
     return changeResource("yc");
   }
+  if (button.hasAttribute("data-channel-view")) {
+    const row = state.items[Number(button.dataset.channelView)];
+    state.listStates.channels = {
+      ...(state.listStates.channels || {}),
+      rtu: row?.rtu_id ? String(row.rtu_id) : "",
+      offset: 0,
+    };
+    return changeResource("channels");
+  }
   for (const [action, handler] of Object.entries(rowActions)) {
     if (button.hasAttribute("data-" + action))
       return handler(state.items[Number(button.getAttribute("data-" + action))]);
@@ -1014,7 +1089,9 @@ async function openEditor(row = null, options = {}) {
         const list =
           name === "rtu_id" && ctx.resource !== "rtus"
             ? ' list="rtu-options"'
-            : "";
+            : name === "channel_id" && ctx.resource === "rtus"
+              ? ' list="channel-options"'
+              : "";
         const numeric = column.data_type !== "str";
         // Keep unconstrained int64 fields as text so their exact decimal
         // representation survives editing; bounded protocol integers can use
@@ -1023,7 +1100,9 @@ async function openEditor(row = null, options = {}) {
           column.data_type === "float" || rule.min !== undefined || rule.max !== undefined
             ? "number"
             : "text";
-        const allowedOptions = Array.isArray(rule.options)
+        const allowedOptions = Array.isArray(options.fieldOptions?.[name])
+          ? options.fieldOptions[name]
+          : Array.isArray(rule.options)
           ? rule.options
           : Array.isArray(column.allowed_values)
             ? column.allowed_values
@@ -1085,6 +1164,7 @@ async function openEditor(row = null, options = {}) {
           "<small>" +
           esc(name) +
           (column.primary_key ? " · 主键" : "") +
+          (schemaTypeLabel(column) ? " · " + esc(schemaTypeLabel(column)) : "") +
           "</small></label>" +
           control +
           "</div>"
@@ -1106,8 +1186,32 @@ async function openEditor(row = null, options = {}) {
 async function openNewRtu() {
   const schema = state.schemas.get("fes_rtu_define");
   if (!schema) return toast("RTU 表结构尚未加载", true);
-  const columns = schema.columns.filter((column) => !rtuRuntimeFields.includes(column.eng_name));
-  await openEditor(null, { schema, columns, title: "RTU 与通道", mode: "new-rtu" });
+  const columns = schema.columns.filter(
+    (column) => !rtuRuntimeFields.includes(column.eng_name),
+  );
+  await openEditor(null, {
+    schema,
+    columns,
+    title: "RTU 定义",
+    mode: "new-rtu",
+    fieldOptions: {
+      channel_type: ["iec104", "modbus-rtu", "modbus-tcp", "can", "bacnet", "opc"],
+    },
+  });
+}
+
+async function openNewChannel() {
+  const schema = state.schemas.get("channels");
+  if (!schema) return toast("通道目录尚未加载", true);
+  const columns = schema.columns.filter((column) =>
+    ["channel_id", "channel_type", "code", "name"].includes(column.eng_name),
+  );
+  await openEditor(null, {
+    schema,
+    columns,
+    title: "通道定义",
+    mode: "new-channel-definition",
+  });
 }
 
 async function openRtuParameters(row) {
@@ -1137,8 +1241,13 @@ async function openChannelEditor(row, create = false) {
 
 async function openChannelParameters(row) {
   try {
-    const rtu = String(row.rtu_id);
-    const info = await api("/api/rtus/" + encodeURIComponent(rtu) + "/channel/parameters");
+    const isDirectory = state.resource === "channels";
+    const rtu = row.rtu_id == null ? "" : String(row.rtu_id);
+    const endpoint = isDirectory
+      ? "/api/channels/" + encodeURIComponent(row.channel_type) + "/" +
+        encodeURIComponent(row.channel_id) + "/parameters"
+      : "/api/rtus/" + encodeURIComponent(rtu) + "/channel/parameters";
+    const info = await api(endpoint);
     if (!info.parameter_schema) return toast("该通道类型没有可维护的协议参数表", true);
     const schema = info.parameter_schema;
     state.schemas.set(schema.head.eng_name, schema);
@@ -1148,9 +1257,9 @@ async function openChannelParameters(row) {
       columns,
       title: channelTypeLabel(row.channel_type) + " 通道参数",
       mode: "protocol-parameters",
-      rtu: String(row.rtu_id),
-      pathOverride: "/api/rtus/" + encodeURIComponent(row.rtu_id) + "/channel/parameters",
-      fetchPath: "/api/rtus/" + encodeURIComponent(row.rtu_id) + "/channel/parameters",
+      rtu,
+      pathOverride: endpoint,
+      fetchPath: endpoint,
     });
   } catch (error) {
     toast(error.message, true);
@@ -1359,7 +1468,7 @@ async function saveRow(event) {
     $("#editor").close();
     toast(ctx.row ? "记录已更新" : "记录已创建");
     await loadRows();
-    await Promise.all([refreshSummary(), loadRtuOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
   } catch (error) {
     $("#form-error").textContent = error.message;
   } finally {
@@ -1408,7 +1517,7 @@ async function removeRow(row) {
       state.rtu = "";
     }
     await loadRows();
-    await Promise.all([refreshSummary(), loadRtuOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -1510,6 +1619,13 @@ function statusBadge(value) {
     "</span>"
   );
 }
+function runtimeBadge(runtime, fallback) {
+  const names = {unknown: "未知", stopped: "停止", starting: "启动中", running: "运行中", stopping: "停止中", error: "错误", degraded: "降级"};
+  if (!runtime || !runtime.state) return statusBadge(fallback);
+  const state = String(runtime.state);
+  const numeric = {running: 2, starting: 1, stopping: 3, degraded: 4, error: 5, stopped: 0}[state];
+  return '<span class="status s' + esc(numeric ?? 0) + '">' + esc(names[state] || state) + '</span>';
+}
 function cellValue(name, value, table = "") {
   if (value === null || value === undefined)
     return '<span class="muted">—</span>';
@@ -1522,6 +1638,12 @@ function cellValue(name, value, table = "") {
       (value === 1 ? "自动" : "停用") +
       "</span>"
     );
+  if (name === "packet_recording" || name === "bound" || name === "parameter_ready")
+    return '<span class="status ' + (Number(value) === 1 ? "enabled" : "") + '">' +
+      (name === "packet_recording"
+        ? Number(value) === 1 ? "保存" : "不保存"
+        : Number(value) === 1 ? "是" : "否") +
+      "</span>";
   if (name === "channel_type") return esc(channelTypeLabel(value));
   const protocolLabel = protocolDisplayLabel(table, name, value);
   if (protocolLabel !== null) return esc(protocolLabel);
@@ -1541,7 +1663,40 @@ function showError(selector, error) {
   $(selector).textContent = error?.message || "";
   $(selector).hidden = !error;
 }
+function saveListState(resource = state.resource) {
+  if (!resources[resource] && !pointKinds.includes(resource)) return;
+  state.listStates[resource] = {
+    offset: state.offset,
+    limit: state.limit,
+    sort: state.sort,
+    order: state.order,
+    rtu: state.rtu,
+    view: state.view,
+    search: $("#search").value,
+  };
+}
+function restoreListState(resource) {
+  const saved = state.listStates[resource] || {
+    offset: 0,
+    limit: 50,
+    sort: "",
+    order: "asc",
+    rtu: "",
+    view: "common",
+    search: "",
+  };
+  state.offset = saved.offset;
+  state.limit = saved.limit;
+  state.sort = saved.sort;
+  state.order = saved.order;
+  state.rtu = saved.rtu;
+  state.view = saved.view;
+  $("#search").value = saved.search;
+  $("#page-size").value = String(state.limit);
+  $("#rtu-filter").value = state.rtu;
+}
 function changeResource(resource, updateHash = true) {
+  saveListState();
   if (resource === "data") resource = "rtus";
   if (
     !["processes", "scdfe", "logs", ...Object.keys(resources)].includes(resource) &&
@@ -1549,6 +1704,7 @@ function changeResource(resource, updateHash = true) {
   )
     resource = "rtus";
   state.resource = resource;
+  restoreListState(resource);
   tableRender.head = null;
   tableRender.rows = [];
   tableRender.entries = [];
@@ -1579,10 +1735,6 @@ function changeResource(resource, updateHash = true) {
   }
   if (resource === "scdfe") return loadScdfe();
   if (resource === "logs") return loadScdfeLogs();
-  state.offset = 0;
-  state.sort = "";
-  state.order = "asc";
-  $("#search").value = "";
   if (!pointKinds.includes(resource) && state.view === "live")
     state.view = "common";
   loadRows();
@@ -1813,18 +1965,23 @@ async function loadScdfe() {
             "<td>" +
             cellValue("process_enable", row.process_enable) +
             "</td><td>" +
-            statusBadge(row.process_status) +
+            runtimeBadge(row.runtime_status, row.process_status) +
+            "</td><td>" +
+            esc(row.runtime_status?.connection_state || "—") +
             "</td><td>" +
             esc(row.thread_id || "—") +
+            '</td><td class="mono">' +
+            esc([row.runtime_status?.rx_count || 0, row.runtime_status?.tx_count || 0, row.runtime_status?.error_count || 0].join(" / ")) +
             "</td><td>" +
-            esc(fmtClockTime(row.process_heartbeat_time)) +
+            esc(fmtClockTime(row.runtime_status?.process_heartbeat_time || row.process_heartbeat_time)) +
+            '<span class="cell-sub">采样 ' + esc(fmtClockTime(row.runtime_status?.sampled_at)) + '</span>' +
             "</td>" +
             '<td class="error-cell"><button class="row-button" data-thread-detail="' +
             index +
             '" title="' +
-            esc(row.process_error || "查看完整记录") +
+            esc(row.runtime_status?.last_error || row.process_error || "查看完整记录") +
             '">' +
-            esc(row.process_error || "—") +
+            esc(row.runtime_status?.last_error || row.process_error || "—") +
             "</button></td>" +
             '<td class="sticky-actions"><button class="row-button" data-thread-log="' +
             esc(row.rtu_id) +
@@ -1838,7 +1995,7 @@ async function loadScdfe() {
       $("#scdfe-rtus"),
       threadRows.length
         ? threadRows
-        : ['<tr><td class="empty" colspan="8">没有匹配的 RTU</td></tr>'],
+        : ['<tr><td class="empty" colspan="11">没有匹配的 RTU</td></tr>'],
       threadRender,
       true,
     );
@@ -2312,6 +2469,7 @@ async function boot() {
   try {
     const [, { items }] = await Promise.all([api("/api/health"), api("/api/schemas")]);
     items.forEach((schema) => state.schemas.set(schema.head.eng_name, schema));
+    state.schemas.set("channels", channelSchema);
     const primary = Object.values(resources).map((item) => item[0]);
     const helperSchemas = items.filter(
       (schema) =>
@@ -2338,8 +2496,12 @@ async function boot() {
           "</button>",
       )
       .join("");
-    const supplementary = Promise.allSettled([refreshSummary(), loadRtuOptions()]);
-    changeResource(location.hash.slice(1) || "rtus", false);
+    const supplementary = Promise.allSettled([
+      refreshSummary(),
+      loadRtuOptions(),
+      loadChannelOptions(),
+    ]);
+    changeResource(location.hash.slice(1) || "channels", false);
     for (const result of await supplementary) {
       if (result.status === "rejected") toast(result.reason.message, true);
     }
@@ -2537,13 +2699,17 @@ initLogFilterToggle();
 $("#refresh").onclick = async () => {
   await loadRows();
   try {
-    await Promise.all([refreshSummary(), loadRtuOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
   } catch (error) {
     toast(error.message, true);
   }
 };
 $("#add").onclick = () =>
-  state.resource === "rtus" ? openNewRtu() : openEditor();
+  state.resource === "channels"
+    ? openNewChannel()
+    : state.resource === "rtus"
+      ? openNewRtu()
+      : openEditor();
 $("#editor-form").onsubmit = saveRow;
 $("#close-editor").onclick = $("#cancel-editor").onclick = closeEditor;
 $("#editor").addEventListener("cancel", (event) => {

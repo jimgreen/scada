@@ -1,0 +1,28 @@
+#   732         fes_channel_runtime_status      通信通道运行状态快照表     public/fes/scada 200 1 0 scada
+<fes_channel_runtime_status>
+service_name             服务实例                    STRING       1            0        public/fes/scada STRING
+channel_id               通道编号                    INT         1            0        public/fes/scada INT
+protocol                 规约                        STRING       0            0        public/fes/scada STRING
+channel_name             通道名称                    STRING       0            0        public/fes/scada STRING
+state                    运行状态                    STRING       0            0        public/fes/scada STRING
+running                  运行标志                    INT          0            0        public/fes/scada INT
+connection_state         连接状态                    STRING       0            0        public/fes/scada STRING
+process_status           进程状态                    INT          0            0        public/fes/scada INT
+process_pid              进程号                      INT         0            0        public/fes/scada INT
+process_start_time       启动时间                    INT         0            0        public/fes/scada INT
+process_stop_time        停止时间                    INT         0            0        public/fes/scada INT
+process_heartbeat_time   心跳时间                    INT         0            0        public/fes/scada INT
+process_exit_code        退出码                      INT          0            0        public/fes/scada INT
+process_error            进程错误                    STRING       0            0        public/fes/scada STRING
+rx_count                 接收计数                    INT         0            0        public/fes/scada INT
+tx_count                 发送计数                    INT         0            0        public/fes/scada INT
+error_count              错误计数                    INT         0            0        public/fes/scada INT
+dropped_count            丢失计数                    INT         0            0        public/fes/scada INT
+reconnect_count          重连计数                    INT         0            0        public/fes/scada INT
+last_rx_time             最近接收时间                INT         0            0        public/fes/scada INT
+last_tx_time             最近发送时间                INT         0            0        public/fes/scada INT
+last_error_time          最后错误时间                INT         0            0        public/fes/scada INT
+last_error               最后错误                    STRING       0            0        public/fes/scada STRING
+diagnostic_json          诊断详情 JSON               STRING       0            0        public/fes/scada STRING
+sampled_at               采样时间                    INT         0            0        public/fes/scada INT
+</fes_channel_runtime_status>

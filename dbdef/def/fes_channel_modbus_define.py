@@ -22,7 +22,7 @@ class fes_channel_modbus_define:
 
     id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'LONG', 'disp_menu': ''},
+        metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     code: Optional[str] = field(
@@ -40,9 +40,9 @@ class fes_channel_modbus_define:
         metadata={'chn_name': 'RDFID', 'eng_name': 'rdfid', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-    rtu_id: Optional[int] = field(
+    channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属RTU', 'eng_name': 'rtu_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
     irtuaddr: Optional[int] = field(
@@ -55,6 +55,11 @@ class fes_channel_modbus_define:
         metadata={'chn_name': '每帧召唤的起始地址', 'eng_name': 'iplace', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
+    address_base: Optional[int] = field(
+        default=0,
+        metadata={'chn_name': '地址基准（0/1/10001/30001/40001）', 'eng_name': 'address_base', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'allowed_values': [0, 1, 10001, 30001, 40001], 'default': 0},
+    )
+
     inum: Optional[int] = field(
         default=None,
         metadata={'chn_name': '每帧召唤的寄存器个数', 'eng_name': 'inum', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
@@ -62,7 +67,7 @@ class fes_channel_modbus_define:
 
     icode: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '每帧召唤的功能码', 'eng_name': 'icode', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '每帧召唤的功能码', 'eng_name': 'icode', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'allowed_values': [1, 2, 3, 4]},
     )
 
     ioffset: Optional[int] = field(
