@@ -196,7 +196,7 @@ class ThreeWebInteractionTests(unittest.TestCase):
 
     def _create_forwarder(self):
         self.api("t", "/api/trans/channels", "POST", {
-            "channel_id": 1, "code": "ACCEPTANCE", "name": "Acceptance forwarder",
+            "channel_id": 1, "name": "Acceptance forwarder",
             "protocol": "modbus-tcp", "bind_host": "127.0.0.1", "bind_port": self.forward_port,
             "unit_id": 1, "scan_interval_ms": 50,
         }, status=201)

@@ -137,7 +137,7 @@ vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.
   await settle();
   let observed={};
   if(input.scenario === 'channels') {
-    set({rtu_id:101,channel_id:101,channel_type:'modbus-tcp',code:'JS101',name:'JS channel',process_enable:0});
+        set({rtu_id:101,channel_id:101,channel_type:'modbus-tcp',name:'JS channel',process_enable:0});
     await submit('channel-form');
     const created=writes.find(r => r.path === '/api/channels' && r.method === 'POST');
     if(!created || created.status !== 201) throw Error('Channel create failed '+JSON.stringify(created));
@@ -146,7 +146,7 @@ vm.runInNewContext(fs.readFileSync(input.script,'utf8'),context,{filename:input.
     await node('update-channel').onclick(); await settle();
     observed={channelMessage:node('channel-message').textContent};
   } else if(input.scenario === 'points') {
-    set({'point-kind':'yc','point-no':1,'point-code':'YC1','point-name':'JS point','point-value':1.25});
+        set({'point-kind':'yc','point-no':1,'point-name':'JS point','point-value':1.25});
     await submit('point-form');
     const added=writes.find(r => r.path.endsWith('/points/yc') && r.method === 'POST');
     if(added && added.status === 201) {

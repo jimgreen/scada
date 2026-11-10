@@ -25,10 +25,6 @@ class fes_channel_modbus_tcp_define:
         metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
     )
 
-    code: Optional[str] = field(
-        default=None,
-        metadata={'chn_name': '英文标识', 'eng_name': 'code', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
-    )
 
     name: Optional[str] = field(
         default=None,

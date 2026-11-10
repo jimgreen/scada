@@ -96,7 +96,7 @@ class WebTests(unittest.TestCase):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
         self.assertEqual(len(body['items']), 32)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 594)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 572)
         self.assertTrue({
             'fes_channel_can_diagnostic', 'fes_channel_can_frame_define',
             'fes_channel_can_j1939_define', 'fes_channel_can_uds_define',
@@ -199,7 +199,7 @@ class WebTests(unittest.TestCase):
     def test_list_field_projection_keeps_keys_and_version(self):
         self.rtu(1)
         self.assertEqual(self.call('/api/rtus/1/points/yc', 'POST', {
-            'pnt_no': 1, 'code': 'YC_1', 'name': '电压', 'value': 12.5,
+            'pnt_no': 1, 'name': '电压', 'value': 12.5,
         })[0], 201)
         status, body = self.call(
             '/api/rtus/1/points/yc?fields=name,value&limit=1',
@@ -245,7 +245,7 @@ class WebTests(unittest.TestCase):
             # validation contract instead of relying on removed forward-era
             # defaults.
             if name == 'fes_scdfe_t_define':
-                row.update(code='TEST_TRANS', protocol='iec104')
+                row.update(protocol='iec104')
             elif name == 'fes_scdfe_t_point_define':
                 row.update(kind='yc', source_rtu_id=1, source_pnt_no=1)
             if any(c['eng_name'] == 'name' for c in schema['columns']):
@@ -391,12 +391,12 @@ class WebTests(unittest.TestCase):
     def test_channel_directory_uses_protocol_type_and_channel_id(self):
         status, body = self.call('/api/channels', 'POST', {
             'channel_id': 1, 'channel_type': 'iec104',
-            'code': 'C104', 'name': 'IEC 通道',
+            'name': 'IEC 通道',
         })
         self.assertEqual(status, 201, body)
         status, body = self.call('/api/channels', 'POST', {
             'channel_id': 1, 'channel_type': 'modbus-tcp',
-            'code': 'C1', 'name': 'Modbus 通道',
+            'name': 'Modbus 通道',
         })
         self.assertEqual(status, 201, body)
         self.assertEqual(self.call('/api/channels', 'POST', {
@@ -404,7 +404,7 @@ class WebTests(unittest.TestCase):
         })[0], 409)
         page = self.call(
             '/api/channels?limit=1&offset=1&sort=channel_id&order=desc'
-            '&fields=channel_id,channel_type,code,name'
+            '&fields=channel_id,channel_type,name'
         )[1]
         self.assertEqual((page['total'], page['items'][0]['channel_type']), (2, 'modbus-tcp'))
         self.assertEqual(self.call('/api/channels?q=Modbus')[1]['total'], 1)

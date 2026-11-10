@@ -33,7 +33,7 @@ class ChannelConcurrencyTests(unittest.TestCase):
 
     def test_slow_control_and_heartbeat_do_not_block_other_operator_edits(self):
         for cid in (1, 10):
-            self.t.create_channel(dict(channel_id=cid, code=str(cid), protocol='iec104'))
+            self.t.create_channel(dict(channel_id=cid, name=str(cid), protocol='iec104'))
         runtime = TransRuntime(self.db, channel_id=10)
         self.addCleanup(runtime.store.close)
         runtime._heartbeat()  # initial transition into RUNNING
@@ -110,7 +110,7 @@ class ChannelConcurrencyTests(unittest.TestCase):
                 probe.bind(('127.0.0.1',0))
                 port=probe.getsockname()[1]
             protocol='iec104' if cid in (1,11) else 'modbus-tcp'
-            api('t','trans/channels','POST',dict(channel_id=cid,code=f'C{cid}',protocol=protocol,
+            api('t','trans/channels','POST',dict(channel_id=cid,name=f'C{cid}',protocol=protocol,
                 common_address=cid,bind_host='127.0.0.1',bind_port=port,scan_interval_ms=50),accept=(201,))
             settings=dict(io_address=0x4001,type_id=13) if protocol=='iec104' else dict(register_area='input',data_type='uint16',address=0)
             api('t',f'trans/channels/{cid}/points','POST',dict(kind='yc',pnt_no=1,source_rtu_id=rid,source_pnt_no=1,**settings),accept=(201,))

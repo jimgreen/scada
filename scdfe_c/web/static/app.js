@@ -28,17 +28,25 @@ const resources = {
   yt: ["fes_yt_define", "遥调点表"],
   yk: ["fes_yk_define", "遥控点表"],
 };
+const CHANNEL_TYPE_OPTIONS = ["iec104", "modbus-rtu", "modbus-tcp", "can", "bacnet", "opc"];
+const RTU_EDITOR_ORDER = [
+  "rtu_id",
+  "name",
+  "channel_type",
+  "channel_id",
+  "status",
+  "refresh_time",
+  "packet_recording",
+];
 const channelSchema = {
   head: { eng_name: "channels", chn_name: "通道定义" },
   primary_keys: ["channel_type", "channel_id"],
   columns: [
     { chn_name: "通道标识", eng_name: "channel_id", primary_key: true, data_type: "int", disp_type: "INT" },
     { chn_name: "通道类型", eng_name: "channel_type", primary_key: true, data_type: "str", disp_type: "STRING", allowed_values: ["iec104", "modbus-rtu", "modbus-tcp", "can", "bacnet", "opc"] },
-    { chn_name: "英文标识", eng_name: "code", data_type: "str", disp_type: "STRING" },
     { chn_name: "中文名称", eng_name: "name", data_type: "str", disp_type: "STRING" },
     { chn_name: "保存报文", eng_name: "packet_recording", data_type: "int", disp_type: "INT" },
     { chn_name: "绑定 RTU", eng_name: "rtu_id", data_type: "int", disp_type: "INT" },
-    { chn_name: "RTU 编号", eng_name: "rtu_code", data_type: "str", disp_type: "STRING" },
     { chn_name: "RTU 名称", eng_name: "rtu_name", data_type: "str", disp_type: "STRING" },
     { chn_name: "已绑定", eng_name: "bound", data_type: "int", disp_type: "INT" },
     { chn_name: "参数已配置", eng_name: "parameter_ready", data_type: "int", disp_type: "INT" },
@@ -72,7 +80,6 @@ const common = {
   channels: [
     "channel_id",
     "channel_type",
-    "code",
     "name",
     "packet_recording",
     "rtu_id",
@@ -576,7 +583,7 @@ async function loadRtuOptions() {
   const request = ++rtuOptionsRequest;
   const items = new Map();
   for (let offset = 0; ; ) {
-    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name,code&offset=" + offset);
+    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name&offset=" + offset);
     if (request !== rtuOptionsRequest) return;
     for (const row of data.items) items.set(row.rtu_id, row);
     offset += data.items.length;
@@ -589,7 +596,7 @@ async function loadRtuOptions() {
         '<option value="' +
         esc(row.rtu_id) +
         '">' +
-        esc(row.rtu_id + " · " + (row.name || row.code || "未命名")) +
+        esc(row.rtu_id + " · " + (row.name || "未命名")) +
         "</option>",
     )
     .join("");
@@ -607,35 +614,86 @@ async function loadRtuOptions() {
         '<option value="' +
         esc(row.rtu_id) +
         '" label="' +
-        esc(row.name || row.code || "未命名") +
+        esc(row.name || "未命名") +
         '"></option>',
     )
     .join("");
 }
 let channelOptionsRequest = 0;
-async function loadChannelOptions() {
-  const request = ++channelOptionsRequest;
+async function fetchChannelOptions(channelType = "") {
   const items = [];
   for (let offset = 0; ; ) {
+    const filter = channelType
+      ? "&channel_type=" + encodeURIComponent(channelType)
+      : "";
     const data = await api(
-      "/api/channels?limit=500&sort=channel_id&fields=channel_id,channel_type,code,name&offset=" +
-        offset,
+      "/api/channels?limit=500&sort=channel_id&fields=channel_id,channel_type,name&offset=" +
+        offset +
+        filter,
     );
-    if (request !== channelOptionsRequest) return;
     items.push(...data.items);
     offset += data.items.length;
     if (!data.items.length || offset >= data.total) break;
   }
-  $("#channel-options").innerHTML = items
+  return items;
+}
+function rtuEditorColumns(columns) {
+  const order = new Map(RTU_EDITOR_ORDER.map((name, index) => [name, index]));
+  return [...columns].sort(
+    (left, right) =>
+      (order.get(left.eng_name) ?? RTU_EDITOR_ORDER.length) -
+      (order.get(right.eng_name) ?? RTU_EDITOR_ORDER.length),
+  );
+}
+function channelOptionLabel(row) {
+  return row.channel_id + " · " + (row.name || "未命名");
+}
+function channelSelectMarkup(rows, selected, channelType) {
+  const options = rows
     .map(
       (row) =>
         '<option value="' +
         esc(row.channel_id) +
-        '" label="' +
-        esc(channelTypeLabel(row.channel_type) + " · " + (row.name || row.code || "未命名")) +
-        '"></option>',
+        '"' +
+        (String(selected ?? "") === String(row.channel_id) ? " selected" : "") +
+        ">" +
+        esc(channelOptionLabel(row)) +
+        "</option>",
     )
     .join("");
+  const prompt = channelType
+    ? rows.length
+      ? "请选择对应通道"
+      : "该类型暂无可用通道"
+    : "请先选择通道类型";
+  return '<option value="">' + esc(prompt) + "</option>" + options;
+}
+async function updateRtuChannelOptions(channelType, selected = "") {
+  const select = $("#f-channel_id");
+  if (!select) return;
+  const request = ++channelOptionsRequest;
+  select.disabled = true;
+  select.innerHTML = channelSelectMarkup([], selected, "");
+  if (!channelType) return;
+  if (!CHANNEL_TYPE_OPTIONS.includes(channelType)) {
+    select.innerHTML = channelSelectMarkup(
+      selected ? [{ channel_id: selected, name: "当前关联通道" }] : [],
+      selected,
+      channelType,
+    );
+    select.disabled = false;
+    return;
+  }
+  try {
+    const rows = (await fetchChannelOptions(channelType)) || [];
+    if (request !== channelOptionsRequest) return;
+    select.innerHTML = channelSelectMarkup(rows, selected, channelType);
+    select.disabled = false;
+  } catch (error) {
+    if (request !== channelOptionsRequest) return;
+    select.innerHTML = '<option value="">加载通道失败</option>';
+    toast(error.message, true);
+  }
 }
 function tableGroup(resource) {
   return Object.keys(state.tableGroups).find((group) =>
@@ -963,7 +1021,7 @@ async function openCommand(row) {
     if (state.resource !== kind || state.rtu !== originRtu) return;
     state.command = { kind, row: current, busy: false };
     $("#command-title").textContent = kind === "yk" ? "遥控下发" : "遥调下发";
-    $("#command-point").textContent = "RTU " + current.rtu_id + " · 点 " + current.pnt_no + " · " + (current.name || current.code || "未命名");
+    $("#command-point").textContent = "RTU " + current.rtu_id + " · 点 " + current.pnt_no + " · " + (current.name || "未命名");
     $("#command-current").textContent = "当前指令值：" + (current.value ?? "—") + " · " + commandState(current)[1];
     $("#command-value-control").innerHTML = kind === "yk"
       ? '<select id="command-value" required><option value="0">0 · ' + esc(current.name_0 || "分/关") + '</option><option value="1">1 · ' + esc(current.name_1 || "合/开") + '</option></select>'
@@ -1027,11 +1085,9 @@ $("#table-body").onclick = (event) => {
   }
   if (button.hasAttribute("data-channel-view")) {
     const row = state.items[Number(button.dataset.channelView)];
-    state.listStates.channels = {
-      ...(state.listStates.channels || {}),
-      rtu: row?.rtu_id ? String(row.rtu_id) : "",
-      offset: 0,
-    };
+    state.rtu = row?.rtu_id ? String(row.rtu_id) : "";
+    $("#rtu-filter").value = state.rtu;
+    state.offset = 0;
     return changeResource("channels");
   }
   for (const [action, handler] of Object.entries(rowActions)) {
@@ -1059,15 +1115,38 @@ async function openEditor(row = null, options = {}) {
     // Always edit the latest record. A later concurrent edit is protected by If-Match.
     if (row) row = (await api(ctx.fetchPath || pathFor(ctx, row))).item;
     if (base.resource !== state.resource || base.rtu !== context().rtu) return;
-    state.editing = { ...ctx, row };
+    const columns =
+      ctx.resource === "rtus" ? rtuEditorColumns(ctx.columns) : ctx.columns;
+    state.editing = { ...ctx, columns, row };
+    const initialChannelType = String(row?.channel_type || "");
+    const initialChannelOptions =
+      ctx.resource === "rtus" && CHANNEL_TYPE_OPTIONS.includes(initialChannelType)
+        ? (await fetchChannelOptions(initialChannelType)) || []
+        : [];
+    if (
+      ctx.resource === "rtus" &&
+      row?.channel_id != null &&
+      !initialChannelOptions.some(
+        (item) => String(item.channel_id) === String(row.channel_id),
+      )
+    ) {
+      initialChannelOptions.unshift({
+        channel_id: row.channel_id,
+        name: "当前关联通道",
+      });
+    }
     $("#form-title").textContent =
       (row ? "编辑 · " : "新增 · ") + (options.title || ctx.schema.head.chn_name);
     $("#form-error").textContent = "";
-    $("#form-fields").innerHTML = ctx.columns
+    $("#form-fields").innerHTML = columns
       .map((column) => {
         const name = column.eng_name;
+        const isRtuChannelId = ctx.resource === "rtus" && name === "channel_id";
         const scoped = name === "rtu_id" && !!ctx.rtu;
-        const disabled = (!!row && column.primary_key) || options.autoPrimaryKeys?.includes(name);
+        const disabled =
+          (!!row && column.primary_key) ||
+          options.autoPrimaryKeys?.includes(name) ||
+          (isRtuChannelId && !initialChannelType);
         const required =
           (!options.autoPrimaryKeys?.includes(name) &&
             (column.primary_key || column.required === true || name === "rtu_id"));
@@ -1086,12 +1165,7 @@ async function openEditor(row = null, options = {}) {
           (disabled ? " disabled" : "") +
           (scoped ? " readonly" : "") +
           (isRequired ? " required" : "");
-        const list =
-          name === "rtu_id" && ctx.resource !== "rtus"
-            ? ' list="rtu-options"'
-            : name === "channel_id" && ctx.resource === "rtus"
-              ? ' list="channel-options"'
-              : "";
+        const list = name === "rtu_id" && ctx.resource !== "rtus" ? ' list="rtu-options"' : "";
         const numeric = column.data_type !== "str";
         // Keep unconstrained int64 fields as text so their exact decimal
         // representation survives editing; bounded protocol integers can use
@@ -1112,7 +1186,16 @@ async function openEditor(row = null, options = {}) {
         const bounds =
           (rule.min === undefined ? "" : ' min="' + esc(rule.min) + '"') +
           (rule.max === undefined ? "" : ' max="' + esc(rule.max) + '"');
-        const control = allowedOptions
+        const channelOptions = isRtuChannelId
+          ? channelSelectMarkup(initialChannelOptions, value, initialChannelType)
+          : "";
+        const channelTypePrompt =
+          name === "channel_type" &&
+          ctx.resource === "rtus" &&
+          String(value) === ""
+            ? '<option value="" selected>请选择通道类型</option>'
+            : "";
+        const control = isRtuChannelId || allowedOptions
           ? '<select id="f-' +
             esc(name) +
             '" data-field="' +
@@ -1120,24 +1203,27 @@ async function openEditor(row = null, options = {}) {
             '"' +
             attrs +
             ">" +
-            allowedOptions
-              .map(
-                (option) =>
-                  '<option value="' +
-                  esc(option) +
-                  '"' +
-                  (String(value) === String(option) ? " selected" : "") +
-                  ">" +
-                  esc(
-                    name === "channel_type"
-                      ? channelTypeLabel(option)
-                      : labels[String(option)] ||
-                        protocolDisplayLabel(ctx.schema.head.eng_name, name, option) ||
-                        option,
-                  ) +
-                  "</option>",
-              )
-              .join("") +
+            (isRtuChannelId
+              ? channelOptions
+              : channelTypePrompt +
+                allowedOptions
+                  .map(
+                    (option) =>
+                      '<option value="' +
+                      esc(option) +
+                      '"' +
+                      (String(value) === String(option) ? " selected" : "") +
+                      ">" +
+                      esc(
+                        name === "channel_type"
+                          ? channelTypeLabel(option)
+                          : labels[String(option)] ||
+                            protocolDisplayLabel(ctx.schema.head.eng_name, name, option) ||
+                            option,
+                      ) +
+                      "</option>",
+                  )
+                  .join("")) +
             "</select>"
           : '<input id="f-' +
             esc(name) +
@@ -1171,6 +1257,11 @@ async function openEditor(row = null, options = {}) {
         );
       })
       .join("");
+    const channelTypeControl = $("#f-channel_type");
+    if (ctx.resource === "rtus" && channelTypeControl && $("#f-channel_id")) {
+      channelTypeControl.onchange = () =>
+        updateRtuChannelOptions(channelTypeControl.value, "");
+    }
     $("#field-search").value = "";
     $("#editor").showModal();
     const preferred =
@@ -1186,8 +1277,8 @@ async function openEditor(row = null, options = {}) {
 async function openNewRtu() {
   const schema = state.schemas.get("fes_rtu_define");
   if (!schema) return toast("RTU 表结构尚未加载", true);
-  const columns = schema.columns.filter(
-    (column) => !rtuRuntimeFields.includes(column.eng_name),
+  const columns = rtuEditorColumns(
+    schema.columns.filter((column) => !rtuRuntimeFields.includes(column.eng_name)),
   );
   await openEditor(null, {
     schema,
@@ -1195,7 +1286,7 @@ async function openNewRtu() {
     title: "RTU 定义",
     mode: "new-rtu",
     fieldOptions: {
-      channel_type: ["iec104", "modbus-rtu", "modbus-tcp", "can", "bacnet", "opc"],
+      channel_type: CHANNEL_TYPE_OPTIONS,
     },
   });
 }
@@ -1204,7 +1295,7 @@ async function openNewChannel() {
   const schema = state.schemas.get("channels");
   if (!schema) return toast("通道目录尚未加载", true);
   const columns = schema.columns.filter((column) =>
-    ["channel_id", "channel_type", "code", "name"].includes(column.eng_name),
+    ["channel_id", "channel_type", "name"].includes(column.eng_name),
   );
   await openEditor(null, {
     schema,
@@ -1468,7 +1559,7 @@ async function saveRow(event) {
     $("#editor").close();
     toast(ctx.row ? "记录已更新" : "记录已创建");
     await loadRows();
-    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     $("#form-error").textContent = error.message;
   } finally {
@@ -1517,7 +1608,7 @@ async function removeRow(row) {
       state.rtu = "";
     }
     await loadRows();
-    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -1670,7 +1761,6 @@ function saveListState(resource = state.resource) {
     limit: state.limit,
     sort: state.sort,
     order: state.order,
-    rtu: state.rtu,
     view: state.view,
     search: $("#search").value,
   };
@@ -1681,7 +1771,6 @@ function restoreListState(resource) {
     limit: 50,
     sort: "",
     order: "asc",
-    rtu: "",
     view: "common",
     search: "",
   };
@@ -1689,7 +1778,6 @@ function restoreListState(resource) {
   state.limit = saved.limit;
   state.sort = saved.sort;
   state.order = saved.order;
-  state.rtu = saved.rtu;
   state.view = saved.view;
   $("#search").value = saved.search;
   $("#page-size").value = String(state.limit);
@@ -2499,7 +2587,6 @@ async function boot() {
     const supplementary = Promise.allSettled([
       refreshSummary(),
       loadRtuOptions(),
-      loadChannelOptions(),
     ]);
     changeResource(location.hash.slice(1) || "channels", false);
     for (const result of await supplementary) {
@@ -2699,7 +2786,7 @@ initLogFilterToggle();
 $("#refresh").onclick = async () => {
   await loadRows();
   try {
-    await Promise.all([refreshSummary(), loadRtuOptions(), loadChannelOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     toast(error.message, true);
   }

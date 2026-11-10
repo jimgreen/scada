@@ -20,7 +20,7 @@ async page => {
         Object.assign(payload.rtus[0], lastPatch.body); payload.rtus[0]._version++;
         return Promise.resolve(new Response(JSON.stringify({ item: payload.rtus[0] })));
       }
-      if (String(url) === '/api/rtus/' + payload.rtus[0].rtu_id) return Promise.resolve(new Response(JSON.stringify({ item: { ...payload.rtus[0], code: '最新记录' } })));
+      if (String(url) === '/api/rtus/' + payload.rtus[0].rtu_id) return Promise.resolve(new Response(JSON.stringify({ item: { ...payload.rtus[0], name: '最新记录' } })));
       return savedFetch(url, options);
     };
     try {

@@ -52,7 +52,7 @@
   async function loadProcesses() {
     try {
       const [channels, processData] = await Promise.all([
-        api("/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,code,name,process_status,process_pid,process_start_time,process_stop_time,process_heartbeat_time,process_error,process_enable"),
+        api("/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,name,process_status,process_pid,process_start_time,process_stop_time,process_heartbeat_time,process_error,process_enable"),
         api("/api/monitor/processes"),
       ]);
       if (!channels || !processData) return;
@@ -71,7 +71,7 @@
         const processName = serviceName ? `scdfe_s-${serviceName}` : "—";
         const startedAt = bound ? status.started_at : channel.process_start_time;
         const heartbeatAt = running ? Date.now() : channel.process_heartbeat_time;
-        return `<tr><td><strong>RTU ${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><span class="cell-sub">通道 ${esc(channel.channel_id ?? "—")} · ${esc(channel.code || "")}</span></td><td class="mono">${esc(processName)}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${esc(channelStatus(channel, bound ? service : null))}</td><td class="mono">${esc(channel.process_pid || "—")}</td><td>${fmt(startedAt)}</td><td>${fmt(heartbeatAt, true)}</td><td title="${esc(error)}">${esc(error)}</td><td>${action} <a href="/communication">通信</a> <a href="/logs?channel_id=${encodeURIComponent(channel.channel_id ?? "")}">日志</a></td></tr>`;
+        return `<tr><td><strong>RTU ${esc(channel.rtu_id)} · ${esc(channel.name || "未命名")}</strong><span class="cell-sub">通道 ${esc(channel.channel_id ?? "—")}</span></td><td class="mono">${esc(processName)}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${esc(channelStatus(channel, bound ? service : null))}</td><td class="mono">${esc(channel.process_pid || "—")}</td><td>${fmt(startedAt)}</td><td>${fmt(heartbeatAt, true)}</td><td title="${esc(error)}">${esc(error)}</td><td>${action} <a href="/communication">通信</a> <a href="/logs?channel_id=${encodeURIComponent(channel.channel_id ?? "")}">日志</a></td></tr>`;
       }).join("");
       show("#rows", rows || `<tr><td colspan="9">暂无通信通道</td></tr>`);
       msg(`共 ${(channels.items || []).length} 个通信通道`);
@@ -103,7 +103,7 @@
         const action = bound
           ? `<button data-service="${esc(service.name)}" data-action="${service.running ? "stop" : "start"}">${service.running ? "停止" : "启动"}</button>`
           : "";
-        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || channel.code || "未命名")}</strong><small class="cell-sub">${esc(channel.code || "")}</small></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
+        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || "未命名")}</strong></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
       }).join("") || `<tr><td colspan="12" class="empty">暂无通信通道</td></tr>`;
       show("#communication-rows", rows);
       msg(`共 ${channels.total ?? (channels.items || []).length} 个通道`);

@@ -87,7 +87,7 @@ class CommitVisibilityTests(unittest.TestCase):
     def test_high_iec_common_address_is_usable_on_the_wire(self):
         trans=TransStore(self.db)
         self.addCleanup(trans.store.close)
-        port=free_port(); base=dict(code='HIGH',protocol='iec104',bind_port=port,bind_host='127.0.0.1')
+        port=free_port(); base=dict(name='HIGH',protocol='iec104',bind_port=port,bind_host='127.0.0.1')
         row=trans.create_channel({**base,'common_address':60000})
         self.assertEqual(row['common_address'],60000)
         with self.assertRaises(ApiError):trans.update_channel(row['channel_id'],{'common_address':65535})
@@ -104,7 +104,7 @@ class CommitVisibilityTests(unittest.TestCase):
     def test_channel_creation_cannot_claim_a_running_process(self):
         trans=TransStore(self.db)
         with self.assertRaises(ApiError) as error:
-            trans.create_channel(dict(code='forged',protocol='iec104',process_pid=123,process_status=2))
+            trans.create_channel(dict(name='forged',protocol='iec104',process_pid=123,process_status=2))
         self.assertEqual(error.exception.status,400)
         self.assertEqual(trans.channels(),[])
     def test_forwarded_command_confirmation_does_not_depend_on_the_log_disk(self):

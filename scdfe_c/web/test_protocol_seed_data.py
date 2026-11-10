@@ -20,7 +20,8 @@ class ProtocolSeedTests(unittest.TestCase):
         self.assertEqual(report["points_per_rtu"], {"yc": 1000, "yx": 1000, "yk": 200, "yt": 200})
         with self.store.connection() as connection:
             stations = connection.execute(
-                "SELECT rtu_id, channel_type FROM fes_rtu_define WHERE code LIKE 'TEST_%' ORDER BY rtu_id"
+                "SELECT rtu_id, channel_type FROM fes_rtu_define "
+                "WHERE name LIKE '%测试站%' ORDER BY rtu_id"
             ).fetchall()
             self.assertEqual(len(stations), 60)
             self.assertEqual(
@@ -44,7 +45,7 @@ class ProtocolSeedTests(unittest.TestCase):
             ).fetchone()[0], 8000)
             for table in ("fes_yc_define", "fes_yx_define", "fes_yk_define", "fes_yt_define"):
                 self.assertEqual(connection.execute(
-                    f"SELECT COUNT(*) - COUNT(DISTINCT code) FROM {table}"
+                    f"SELECT COUNT(*) - COUNT(DISTINCT name) FROM {table}"
                 ).fetchone()[0], 0)
             for table, count in (("fes_yc_define", 60000), ("fes_yt_define", 12000)):
                 self.assertEqual(tuple(connection.execute(

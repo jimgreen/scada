@@ -13,14 +13,6 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "英文标识",
-      "eng_name": "code",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "中文名称",
       "eng_name": "name",
       "primary_key": false,
@@ -31,30 +23,6 @@
     {
       "chn_name": "状态",
       "eng_name": "status",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "INT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "全数据召唤周期（毫秒）",
-      "eng_name": "call_all_cycle",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "SHORT",
-      "disp_menu": ""
-    },
-    {
-      "chn_name": "保存历史",
-      "eng_name": "his_save",
-      "primary_key": false,
-      "data_type": "int",
-      "disp_type": "单选菜单",
-      "disp_menu": "二值判断"
-    },
-    {
-      "chn_name": "数据刷新周期(毫秒)",
-      "eng_name": "refresh_trigger",
       "primary_key": false,
       "data_type": "int",
       "disp_type": "INT",

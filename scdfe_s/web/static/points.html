@@ -17,16 +17,16 @@
   </nav>
   <div class="point-pages">
     <section class="point-page tab-panel" id="point-page-yc" data-point-page="yc" role="tabpanel" aria-labelledby="point-tab-yc">
-      <h2>遥测（YC）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>编码</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody id="points" data-points-body="yc"></tbody></table></div>
+      <h2>遥测（YC）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody id="points" data-points-body="yc"></tbody></table></div>
     </section>
     <section class="point-page tab-panel" id="point-page-yx" data-point-page="yx" role="tabpanel" aria-labelledby="point-tab-yx" hidden>
-      <h2>遥信（YX）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>编码</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yx"></tbody></table></div>
+      <h2>遥信（YX）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yx"></tbody></table></div>
     </section>
     <section class="point-page tab-panel" id="point-page-yk" data-point-page="yk" role="tabpanel" aria-labelledby="point-tab-yk" hidden>
-      <h2>遥控（YK）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>编码</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yk"></tbody></table></div>
+      <h2>遥控（YK）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yk"></tbody></table></div>
     </section>
     <section class="point-page tab-panel" id="point-page-yt" data-point-page="yt" role="tabpanel" aria-labelledby="point-tab-yt" hidden>
-      <h2>遥调（YT）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>编码</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yt"></tbody></table></div>
+      <h2>遥调（YT）</h2><div class="table-wrap"><table><thead><tr><th>类型</th><th>点号</th><th>名称</th><th>值</th><th>操作</th></tr></thead><tbody data-points-body="yt"></tbody></table></div>
     </section>
   </div>
   <div class="pager" aria-label="四遥数据分页"><span id="point-page-summary"></span><label>每页<select id="point-limit"><option value="50">50</option><option value="100" selected>100</option><option value="500">500</option></select>条</label><button id="point-prev" disabled>上一页</button><button id="point-next" disabled>下一页</button></div>
@@ -37,7 +37,7 @@
     <div class="point-editor-grid">
       <label>类型<select id="point-kind" disabled><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
       <label>点号<input id="point-no" type="number" min="1" required></label>
-      <label>编码<input id="point-code"></label><label>名称<input id="point-name"></label>
+      <label>名称<input id="point-name"></label>
       <label>值<input id="point-value" type="number" step="any" value="0"></label>
     </div>
     <p id="point-editor-error" class="error"></p>

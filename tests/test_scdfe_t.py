@@ -43,24 +43,24 @@ class ScdfeTTestBase(unittest.TestCase):
         self.store = ScadaStore(self.db)
         self.store.create_row("fes_rtu_define", {
             "rtu_id": 1, "channel_id": 1, "channel_type": "iec104",
-            "code": "SRC1", "name": "源站",
+            "name": "源站",
         })
         self.store.create_row("fes_yc_define", {
-            "rtu_id": 1, "pnt_no": 1, "code": "YC1", "name": "电压", "value": 12.5,
+            "rtu_id": 1, "pnt_no": 1, "name": "电压", "value": 12.5,
         })
         self.store.create_row("fes_yx_define", {
-            "rtu_id": 1, "pnt_no": 1, "code": "YX1", "name": "状态", "value": 1,
+            "rtu_id": 1, "pnt_no": 1, "name": "状态", "value": 1,
         })
         self.store.create_row("fes_yk_define", {
-            "rtu_id": 1, "pnt_no": 1, "code": "YK1", "name": "开关", "value": 0,
+            "rtu_id": 1, "pnt_no": 1, "name": "开关", "value": 0,
         })
         self.store.create_row("fes_yt_define", {
-            "rtu_id": 1, "pnt_no": 1, "code": "YT1", "name": "设定", "value": 5.0,
+            "rtu_id": 1, "pnt_no": 1, "name": "设定", "value": 5.0,
         })
 
     def add_channel(self, protocol, port):
         self.store.create_row("fes_scdfe_t_define", {
-            "channel_id": 1, "code": "TRANS1", "name": "转发1", "protocol": protocol,
+            "channel_id": 1, "name": "转发1", "protocol": protocol,
             "bind_host": "127.0.0.1", "bind_port": port, "common_address": 1, "unit_id": 1,
             "scan_interval_ms": 50,
         })
@@ -165,7 +165,7 @@ class TransWebApiTests(ScdfeTTestBase):
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "ok")
         channel = {
-            "channel_id": 9, "code": "WEB9", "name": "WEB通道", "protocol": "modbus-tcp",
+            "channel_id": 9, "name": "WEB通道", "protocol": "modbus-tcp",
             "bind_host": "127.0.0.1", "bind_port": _free_port(), "common_address": 1, "unit_id": 1,
         }
         status, data = self.request("POST", "/api/trans/channels", channel)

@@ -46,14 +46,14 @@ class TransmissionReviewTests(unittest.TestCase):
         self.store = ScadaStore(self.db)
         self.port = free_port()
         self.store.create_row("fes_scdfe_t_define", {
-            "channel_id": 1, "code": "T1", "name": "Review", "protocol": "modbus-tcp",
+            "channel_id": 1, "name": "Review", "protocol": "modbus-tcp",
             "bind_host": "127.0.0.1", "bind_port": self.port, "unit_id": 1,
             "scan_interval_ms": 50,
         })
         for rtu in (101, 202):
             self.store.create_row("fes_rtu_define", {
                 "rtu_id": rtu, "channel_id": rtu, "channel_type": "modbus-tcp",
-                "code": f"R{rtu}", "name": f"RTU {rtu}",
+                "name": f"RTU {rtu}",
             })
         self.runtime = TransRuntime(self.db, channel_id=1)
         self.writer = RecordingWriter()
@@ -64,8 +64,7 @@ class TransmissionReviewTests(unittest.TestCase):
             self.store.get_row(f"fes_{kind}_define", [rtu, source])
         except Exception:
             self.store.create_row(f"fes_{kind}_define", {
-                "rtu_id": rtu, "pnt_no": source, "code": f"{kind}{source}",
-                "name": kind, "value": value,
+                "rtu_id": rtu, "pnt_no": source, "name": kind, "value": value,
             })
         return self.store.create_row("fes_scdfe_t_point_define", {
             "channel_id": 1, "kind": kind, "pnt_no": no,

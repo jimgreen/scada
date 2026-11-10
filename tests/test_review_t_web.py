@@ -24,7 +24,7 @@ class TransWebReviewTests(unittest.TestCase):
         self.db = Path(self.temp.name) / "review.sqlite3"
         self.service = TransStore(self.db)
         self.channel = self.service.create_channel({
-            "channel_id": 1, "code": "REVIEW", "protocol": "modbus-tcp",
+            "channel_id": 1, "name": "REVIEW", "protocol": "modbus-tcp",
             "bind_host": "127.0.0.1", "bind_port": self.free_port(),
             "scan_interval_ms": 50,
         })
@@ -90,7 +90,7 @@ class TransWebReviewTests(unittest.TestCase):
             "rtu_id": 7, "channel_id": 70, "channel_type": "iec104", "name": "源站",
         })
         self.service.store.create_row("fes_yc_define", {
-            "rtu_id": 7, "pnt_no": 3, "code": "YC3", "name": "母线电压",
+            "rtu_id": 7, "pnt_no": 3, "name": "母线电压",
         })
         server = self.http_server()
         status, catalog = self.request(server, "/api/trans/source-catalog?kind=yc&rtu_id=7")

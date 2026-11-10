@@ -1603,8 +1603,8 @@ class ScadaStore:
     @staticmethod
     def _channel_view_fields() -> set[str]:
         return {
-            'channel_id', 'channel_type', 'code', 'name', 'packet_recording',
-            'rtu_id', 'rtu_code', 'rtu_name', 'bound', 'parameter_ready',
+            'channel_id', 'channel_type', 'name', 'packet_recording',
+            'rtu_id', 'rtu_name', 'bound', 'parameter_ready',
         }
 
     def _channel_definition_cte(self) -> tuple[str, list[Any]]:
@@ -1620,11 +1620,10 @@ class ScadaStore:
         for channel_type, table in CHANNEL_PARAMETER_TABLES.items():
             schema = self.schema(table)
             names = {column['eng_name'] for column in schema['columns']}
-            code = quote_identifier('code') if 'code' in names else 'NULL'
             name = quote_identifier('name') if 'name' in names else 'NULL'
             parameter_rows.append(
                 'SELECT channel_id, ? AS channel_type, '
-                f'{code} AS code, {name} AS name, _version AS source_version, '
+                f'{name} AS name, _version AS source_version, '
                 '1 AS parameter_ready FROM ' + quote_identifier(table)
             )
             params.append(channel_type)
@@ -1638,15 +1637,15 @@ class ScadaStore:
             'AND r2.channel_type = r.channel_type'
             ')'
             '), channel_rows AS ('
-            'SELECT p.channel_id, p.channel_type, p.code, p.name, '
-            'p.source_version, o.rtu_id, o.code AS rtu_code, '
+            'SELECT p.channel_id, p.channel_type, p.name, '
+            'p.source_version, o.rtu_id, '
             'o.name AS rtu_name, o.packet_recording, o._version AS rtu_version, '
             'p.parameter_ready '
             'FROM parameter_channels p LEFT JOIN rtu_owner o '
             'ON o.channel_id = p.channel_id AND o.channel_type = p.channel_type '
             'UNION ALL '
-            'SELECT o.channel_id, o.channel_type, o.code, o.name, '
-            'o._version AS source_version, o.rtu_id, o.code AS rtu_code, '
+            'SELECT o.channel_id, o.channel_type, o.name, '
+            'o._version AS source_version, o.rtu_id, '
             'o.name AS rtu_name, o.packet_recording, o._version AS rtu_version, '
             '0 AS parameter_ready '
             'FROM rtu_owner o '
@@ -1666,7 +1665,7 @@ class ScadaStore:
             raise ApiError(400, 'limit 必须在 1 到 500 之间，offset 不能为负数')
         allowed = self._channel_view_fields()
         requested = list(fields) if fields is not None else [
-            'channel_id', 'channel_type', 'code', 'name', 'packet_recording',
+            'channel_id', 'channel_type', 'name', 'packet_recording',
             'rtu_id', 'rtu_name', 'bound', 'parameter_ready',
         ]
         if not requested or any(not isinstance(name, str) or not name for name in requested):
@@ -1722,13 +1721,11 @@ class ScadaStore:
             conditions.append(
                 '(CAST(channel_id AS TEXT) LIKE ? ESCAPE \'\\\' OR '
                 'channel_type LIKE ? ESCAPE \'\\\' OR '
-                'COALESCE(code, \'\') LIKE ? ESCAPE \'\\\' OR '
                 'COALESCE(name, \'\') LIKE ? ESCAPE \'\\\' OR '
                 'CAST(COALESCE(rtu_id, \'\') AS TEXT) LIKE ? ESCAPE \'\\\' OR '
-                'COALESCE(rtu_code, \'\') LIKE ? ESCAPE \'\\\' OR '
                 'COALESCE(rtu_name, \'\') LIKE ? ESCAPE \'\\\')'
             )
-            where_params.extend([f'%{escaped}%'] * 7)
+            where_params.extend([f'%{escaped}%'] * 5)
         predicate = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
         projection_parts = []
         for name in selected_names:
@@ -1809,7 +1806,7 @@ class ScadaStore:
 
     def create_channel_definition(self, values: dict[str, Any]) -> dict[str, Any]:
         body = dict(values)
-        allowed = {'channel_id', 'channel_type', 'code', 'name'}
+        allowed = {'channel_id', 'channel_type', 'name'}
         unknown = sorted(set(body) - allowed)
         if unknown:
             raise ApiError(400, '通道请求包含未知字段', details={'unknown_fields': unknown})
@@ -1849,7 +1846,7 @@ class ScadaStore:
                                   values: dict[str, Any],
                                   if_match: int | None = None) -> dict[str, Any]:
         item = self.get_channel_definition(channel_id, channel_type)
-        unknown = sorted(set(values) - {'channel_type', 'code', 'name', 'packet_recording'})
+        unknown = sorted(set(values) - {'channel_type', 'name', 'packet_recording'})
         if unknown:
             raise ApiError(400, '通道请求包含未知字段', details={'unknown_fields': unknown})
         if 'channel_type' in values and values['channel_type'] != item['channel_type']:
@@ -1863,7 +1860,7 @@ class ScadaStore:
                 'packet_recording': values['packet_recording'],
             }, if_match)
             return self.get_channel_definition(channel_id, channel_type)
-        changes = {key: values[key] for key in ('code', 'name') if key in values}
+        changes = {key: values[key] for key in ('name',) if key in values}
         if not changes:
             raise ApiError(400, '至少需要修改一个通道字段')
         table = self.channel_parameter_table(item['channel_type'])

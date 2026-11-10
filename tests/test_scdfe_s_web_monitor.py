@@ -48,12 +48,12 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
     def test_channel_and_point_crud_alias(self):
         status, payload = self.request("POST", "/api/channels", {
             "rtu_id": 1, "channel_id": 11, "channel_type": "iec104",
-            "code": "S11", "name": "测试通道", "process_enable": 0,
+            "name": "测试通道", "process_enable": 0,
         })
         self.assertEqual(status, 201)
         self.assertEqual(payload["item"]["channel_id"], 11)
         status, payload = self.request("POST", "/api/channels/1/points/yc", {
-            "pnt_no": 1, "code": "YC1", "name": "电压", "value": 1.5,
+            "pnt_no": 1, "name": "电压", "value": 1.5,
         })
         self.assertEqual(status, 201)
         status, payload = self.request("GET", "/api/channels/1/points/yc")

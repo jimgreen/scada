@@ -25,10 +25,6 @@ class fes_rtu_define:
         metadata={'chn_name': 'rtu编号', 'eng_name': 'rtu_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-    code: Optional[str] = field(
-        default=None,
-        metadata={'chn_name': '英文标识', 'eng_name': 'code', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
-    )
 
     name: Optional[str] = field(
         default=None,
@@ -40,20 +36,6 @@ class fes_rtu_define:
         metadata={'chn_name': '状态', 'eng_name': 'status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-    call_all_cycle: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '全数据召唤周期（毫秒）', 'eng_name': 'call_all_cycle', 'primary_key': False, 'data_type': 'int', 'disp_type': 'SHORT', 'disp_menu': ''},
-    )
-
-    his_save: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '保存历史', 'eng_name': 'his_save', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
-    )
-
-    refresh_trigger: Optional[int] = field(
-        default=None,
-        metadata={'chn_name': '数据刷新周期(毫秒)', 'eng_name': 'refresh_trigger', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
-    )
 
     refresh_time: Optional[int] = field(
         default=None,

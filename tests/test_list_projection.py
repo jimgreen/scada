@@ -14,7 +14,7 @@ class ListProjectionTests(unittest.TestCase):
             "rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp", "name": "站 7",
         })
         self.store.create_row("fes_yc_define", {
-            "rtu_id": 7, "pnt_no": 1, "code": "YC_1", "name": "电压",
+            "rtu_id": 7, "pnt_no": 1, "name": "电压",
             "value": 12.5, "status": 1, "raw_value": 125,
         })
         self.addCleanup(self.temp.cleanup)

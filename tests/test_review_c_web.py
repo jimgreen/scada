@@ -150,7 +150,7 @@ class ReviewedCWebTests(unittest.TestCase):
     def test_partial_trans_mapping_edit_keeps_source_and_exposed_kinds_equal(self):
         table = "fes_scdfe_t_point_define"
         self.store.create_row("fes_scdfe_t_define", {
-            "channel_id": 101, "code": "T101", "name": "Review", "protocol": "modbus-tcp",
+            "channel_id": 101, "name": "Review", "protocol": "modbus-tcp",
         })
         self.store.create_row(table, {
             "channel_id": 101, "pnt_no": 1, "kind": "yc",

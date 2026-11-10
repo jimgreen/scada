@@ -95,7 +95,7 @@ class IEC104AcceptanceTests(unittest.TestCase):
                     "type_id": 5, "time_tag": "NONE",
                 })
                 store.create_row("fes_scdfe_t_define", {
-                    "channel_id": 1, "code": "T1", "protocol": "iec104",
+                    "channel_id": 1, "name": "转发1", "protocol": "iec104",
                     "k": 8, "w": 8, "t1": 15, "t2": 10, "t3": 20,
                     "max_asdu_length": 249,
                 })
@@ -110,7 +110,7 @@ class IEC104AcceptanceTests(unittest.TestCase):
                     })
                 with self.assertRaises(ApiError):
                     store.create_row("fes_scdfe_t_define", {
-                        "channel_id": 2, "code": "T2", "protocol": "iec104",
+                        "channel_id": 2, "name": "转发2", "protocol": "iec104",
                         "k": 4, "w": 8,
                     })
             finally:

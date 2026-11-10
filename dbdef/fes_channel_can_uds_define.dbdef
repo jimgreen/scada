@@ -6,7 +6,6 @@
 @   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key     app_type     display_type     menu_name
 #   1             id                             标识                             INT       8            1        public/fes/scada INT
 #   2             channel_id                         所属通道                          INT       8            0        public/fes/scada KEYID类型
-#   3             code                           英文标识                           STRING     256          0        public/fes/scada STRING
 #   4             name                           中文名称                           STRING     256          0        public/fes/scada STRING
 #   5             request_id                     请求ID                           INT       8            0        public/fes/scada INT
 #   6             response_id                    响应ID                           INT       8            0        public/fes/scada INT

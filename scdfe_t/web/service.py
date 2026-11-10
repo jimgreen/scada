@@ -118,7 +118,7 @@ class TransStore:
         if selector:
             with self.store.connection() as con:
                 return [dict(row) for row in con.execute(
-                    f"SELECT channel_id,code,name,protocol FROM {CHANNEL_TABLE} ORDER BY channel_id")]
+                    f"SELECT channel_id,name,protocol FROM {CHANNEL_TABLE} ORDER BY channel_id")]
         columns = self._schema(CHANNEL_TABLE)["columns"]
         with self.store.connection() as con:
             rows = con.execute(f"SELECT * FROM {CHANNEL_TABLE} ORDER BY channel_id").fetchall()
@@ -141,7 +141,7 @@ class TransStore:
                     "service_name": "scdfe_t",
                     "channel_id": channel_id,
                     "protocol": item.get("protocol", ""),
-                    "channel_name": item.get("name") or item.get("code") or "",
+                    "channel_name": item.get("name") or "",
                     "state": state_for(process_status, process_status == 2, error),
                     "running": int(process_status == 2),
                     "connection_state": "unknown",
@@ -176,10 +176,8 @@ class TransStore:
             if protocol not in {"iec104", "modbus-tcp"}:
                 raise ApiError(400, "转发规约只能是 iec104 或 modbus-tcp")
             values["protocol"] = protocol
-        if not values.get("code"):
-            raise ApiError(400, "转发通道 code 不能为空")
         if not values.get("name"):
-            values["name"] = values["code"]
+            values["name"] = f"转发通道{values.get('channel_id', '')}".rstrip()
         return self.store.create_row(CHANNEL_TABLE, values, allocate_key="channel_id" not in values)
 
     def update_channel(self, channel_id: Any, body: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
@@ -270,17 +268,16 @@ class TransStore:
             raise ApiError(400, "源 RTU 必须是正整数")
         with self.store.connection() as con:
             rtus = [dict(row) for row in con.execute(
-                f"SELECT r.rtu_id, COALESCE(r.code,'') AS code, "
-                f"COALESCE(r.name,'') AS name, COALESCE(r.channel_type,'') AS channel_type, "
+                f"SELECT r.rtu_id, COALESCE(r.name,'') AS name, "
+                f"COALESCE(r.channel_type,'') AS channel_type, "
                 f"COUNT(p.pnt_no) AS point_count "
                 f"FROM fes_rtu_define r JOIN {table} p ON p.rtu_id=r.rtu_id "
-                "GROUP BY r.rtu_id,r.code,r.name,r.channel_type ORDER BY r.rtu_id"
+                "GROUP BY r.rtu_id,r.name,r.channel_type ORDER BY r.rtu_id"
             )]
             points = []
             if selected_rtu is not None:
                 points = [dict(row) for row in con.execute(
-                    f"SELECT rtu_id,pnt_no,COALESCE(code,'') AS code, "
-                    f"COALESCE(name,'') AS name,value,status FROM {table} "
+                    f"SELECT rtu_id,pnt_no,COALESCE(name,'') AS name,value,status FROM {table} "
                     "WHERE rtu_id=? ORDER BY pnt_no", (selected_rtu,)
                 )]
         for row in points:

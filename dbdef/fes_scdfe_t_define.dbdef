@@ -4,7 +4,6 @@
 <fes_scdfe_t_define>
 @  column_name_eng  column_name_chn  data_type  is_key  display_type
 #  channel_id  通道编号  int  1  INT
-#  code  英文标识  str  0  STRING
 #  name  中文名称  str  0  STRING
 #  protocol  转发规约  str  0  单选菜单
 #  bind_host  绑定主机  str  0  STRING

@@ -11,7 +11,6 @@ class fes_scdfe_t_define:
 
     channel_id: Optional[int] = field(default=None, metadata={'chn_name': '通道编号', 'disp_type': 'INT', 'disp_menu': ''})
 
-    code: Optional[str] = field(default=None, metadata={'chn_name': '英文标识', 'disp_type': 'STRING', 'disp_menu': ''})
 
     name: Optional[str] = field(default=None, metadata={'chn_name': '中文名称', 'disp_type': 'STRING', 'disp_menu': ''})
 

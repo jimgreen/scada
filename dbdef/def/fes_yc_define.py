@@ -30,10 +30,6 @@ class fes_yc_define:
         metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-    code: Optional[str] = field(
-        default=None,
-        metadata={'chn_name': '英文标识', 'eng_name': 'code', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
-    )
 
     name: Optional[str] = field(
         default=None,

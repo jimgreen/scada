@@ -14,14 +14,6 @@
       "required": true
     },
     {
-      "chn_name": "英文标识",
-      "eng_name": "code",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "中文名称",
       "eng_name": "name",
       "primary_key": false,

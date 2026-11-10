@@ -16,9 +16,9 @@ class RemoveDeviceValuesTests(unittest.TestCase):
         self.db = Path(self.temp.name) / 'scada.sqlite3'
         self.store = ScadaStore(self.db)
         self.store.create_row('fes_rtu_define', {'rtu_id': 7, 'channel_id': 70,
-                                               'channel_type': 'iec104', 'code': 'TEST_IEC104_RTU'})
+                                               'channel_type': 'iec104', 'name': 'TEST_IEC104_RTU'})
         self.store.create_row('fes_yc_define', {
-            'rtu_id': 7, 'pnt_no': 1, 'code': 'TEST_IEC104_YC_001',
+            'rtu_id': 7, 'pnt_no': 1, 'name': 'TEST_IEC104_YC_001',
             'raw_value': 12.5, 'raw_scale': 2.0, 'raw_base': 3.0, 'value': 28.0})
         self.store.create_row('fes_yx_define', {'rtu_id': 7, 'pnt_no': 1, 'value': 1})
 
@@ -58,9 +58,9 @@ class RemoveDeviceValuesTests(unittest.TestCase):
 
     def test_refresh_only_fixture_values_and_never_command_values(self):
         self.store.create_row('fes_yc_define', {
-            'rtu_id': 7, 'pnt_no': 2, 'code': 'USER_YC_002', 'value': 42.0})
+            'rtu_id': 7, 'pnt_no': 2, 'name': 'USER_YC_002', 'value': 42.0})
         self.store.create_row('fes_yt_define', {
-            'rtu_id': 7, 'pnt_no': 1, 'code': 'TEST_IEC104_YT_001',
+            'rtu_id': 7, 'pnt_no': 1, 'name': 'TEST_IEC104_YT_001',
             'value': 20.0, 'cmd_time': 10, 'cmd_handle_time': 0})
         untouched = self.store.get_row('fes_yc_define', [7, 2])
         command = self.store.get_row('fes_yt_define', [7, 1])

@@ -89,7 +89,7 @@ class SimplifySchemaTests(unittest.TestCase):
         trans=TransStore(self.db)
         def new(i):
             gate.wait(timeout=5)
-            return trans.create_channel({'code':f'T{i}','protocol':'iec104'})['channel_id']
+            return trans.create_channel({'name':f'T{i}','protocol':'iec104'})['channel_id']
         with ThreadPoolExecutor(8) as pool:
             keys=list(pool.map(new,range(8)))
         self.assertEqual(len(set(keys)),8)

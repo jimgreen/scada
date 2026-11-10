@@ -82,7 +82,7 @@ def run(minutes,out):
         ports={1:fixture.forward_port}
         for cid,kind,rid in ((10,'iec104',fixture.RTUS[0]),(11,'iec104',fixture.RTUS[1]),(100,'modbus-tcp',fixture.RTUS[1])):
             ports[cid]=free_port()
-            api('t','/api/trans/channels','POST',dict(channel_id=cid,code=f'SOAK{cid}',protocol=kind,bind_host='127.0.0.1',
+            api('t','/api/trans/channels','POST',dict(channel_id=cid,name=f'SOAK{cid}',protocol=kind,bind_host='127.0.0.1',
                 bind_port=ports[cid],common_address=cid,scan_interval_ms=50,report_interval_ms=1000),status=201)
             opts=dict(io_address=0x4001,type_id=13) if kind=='iec104' else dict(register_area='input',address=0,data_type='uint16')
             api('t',f'/api/trans/channels/{cid}/points','POST',dict(kind='yc',pnt_no=1,source_rtu_id=rid,source_pnt_no=1,**opts),status=201)

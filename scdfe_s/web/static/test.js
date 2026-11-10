@@ -28,7 +28,7 @@
     return `<dl class="key-values">${items.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(value === null || value === undefined || value === "" ? "—" : value)}</dd></div>`).join("")}</dl>`;
   }
   function channelRows(item) {
-    return [["RTU 编号", item.rtu_id], ["通道号", item.channel_id], ["规约", protocolFor(item.channel_type).label], ["编码", item.code], ["名称", item.name], ["保存报文", Number(item.packet_recording) ? "开启" : "关闭"], ["自动通信", Number(item.process_enable) ? "启用" : "停用"]];
+    return [["RTU 编号", item.rtu_id], ["通道号", item.channel_id], ["规约", protocolFor(item.channel_type).label], ["名称", item.name], ["保存报文", Number(item.packet_recording) ? "开启" : "关闭"], ["自动通信", Number(item.process_enable) ? "启用" : "停用"]];
   }
   function parameterRows(parameter, schema) {
     if (!parameter) return [];
@@ -51,7 +51,7 @@
     const page = state.pages[kind] || 0;
     const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     const body = $(`[data-point-body="${kind}"]`);
-    body.innerHTML = slice.length ? slice.map(point => `<tr><td>${esc(point.pnt_no)}</td><td>${esc(point.name || point.code || "")}</td><td>${esc(point.value)}</td><td>${esc(point.status)}</td><td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${kind === "yk" || kind === "yt" ? "下发" : "更新"}</button></td></tr>`).join("") : '<tr><td colspan="5" class="muted">暂无定义</td></tr>';
+    body.innerHTML = slice.length ? slice.map(point => `<tr><td>${esc(point.pnt_no)}</td><td>${esc(point.name || "")}</td><td>${esc(point.value)}</td><td>${esc(point.status)}</td><td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${kind === "yk" || kind === "yt" ? "下发" : "更新"}</button></td></tr>`).join("") : '<tr><td colspan="5" class="muted">暂无定义</td></tr>';
     const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     $(`[data-point-pager="${kind}"]`).innerHTML = rows.length > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${rows.length} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${rows.length} 点</span>`;
   }
@@ -115,7 +115,7 @@
       const data = await api("/api/rtus?limit=500");
       state.rtus = data.items || [];
       const select = $("#rtu-select");
-      select.innerHTML = state.rtus.map(item => `<option value="${esc(item.rtu_id)}">RTU ${esc(item.rtu_id)} · ${esc(item.name || item.code || "未命名")} · ${esc(protocolFor(item.channel_type).label)}</option>`).join("");
+      select.innerHTML = state.rtus.map(item => `<option value="${esc(item.rtu_id)}">RTU ${esc(item.rtu_id)} · ${esc(item.name || "未命名")} · ${esc(protocolFor(item.channel_type).label)}</option>`).join("");
       if (!state.rtus.length) { select.innerHTML = '<option value="">暂无 RTU</option>'; return; }
       const queryId = new URLSearchParams(location.search).get("rtu_id");
       select.value = state.rtus.some(item => String(item.rtu_id) === queryId) ? queryId : String(state.rtus[0].rtu_id);

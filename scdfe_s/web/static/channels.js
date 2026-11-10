@@ -86,7 +86,7 @@
     const request = ++channelsRequest;
     try {
       const rows = [];
-      const fields = $("#channels") ? "rtu_id,channel_id,channel_type,code,name,packet_recording,process_enable" : "rtu_id,channel_type,name,code,packet_recording";
+      const fields = $("#channels") ? "rtu_id,channel_id,channel_type,name,packet_recording,process_enable" : "rtu_id,channel_type,name,packet_recording";
       for (;;) {
         const page = await api("/api/channels?limit=500&fields=" + fields + (rows.length ? "&offset=" + rows.length : ""));
         if (request !== channelsRequest) return;
@@ -97,14 +97,14 @@
       channelRows = rows;
       if (request !== channelsRequest) return;
       if ($("#channels")) {
-        $("#channels").innerHTML = rows.map(r => `<tr data-select="${esc(r.rtu_id)}"><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || r.code || "")}</td><td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="6">暂无通道</td></tr>';
+        $("#channels").innerHTML = rows.map(r => `<tr data-select="${esc(r.rtu_id)}"><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || "")}</td><td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="6">暂无通道</td></tr>';
         notice("#channel-message", `共 ${rows.length} 个通道`);
       }
       if ($("#point-rtu")) {
         const previous = selected?.rtu_id;
         const requested = previous ?? new URLSearchParams(location.search).get("rtu_id");
         selected = (requested ? rows.find(r => String(r.rtu_id) === String(requested)) : rows[0]) || null;
-        $("#point-rtu").innerHTML = '<option value="">请选择通道</option>' + rows.map(r => `<option value="${esc(r.rtu_id)}">${esc(r.rtu_id)} · ${esc(r.name || r.code || r.channel_type)}</option>`).join("");
+        $("#point-rtu").innerHTML = '<option value="">请选择通道</option>' + rows.map(r => `<option value="${esc(r.rtu_id)}">${esc(r.rtu_id)} · ${esc(r.name || r.channel_type)}</option>`).join("");
         $("#point-rtu").value = selected?.rtu_id || "";
         if (previous !== selected?.rtu_id) { selectedPoint = null; offset = 0; }
         await loadPoints();
@@ -113,7 +113,7 @@
   }
   function fillChannel(row) {
     selected = row;
-    for (const key of ["rtu_id","channel_id","channel_type","code","name","packet_recording","process_enable"]) $("#" + key).value = row[key] == null ? "" : row[key];
+    for (const key of ["rtu_id","channel_id","channel_type","name","packet_recording","process_enable"]) $("#" + key).value = row[key] == null ? "" : row[key];
     $("#channel-editor-title").textContent = "编辑通道";
     $("#create-channel-submit").hidden = true;
     $("#update-channel").hidden = false;
@@ -192,12 +192,12 @@
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
     }
     try {
-      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=pnt_no,code,name,value`) : {items:[],total:0};
+      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=pnt_no,name,value`) : {items:[],total:0};
       if (request !== requestId || rtu !== selected?.rtu_id) return;
       total = data.total || 0;
       if (offset > 0 && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / limit) * limit); return loadPoints(); }
       const points = data.items || [];
-      body.innerHTML = points.map(p => `<tr><td>${names[kind]}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.value)}</td><td><button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="6">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      body.innerHTML = points.map(p => `<tr><td>${names[kind]}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.name)}</td><td>${esc(p.value)}</td><td><button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="5">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
       $("#point-next").disabled = offset + points.length >= total;
@@ -208,7 +208,6 @@
     selectedPoint = point;
     $("#point-kind").value = point.kind;
     $("#point-no").value = point.pnt_no;
-    $("#point-code").value = point.code || "";
     $("#point-name").value = point.name || "";
     $("#point-value").value = point.value == null ? 0 : point.value;
     $("#point-editor-title").textContent = `编辑${names[point.kind] || ""}测点`;
@@ -218,8 +217,8 @@
     if ($("#point-editor-error")) $("#point-editor-error").textContent = "";
     showEditor("#point-editor");
   }
-  const channelBody = () => ({rtu_id:keyValue($("#rtu_id").value),channel_id:keyValue($("#channel_id").value),channel_type:$("#channel_type").value,code:$("#code").value,name:$("#name").value,packet_recording:Number($("#packet_recording").value),process_enable:Number($("#process_enable").value)});
-  const pointBody = () => ({pnt_no:keyValue($("#point-no").value),code:$("#point-code").value,name:$("#point-name").value,value:Number($("#point-value").value)});
+  const channelBody = () => ({rtu_id:keyValue($("#rtu_id").value),channel_id:keyValue($("#channel_id").value),channel_type:$("#channel_type").value,name:$("#name").value,packet_recording:Number($("#packet_recording").value),process_enable:Number($("#process_enable").value)});
+  const pointBody = () => ({pnt_no:keyValue($("#point-no").value),name:$("#point-name").value,value:Number($("#point-value").value)});
   if ($("#channel-form")) $("#channel-form").onsubmit = async event => {
     event.preventDefault();
     try { await api("/api/channels", {method:"POST",body:JSON.stringify(channelBody())}); closeEditor("#channel-editor"); await loadChannels(); notice("#channel-message", "通道已新增"); }

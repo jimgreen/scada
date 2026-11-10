@@ -59,12 +59,12 @@ def web_reads(root):
             db.execute("BEGIN")
             for i in range(1, 501):
                 db.execute(
-                    "INSERT INTO fes_rtu_define(rtu_id, channel_id,channel_type,code,name) VALUES(?,?,'modbus-tcp',?,?)",
-                    (i, i, f"RTU{i}", f"站{i}"),
+                    "INSERT INTO fes_rtu_define(rtu_id, channel_id,channel_type,name) VALUES(?,?,'modbus-tcp',?)",
+                    (i, i, f"站{i}"),
                 )
                 db.execute(
-                    "INSERT INTO fes_yc_define(rtu_id,pnt_no,value,name,code) VALUES(1,?,?,?,?)",
-                    (i, i, f"遥测{i}", f"YC{i}"),
+                    "INSERT INTO fes_yc_define(rtu_id,pnt_no,value,name) VALUES(1,?,?,?)",
+                    (i, i, f"遥测{i}"),
                 )
             db.commit()
         th = Thread(target=web.serve_forever, daemon=True)
@@ -72,8 +72,8 @@ def web_reads(root):
         try:
             result = {}
             for key, path, fields in [
-                ("stations", "channels", "rtu_id,channel_type,name,code"),
-                ("points", "channels/1/points/yc", "pnt_no,code,name,value"),
+                ("stations", "channels", "rtu_id,channel_type,name"),
+                ("points", "channels/1/points/yc", "pnt_no,name,value"),
             ]:
                 for narrow in [False, True]:
                     url = f"http://127.0.0.1:{web.server_port}/api/{path}?limit=500"
@@ -143,8 +143,8 @@ def monitor_reads(root):
     try:
         with service.store.connection() as con:
             con.executemany(
-                "INSERT INTO fes_scdfe_t_define(channel_id,code,name,protocol,bind_port) VALUES(?,?,?,'modbus-tcp',?)",
-                [(i, str(i), str(i), 10000 + i) for i in range(1, 501)],
+                "INSERT INTO fes_scdfe_t_define(channel_id,name,protocol,bind_port) VALUES(?,?,'modbus-tcp',?)",
+                [(i, str(i), 10000 + i) for i in range(1, 501)],
             )
             con.commit()
         lease = InstanceLock(service.db_path, "trans-7")

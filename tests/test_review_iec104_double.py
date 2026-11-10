@@ -145,7 +145,7 @@ class IEC104DoubleRegressionTests(unittest.TestCase):
             store.create_row('fes_yk_define', {'rtu_id': 7, 'pnt_no': 4, 'value': 0})
             port = free_port()
             store.create_row('fes_scdfe_t_define', {
-                'channel_id': 1, 'code': 'DOUBLE_TEST', 'name': 'Double command test',
+                'channel_id': 1, 'name': 'Double command test',
                 'protocol': 'iec104', 'bind_host': '127.0.0.1', 'bind_port': port,
             })
             store.create_row('fes_scdfe_t_point_define', {

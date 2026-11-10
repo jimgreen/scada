@@ -53,7 +53,7 @@ class ScdfeSWebUiTests(unittest.TestCase):
         for rtu_id in (101, 102):
             status, body = self.call("POST", "/api/channels", {
                 "rtu_id": rtu_id, "channel_id": rtu_id,
-                "channel_type": "custom", "code": f"CH{rtu_id}",
+                "channel_type": "custom",
                 "name": f"通道 {rtu_id}", "process_enable": 0,
             })
             self.assertEqual(status, 201, body)
@@ -64,7 +64,7 @@ class ScdfeSWebUiTests(unittest.TestCase):
 
         for kind, value in (("yc", 1.25), ("yx", 1), ("yk", 0), ("yt", 5.5)):
             status, body = self.call("POST", "/api/channels/101/points/" + kind, {
-                "pnt_no": 1, "code": f"{kind.upper()}1", "name": kind,
+                "pnt_no": 1, "name": kind,
                 "value": value,
             })
             self.assertEqual(status, 201, body)

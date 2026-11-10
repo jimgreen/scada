@@ -34,7 +34,7 @@ cd /opt/scada
 
 在 Web 的“转发通道”页新建一行，至少设置：
 
-- `code`、`name`：操作员可读的通道标识；
+- `name`：操作员可读的通道名称；
 - `protocol`：`iec104` 或 `modbus-tcp`；
 - `bind_host`、`bind_port`：对外监听地址和端口；
 - `common_address`、`unit_id`：IEC104 公共地址、Modbus 单元号；

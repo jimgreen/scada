@@ -14,7 +14,6 @@ class ScdfeTransSchemaTests(unittest.TestCase):
         self.store = self.trans.store
         self.trans.create_channel({
             "channel_id": 1,
-            "code": "TRANS1",
             "name": "转发1",
             "protocol": "modbus-tcp",
             "bind_host": "127.0.0.1",

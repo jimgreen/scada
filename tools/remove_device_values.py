@@ -39,9 +39,15 @@ def retained_digest(connection, table, columns):
 
 
 def refresh_fixtures(connection):
-    """Only explicit test codes; never alter pending or issued YT commands."""
-    specs = {_base_rtu_code(spec): spec for spec in expanded_protocols(100)}
-    stations = [(r[0], specs[r[1]]) for r in connection.execute('SELECT rtu_id,code FROM fes_rtu_define')
+    """Only explicit test names; never alter pending or issued YT commands."""
+    specs = {}
+    for spec in expanded_protocols(100):
+        # ``name`` is now the only business identifier.  Accept both the
+        # current display name and the former stable fixture token so existing
+        # test databases remain refreshable after the schema migration.
+        specs[spec["name"]] = spec
+        specs[_base_rtu_code(spec)] = spec
+    stations = [(r[0], specs[r[1]]) for r in connection.execute('SELECT rtu_id,name FROM fes_rtu_define')
                 if r[1] in specs]
     changed = {}
     now = int(time.time() * 1000)
@@ -55,10 +61,10 @@ def refresh_fixtures(connection):
             for row in connection.execute(f'SELECT * FROM {table} WHERE rtu_id=?', (rtu_id,)):
                 number = row['pnt_no']
                 values = _point_values(spec, rtu_id, kind, number, now)
-                codes = {values['code']}
+                names = {values['name']}
                 if spec['key'] == 'iec104' and spec['station_index'] == 1:
-                    codes.add(f'TEST_IEC104_{kind.upper()}_{number:03d}')
-                if row['code'] not in codes:
+                    names.add(f'TEST_IEC104_{kind.upper()}_{number:03d}')
+                if row['name'] not in names:
                     continue
                 if kind == 'yt' and (row['cmd_time'] or row['cmd_handle_time']):
                     continue
