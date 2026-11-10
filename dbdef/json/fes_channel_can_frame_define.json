@@ -30,14 +30,6 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "RDFID",
-      "eng_name": "rdfid",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "仲裁ID",
       "eng_name": "arbitration_id",
       "primary_key": false,

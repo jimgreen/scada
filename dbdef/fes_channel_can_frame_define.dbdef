@@ -7,7 +7,6 @@
 #   1             id                             标识                             INT       8            1        public/fes/scada INT
 #   2             channel_id                         所属通道                          INT       8            0        public/fes/scada KEYID类型
 #   4             name                           中文名称                           STRING     256          0        public/fes/scada STRING
-#   5             rdfid                          RDFID                          STRING     256          0        public/fes/scada STRING
 #   6             arbitration_id                 仲裁ID                           INT       8            0        public/fes/scada INT
 #   7             is_extended_id                 扩展帧                            INT       8            0        public/fes/scada 单选菜单           二值判断
 #   8             is_fd                          CAN-FD                         INT       8            0        public/fes/scada 单选菜单           二值判断

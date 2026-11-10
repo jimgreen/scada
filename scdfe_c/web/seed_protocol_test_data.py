@@ -196,9 +196,8 @@ def _rtu_values(spec: dict, rtu_id: int, channel_id: int, now: int) -> dict:
 def _point_values(spec: dict, rtu_id: int, kind: str, number: int,
                   now: int) -> dict:
     token = _key_token(spec)
-    rdfid = f"{PREFIX}_{token}_{kind.upper()}_{number:03d}"
     result = {
-        "rtu_id": rtu_id, "pnt_no": number, "rdfid": rdfid,
+        "rtu_id": rtu_id, "pnt_no": number,
         "name": f"{_key_token(spec)}测试{kind.upper()}{number:03d}",
     }
     rng = random.Random(f"scada-test:{rtu_id}:{kind}:{number}")
@@ -244,8 +243,7 @@ def _point_values(spec: dict, rtu_id: int, kind: str, number: int,
 
 def _parameter_values(spec: dict, channel_id: int, identifier: int) -> dict:
     key = spec["key"]
-    token = f"{PREFIX}_{_key_token(spec)}_PARAM"
-    base = {"rdfid": token, "name": f"{spec['name']}参数", "channel_id": channel_id}
+    base = {"name": f"{spec['name']}参数", "channel_id": channel_id}
     if key == "iec104":
         base.update(id=identifier, remote_host=spec["channel"], remote_port=spec["port"],
                     rtu_addr=1, ycbegin_addr=0x4001, yxbegin_addr=1,
@@ -267,7 +265,6 @@ def _parameter_values(spec: dict, channel_id: int, identifier: int) -> dict:
                     bind_ip="127.0.0.1",
                     bind_port=int(spec["port"]) + 1, dev_id=1234 + int(spec.get("station_index", 1)) - 1)
     elif key == "opc":
-        base.pop("rdfid", None)
         base.update(id=identifier, opc_interval=1000, opc_user="", opc_pwd="",
                     opc_domain="", opc_name=spec["channel"])
     return base
@@ -281,7 +278,7 @@ def _add_modbus_tables(connection, store: ScadaStore, spec: dict, channel_id: in
     definition_id = _id_for_name(connection, "fes_channel_modbus_define", channel_name, ids, indexes)
     _add_record(store, pending, "fes_channel_modbus_define", {
         "id": definition_id, "channel_id": channel_id,
-        "rdfid": f"{prefix}_CHANNEL", "name": channel_name,
+        "name": channel_name,
         "irtuaddr": 3 if key == "modbus-tcp" else 4,
     }, indexes)
     # Keep sequence 0 for the first YC frame and sequence 1 for YX; additional

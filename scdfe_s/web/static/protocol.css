@@ -158,3 +158,14 @@ body[data-points] .point-filters > label:not(.visually-hidden) select { width:28
 .editor-dialog .error { min-height:1.2em; margin:0 22px; color:#b3261e; }
 @media(max-width:700px){ .editor-dialog { width:calc(100vw - 16px); max-height:92vh; } .editor-dialog form { max-height:92vh; } .editor-dialog .dialog-fields { grid-template-columns:repeat(2,minmax(0,1fr)); padding:16px 16px 6px; } .editor-dialog .parameter-fields { padding:16px 16px 6px; } .editor-dialog .dialog-head { padding:13px 16px; } .editor-dialog .form-actions { padding:10px 16px 13px; } .editor-dialog .error { margin:0 16px; } }
 @media(max-width:480px){ .editor-dialog .dialog-fields { grid-template-columns:1fr; } }
+.point-update-dialog { width:min(460px,calc(100vw - 32px)); margin:auto; border:1px solid #b9cdd3; border-radius:8px; padding:0; color:#203847; box-shadow:0 16px 50px #173b4c35; overflow:hidden; }
+.point-update-dialog::backdrop { background:#173b4c66; }
+.point-update-dialog form { display:flex; flex-direction:column; min-width:0; padding:0; }
+.point-update-dialog .dialog-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:15px 22px; border-bottom:1px solid #dce7ea; background:linear-gradient(135deg,#f7fafb,#eef5f7); }
+.point-update-dialog .dialog-head h2 { margin:0; font-size:18px; color:#173f4b; }
+.point-update-dialog .dialog-head button { width:34px; height:34px; padding:0; border-radius:7px; color:#627b88; font-size:18px; line-height:1; }
+.point-update-dialog .dialog-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 14px; padding:20px 22px 8px; }
+.point-update-dialog .form-actions { display:flex; justify-content:flex-end; align-items:center; gap:8px; padding:12px 22px 16px; margin:0; border-top:1px solid #e0e8eb; background:#fbfcfd; }
+.point-update-dialog .form-actions button { min-width:76px; }
+.point-update-dialog .error { min-height:1.2em; margin:0 22px; color:#b3261e; }
+@media(max-width:480px){ .point-update-dialog { width:calc(100vw - 16px); } .point-update-dialog .dialog-fields { grid-template-columns:1fr; padding:16px 16px 6px; } .point-update-dialog .dialog-head { padding:13px 16px; } .point-update-dialog .form-actions { padding:10px 16px 13px; } .point-update-dialog .error { margin:0 16px; } }

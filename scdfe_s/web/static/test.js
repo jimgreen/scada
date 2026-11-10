@@ -13,8 +13,10 @@
   };
   const pointLabels = {yc:"遥测 YC", yx:"遥信 YX", yk:"遥控 YK", yt:"遥调 YT"};
   const runtimeKeys = new Set(["_version", "raw_value", "raw_status", "raw_time", "refresh_time", "process_status", "process_pid", "process_start_time", "process_stop_time", "process_heartbeat_time", "process_exit_code", "process_error"]);
-  const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0};
+  const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0, editingPoint:null};
   const PAGE_SIZE = 25;
+  const commandKinds = new Set(["yk", "yt"]);
+  const rawStatusKinds = new Set(["yc", "yt"]);
   async function api(path, options = {}) {
     const response = await fetch(path, {cache:"no-store", ...options, headers:{"Content-Type":"application/json", ...(options.headers || {})}});
     const data = await response.json();
@@ -35,6 +37,21 @@
     const columns = schema?.columns || Object.keys(parameter).map(eng_name => ({eng_name, chn_name:eng_name}));
     return columns.filter(column => !runtimeKeys.has(column.eng_name) && column.eng_name !== "id").map(column => [column.chn_name || column.eng_name, parameter[column.eng_name]]);
   }
+  function formatPointTime(value) {
+    if (!value) return "—";
+    const date = new Date(Number(value));
+    if (Number.isNaN(date.valueOf())) return String(value);
+    const pad = part => String(part).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.` +
+      String(date.getMilliseconds()).padStart(3, "0");
+  }
+  function pointFields(kind) {
+    return ["pnt_no", "name", "value", "status"]
+      .concat(rawStatusKinds.has(kind) ? ["raw_status"] : [])
+      .concat(["refresh_time"])
+      .concat(commandKinds.has(kind) ? ["cmd_handle_time"] : []);
+  }
   function renderSummary() {
     const item = state.channel?.item;
     if (!item) return;
@@ -51,7 +68,18 @@
     const page = state.pages[kind] || 0;
     const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     const body = $(`[data-point-body="${kind}"]`);
-    body.innerHTML = slice.length ? slice.map(point => `<tr><td>${esc(point.pnt_no)}</td><td>${esc(point.name || "")}</td><td>${esc(point.value)}</td><td>${esc(point.status)}</td><td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${kind === "yk" || kind === "yt" ? "下发" : "更新"}</button></td></tr>`).join("") : '<tr><td colspan="5" class="muted">暂无定义</td></tr>';
+    const command = commandKinds.has(kind);
+    const rawStatus = rawStatusKinds.has(kind);
+    body.innerHTML = slice.length ? slice.map(point => {
+      const states = [point.status];
+      if (rawStatus) states.push(point.raw_status);
+      const times = [formatPointTime(point.refresh_time)];
+      if (command) times.push(formatPointTime(point.cmd_handle_time));
+      return `<tr><td>${esc(point.pnt_no)}</td><td>${esc(point.name || "")}</td><td>${esc(point.value)}</td>` +
+        states.map(value => `<td>${esc(value)}</td>`).join("") +
+        times.map(value => `<td>${esc(value)}</td>`).join("") +
+        `<td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${command ? "下发" : "更新"}</button></td></tr>`;
+    }).join("") : `<tr><td colspan="${6 + (rawStatus ? 1 : 0) + (command ? 1 : 0)}" class="muted">暂无定义</td></tr>`;
     const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     $(`[data-point-pager="${kind}"]`).innerHTML = rows.length > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${rows.length} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${rows.length} 点</span>`;
   }
@@ -69,10 +97,11 @@
   async function fetchPoints(rtuId) {
     const result = {};
     for (const kind of ["yc","yx","yk","yt"]) {
-      const first = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=0`);
+      const fields = pointFields(kind).join(",");
+      const first = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=0&fields=${fields}`);
       result[kind] = first.items || [];
       for (let offset = result[kind].length; offset < (first.total || result[kind].length); offset += 500) {
-        const next = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=${offset}`);
+        const next = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=${offset}&fields=${fields}`);
         result[kind].push(...(next.items || []));
         if (!(next.items || []).length) break;
       }
@@ -131,15 +160,42 @@
     try { await api(`/api/${state.service}/poll`, {method:"POST", body:"{}"}); await loadRtu($("#rtu-select").value); message("采集已完成"); }
     catch (error) { message(error.message, true); }
   }
-  async function updatePoint(kind, pointNo) {
-    const current = (state.points[kind] || []).find(point => String(point.pnt_no) === String(pointNo));
-    const raw = window.prompt(`${pointLabels[kind]} ${pointNo} 输入${kind === "yk" || kind === "yt" ? "下发" : "更新"}值`, String(current?.value ?? 0));
-    if (raw === null) return;
-    const number = Number(raw); if (!Number.isFinite(number)) { message("请输入有限数字", true); return; }
+  function closePointUpdate() {
+    const dialog = $("#point-update-dialog");
+    state.editingPoint = null;
+    if (dialog?.open && typeof dialog.close === "function") dialog.close();
+    if ($("#point-update-error")) $("#point-update-error").textContent = "";
+  }
+  function openPointUpdate(kind, pointNo) {
+    const current = (state.points[kind] || []).find(point => String(point.pnt_no) === String(pointNo)) || {};
+    state.editingPoint = {kind, pointNo, current};
+    $("#point-update-title").textContent = `${pointLabels[kind]} ${pointNo} · ${commandKinds.has(kind) ? "下发" : "更新"}`;
+    $("#point-update-value").value = current.value ?? 0;
+    $("#point-update-status").value = current.status ?? 0;
+    $("#point-update-status-field").hidden = commandKinds.has(kind);
+    $("#point-update-error").textContent = "";
+    const dialog = $("#point-update-dialog");
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.open = true;
+    $("#point-update-value").focus();
+    $("#point-update-value").select();
+  }
+  async function submitPointUpdate() {
+    const edit = state.editingPoint;
+    if (!edit) return;
+    const {kind, pointNo} = edit;
+    const number = Number($("#point-update-value").value);
+    if (!Number.isFinite(number)) { $("#point-update-error").textContent = "请输入有限数字"; return; }
     const value = kind === "yx" || kind === "yk" ? (number ? 1 : 0) : number;
+    let status = Number($("#point-update-status").value);
+    if (!commandKinds.has(kind) && (!Number.isInteger(status) || !Number.isFinite(status))) {
+      $("#point-update-error").textContent = "状态必须是整数";
+      return;
+    }
     try {
-      const path = kind === "yk" || kind === "yt" ? `/api/rtus/${state.rtu.rtu_id}/commands/${kind}/${encodeURIComponent(pointNo)}` : `/api/rtus/${state.rtu.rtu_id}/points/${kind}/${encodeURIComponent(pointNo)}`;
-      await api(path, {method:kind === "yk" || kind === "yt" ? "POST" : "PATCH", body:JSON.stringify(kind === "yk" || kind === "yt" ? {value} : {value, status:0})});
+      const path = commandKinds.has(kind) ? `/api/rtus/${state.rtu.rtu_id}/commands/${kind}/${encodeURIComponent(pointNo)}` : `/api/rtus/${state.rtu.rtu_id}/points/${kind}/${encodeURIComponent(pointNo)}`;
+      await api(path, {method:commandKinds.has(kind) ? "POST" : "PATCH", body:JSON.stringify(commandKinds.has(kind) ? {value} : {value, status})});
+      closePointUpdate();
       await loadRtu(state.rtu.rtu_id); message(kind === "yk" || kind === "yt" ? "指令已提交" : "点值已更新");
     } catch (error) { message(error.message, true); }
   }
@@ -153,6 +209,10 @@
   $("#service-start").addEventListener("click", () => serviceAction("start"));
   $("#service-stop").addEventListener("click", () => serviceAction("stop"));
   $("#service-poll").addEventListener("click", poll);
-  $("#point-panels").addEventListener("click", event => { const action = event.target.closest("[data-point-action]"); if (action) updatePoint(action.dataset.pointAction, action.dataset.pointNo); const page = event.target.closest("[data-point-page]"); if (page) { const kind = page.dataset.pointKind; state.pages[kind] = Math.max(0, state.pages[kind] + (page.dataset.pointPage === "next" ? 1 : -1)); renderPointKind(kind); } });
+  $("#point-panels").addEventListener("click", event => { const action = event.target.closest("[data-point-action]"); if (action) openPointUpdate(action.dataset.pointAction, action.dataset.pointNo); const page = event.target.closest("[data-point-page]"); if (page) { const kind = page.dataset.pointKind; state.pages[kind] = Math.max(0, state.pages[kind] + (page.dataset.pointPage === "next" ? 1 : -1)); renderPointKind(kind); } });
+  $("#point-update-form").addEventListener("submit", event => { event.preventDefault(); submitPointUpdate(); });
+  $("#point-update-close").addEventListener("click", closePointUpdate);
+  $("#point-update-cancel").addEventListener("click", closePointUpdate);
+  $("#point-update-dialog").addEventListener("cancel", () => { state.editingPoint = null; });
   initTabs(); loadRtus(); setInterval(() => { if (!document.hidden && state.rtu) loadRtu(state.rtu.rtu_id); }, 10000);
 })();

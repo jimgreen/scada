@@ -96,12 +96,18 @@ class WebTests(unittest.TestCase):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
         self.assertEqual(len(body['items']), 32)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 572)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 564)
         self.assertTrue({
             'fes_channel_can_diagnostic', 'fes_channel_can_frame_define',
             'fes_channel_can_j1939_define', 'fes_channel_can_uds_define',
             'fes_channel_canopen_service_define', 'fes_channel_runtime_status',
         }.issubset({s['head']['eng_name'] for s in body['items']}))
+        for schema in body['items']:
+            self.assertNotIn(
+                'rdfid',
+                {column['eng_name'] for column in schema['columns']},
+                schema['head']['eng_name'],
+            )
         mapping = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_scdfe_t_point_define')
         self.assertNotIn('source_kind', {column['eng_name'] for column in mapping['columns']})
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')

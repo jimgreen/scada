@@ -6,7 +6,6 @@
 @   column_id     column_name_eng     column_name_chn     data_type     data_length     is_key       app_type                                               display_type     menu_name
 #   1            channel_id              所属通道             INT           4             1            public/fes/scada     KEYID类型
 #   3            name                中文名称              STRING        64            0            public/fes/scada     STRING
-#   4            rdfid               RDFID             STRING        64            0            public/fes/scada     STRING
 #   5            remote_host         远端主机              STRING        64            0            public/fes/scada     STRING
 #   6            remote_port         远端端口              INT           4             0            public/fes/scada     INT
 #   7            unit_id             默认从站地址            INT           4             0            public/fes/scada     INT

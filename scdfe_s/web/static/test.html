@@ -62,10 +62,10 @@
           <button class="page-tab" type="button" data-point-tab="yt" aria-selected="false">遥调 YT</button>
         </nav><button id="points-refresh" type="button">刷新</button></div>
         <div id="point-panels">
-          <section data-point-panel="yc"><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yc"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yc"></div></section>
-          <section data-point-panel="yx" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yx"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yx"></div></section>
-          <section data-point-panel="yk" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yk"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yk"></div></section>
-          <section data-point-panel="yt" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>操作</th></tr></thead><tbody data-point-body="yt"><tr><td colspan="5" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yt"></div></section>
+          <section data-point-panel="yc"><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>原始状态</th><th>刷新时间</th><th>操作</th></tr></thead><tbody data-point-body="yc"><tr><td colspan="7" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yc"></div></section>
+          <section data-point-panel="yx" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>刷新时间</th><th>操作</th></tr></thead><tbody data-point-body="yx"><tr><td colspan="6" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yx"></div></section>
+          <section data-point-panel="yk" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>刷新时间</th><th>指令接收时间</th><th>操作</th></tr></thead><tbody data-point-body="yk"><tr><td colspan="7" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yk"></div></section>
+          <section data-point-panel="yt" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>原始状态</th><th>刷新时间</th><th>指令接收时间</th><th>操作</th></tr></thead><tbody data-point-body="yt"><tr><td colspan="8" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yt"></div></section>
         </div>
       </article>
         </section>
@@ -87,6 +87,17 @@
       </div>
     </div>
   </main>
+  <dialog id="point-update-dialog" class="point-update-dialog" aria-labelledby="point-update-title">
+    <form id="point-update-form" method="dialog">
+      <div class="dialog-head"><h2 id="point-update-title">更新测点</h2><button type="button" id="point-update-close" aria-label="关闭">×</button></div>
+      <div class="dialog-fields">
+        <label>值<input id="point-update-value" type="number" step="any" required></label>
+        <label id="point-update-status-field">状态<input id="point-update-status" type="number" step="1" required></label>
+      </div>
+      <p id="point-update-error" class="error" role="alert"></p>
+      <div class="form-actions"><button type="button" id="point-update-cancel">取消</button><button class="primary" type="submit">保存</button></div>
+    </form>
+  </dialog>
   <script defer src="/static/test.js"></script>
 </body>
 </html>

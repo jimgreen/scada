@@ -22,14 +22,6 @@
       "disp_menu": ""
     },
     {
-      "chn_name": "RDFID",
-      "eng_name": "rdfid",
-      "primary_key": false,
-      "data_type": "str",
-      "disp_type": "STRING",
-      "disp_menu": ""
-    },
-    {
       "chn_name": "CAN接口",
       "eng_name": "interface",
       "primary_key": false,

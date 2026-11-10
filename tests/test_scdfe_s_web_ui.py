@@ -57,15 +57,73 @@ class ScdfeSWebUiTests(unittest.TestCase):
         yx_page = page.split('data-point-page="yx"', 1)[1].split("</section>", 1)[0]
         yk_page = page.split('data-point-page="yk"', 1)[1].split("</section>", 1)[0]
         self.assertIn("刷新时间", yc_page)
+        self.assertIn("状态", yc_page)
+        self.assertIn("原始状态", yc_page)
         self.assertNotIn("指令接收时间", yc_page)
         self.assertIn("刷新时间", yx_page)
+        self.assertIn("状态", yx_page)
+        self.assertNotIn("原始状态", yx_page)
         self.assertNotIn("指令接收时间", yx_page)
+        self.assertIn("状态", yk_page)
         self.assertIn("指令接收时间", yk_page)
+        yt_page = page.split('data-point-page="yt"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("状态", yt_page)
+        self.assertIn("原始状态", yt_page)
+        self.assertIn("指令接收时间", yt_page)
         status, script = self.call("GET", "/static/channels.js")
         self.assertEqual(status, 200)
         script = script.decode("utf-8")
         self.assertIn("formatPointTime", script)
         self.assertIn("cmd_handle_time", script)
+        self.assertIn("raw_status", script)
+        self.assertIn("point-status", script)
+        self.assertNotIn("point-kind", page)
+        self.assertNotIn("point-kind", script)
+
+    def test_communication_test_four_remote_page_shows_time_columns(self):
+        status, page = self.call("GET", "/test")
+        self.assertEqual(status, 200)
+        page = page.decode("utf-8")
+        for kind in ("yc", "yx"):
+            section = page.split(f'data-point-panel="{kind}"', 1)[1].split("</section>", 1)[0]
+            self.assertIn("刷新时间", section)
+            self.assertNotIn("指令接收时间", section)
+        for kind in ("yk", "yt"):
+            section = page.split(f'data-point-panel="{kind}"', 1)[1].split("</section>", 1)[0]
+            self.assertIn("刷新时间", section)
+            self.assertIn("指令接收时间", section)
+        status, script = self.call("GET", "/static/test.js")
+        self.assertEqual(status, 200)
+        script = script.decode("utf-8")
+        self.assertIn("formatPointTime", script)
+        self.assertIn("pointFields", script)
+        self.assertIn("cmd_handle_time", script)
+
+        status, script = self.call("GET", "/static/test.js")
+        self.assertEqual(status, 200)
+        script = script.decode("utf-8")
+        self.assertIn("status", script)
+        self.assertIn("raw_status", script)
+        self.assertIn("point-update-dialog", page)
+        self.assertIn("point-update-value", page)
+        self.assertIn("point-update-status", page)
+        self.assertIn("showModal", script)
+        self.assertNotIn("window.prompt", script)
+
+    def test_api_schemas_and_web_pages_do_not_expose_rdfid(self):
+        status, body = self.call("GET", "/api/schemas")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["items"])
+        for schema in body["items"]:
+            self.assertNotIn(
+                "rdfid",
+                {column["eng_name"] for column in schema["columns"]},
+                schema["head"]["eng_name"],
+            )
+        for path in ("/channels", "/points"):
+            status, page = self.call("GET", path)
+            self.assertEqual(status, 200)
+            self.assertNotIn("rdfid", page.decode("utf-8").lower())
 
     def test_multiple_channel_and_four_remote_point_crud(self):
         for rtu_id in (101, 102):
@@ -93,9 +151,10 @@ class ScdfeSWebUiTests(unittest.TestCase):
         status, body = self.call("PATCH", "/api/channels/101", {"name": "已更新"})
         self.assertEqual(status, 200, body)
         self.assertEqual(body["item"]["name"], "已更新")
-        status, body = self.call("PATCH", "/api/channels/101/points/yc/1", {"name": "更新测点", "value": 9.5})
+        status, body = self.call("PATCH", "/api/channels/101/points/yc/1", {"name": "更新测点", "value": 9.5, "status": 64})
         self.assertEqual(status, 200, body)
         self.assertEqual(body["item"]["value"], 9.5)
+        self.assertEqual(body["item"]["status"], 64)
 
         status, body = self.call("DELETE", "/api/channels/101/points/yc/1", {})
         self.assertEqual(status, 200, body)

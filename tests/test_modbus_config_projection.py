@@ -15,7 +15,7 @@ class ModbusConfigProjectionTests(unittest.TestCase):
             self.assertTrue(selected <= columns, (table, selected - columns))
 
     def test_runtime_projection_does_not_load_display_only_fields(self):
-        display_columns = {"name", "rdfid"}
+        display_columns = {"name"}
         for projection in _ModbusMasterOperations._STORE_PROJECTIONS.values():
             self.assertTrue(display_columns.isdisjoint({name.strip() for name in projection.split(",")}))
 

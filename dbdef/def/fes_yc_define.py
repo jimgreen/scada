@@ -36,10 +36,6 @@ class fes_yc_define:
         metadata={'chn_name': '中文标识', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-    rdfid: Optional[str] = field(
-        default=None,
-        metadata={'chn_name': 'RDFID', 'eng_name': 'rdfid', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
-    )
 
     raw_base: Optional[float] = field(
         default=None,
