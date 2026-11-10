@@ -1,7 +1,7 @@
 "use strict";
 const $=s=>document.querySelector(s);
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]));
-const state={channels:[],points:[],selected:new URLSearchParams(location.search).get("channel_id")||null,logs:[],log:null,logRecord:"runtime",page:"channels",edit:null,batch:false,sourceCatalog:null,pointOffset:0,pointLimit:100,pointTotal:0,pointRequest:0};
+const state={channels:[],points:[],selected:new URLSearchParams(location.search).get("channel_id")||null,logs:[],log:null,logRecord:"runtime",page:"channels",edit:null,batch:false,sourceCatalog:null,pointOffset:0,pointLimit:100,pointTotal:0,pointRequest:0,pointLoading:false,pointReloadPending:false};
 const kindName={yc:"遥测",yx:"遥信",yk:"遥控",yt:"遥调"};
 const pointKinds=Object.keys(kindName);
 function activePointKind(){return $("#kind-filter")?.value||"yc"}
@@ -89,7 +89,27 @@ async function loadChannels({loadSelectedPoints = false} = {}) {
   } catch (error) { if (request === channelRequest) throw error; }
   finally { pendingChannels--; }
 }
-async function loadPoints(){const kind=activePointKind(),body=pointTableBody(kind);if(!body)return;setPointTab(kind);const request=++state.pointRequest;if(!state.selected){state.points=[];state.pointTotal=0;state.pointOffset=0;renderPoints();return}const cid=state.selected,q=new URLSearchParams({limit:String(state.pointLimit),offset:String(state.pointOffset),kind});const scope=cid+"/"+kind;if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;body.innerHTML='<tr><td colspan="13">正在读取点映射…</td></tr>'}let page;try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(request!==state.pointRequest)return;throw error}if(request!==state.pointRequest||cid!==state.selected)return;state.pointTotal=page.total??0;if(state.pointOffset>0&&state.pointOffset>=state.pointTotal){state.pointOffset=Math.max(0,Math.floor((state.pointTotal-1)/state.pointLimit)*state.pointLimit);return loadPoints()}state.points=page.items||[];renderPoints()}
+async function loadPoints(){
+  if(state.pointLoading){state.pointReloadPending=true;return}
+  state.pointLoading=true;
+  try{
+    const kind=activePointKind(),body=pointTableBody(kind);if(!body)return;setPointTab(kind);
+    const request=++state.pointRequest;
+    if(!state.selected){state.points=[];state.pointTotal=0;state.pointOffset=0;renderPoints();return}
+    const cid=state.selected,offset=state.pointOffset,q=new URLSearchParams({limit:String(state.pointLimit),offset:String(offset),kind});
+    const scope=cid+"/"+kind;
+    if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;body.innerHTML='<tr><td colspan="13">正在读取点映射…</td></tr>'}
+    let page;
+    try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(request!==state.pointRequest)return;throw error}
+    if(request!==state.pointRequest||cid!==state.selected||kind!==activePointKind()||offset!==state.pointOffset)return;
+    state.pointTotal=page.total??0;
+    if(offset>0&&offset>=state.pointTotal){state.pointOffset=Math.max(0,Math.floor((state.pointTotal-1)/state.pointLimit)*state.pointLimit);state.pointReloadPending=true;return}
+    state.points=page.items||[];renderPoints()
+  }finally{
+    state.pointLoading=false;
+    if(state.pointReloadPending){state.pointReloadPending=false;queueMicrotask(()=>loadPoints().catch(e=>toast(e.message)))}
+  }
+}
 async function control(cid,a){await api(`/api/trans/channels/${cid}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels({loadSelectedPoints:true});if(state.page==="processes")await loadProcesses()}
 async function loadProcesses(){const r=(await api("/api/trans/processes")).items||[];$("#process-summary").textContent=`运行 ${r.filter(x=>x.alive).length} / 总数 ${r.length}`;$("#processes").innerHTML=r.length?r.map(x=>`<tr><td>${id(x)} · ${esc(x.name||"")}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid||"—"}</td><td>${fmt(x.process_start_time)}</td><td>${fmt(x.process_heartbeat_time,true)}</td><td title="${esc(x.process_error)}">${esc(x.process_error)||"—"}</td><td class="actions"><button data-control="start" data-id="${id(x)}">启动</button><button data-control="stop" data-id="${id(x)}">停止</button><button data-log-channel="${id(x)}">日志</button></td></tr>`).join(""):'<tr><td colspan="8" class="muted">暂无通道</td></tr>'}
 async function loadLogs(){const c=$("#log-channel")?.value||"";state.logsChannel=c;const q=new URLSearchParams({record:state.logRecord||"runtime"});if(c)q.set("channel_id",c);const v=await api(`/api/trans/logs?${q}`);state.logs=v.items||[];$("#log-count").textContent=`${v.total||0} 个文件`;$("#log-files").innerHTML=state.logs.map(x=>`<button class="log-file ${state.log===x.filename?"active":""}" data-log="${esc(x.filename)}">${esc(x.filename)}<small>${(x.size/1024).toFixed(1)} KB · ${fmt(x.mtime)}</small></button>`).join("")||'<div class="muted">暂无日志</div>';if(state.log&&!state.logs.some(x=>x.filename===state.log))state.log=null;if(!state.log&&state.logs.length)state.log=state.logs[0].filename;if(state.log)await loadLog();else {$("#log-name").textContent="请选择日志文件";$("#log-content").textContent="—"}}

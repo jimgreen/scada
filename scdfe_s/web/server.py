@@ -31,13 +31,31 @@ from scdfe_s.web.protocol_service import (
     ProtocolServiceError,
     OpcServerService,
 )
-
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 from core.runtime_status import now_ms, runtime_status_rows
+
+
+def _rtu_point_counts(store) -> dict[int, int]:
+    """Count all four point tables in one read transaction.
+
+    Communication and process monitor pages poll every configured RTU at the
+    same time. Keeping this aggregation here avoids four queries and one
+    SQLite connection per service status call.
+    """
+    with store.connection() as connection:
+        rows = connection.execute(
+            "SELECT r.rtu_id,"
+            " (SELECT COUNT(*) FROM fes_yc_define p WHERE p.rtu_id=r.rtu_id)"
+            " + (SELECT COUNT(*) FROM fes_yx_define p WHERE p.rtu_id=r.rtu_id)"
+            " + (SELECT COUNT(*) FROM fes_yk_define p WHERE p.rtu_id=r.rtu_id)"
+            " + (SELECT COUNT(*) FROM fes_yt_define p WHERE p.rtu_id=r.rtu_id)"
+            " FROM fes_rtu_define r WHERE r.channel_type IS NOT NULL"
+        ).fetchall()
+    return {int(row[0]): int(row[1]) for row in rows}
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scada.web")
@@ -239,6 +257,11 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if len(parts) >= 3 and parts[2] in {"processes", "communications"}
             else {}
         )
+        point_counts = (
+            _rtu_point_counts(self.store)
+            if len(parts) >= 3 and parts[2] in {"processes", "communications"}
+            else None
+        )
         if len(parts) == 5 and parts[2] in {"processes", "communications"} and parts[4] in {"start", "stop"}:
             if method != "POST" or query:
                 raise ApiError(405, "进程控制接口只支持 POST")
@@ -253,7 +276,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 raise ApiError(405, "进程监控接口只支持 GET")
             items = []
             for slug, service in channel_services.items():
-                status = service.status()
+                status = service.status(point_counts=point_counts)
                 items.append({"name": slug, "label": status.get("label", slug),
                               "rtu_id": status.get("rtu_id"),
                               "running": bool(status.get("running")),
@@ -279,7 +302,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 }
             items = []
             for slug, service in channel_services.items():
-                status = service.status()
+                status = service.status(point_counts=point_counts)
                 rtu_id = status.get("rtu_id", status.get("config", {}).get("effective_rtu_id"))
                 runtime = runtime_by_channel.get(channel_by_rtu.get(int(rtu_id))) if rtu_id is not None else None
                 items.append({"name": slug, "label": status.get("label", slug),

@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 
-from scdfe_s.web.server import make_server
+from scdfe_s.web.server import _rtu_point_counts, make_server
 
 
 class ScdfeSWebMonitorTests(unittest.TestCase):
@@ -44,6 +44,25 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
             status, payload = self.request("GET", path)
             self.assertEqual(status, 200, path)
             self.assertIn("items", payload)
+
+    def test_point_counts_are_aggregated_across_all_rtu_tables(self):
+        for rtu_id in (1, 2):
+            self.store.create_row("fes_rtu_define", {
+                "rtu_id": rtu_id, "channel_id": 100 + rtu_id,
+                "channel_type": "iec104", "name": f"RTU-{rtu_id}",
+                "process_enable": 0,
+            })
+        for table, rtu_id, point_no in (
+            ("fes_yc_define", 1, 1),
+            ("fes_yx_define", 1, 2),
+            ("fes_yk_define", 1, 3),
+            ("fes_yt_define", 2, 1),
+        ):
+            self.store.create_row(table, {
+                "rtu_id": rtu_id, "pnt_no": point_no,
+                "name": f"{table}-{point_no}", "value": 0,
+            })
+        self.assertEqual(_rtu_point_counts(self.store), {1: 3, 2: 1})
 
     def test_channel_and_point_crud_alias(self):
         status, payload = self.request("POST", "/api/channels", {

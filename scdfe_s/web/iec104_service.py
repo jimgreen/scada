@@ -636,7 +636,7 @@ class IEC104Service:
         except Exception:
             LOG.exception("写入 IEC104 通道运行状态失败: rtu_id=%s", rtu_id)
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, point_counts: dict[int, int] | None = None) -> dict[str, Any]:
         with self._lock:
             server = self._server
             config = self.config()
@@ -649,7 +649,15 @@ class IEC104Service:
                 "common_address": getattr(server, "common_address", None) if server else None,
                 "open_connections": int(server.open_connection_count) if server else 0,
                 "active_connections": int(server.active_connection_count) if server else 0,
-                "point_count": server.point_count if server else 0,
+                # A running IEC104 server owns its in-memory point snapshot.
+                # When stopped, use the monitor's shared database aggregate so
+                # the page still shows the configured point count.
+                "point_count": (
+                    server.point_count if server
+                    else int(point_counts.get(int(config["effective_rtu_id"]), 0))
+                    if point_counts is not None and config.get("effective_rtu_id") is not None
+                    else 0
+                ),
                 "protocol_config": (server.protocol_config if server else {
                     key: config[key] for key in ("k", "w", "t1", "t2", "t3", "max_asdu_length")
                 }),

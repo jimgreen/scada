@@ -423,7 +423,7 @@ class ProtocolService:
             with self._lock:
                 self._file_log.end_session()
 
-    def status(self):
+    def status(self, *, point_counts: Mapping[int, int] | None = None):
         with self._lock:
             engine = self._engine
             connection_count = int(getattr(engine, "connections", 0)) if engine else 0
@@ -441,10 +441,14 @@ class ProtocolService:
                 isinstance(getattr(engine, "error", None), BaseException) else self._last_error,
                 "connections": list(self._connections),
                 "open_connections": connection_count,
-                # Status is polled frequently by the Web page.  Counting four
-                # point tables must not materialise every point row just to
-                # render one integer; use one aggregate query instead.
-                "point_count": self._point_count(rtu_id),
+                # Status is polled frequently by the Web page.  The monitor
+                # supplies one aggregate count for all RTUs so this service
+                # does not open and query SQLite once per channel.
+                "point_count": (
+                    self._point_count(rtu_id)
+                    if point_counts is None
+                    else int(point_counts.get(int(rtu_id), 0)) if rtu_id is not None else 0
+                ),
                 "rx_count": self._rx_count,
                 "tx_count": self._tx_count,
                 "error_count": self._error_count,

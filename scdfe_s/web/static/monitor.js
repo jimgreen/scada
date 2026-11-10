@@ -20,12 +20,22 @@
   }
   function msg(text, error) { const node = $("#message"); if (node) { node.textContent = text || ""; node.className = "message" + (error ? " error" : ""); } }
   let requestId = 0, pending = 0, lastMarkup = null;
-  async function fetchView(path) {
+  async function fetchViews(paths) {
     const id = ++requestId;
     pending++;
-    try { const data = await api(path); return id === requestId ? data : null; }
-    catch (error) { if (id === requestId) throw error; return null; }
-    finally { pending--; }
+    try {
+      const data = await Promise.all(paths.map(path => api(path)));
+      return id === requestId ? data : null;
+    } catch (error) {
+      if (id === requestId) throw error;
+      return null;
+    } finally {
+      pending--;
+    }
+  }
+  async function fetchView(path) {
+    const data = await fetchViews([path]);
+    return data ? data[0] : null;
   }
   function show(selector, markup) {
     // Each standalone monitor has one list. Keep focused buttons and text
@@ -80,10 +90,12 @@
   }
   async function loadCommunications() {
     try {
-      const channels = await fetchView("/api/rtus?limit=500&offset=0");
-      if (!channels) return;
-      const data = await fetchView("/api/monitor/communications");
-      if (!data) return;
+      const views = await fetchViews([
+        "/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,name,process_enable,process_error,packet_recording",
+        "/api/monitor/communications",
+      ]);
+      if (!views) return;
+      const [channels, data] = views;
       const serviceStatus = new Map((data.items || []).map(item => [item.name, item]));
       const serviceByRtu = new Map((data.items || []).filter(item => item.rtu_id != null).map(item => [String(item.rtu_id), item]));
       const rows = (channels.items || []).map(channel => {
