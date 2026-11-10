@@ -37,7 +37,7 @@ from core.web_request import RequestBodyMixin
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
-from core.runtime_status import runtime_status_rows
+from core.runtime_status import now_ms, runtime_status_rows
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scada.web")
@@ -754,6 +754,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(201, {"item": self.store.create_row(table, body)})
         if method == "PATCH" and key is not None:
             body = self._body()
+            if table in {"fes_yc_define", "fes_yx_define"} and "value" in body and "refresh_time" not in body:
+                body = dict(body)
+                body["refresh_time"] = now_ms()
             return self._json(200, {"item": self.store.update_row(table, key, body, self._if_match())})
         if method == "DELETE" and key is not None:
             if table == "fes_rtu_define":

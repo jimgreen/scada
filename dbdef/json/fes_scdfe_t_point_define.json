@@ -72,6 +72,51 @@
       "default": 1
     },
     {
+      "chn_name": "实时值",
+      "eng_name": "value",
+      "primary_key": false,
+      "data_type": "float",
+      "disp_type": "FLOAT",
+      "disp_menu": "",
+      "default": 0.0
+    },
+    {
+      "chn_name": "状态",
+      "eng_name": "status",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "INT",
+      "disp_menu": "",
+      "default": 128
+    },
+    {
+      "chn_name": "刷新时间",
+      "eng_name": "refresh_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "最后转发时间",
+      "eng_name": "forward_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
+      "chn_name": "指令接收时间",
+      "eng_name": "command_receive_time",
+      "primary_key": false,
+      "data_type": "int",
+      "disp_type": "带毫秒的DATETIME",
+      "disp_menu": "",
+      "default": 0
+    },
+    {
       "chn_name": "IEC信息体地址",
       "eng_name": "io_address",
       "primary_key": false,

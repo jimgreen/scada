@@ -49,6 +49,24 @@ class ScdfeSWebUiTests(unittest.TestCase):
             self.assertEqual(status, 200, path)
             self.assertTrue(payload, path)
 
+    def test_four_remote_page_shows_refresh_and_command_receive_times(self):
+        status, page = self.call("GET", "/points")
+        self.assertEqual(status, 200)
+        page = page.decode("utf-8")
+        yc_page = page.split('data-point-page="yc"', 1)[1].split("</section>", 1)[0]
+        yx_page = page.split('data-point-page="yx"', 1)[1].split("</section>", 1)[0]
+        yk_page = page.split('data-point-page="yk"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("刷新时间", yc_page)
+        self.assertNotIn("指令接收时间", yc_page)
+        self.assertIn("刷新时间", yx_page)
+        self.assertNotIn("指令接收时间", yx_page)
+        self.assertIn("指令接收时间", yk_page)
+        status, script = self.call("GET", "/static/channels.js")
+        self.assertEqual(status, 200)
+        script = script.decode("utf-8")
+        self.assertIn("formatPointTime", script)
+        self.assertIn("cmd_handle_time", script)
+
     def test_multiple_channel_and_four_remote_point_crud(self):
         for rtu_id in (101, 102):
             status, body = self.call("POST", "/api/channels", {

@@ -69,6 +69,60 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
         status, _ = self.request("DELETE", "/api/channels/1", {})
         self.assertEqual(status, 200)
 
+    def test_generic_yx_patch_only_updates_database(self):
+        status, _ = self.request("POST", "/api/channels", {
+            "rtu_id": 2, "channel_id": 12, "channel_type": "iec104",
+            "name": "IEC104 测试通道", "process_enable": 0,
+        })
+        self.assertEqual(status, 201)
+        status, _ = self.request("POST", "/api/channels/2/points/yx", {
+            "pnt_no": 1, "name": "开关量", "value": 0,
+        })
+        self.assertEqual(status, 201)
+
+        from unittest.mock import Mock
+
+        service = Mock()
+        service.running = True
+        service.incremental_update.return_value = {"value": 1, "sent": True}
+        self.httpd._channel_service_cache["iec104-rtu-2"] = service
+
+        status, payload = self.request("PATCH", "/api/channels/2/points/yx/1", {
+            "name": "开关量更新", "value": 1,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["item"]["value"], 1)
+        self.assertEqual(payload["item"]["name"], "开关量更新")
+        self.assertGreater(payload["item"]["refresh_time"], 0)
+        service.incremental_update.assert_not_called()
+        stored = self.store.get_row("fes_yx_define", [2, 1])
+        self.assertEqual(stored["_version"], payload["item"]["_version"])
+
+    def test_yc_yx_value_or_status_change_stamps_refresh_time(self):
+        self.store.create_row("fes_rtu_define", {
+            "rtu_id": 10, "channel_id": 10, "channel_type": "custom", "name": "测试 RTU",
+        })
+        for kind, value in (("yc", 1.5), ("yx", 0)):
+            table = f"fes_{kind}_define"
+            self.store.create_row(table, {
+                "rtu_id": 10, "pnt_no": 1, "name": kind,
+                "value": value, "status": 0, "refresh_time": 1,
+            })
+            before = self.store.get_row(table, [10, 1])
+
+            changed_status = self.store.update_row(table, [10, 1], {"status": 1})
+            self.assertGreater(changed_status["refresh_time"], before["refresh_time"], kind)
+
+            unchanged = self.store.update_row(table, [10, 1], {
+                "value": value, "status": 1,
+            })
+            self.assertEqual(unchanged["refresh_time"], changed_status["refresh_time"], kind)
+
+            changed_value = self.store.update_row(table, [10, 1], {
+                "value": 2.5 if kind == "yc" else 1,
+            })
+            self.assertGreater(changed_value["refresh_time"], unchanged["refresh_time"], kind)
+
 
 if __name__ == "__main__":
     unittest.main()

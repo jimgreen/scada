@@ -38,6 +38,9 @@ _WIRE_FIELDS = {
     "modbus-tcp": _SOURCE_FIELDS + ("register_area", "address", "data_type", "byte_order",
                                     "word_order", "scale", "offset", "address_base"),
 }
+_POINT_RUNTIME_FIELDS = (
+    "value", "status", "refresh_time", "forward_time", "command_receive_time",
+)
 
 
 def _get(row: Mapping[str, Any], key: str, default: Any = None) -> Any:
@@ -155,6 +158,9 @@ class TransRuntime:
         self._scan_plan = ()
         self.values: dict[tuple[str, int], Any] = {}
         self.qualities: dict[tuple[str, int], int] = {}
+        self._sample_seen: dict[tuple[str, int], tuple[Any, int, int]] = {}
+        self._point_runtime_state: dict[tuple[str, int], dict[str, Any]] = {}
+        self._point_runtime_pending: dict[tuple[str, int], dict[str, Any]] = {}
         self.signature = None
         self._definition_cache = None
         self.writer = None
@@ -331,7 +337,7 @@ class TransRuntime:
             numbers = sorted(targets)
             # Sequential point numbers form one bounded primary-key range.
             # Sparse mappings still use exact lookups; never read intervening rows.
-            projection = f"SELECT pnt_no,value,status FROM {table} WHERE rtu_id=? AND "
+            projection = f"SELECT pnt_no,value,status,refresh_time FROM {table} WHERE rtu_id=? AND "
             if len(numbers) > 1 and numbers[-1] - numbers[0] + 1 == len(numbers):
                 plan.append((projection + "pnt_no BETWEEN ? AND ?", (rtu, numbers[0], numbers[-1]), targets))
                 continue
@@ -343,7 +349,7 @@ class TransRuntime:
                 plan.append((sql, (rtu, *batch), targets))
         return tuple(plan)
 
-    def _read_sources(self, plan, include_quality):
+    def _read_sources(self, plan, include_quality, include_timestamp=False):
         result = {}
         if not plan:
             return result
@@ -353,15 +359,83 @@ class TransRuntime:
             cursor = con.cursor()
             cursor.row_factory = None
             for sql, args, targets in plan:
-                for no, value, quality in cursor.execute(sql, args):
+                for no, value, quality, refresh_time in cursor.execute(sql, args):
                     if value is not None:
                         sample = (value, int(quality or 0)) if include_quality else value
+                        if include_timestamp:
+                            sample = (*sample, int(refresh_time or 0)) if isinstance(sample, tuple) else (
+                                sample, int(refresh_time or 0)
+                            )
                         for key in targets[no]:
                             result[key] = sample
         return result
 
-    def source_values(self, points, *, include_quality=False):
-        return self._read_sources(self._source_plan(points), include_quality)
+    def source_values(self, points, *, include_quality=False, include_timestamp=False):
+        return self._read_sources(self._source_plan(points), include_quality, include_timestamp)
+
+    @staticmethod
+    def _sample_parts(sample, default=(0, 128, 0)):
+        if sample is None:
+            return default
+        values = tuple(sample) if isinstance(sample, tuple) else (sample,)
+        return (
+            values[0] if len(values) > 0 else default[0],
+            int(values[1]) if len(values) > 1 else default[1],
+            int(values[2] or 0) if len(values) > 2 else default[2],
+        )
+
+    def _queue_point_runtime(self, key, **updates):
+        allowed = set(_POINT_RUNTIME_FIELDS)
+        updates = {name: value for name, value in updates.items() if name in allowed}
+        if not updates:
+            return
+        current = dict(self._point_runtime_state.get(key, {}))
+        current.update(self._point_runtime_pending.get(key, {}))
+        changed = {name: value for name, value in updates.items()
+                   if current.get(name) != value}
+        if changed:
+            self._point_runtime_pending.setdefault(key, {}).update(changed)
+
+    def _flush_point_runtime(self):
+        if not self._point_runtime_pending:
+            return True
+        pending = {key: dict(values) for key, values in self._point_runtime_pending.items()}
+        try:
+            with self.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                for (kind, point_no), values in pending.items():
+                    assignments = ", ".join(f'"{name}"=?' for name in values)
+                    con.execute(
+                        f'UPDATE {POINT_TABLE} SET {assignments} '
+                        'WHERE channel_id=? AND pnt_no=? AND kind=?',
+                        [*values.values(), self.channel_id, point_no, kind],
+                    )
+                con.commit()
+        except Exception as exc:
+            self._runtime_error(exc)
+            self.logger.error(f"写入转发点实时状态失败: {exc}")
+            return False
+        for key, values in pending.items():
+            self._point_runtime_state.setdefault(key, {}).update(values)
+            current = self._point_runtime_pending.get(key)
+            if current is not None:
+                for name, value in values.items():
+                    if current.get(name) == value:
+                        current.pop(name, None)
+                if not current:
+                    self._point_runtime_pending.pop(key, None)
+        return True
+
+    def _record_sample(self, key, value, quality, source_time=0):
+        sample = (value, int(quality), int(source_time or 0))
+        if self._sample_seen.get(key) == sample:
+            return False
+        self._sample_seen[key] = sample
+        self._queue_point_runtime(
+            key, value=value, status=int(quality),
+            refresh_time=sample[2] or now_ms(),
+        )
+        return True
 
     def _writer_client(self):
         if self.writer is None:
@@ -378,6 +452,7 @@ class TransRuntime:
         Modbus owns its register scale/offset conversion. IEC104 callbacks
         already contain engineering values and normalized single/double states.
         """
+        received_at = now_ms()
         try:
             value = float(engineering_value)
             if not math.isfinite(value):
@@ -402,15 +477,26 @@ class TransRuntime:
         except OSError:
             logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
         self._command_count += 1
+        self.values[(p.kind, p.pnt_no)] = value
+        self.qualities[(p.kind, p.pnt_no)] = 0
+        self._queue_point_runtime(
+            (p.kind, p.pnt_no), value=value, status=0,
+            refresh_time=received_at, command_receive_time=received_at,
+        )
+        self._flush_point_runtime()
         return True
 
     def build_server(self, spec, points):
+        self._flush_point_runtime()
         self.values.clear()
         self.qualities.clear()
+        self._sample_seen.clear()
+        self._point_runtime_state.clear()
+        self._point_runtime_pending.clear()
         self.points = {(p.kind, p.pnt_no): p for p in points}
         self._scan_plan = self._source_plan(p for p in points if p.kind in {'yc', 'yx'})
-        initial_samples = self.source_values(points, include_quality=True)
-        initial = {key: sample[0] for key, sample in initial_samples.items()}
+        initial_samples = self.source_values(points, include_quality=True, include_timestamp=True)
+        initial = {key: self._sample_parts(sample)[0] for key, sample in initial_samples.items()}
         if spec.protocol == "iec104":
             from server.iec104_server import IEC104Server
             server = IEC104Server(ip=spec.bind_host, port=spec.bind_port,
@@ -419,7 +505,7 @@ class TransRuntime:
             server.set_packet_handler(self.logger.packet)
             for key, p in self.points.items():
                 handler = (lambda event, point=p: self.command(point, event.value)) if p.kind in {"yk", "yt"} else None
-                value, quality = initial_samples.get(key, (0, 128))
+                value, quality, source_time = self._sample_parts(initial_samples.get(key))
                 try:
                     server.add_point(p.kind, p.pnt_no, data_type=p.type_id, value=value,
                                      io_address=p.io_address, time_tag=p.time_tag,
@@ -437,11 +523,13 @@ class TransRuntime:
                 if p.kind in {"yc", "yx"}:
                     server.set_value(p.kind, p.pnt_no, value, quality=quality)
                     self.values[key], self.qualities[key] = value, quality
+                self._record_sample(key, value, quality, source_time)
             server.set_monitor_report_interval(spec.report_interval_ms)
             # Keep the constructed server as the active target as well.  This
             # makes the method useful for callers that build a server for
             # diagnostics before invoking ``rebuild``.
             self.server = server
+            self._flush_point_runtime()
             return server
         from server.modbus_trans_server import ModbusTcpTransServer
         point_index = self.points
@@ -455,9 +543,12 @@ class TransRuntime:
             log=lambda level, message: self.logger.emit("normal", message, level=level))
         server.set_packet_handler(self.logger.packet)
         # The constructor already encoded the initial samples into the datastore.
-        for key, (value, quality) in initial_samples.items():
+        for key, sample in initial_samples.items():
+            value, quality, source_time = self._sample_parts(sample)
             if key[0] in {"yc", "yx"}:
                 self.values[key], self.qualities[key] = value, quality
+            self._record_sample(key, value, quality, source_time)
+        self._flush_point_runtime()
         self.server = server
         return server
 
@@ -483,23 +574,33 @@ class TransRuntime:
         self.logger.process(f"转发通道启动，规约={spec.protocol}")
 
     def refresh(self):
-        current = self._read_sources(self._scan_plan, True)
+        current = self._read_sources(self._scan_plan, True, True)
         if current:
             self._rx_count += len(current)
             self._last_rx_time = now_ms()
         if getattr(type(self.server), "update_many", None) is not None:
             changes = []
-            for key, (value, quality) in current.items():
+            for key, sample in current.items():
+                value, quality, source_time = self._sample_parts(sample)
+                self._record_sample(key, value, quality, source_time)
                 if self.values.get(key) != value:
                     changes.append((*key, value))
                 else:
                     self.qualities[key] = quality  # Modbus does not transmit quality bits.
+            for key, point in self.points.items():
+                if point.kind not in {"yc", "yx"} or key in current:
+                    continue
+                value = self.values.get(key, 0)
+                quality = self.qualities.get(key, 0) | 128
+                self.qualities[key] = quality
+                self._record_sample(key, value, quality, 0)
             if changes:
                 try:
                     errors = self.server.update_many(changes)
                 except Exception as exc:
                     self._runtime_error(exc)
                     self.logger.error(f"Modbus 扫描发布未确认: {exc}")
+                    self._flush_point_runtime()
                     return  # Retry unconfirmed values on the next scan.
                 for kind, no, value in changes:
                     key = (kind, no)
@@ -507,21 +608,26 @@ class TransRuntime:
                         self._runtime_error(errors[key])
                         self.logger.error(f"转发点 {kind}/{no} 更新失败: {errors[key]}")
                     else:
-                        self.values[key], self.qualities[key] = current[key]
+                        sample = self._sample_parts(current[key])
+                        self.values[key], self.qualities[key] = sample[0], sample[1]
+                        self._queue_point_runtime(key, forward_time=now_ms())
                         self._tx_count += 1
                         self._last_tx_time = now_ms()
+            self._flush_point_runtime()
             return
         for key, point in self.points.items():
             if point.kind not in {"yc", "yx"}:
                 continue
             if key in current:
-                value, quality = current[key]
+                value, quality, source_time = self._sample_parts(current[key])
             elif hasattr(self.server, "set_value"):
                 # Missing/NULL source: hold the last published value and mark
                 # it invalid. Modbus registers have no protocol quality bit.
                 value, quality = self.values.get(key, 0), self.qualities.get(key, 0) | 128
+                source_time = 0
             else:
                 continue
+            self._record_sample(key, value, quality, source_time)
             # Avoid sending an IEC spontaneous frame on every scan when the
             # source value is unchanged.  Modbus still receives the changed
             # snapshot in its datastore and is cheap, but this guard keeps the
@@ -545,11 +651,13 @@ class TransRuntime:
                         self.server.update(point.kind, point.pnt_no, value)
                 self.values[key] = value
                 self.qualities[key] = quality
+                self._queue_point_runtime(key, forward_time=now_ms())
                 self._tx_count += 1
                 self._last_tx_time = now_ms()
             except Exception as exc:
                 self._runtime_error(exc)
                 self.logger.error(f"转发点更新失败: {exc}")
+        self._flush_point_runtime()
 
     def _enabled(self):
         if not self.require_enabled:

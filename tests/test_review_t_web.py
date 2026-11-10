@@ -56,10 +56,21 @@ class TransWebReviewTests(unittest.TestCase):
         self.service.create_point(1, {"pnt_no": 1, "kind": "yc", "source_rtu_id": 7,
                                       "source_pnt_no": 2, "name": "Before"})
         server = self.http_server()
+        status, current = self.request(server, "/api/trans/channels/1/points/yc/1")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            {name: current["item"][name] for name in
+             ("value", "status", "refresh_time", "forward_time", "command_receive_time")},
+            {"value": 0.0, "status": 128, "refresh_time": 0,
+             "forward_time": 0, "command_receive_time": 0},
+        )
         status, value = self.request(server, "/api/trans/channels/1/points/yc/1", "PATCH",
                                      {"kind": "yc", "pnt_no": 1, "name": "After"})
         self.assertEqual(status, 200, value)
         self.assertEqual(value["item"]["name"], "After")
+        status, value = self.request(server, "/api/trans/channels/1/points/yc/1", "PATCH",
+                                     {"value": 12.5})
+        self.assertEqual(status, 400)
         status, _ = self.request(server, "/api/trans/channels/1/points/yc/1", "PATCH", {"kind": "yk"})
         self.assertEqual(status, 400)
 

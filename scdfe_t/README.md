@@ -8,7 +8,7 @@
 - `scdfe_t/`：转发运行时、协议适配和进程生命周期；
 - `scdfe_t/web/`：转发通道的独立 Web 服务；
 - `dbdef/json/fes_scdfe_t_define.json`：转发通道定义；
-- `dbdef/json/fes_scdfe_t_point_define.json`：通道内四遥映射定义。
+- `dbdef/json/fes_scdfe_t_point_define.json`：通道内四遥映射定义；运行时由转发进程维护 `value`、`status`、`refresh_time`、`forward_time` 和 `command_receive_time`，用于 Web 实时查看转发状态。
 
 项目使用同一个 SQLite 数据库。运行前先用 `scdfe_c` 的数据库初始化流程创建/升级表，然后启动 Web 管理服务：
 
@@ -84,7 +84,7 @@ Web 启动和停止是推荐方式。需要脚本或调试时，可直接运行�
 
 同一 RTU 的连续源点使用复合主键范围查询，稀疏点只读映射中的点号；跨 RTU 或跨读取批次时，每轮扫描使用同一数据库快照。Modbus 把本轮变化的遥测、遥信交给服务线程发布，编码失败的点保留原值并在下次扫描重试；同批其他有效点仍可更新。IEC104 的总召和质量码变化继续按 IEC104 的语义处理。
 
-四遥页面的通道选择框使用 `GET /api/trans/channels?view=selector`，只返回编号、编码、名称和规约。默认列表仍返回完整通道数据。刷新相同点映射时，界面保留原行和焦点；修改后使用新的版本号继续编辑。
+四遥页面的通道选择框使用 `GET /api/trans/channels?view=selector`，只返回编号、编码、名称和规约。默认列表仍返回完整通道数据。点映射接口同时返回实时值、质量状态、刷新时间、最后转发时间和指令接收时间；页面可手动刷新，也可勾选 2 秒自动刷新。刷新相同点映射时，界面保留原行和焦点；修改后使用新的版本号继续编辑。
 
 日志目录和检索均可传 `channel_id`，例如 `GET /api/log-files/search?record=packet&channel_id=1&direction=RX`。
 转发日志按所属通道的文件名过滤，报文文件名按所属通道过滤；通道标记由文件名和查询参数共同确定。大文件尾读只向前读取必要的块，最多 2 MB；

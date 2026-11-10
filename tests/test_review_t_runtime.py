@@ -184,6 +184,43 @@ class TransmissionReviewTests(unittest.TestCase):
         self.assertEqual(client.read_holding_registers(20, count=1, device_id=1).registers, [18])
         self.assertTrue(client.read_coils(2, count=1, device_id=1).bits[0])
 
+    def test_forward_point_persists_live_value_quality_and_forward_time(self):
+        self.point("yc", 1, value=12.5, register_area="input", address=20, data_type="float32")
+        client = self.connect()
+        row = self.store.get_row("fes_scdfe_t_point_define", [1, 1, "yc"])
+        self.assertEqual((row["value"], row["status"]), (12.5, 0))
+        self.assertGreater(row["refresh_time"], 0)
+        self.assertEqual(row["forward_time"], 0)
+        version = row["_version"]
+
+        self.runtime.refresh()
+        unchanged = self.store.get_row("fes_scdfe_t_point_define", [1, 1, "yc"])
+        self.assertEqual(unchanged["refresh_time"], row["refresh_time"])
+        self.assertEqual(unchanged["_version"], version)
+
+        self.store.update_row("fes_yc_define", [101, 1], {
+            "value": 18.5, "status": 4, "refresh_time": 200,
+        })
+        self.runtime.refresh()
+        changed = self.store.get_row("fes_scdfe_t_point_define", [1, 1, "yc"])
+        self.assertEqual((changed["value"], changed["status"], changed["refresh_time"]), (18.5, 4, 200))
+        self.assertGreater(changed["forward_time"], 0)
+        self.assertEqual(changed["_version"], version)
+        self.assertEqual(client.read_input_registers(20, count=2, device_id=1).registers[0], 16788)
+
+    def test_forward_command_records_receive_time_without_changing_definition_version(self):
+        point = self.point("yk", 2, value=0, register_area="coil", address=2, data_type="bool")
+        self.connect()
+        version = self.store.get_row("fes_scdfe_t_point_define", [1, 2, "yk"])["_version"]
+        self.assertTrue(self.runtime.command(self.runtime.points["yk", 2], 1))
+        row = self.store.get_row("fes_scdfe_t_point_define", [1, 2, "yk"])
+        self.assertEqual(row["value"], 1.0)
+        self.assertEqual(row["status"], 0)
+        self.assertGreater(row["refresh_time"], 0)
+        self.assertGreater(row["command_receive_time"], 0)
+        self.assertEqual(row["refresh_time"], row["command_receive_time"])
+        self.assertEqual(row["_version"], version)
+
     def test_mixed_coil_write_cannot_bypass_readonly_measurement(self):
         self.point("yk", 1, register_area="coil", address=0, data_type="bool")
         self.point("yx", 1, value=0, register_area="coil", address=1, data_type="bool")

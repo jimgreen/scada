@@ -23,6 +23,16 @@ class fes_scdfe_t_point_define:
 
     enabled: Optional[int] = field(default=1, metadata={'chn_name': '启用', 'eng_name': 'enabled', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'})
 
+    value: Optional[float] = field(default=0.0, metadata={'chn_name': '实时值', 'eng_name': 'value', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': ''})
+
+    status: Optional[int] = field(default=128, metadata={'chn_name': '状态', 'eng_name': 'status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
+
+    refresh_time: Optional[int] = field(default=0, metadata={'chn_name': '刷新时间', 'eng_name': 'refresh_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''})
+
+    forward_time: Optional[int] = field(default=0, metadata={'chn_name': '最后转发时间', 'eng_name': 'forward_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''})
+
+    command_receive_time: Optional[int] = field(default=0, metadata={'chn_name': '指令接收时间', 'eng_name': 'command_receive_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''})
+
     io_address: Optional[int] = field(default=0, metadata={'chn_name': 'IEC信息体地址', 'eng_name': 'io_address', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})
 
     type_id: Optional[int] = field(default=0, metadata={'chn_name': 'IEC类型标识', 'eng_name': 'type_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''})

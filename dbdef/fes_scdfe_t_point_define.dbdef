@@ -10,6 +10,11 @@
 #  source_rtu_id  源RTU  int  0  KEYID类型
 #  source_pnt_no  源点号  int  0  INT
 #  enabled  启用  int  0  单选菜单
+#  value  实时值  float  0  FLOAT
+#  status  状态  int  0  INT
+#  refresh_time  刷新时间  int  0  带毫秒的DATETIME
+#  forward_time  最后转发时间  int  0  带毫秒的DATETIME
+#  command_receive_time  指令接收时间  int  0  带毫秒的DATETIME
 #  io_address  IEC信息体地址  int  0  INT
 #  type_id  IEC类型标识  int  0  INT
 #  command_mode  命令执行方式  str  0  单选菜单

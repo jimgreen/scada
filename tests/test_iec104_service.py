@@ -47,6 +47,23 @@ class IEC104ServiceTests(unittest.TestCase):
         self.assertEqual(self.store.get_row("fes_yx_define", [1,1])["value"], 0)
         self.assertEqual(self.service.status()["point_count"], 4)
 
+    def test_database_yx_change_is_published_by_service_worker(self):
+        client = IEC104Master("127.0.0.1", 25141, common_address=1, init="NONE")
+        self.addCleanup(client.close)
+        client.add_point("yx", 1)
+        client.connect(timeout=3)
+        deadline = time.monotonic() + 2
+        while self.service.status()["active_connections"] < 1 and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertGreaterEqual(self.service.status()["active_connections"], 1)
+        self.assertTrue(self.store.update_row("fes_yx_define", [1, 1], {"value": 0})["value"] == 0)
+        deadline = time.monotonic() + 2
+        while (client.value("yx", 1).value is not False or
+               self.service.server.snapshot()[("yx", 1)] is not False) and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertIs(client.value("yx", 1).value, False)
+        self.assertFalse(self.service.server.snapshot()[("yx", 1)])
+
     def test_point_projection_joins_each_kind_and_point_by_name(self):
         expected = {"yc": (0x4001, 1), "yx": (1, 1), "yk": (0x6001, 1), "yt": (0x6201, 3)}
         rows = self.service.points()

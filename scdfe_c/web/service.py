@@ -37,6 +37,7 @@ RTU_VERSION_DDL = ('CREATE TABLE IF NOT EXISTS _scada_rtu_version ('
 _DEFINITION_RUNTIME_COLUMNS = frozenset({
     '_version', 'raw_value', 'raw_status', 'raw_time', 'value', 'status',
     'refresh_time', 'refresh_time1', 'refresh_time2', 'refresh_time3',
+    'forward_time', 'command_receive_time',
     'cmd_time', 'cmd_handle_time', 'cmd_check_id',
     'man_disable_last_tm', 'lock_begintime', 'lock_holdtime',
     'process_enable', 'process_status', 'process_pid', 'process_start_time',
@@ -439,6 +440,7 @@ class ScadaStore:
                             self._ensure_indexes(connection, name, payload)
                     self._ensure_definition_version_triggers(connection, self.catalog)
                     self._ensure_command_version_triggers(connection)
+                    self._ensure_point_refresh_triggers(connection)
                     connection.execute(
                         'INSERT OR IGNORE INTO _scada_rtu_version(rtu_id) SELECT rtu_id FROM fes_rtu_define'
                     )
@@ -625,6 +627,35 @@ class ScadaStore:
                 f'AFTER UPDATE OF "value", "cmd_time" ON {table} '
                 f'WHEN OLD."value" IS NOT NEW."value" OR OLD."cmd_time" IS NOT NEW."cmd_time" '
                 f'BEGIN {bump("NEW")} END'
+            )
+
+    @staticmethod
+    def _ensure_point_refresh_triggers(connection) -> None:
+        """Stamp YC/YX samples when their value or quality changes.
+
+        Point values are written by several paths (Web, protocol services and
+        the scdfe_c writer).  Keeping this invariant in SQLite prevents one
+        writer from silently leaving ``refresh_time`` stale.  A caller that
+        supplies an explicit, different timestamp keeps that timestamp; the
+        trigger only fills the timestamp when the update omitted it.
+        """
+        stamp = (
+            "CASE WHEN CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) "
+            "> OLD.\"refresh_time\" "
+            "THEN CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) "
+            "ELSE OLD.\"refresh_time\" + 1 END"
+        )
+        for table_name in ("fes_yc_define", "fes_yx_define"):
+            table = quote_identifier(table_name)
+            trigger_name = quote_identifier(f"_scada_point_refresh_{table_name}")
+            connection.execute(
+                f"CREATE TRIGGER IF NOT EXISTS {trigger_name} "
+                f"AFTER UPDATE OF \"value\", \"status\" ON {table} "
+                f"WHEN (OLD.\"value\" IS NOT NEW.\"value\" OR "
+                f"OLD.\"status\" IS NOT NEW.\"status\") "
+                f"AND OLD.\"refresh_time\" IS NEW.\"refresh_time\" "
+                f"BEGIN UPDATE {table} SET \"refresh_time\"={stamp} "
+                f"WHERE \"rtu_id\"=NEW.\"rtu_id\" AND \"pnt_no\"=NEW.\"pnt_no\"; END"
             )
 
     def schema(self, table: str) -> dict[str, Any]:

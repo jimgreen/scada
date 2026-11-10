@@ -37,6 +37,15 @@
     });
   }
   const keyValue = raw => Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
+  const padTimePart = value => String(value).padStart(2, "0");
+  function formatPointTime(value) {
+    if (!value) return "—";
+    const date = new Date(Number(value));
+    if (Number.isNaN(date.valueOf())) return String(value);
+    return `${date.getFullYear()}-${padTimePart(date.getMonth() + 1)}-${padTimePart(date.getDate())} ` +
+      `${padTimePart(date.getHours())}:${padTimePart(date.getMinutes())}:${padTimePart(date.getSeconds())}.` +
+      String(date.getMilliseconds()).padStart(3, "0");
+  }
   const versionHeaders = version => version == null ? {} : {"If-Match":String(version)};
   async function api(path, options) {
     const response = await fetch(path, {...options, headers:{"Content-Type":"application/json", ...options?.headers}});
@@ -186,18 +195,27 @@
     setPointTab(kind);
     const request = ++requestId, rtu = selected?.rtu_id;
     const scope = `${rtu}/${kind}`;
+    const commandPoint = ["yk", "yt"].includes(kind);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
-      body.innerHTML = '<tr><td colspan="6">正在读取测点…</td></tr>';
+      body.innerHTML = `<tr><td colspan="${commandPoint ? 7 : 6}">正在读取测点…</td></tr>`;
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
     }
     try {
-      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=pnt_no,name,value`) : {items:[],total:0};
+      const fields = ["pnt_no", "name", "value", "refresh_time"];
+      if (["yk", "yt"].includes(kind)) fields.push("cmd_handle_time");
+      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=${fields.join(",")}`) : {items:[],total:0};
       if (request !== requestId || rtu !== selected?.rtu_id) return;
       total = data.total || 0;
       if (offset > 0 && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / limit) * limit); return loadPoints(); }
       const points = data.items || [];
-      body.innerHTML = points.map(p => `<tr><td>${names[kind]}</td><td>${esc(p.pnt_no)}</td><td>${esc(p.name)}</td><td>${esc(p.value)}</td><td><button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="5">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      const rows = points.map(p => {
+        const values = [names[kind], p.pnt_no, p.name, p.value, formatPointTime(p.refresh_time)];
+        if (commandPoint) values.push(formatPointTime(p.cmd_handle_time));
+        values.push(`<button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button>`);
+        return values;
+      });
+      body.innerHTML = rows.map(row => `<tr>${row.map((value, index) => `<td>${index === row.length - 1 ? value : esc(value)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${commandPoint ? 7 : 6}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
       $("#point-next").disabled = offset + points.length >= total;

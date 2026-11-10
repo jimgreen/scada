@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import threading
 import time
 from typing import Any
@@ -60,6 +61,7 @@ class IEC104Service:
     LOG_LIMIT = 500
     ALERT_LIMIT = 200
     CONNECTION_LIMIT = 100
+    DATABASE_SYNC_INTERVAL_S = 0.05
 
     def __init__(self, store, *, config_path: Path | str | None = None, startup_catalog=None):
         self.store = store
@@ -70,6 +72,8 @@ class IEC104Service:
         self._log_lock = threading.RLock()
         self._packet_sink = service_packet_recorder(self._record, None, None)
         self._server: IEC104Server | None = None
+        self._database_sync_stop = threading.Event()
+        self._database_sync_thread: threading.Thread | None = None
         self._config_error = None
         self._config = self._load_config()
         self._file_log = ServiceFileLog(store, "iec104", startup_catalog=startup_catalog, channel_required=True)
@@ -268,6 +272,13 @@ class IEC104Service:
                 self._file_log.end_session()
                 raise IEC104ServiceError(str(exc)) from exc
             self._server = server
+            self._database_sync_stop.clear()
+            self._database_sync_thread = threading.Thread(
+                target=self._database_sync_loop,
+                name=f"iec104-db-sync-{server.rtu_id}",
+                daemon=True,
+            )
+            self._database_sync_thread.start()
             self._started_at = _now_ms()
             self._stopped_at = None
             self._reconnect_count += 1
@@ -279,8 +290,10 @@ class IEC104Service:
             return self.status()
 
     def stop(self) -> dict[str, Any]:
+        sync_thread = None
         with self._lock:
             server = self._server
+            self._database_sync_stop.set()
             if server is not None:
                 try:
                     server.stop()
@@ -290,9 +303,14 @@ class IEC104Service:
                     raise IEC104ServiceError(str(exc)) from exc
                 self._record("INFO", "IEC104 服务已停止")
             self._server = None
+            sync_thread = self._database_sync_thread
+            self._database_sync_thread = None
             self._stopped_at = _now_ms()
             self._file_log.end_session()
-            return self.status()
+            result = self.status()
+        if sync_thread is not None and sync_thread is not threading.current_thread():
+            sync_thread.join(timeout=2)
+        return result
 
     def close(self) -> None:
         try:
@@ -317,6 +335,75 @@ class IEC104Service:
 
     def _adopt_config(self, config):
         self._config = config
+
+    def _sync_database_values(self, connection=None) -> int:
+        """Publish database YC/YX changes independently of Web requests.
+
+        The S point editor is deliberately database-only.  This worker polls
+        the committed S database and reconciles the running IEC104 station's
+        in-memory monitoring points, so edits from the UI, scripts, or another
+        process all follow the same IEC104 spontaneous-report path.
+        """
+        if connection is None:
+            with self.store.connection() as owned_connection:
+                return self._sync_database_values(owned_connection)
+        with self._lock:
+            server = self._server
+            if server is None or not server.running:
+                return 0
+            rtu_id = int(server.rtu_id)
+            snapshot = server.snapshot()
+            transmit = bool(server.active_connection_count)
+            changed = []
+            for table, kind in (("fes_yc_define", "yc"), ("fes_yx_define", "yx")):
+                rows = connection.execute(
+                    f"SELECT pnt_no, value FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
+                    (rtu_id,),
+                )
+                for row in rows:
+                    point_no, value = int(row[0]), row[1]
+                    try:
+                        actual = server.prepare_value(kind, point_no, value)
+                    except Exception as exc:
+                        LOG.warning("IEC104 数据库值无法转换 %s/%s: %s", kind, point_no, exc)
+                        continue
+                    if snapshot.get((kind, point_no)) == actual:
+                        continue
+                    server.update(kind, point_no, value, transmit=transmit)
+                    changed.append((kind, point_no, actual))
+            if changed:
+                LOG.debug(
+                    "IEC104 数据库值同步 RTU=%s points=%s transmit=%s",
+                    rtu_id, len(changed), transmit,
+                )
+            return len(changed)
+
+    def _database_sync_loop(self) -> None:
+        connection = None
+        try:
+            # PRAGMA data_version lets the worker avoid scanning all YC/YX
+            # rows on every 50 ms tick.  Keep this connection open because
+            # data_version is scoped to a connection and must be compared with
+            # its own previous value.
+            connection = sqlite3.connect(
+                str(self.store.db_path), timeout=2.0, isolation_level=None
+            )
+            previous_data_version = None
+            while not self._database_sync_stop.wait(self.DATABASE_SYNC_INTERVAL_S):
+                try:
+                    current_data_version = int(
+                        connection.execute("PRAGMA data_version").fetchone()[0]
+                    )
+                    if previous_data_version is None or current_data_version != previous_data_version:
+                        self._sync_database_values(connection)
+                    previous_data_version = current_data_version
+                except Exception as exc:  # keep the transport alive if a poll fails
+                    LOG.warning("IEC104 数据库值同步失败: %s", exc)
+        except Exception as exc:
+            LOG.warning("IEC104 数据库同步线程启动失败: %s", exc)
+        finally:
+            if connection is not None:
+                connection.close()
 
     def _row_for_point(self, kind: str, point_no: int, rtu_id=None) -> tuple[str, list[int]]:
         tables = {"yc": "fes_yc_define", "yx": "fes_yx_define", "yk": "fes_yk_define", "yt": "fes_yt_define"}

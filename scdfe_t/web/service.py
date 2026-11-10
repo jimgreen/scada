@@ -26,6 +26,9 @@ RUNTIME_FIELDS = frozenset({
     "_version", "process_status", "process_pid", "process_start_time", "process_stop_time",
     "process_heartbeat_time", "process_exit_code", "process_error", "process_enable",
 })
+POINT_RUNTIME_FIELDS = frozenset({
+    "value", "status", "refresh_time", "forward_time", "command_receive_time",
+})
 START_TIMEOUT = 10.0
 STOP_TIMEOUT = 10.0
 
@@ -288,6 +291,10 @@ class TransStore:
         cid = self._channel_key(channel_id)[0]
         self.get_channel(cid)
         columns = self._columns(POINT_TABLE)
+        runtime_fields = set(body) & POINT_RUNTIME_FIELDS
+        if runtime_fields:
+            raise ApiError(400, "转发点实时状态只能由转发进程更新",
+                           details={"runtime_fields": sorted(runtime_fields)})
         unknown = set(body) - columns - {"channel_id", "source_kind"}
         if unknown:
             raise ApiError(400, "转发点映射包含未知字段", details={"unknown_fields": sorted(unknown)})
@@ -372,6 +379,10 @@ class TransStore:
         with self._control(cid):
             current = self.get_point(cid, key)
             values = dict(body)
+            runtime_fields = set(values) & POINT_RUNTIME_FIELDS
+            if runtime_fields:
+                raise ApiError(400, "转发点实时状态只能由转发进程更新",
+                               details={"runtime_fields": sorted(runtime_fields)})
             legacy_type = "source_kind" in values
             if legacy_type and values.pop("source_kind") != current["kind"]:
                 raise ApiError(400, "点映射 kind 必须与 source_kind 一致")
