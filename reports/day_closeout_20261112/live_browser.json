@@ -1,0 +1,23 @@
+[
+  {
+    "role": "c",
+    "port": 8877,
+    "title": "SCADA · 运行工作台",
+    "browser_errors": [],
+    "http_errors": []
+  },
+  {
+    "role": "s",
+    "port": 8878,
+    "title": "scdfe_s · 通信测试",
+    "browser_errors": [],
+    "http_errors": []
+  },
+  {
+    "role": "t",
+    "port": 8879,
+    "title": "scdfe_t · 进程监控",
+    "browser_errors": [],
+    "http_errors": []
+  }
+]

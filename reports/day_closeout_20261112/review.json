@@ -1,0 +1,46 @@
+{
+  "review_scope": "2026-11-12 SCADA execution history in this chat, current workspace and verification artifacts",
+  "workspace": "D:\\codex\\scada",
+  "implementation": "Today protocol fixes and two performance rounds are saved; selected RTU service control repaired during closeout.",
+  "focused_validation": ".........................                                             [100%]\n25 passed, 3 subtests passed in 12.73s",
+  "stop_probe": "30 consecutive original 1-second-stop tests passed; earlier intermittent timeout root cause remains unconfirmed.",
+  "pending_capabilities": [
+    [
+      "CP24Time2a",
+      "当前 c104 2.2.1+scada.1 不支持。数据库保存和运行时注册返回明确错误；需要原生协议库扩展，未静默转换为 CP56。"
+    ],
+    [
+      "独立选择阶段",
+      "支持直接执行、自动选择并执行和撤销；当前驱动未开放“仅选择、稍后单独执行”的接口。"
+    ],
+    [
+      "ASDU 长度",
+      "max_asdu_length 是诊断阈值，不是发送组帧或接收丢弃的强制限制。原生上限为 249。"
+    ],
+    [
+      "T 命令确认",
+      "IEC104/Modbus 应答表示 writer 已受理写库，不能证明现场设备动作完成；API 返回 confirmation_scope=writer_commit，device_execution_confirmed=null。"
+    ],
+    [
+      "S Modbus 特殊映射",
+      "工程点适配器尚不支持寄存器位/字节切片、反相位和特殊寄存器遥控；明确配置这些映射会拒绝启动。无映射时保留原始寄存器模拟模式，RTU simulation 模式仍是内存模拟器。"
+    ],
+    [
+      "CAN 高层与硬件",
+      "DBC 文件解析、CANopen/J1939/UDS 完整协议栈尚未实现。扩展表字段不等于运行能力。ACK/CRC/位填充错误注入、Bus-off 实测、波形与环境试验仍需专用硬件；本轮仅使用 virtual 总线。"
+    ],
+    [
+      "CAN 调度边界",
+      "period_ms 使用报文定义表；点映射中的 period_ms/DBC 名称不构成独立调度或 DBC 导入。replay_source 外部文件导入未实现，周期发送不提供硬实时保证。"
+    ]
+  ],
+  "preserved_unstaged": [
+    "db/scada.sqlite3",
+    "docs/database_simplification.md",
+    "docs/efile_manager.html",
+    "docs/scdfe_usage_guide.html",
+    "docs/web_protocol_crud_guide.html",
+    "docs/window_interaction_summary.md"
+  ],
+  "remote_connectivity": "github.com:443 connection timed out during ls-remote; publication requires a successful push."
+}

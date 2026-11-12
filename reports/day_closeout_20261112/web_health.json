@@ -1,0 +1,39 @@
+[
+  {
+    "service": "scdfe_c",
+    "port": 8877,
+    "health": 200,
+    "home": 200,
+    "protocols": [
+      "iec104",
+      "modbus-tcp",
+      "modbus-rtu",
+      "can"
+    ],
+    "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+  },
+  {
+    "service": "scdfe_s",
+    "port": 8878,
+    "health": 200,
+    "home": 200,
+    "protocols": [
+      "iec104",
+      "modbus-tcp",
+      "modbus-rtu",
+      "can"
+    ],
+    "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+  },
+  {
+    "service": "scdfe_t",
+    "port": 8879,
+    "health": 200,
+    "home": 200,
+    "protocols": [
+      "iec104",
+      "modbus-tcp"
+    ],
+    "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+  }
+]

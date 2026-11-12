@@ -1,0 +1,71 @@
+{
+  "code_commit": "dd07d6f126dd1539baa8c2f774e7524abad1d9f2",
+  "full_regression": "560 passed, 1 skipped, 434 subtests passed in 293.43s (0:04:53)",
+  "full_log_sha256": "14946d352dd364feefa13645eb490b774cdee24ae61c2c2bcd5a2e3991f8bb16",
+  "fixture_browser_checks": 89,
+  "live_browser": [
+    {
+      "role": "c",
+      "port": 8877,
+      "title": "SCADA · 运行工作台",
+      "browser_errors": [],
+      "http_errors": []
+    },
+    {
+      "role": "s",
+      "port": 8878,
+      "title": "scdfe_s · 通信测试",
+      "browser_errors": [],
+      "http_errors": []
+    },
+    {
+      "role": "t",
+      "port": 8879,
+      "title": "scdfe_t · 进程监控",
+      "browser_errors": [],
+      "http_errors": []
+    }
+  ],
+  "web_health": [
+    {
+      "service": "scdfe_c",
+      "port": 8877,
+      "health": 200,
+      "home": 200,
+      "protocols": [
+        "iec104",
+        "modbus-tcp",
+        "modbus-rtu",
+        "can"
+      ],
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    },
+    {
+      "service": "scdfe_s",
+      "port": 8878,
+      "health": 200,
+      "home": 200,
+      "protocols": [
+        "iec104",
+        "modbus-tcp",
+        "modbus-rtu",
+        "can"
+      ],
+      "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+    },
+    {
+      "service": "scdfe_t",
+      "port": 8879,
+      "health": 200,
+      "home": 200,
+      "protocols": [
+        "iec104",
+        "modbus-tcp"
+      ],
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    }
+  ],
+  "stop_repetitions": 30,
+  "stop_root_cause_confirmed": false,
+  "interrupted_full_run": "One run stopped making progress and was terminated; diagnostic rerun completed without a 30-second faulthandler dump."
+}
