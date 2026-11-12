@@ -1,0 +1,47 @@
+{
+  "status": "passed_with_followup",
+  "date": "2026-11-13",
+  "baseline": "4f9aed9",
+  "summary": "首次全量回归：588 passed、1 failed、1 skipped，450 subtests passed，耗时 599.27 秒。失败项的数据排空与落库均通过，失败在假定一次停止检查就完成进程退出的断言；现按接口允许分段检查的约定修正测试，并新增慢退出时只发送一次停止命令的验证。相关复验 34 passed、8 subtests passed，耗时 14.42 秒。未改动生产停止策略。唯一跳过项为 Windows 符号链接权限。",
+  "frontend_summary": "Chromium 84 项检查通过：本轮 22 项，既有界面回归 62 项。使用实际 HTML/JavaScript 与隔离的 API 响应。",
+  "focused_tests": {
+    "passed": 20,
+    "subtests_passed": 20,
+    "seconds": 20.62
+  },
+  "frontend": {
+    "passed": 84,
+    "round6": 22,
+    "existing": 62
+  },
+  "source_hashes_match": 5,
+  "scope": "Local SQLite and TCP; no physical-device commands or serial/CAN hardware certification.",
+  "completed_at": "2026-11-13T00:37:35.537921+08:00",
+  "initial_full": {
+    "passed": 588,
+    "failed": 1,
+    "skipped": 1,
+    "subtests_passed": 450,
+    "seconds": 599.27,
+    "failure": "tests/test_review_c_runtime.py::ReviewRuntimeTests::test_drain_barrier_acknowledges_committed_data_in_real_writer_process; _stop_writer() returned False after a bounded two-second poll; drain and committed value assertions passed"
+  },
+  "followup": {
+    "passed": 34,
+    "failed": 0,
+    "subtests_passed": 8,
+    "seconds": 14.42,
+    "command": "D:/anaconda3/python.exe -m pytest tests/test_review_c_runtime.py tests/test_efficiency_round6.py tests/test_runtime_status.py tests/test_web_connection_pool.py tests/test_commit_visibility.py -q -rs"
+  },
+  "diagnostic_repeat_before_test_fix": {
+    "passed": 10,
+    "seconds": 23.417
+  },
+  "static_validation": {
+    "python_compile": "passed",
+    "javascript_syntax": "passed",
+    "git_diff_check": "passed",
+    "production_source_hashes_match": 5,
+    "standalone_html_documents": 2
+  },
+  "live_verification": "C/S/T Web health 200; four process/communication pages refreshed successfully with GET-only browser requests. Both HTML reports have no horizontal overflow at 1440/390 pixels."
+}

@@ -1,0 +1,77 @@
+{
+  "baseline": "4f9aed9",
+  "checks": [
+    "s/before: no browser errors",
+    "t/before: no browser errors",
+    "C preserves summary metric nodes on heartbeat",
+    "s retains action buttons during heartbeat",
+    "s preserves keyboard focus",
+    "S merges five refreshes into one pair of API calls",
+    "S control completion reads fresh state after an older request",
+    "S reports current request errors",
+    "S recovers after failed refresh",
+    "s controls follow reordered channel rows",
+    "s renders empty result after channel removal",
+    "s restores rows after empty result",
+    "s/after: no browser errors",
+    "t retains action buttons during heartbeat",
+    "t preserves keyboard focus",
+    "t controls follow reordered channel rows",
+    "t renders empty result after channel removal",
+    "t restores rows after empty result",
+    "t/after: no browser errors",
+    "S communication counters preserve action button",
+    "S communication diagnostics show new data",
+    "s/after: no browser errors"
+  ],
+  "measurements": [
+    {
+      "role": "c",
+      "variant": "before",
+      "summary_nodes_preserved": 0
+    },
+    {
+      "role": "s",
+      "variant": "before",
+      "count": 0,
+      "focus": false,
+      "total": 50
+    },
+    {
+      "role": "s",
+      "variant": "before",
+      "overlapping_requests": 10
+    },
+    {
+      "role": "t",
+      "variant": "before",
+      "count": 0,
+      "focus": false,
+      "total": 100
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "summary_nodes_preserved": 4
+    },
+    {
+      "role": "s",
+      "variant": "after",
+      "count": 50,
+      "focus": true,
+      "total": 50
+    },
+    {
+      "role": "s",
+      "variant": "after",
+      "overlapping_requests": 2
+    },
+    {
+      "role": "t",
+      "variant": "after",
+      "count": 100,
+      "focus": true,
+      "total": 100
+    }
+  ]
+}

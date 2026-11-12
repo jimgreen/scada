@@ -1941,11 +1941,13 @@ async function fetchProcesses() {
     if (request !== processMonitor.request) return;
     processMonitor.rows = data.items;
     processMonitor.busy = data.busy;
-    $("#process-summary").innerHTML = [
+    const summary = [
       [data.items.length, "登记进程"], [data.items.filter((r) => r.alive).length, "进程在线"],
       [data.items.filter((r) => r.process_status === 5).length, "进程异常"],
       [data.items.filter((r) => r.kind === "debug" && r.include_in_all).length, "已选调试"],
     ].map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
+    const summaryNode = $("#process-summary");
+    if (summaryNode._markup !== summary) { summaryNode.innerHTML = summary; summaryNode._markup = summary; }
     renderProcesses();
     showError("#process-error", null);
     markUpdated();

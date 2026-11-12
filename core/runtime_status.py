@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 import json
 import math
+import sqlite3
 import threading
 import time
 from typing import Any
@@ -27,6 +28,14 @@ _VALUE_FIELDS = (
     "process_heartbeat_time", "process_exit_code", "process_error", "rx_count",
     "tx_count", "error_count", "dropped_count", "reconnect_count", "last_rx_time",
     "last_tx_time", "last_error_time", "last_error", "diagnostic_json", "sampled_at",
+)
+_UPSERT_COLUMNS = (*_KEYS, *_VALUE_FIELDS)
+_UPSERT_SQL = (
+    f'INSERT INTO "{TABLE}" (' + ', '.join(f'"{name}"' for name in _UPSERT_COLUMNS)
+    + ') VALUES (' + ', '.join('?' for _ in _UPSERT_COLUMNS)
+    + ') ON CONFLICT("service_name", "channel_id") DO UPDATE SET '
+    + f'"_version"="{TABLE}"."_version"+1, '
+    + ', '.join(f'"{field}"=excluded."{field}"' for field in _VALUE_FIELDS)
 )
 
 
@@ -151,23 +160,12 @@ class RuntimeStatusStore:
                 return False
             self._last_write[channel_id] = (sampled_at, signature)
 
-        names = ["service_name", "channel_id", *_VALUE_FIELDS]
         values_to_bind = [self.service_name, channel_id, *(payload[field] for field in _VALUE_FIELDS)]
-        quoted_names = ", ".join(f'"{name}"' for name in names)
-        assignments = ", ".join(
-            f'"{field}"=excluded."{field}"' for field in _VALUE_FIELDS
-        )
-        sql = (
-            f'INSERT INTO "{TABLE}" ({quoted_names}) '
-            f'VALUES ({", ".join("?" for _ in names)}) '
-            f'ON CONFLICT("service_name", "channel_id") DO UPDATE SET '
-            f'"_version"="{TABLE}"."_version"+1, {assignments}'
-        )
         try:
             if connection is None:
                 with self.store.connection() as current:
                     current.execute("BEGIN IMMEDIATE")
-                    current.execute(sql, values_to_bind)
+                    current.execute(_UPSERT_SQL, values_to_bind)
                     current.commit()
             else:
                 # A caller may group the snapshot with another state write.
@@ -179,7 +177,7 @@ class RuntimeStatusStore:
                 if owns_transaction:
                     current.execute("BEGIN IMMEDIATE")
                 try:
-                    current.execute(sql, values_to_bind)
+                    current.execute(_UPSERT_SQL, values_to_bind)
                     if owns_transaction:
                         current.commit()
                 except Exception:
@@ -211,7 +209,7 @@ class RuntimeStatusStore:
 def runtime_status_rows(store, *, service_name: str | None = None,
                         channel_id: Any | None = None,
                         channel_ids: Any | None = None) -> list[dict[str, Any]]:
-    """Read snapshots with one indexed query for HMI/API projections.
+    """Read HMI snapshots with indexed queries bounded by SQLite's bind limit.
 
     ``channel_ids`` keeps paginated multi-RTU monitors from scanning and
     decoding snapshots for channels that are not present on the current page.
@@ -225,15 +223,38 @@ def runtime_status_rows(store, *, service_name: str | None = None,
         clauses.append('"channel_id"=?')
         params.append(_integer(channel_id))
     elif channel_ids is not None:
-        ids = []
+        ids, seen = [], set()
         for value in channel_ids:
             current = _integer(value)
-            if current > 0 and current not in ids:
+            if current > 0 and current not in seen:
+                seen.add(current)
                 ids.append(current)
         if not ids:
             return []
-        clauses.append('"channel_id" IN (' + ','.join('?' for _ in ids) + ')')
-        params.extend(ids)
+        # Large HMI selections can exceed SQLite's per-statement parameter
+        # budget. Keep one read snapshot across chunks and preserve SQL order.
+        with store.connection() as connection:
+            size = connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) - len(params)
+            if size < 1:
+                raise sqlite3.OperationalError('SQLite variable limit is too small for channel selection')
+            owns_transaction = len(ids) > size and not connection.in_transaction
+            if owns_transaction:
+                connection.execute('BEGIN')
+            try:
+                rows = []
+                for start in range(0, len(ids), size):
+                    chunk = ids[start:start + size]
+                    where = ' AND '.join([*clauses, '"channel_id" IN (' + ','.join('?' for _ in chunk) + ')'])
+                    rows.extend(public_runtime_row(row) for row in connection.execute(
+                        f'SELECT * FROM "{TABLE}" WHERE {where} ORDER BY "service_name", "channel_id"',
+                        [*params, *chunk]))
+                if owns_transaction:
+                    connection.commit()
+                return sorted(rows, key=lambda row: (row['service_name'], row['channel_id'])) if len(ids) > size else rows
+            except BaseException:
+                if owns_transaction:
+                    connection.rollback()
+                raise
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with store.connection() as connection:
         return [public_runtime_row(row) for row in connection.execute(

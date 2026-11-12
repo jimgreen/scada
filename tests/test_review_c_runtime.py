@@ -153,9 +153,36 @@ class ReviewRuntimeTests(unittest.TestCase):
             }]})
             self.assertTrue(supervisor._drain_writer(timeout=3))
             self.assertEqual(self.store.get_row('fes_yc_define', [27101, 1])['value'], 42.5)
-            self.assertTrue(supervisor._stop_writer())
+            # _stop_writer is a bounded poll: a slow process/OS teardown is
+            # retained for the next supervisor scan, not forcibly terminated.
+            # The drain/commit assertions above do not promise process exit
+            # within a single two-second poll.
+            deadline = time.monotonic() + 10
+            while not supervisor._stop_writer():
+                self.assertLess(time.monotonic(), deadline, 'writer did not finish cooperative shutdown')
         finally:
             supervisor._stop_writer()
+
+    def test_writer_stop_retains_slow_process_and_sends_only_one_stop(self):
+        supervisor = self.supervisor()
+        process = Mock(exitcode=0)
+        process.is_alive.return_value = True
+        queue = Mock()
+        supervisor._writer_process = process
+        supervisor._writer_queue = queue
+        self.assertFalse(supervisor._stop_writer())
+        self.assertFalse(supervisor._stop_writer())
+        self.assertIs(supervisor._writer_process, process)
+        self.assertIs(supervisor._writer_queue, queue)
+        queue.put.assert_called_once()
+        self.assertEqual(queue.put.call_args.args, (runtime.BATCH_WRITER_STOP,))
+        queue.close.assert_not_called()
+        process.is_alive.return_value = False
+        self.assertTrue(supervisor._stop_writer())
+        self.assertIsNone(supervisor._writer_process)
+        queue.close.assert_called_once()
+        queue.join_thread.assert_called_once()
+        process.close.assert_called_once()
 
     def test_writer_death_during_drain_returns_without_background_waiters(self):
         supervisor = self.supervisor()

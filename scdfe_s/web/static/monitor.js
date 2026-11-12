@@ -19,19 +19,23 @@
     return body;
   }
   function msg(text, error) { const node = $("#message"); if (node) { node.textContent = text || ""; node.className = "message" + (error ? " error" : ""); } }
-  let requestId = 0, pending = 0, lastMarkup = null;
-  async function fetchViews(paths) {
+  let requestId = 0, pending = 0, lastMarkup = null, viewPromise = null, viewKey = null;
+  function fetchViews(paths, {fresh = false} = {}) {
+    const key = JSON.stringify(paths);
+    if (viewPromise && viewKey === key)
+      return fresh ? viewPromise.catch(() => {}).then(() => fetchViews(paths)) : viewPromise;
     const id = ++requestId;
     pending++;
-    try {
-      const data = await Promise.all(paths.map(path => api(path)));
-      return id === requestId ? data : null;
-    } catch (error) {
+    viewKey = key;
+    const promise = Promise.all(paths.map(path => api(path))).then(data => id === requestId ? data : null).catch(error => {
       if (id === requestId) throw error;
       return null;
-    } finally {
+    }).finally(() => {
       pending--;
-    }
+      if (viewPromise === promise) { viewPromise = null; viewKey = null; }
+    });
+    viewPromise = promise;
+    return promise;
   }
   async function fetchView(path) {
     const data = await fetchViews([path]);
@@ -40,7 +44,22 @@
   function show(selector, markup) {
     // Each standalone monitor has one list. Keep focused buttons and text
     // selections when the next poll returns the same displayed values.
-    if (lastMarkup !== markup) { $(selector).innerHTML = markup; lastMarkup = markup; }
+    if (lastMarkup === markup) return;
+    const body = $(selector);
+    const cells = html => html?.match(/<td\b[\s\S]*?<\/td>/g) || [];
+    const oldRows = lastMarkup?.match(/<tr\b[\s\S]*?<\/tr>/g) || [];
+    const rows = markup.match(/<tr\b[\s\S]*?<\/tr>/g) || [];
+    if (body.tagName === 'TBODY' && rows.length && rows.length === oldRows.length &&
+        rows.every((row, i) => cells(row).length === cells(oldRows[i]).length)) {
+      rows.forEach((row, i) => {
+        if (row === oldRows[i]) return;
+        const previous = cells(oldRows[i]);
+        cells(row).forEach((cell, column) => {
+          if (cell !== previous[column]) body.rows[i].cells[column].outerHTML = cell;
+        });
+      });
+    } else body.innerHTML = markup;
+    lastMarkup = markup;
   }
   function fmt(value, timeOnly = false) {
     if (!value) return "—";
@@ -59,13 +78,14 @@
     const names = {unknown: "未知", stopped: "已停止", starting: "启动中", running: "运行中", stopping: "停止中", error: "错误", degraded: "降级"};
     return runtime && runtime.state ? (names[runtime.state] || runtime.state) : fallback;
   }
-  async function loadProcesses() {
+  async function loadProcesses({fresh = false} = {}) {
     try {
-      const [channels, processData] = await Promise.all([
-        api("/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,name,process_status,process_pid,process_start_time,process_stop_time,process_heartbeat_time,process_error,process_enable"),
-        api("/api/monitor/processes"),
-      ]);
-      if (!channels || !processData) return;
+      const views = await fetchViews([
+        "/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,name,process_status,process_pid,process_start_time,process_stop_time,process_heartbeat_time,process_error,process_enable",
+        "/api/monitor/processes",
+      ], {fresh});
+      if (!views) return;
+      const [channels, processData] = views;
       const servicesByName = new Map((processData.items || []).map(item => [item.name, item]));
       const servicesByRtu = new Map((processData.items || []).filter(item => item.rtu_id != null).map(item => [String(item.rtu_id), item]));
       const rows = (channels.items || []).map(channel => {
@@ -88,12 +108,12 @@
       msg("");
     } catch (e) { msg(e.message, true); }
   }
-  async function loadCommunications() {
+  async function loadCommunications({fresh = false} = {}) {
     try {
       const views = await fetchViews([
         "/api/rtus?limit=500&offset=0&sort=rtu_id&order=asc&fields=rtu_id,channel_id,channel_type,name,process_enable,process_error,packet_recording",
         "/api/monitor/communications",
-      ]);
+      ], {fresh});
       if (!views) return;
       const [channels, data] = views;
       const serviceStatus = new Map((data.items || []).map(item => [item.name, item]));
@@ -133,7 +153,7 @@
   }
   async function action(button) {
     button.disabled = true;
-    try { await api(`/api/monitor/communications/${encodeURIComponent(button.dataset.service)}/${button.dataset.action}`, {method:"POST", body:"{}"}); await (document.body.dataset.monitor === "processes" ? loadProcesses() : loadCommunications()); msg("操作已完成"); }
+    try { await api(`/api/monitor/communications/${encodeURIComponent(button.dataset.service)}/${button.dataset.action}`, {method:"POST", body:"{}"}); await (document.body.dataset.monitor === "processes" ? loadProcesses({fresh:true}) : loadCommunications({fresh:true})); msg("操作已完成"); }
     catch (e) { msg(e.message, true); } finally { button.disabled = false; }
   }
   if (document.body.dataset.monitor) {

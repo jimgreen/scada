@@ -1,0 +1,118 @@
+{
+  "baseline": "b35268b4ad3a082319cd80f07f40de00babeeab3",
+  "generated_at": "2026-11-12T16:24:15.795Z",
+  "node": "v24.15.0",
+  "browser": "158.0.8127.18",
+  "mode": "real Chromium, repository HTML/JS, fully intercepted API fixtures; no database or running service",
+  "source_sha256": {
+    "core/web_static/log-browser.js": "73f5fd833525b29573094bf6a5f7db8030e96781471402030ab3bc5b2422659f",
+    "scdfe_c/web/static/app.js": "b4c0829c5f9a3b040f1b2d998078a88f406ccdde12836f7c5b28271bedbfe01b",
+    "scdfe_t/web/static/app.js": "56fb99898e0fbcdfc0719f5984d1a2ff99655353eff54d47cbc9703b7cab5a71"
+  },
+  "checks": [
+    "C: one rows/summary/RTU batch for three clicks",
+    "C: refresh is re-enabled",
+    "C: failure releases refresh guard",
+    "C: explicit retry starts a fresh batch",
+    "C: stale success cannot overwrite new query",
+    "C: stale failure cannot overwrite new query",
+    "c/index/after: no browser errors",
+    "S: hidden log panel makes zero requests",
+    "S: revealing panel loads log content with an input channel filter",
+    "s/test/after: no browser errors",
+    "S: repeated RTU notification does not re-search",
+    "S: repeated RTU event preserves older cursor",
+    "s: manual log refresh has one directory/content batch",
+    "s: explicit search consumes debounce",
+    "s: stale success cannot overwrite new log query",
+    "s: stale failure cannot overwrite new log query",
+    "s: in-flight directory keeps latest process selection",
+    "S: repeated RTU event preserves manual process during directory refresh",
+    "S: changed RTU remains selected after old directory completes",
+    "S: switching RTU during old directory request renders the new channel file",
+    "s: record change starts a new directory read without waiting",
+    "s: late old directory cannot replace new record",
+    "s: record switch does not lose the new content read",
+    "s: hidden reader suppresses polling and debounced search",
+    "s: reader reveal resumes without a timer tick",
+    "s: directory failure is visible",
+    "s: directory failure is retryable",
+    "s/logs/after: no browser errors",
+    "t: manual log refresh has one directory/content batch",
+    "t: explicit search consumes debounce",
+    "t: stale success cannot overwrite new log query",
+    "t: stale failure cannot overwrite new log query",
+    "t: in-flight directory keeps latest process selection",
+    "t: record change starts a new directory read without waiting",
+    "t: late old directory cannot replace new record",
+    "t: record switch does not lose the new content read",
+    "t: hidden reader suppresses polling and debounced search",
+    "t: reader reveal resumes without a timer tick",
+    "t: directory failure is visible",
+    "t: directory failure is retryable",
+    "t/logs/after: no browser errors",
+    "T: background ticks do not queue duplicate point reads",
+    "T: outdated page-size success never renders",
+    "T: outdated page-size failure is ignored",
+    "T: explicit change keeps trailing read for latest page size",
+    "T: outdated page-size success never renders",
+    "T: outdated page-size failure is ignored",
+    "T: explicit change keeps trailing read for latest page size",
+    "t/points/after: no browser errors",
+    "T: IEC104 editor exposes k",
+    "T: IEC104 editor exposes w",
+    "T: IEC104 editor exposes t1",
+    "T: IEC104 editor exposes t2",
+    "T: IEC104 editor exposes t3",
+    "T: IEC104 editor exposes max_asdu_length",
+    "T: Modbus editor hides IEC104 windows",
+    "T: Modbus editor exposes unit ID",
+    "T: point editor exposes time tag",
+    "T: point editor loads source catalogue without errors",
+    "T: time tag is included in point payload",
+    "T: hidden Modbus address base is omitted from IEC104 payload",
+    "t/points/after: no browser errors"
+  ],
+  "measurements": [
+    {
+      "scenario": "C: three overlapping manual refreshes",
+      "variant": "after",
+      "requests": 3
+    },
+    {
+      "scenario": "S: hidden log panel startup plus three polls",
+      "variant": "after",
+      "requests": 0
+    },
+    {
+      "scenario": "S: three unchanged RTU status events",
+      "variant": "after",
+      "requests": 0
+    },
+    {
+      "scenario": "S: three overlapping log refreshes",
+      "variant": "after",
+      "requests": 3
+    },
+    {
+      "scenario": "S: apply while search debounce pending",
+      "variant": "after",
+      "requests": 1
+    },
+    {
+      "scenario": "T: three overlapping log refreshes",
+      "variant": "after",
+      "requests": 2
+    },
+    {
+      "scenario": "T: apply while search debounce pending",
+      "variant": "after",
+      "requests": 1
+    },
+    {
+      "scenario": "T: slow point read with three background ticks",
+      "variant": "after",
+      "requests": 1
+    }
+  ]
+}

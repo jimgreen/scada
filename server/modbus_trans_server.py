@@ -228,12 +228,16 @@ class ModbusTcpTransServer(ModbusTcpServer):
         # Per-bit permissions belong here because SimData readonly flags are
         # packed per 16-bit word and would also disable adjacent command coils.
         write_count = len(set_values)
-        candidates = []
+        candidates, seen = [], set()
         for offset in range(write_count):
             row = self._by_address.get((area, int(address) + offset))
             if row is None or (not self.ALLOW_MEASUREMENT_WRITES and row["kind"] not in {"yk", "yt"}):
                 return ExcCodes.ILLEGAL_ADDRESS
-            if row not in candidates:
+            # A wide register mapping occurs at several addresses. Keep the
+            # first encounter order without comparing every prior row dict.
+            identity = (row["kind"], row["pnt_no"])
+            if identity not in seen:
+                seen.add(identity)
                 candidates.append(row)
         decoded = []
         for row in candidates:
