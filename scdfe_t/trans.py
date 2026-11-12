@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from itertools import groupby
 import logging
 import math
 import os
@@ -445,12 +446,13 @@ class TransRuntime:
         try:
             with self.store.connection() as con:
                 con.execute("BEGIN IMMEDIATE")
-                for (kind, point_no), values in pending.items():
-                    assignments = ", ".join(f'"{name}"=?' for name in values)
-                    con.execute(
+                for names, adjacent in groupby(pending.items(), key=lambda item: tuple(item[1])):
+                    assignments = ", ".join(f'"{name}"=?' for name in names)
+                    con.executemany(
                         f'UPDATE {POINT_TABLE} SET {assignments} '
                         'WHERE channel_id=? AND pnt_no=? AND kind=?',
-                        [*values.values(), self.channel_id, point_no, kind],
+                        ([*values.values(), self.channel_id, point_no, kind]
+                         for (kind, point_no), values in adjacent),
                     )
                 con.commit()
         except Exception as exc:

@@ -1,0 +1,70 @@
+[
+  {
+    "document": "scdfe_efficiency_round3_20261112.html",
+    "width": 1440,
+    "dimensions": {
+      "scroll": 1440,
+      "viewport": 1440
+    },
+    "errors": []
+  },
+  {
+    "document": "protocol_interface_updates.html",
+    "width": 1440,
+    "dimensions": {
+      "scroll": 1440,
+      "viewport": 1440
+    },
+    "errors": []
+  },
+  {
+    "document": "scdfe_efficiency_round3_20261112.html",
+    "width": 390,
+    "dimensions": {
+      "scroll": 390,
+      "viewport": 390
+    },
+    "errors": []
+  },
+  {
+    "document": "protocol_interface_updates.html",
+    "width": 390,
+    "dimensions": {
+      "scroll": 390,
+      "viewport": 390
+    },
+    "errors": []
+  },
+  {
+    "role": "c",
+    "port": 8877,
+    "title": "SCADA · 运行工作台",
+    "errors": [],
+    "http_errors": [],
+    "writes": [],
+    "all_fields": {
+      "visible": 44,
+      "loaded": 50,
+      "error": null,
+      "raw_base_loaded": true
+    }
+  },
+  {
+    "role": "s",
+    "port": 8878,
+    "title": "scdfe_s · 四遥数据",
+    "errors": [],
+    "http_errors": [],
+    "writes": [],
+    "all_fields": null
+  },
+  {
+    "role": "t",
+    "port": 8879,
+    "title": "scdfe_t · 四遥数据",
+    "errors": [],
+    "http_errors": [],
+    "writes": [],
+    "all_fields": null
+  }
+]

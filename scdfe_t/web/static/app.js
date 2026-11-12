@@ -71,8 +71,19 @@ function renderPoints(){
   }
   previousRows=rows;
   if($("#point-page-summary"))$("#point-page-summary").textContent=`共 ${state.pointTotal} 条 · 当前 ${r.length?state.pointOffset+1:0}–${state.pointOffset+r.length} 条`;if($("#point-prev"))$("#point-prev").disabled=state.pointOffset===0;if($("#point-next"))$("#point-next").disabled=state.pointOffset+r.length>=state.pointTotal}
-let channelRequest = 0, pendingChannels = 0;
-async function loadChannels({loadSelectedPoints = false} = {}) {
+let channelRequest = 0, pendingChannels = 0, channelRead = null;
+function loadChannels({loadSelectedPoints = false, fresh = false} = {}) {
+  if (channelRead) {
+    if (fresh) return channelRead.promise.catch(() => {}).then(() => loadChannels({loadSelectedPoints}));
+    channelRead.loadSelectedPoints ||= loadSelectedPoints;
+    return channelRead.promise;
+  }
+  const pending = {loadSelectedPoints};
+  pending.promise = performLoadChannels(pending).finally(() => { if (channelRead === pending) channelRead = null; });
+  channelRead = pending;
+  return pending.promise;
+}
+async function performLoadChannels(pending) {
   const request = ++channelRequest;
   pendingChannels++;
   try {
@@ -85,7 +96,7 @@ async function loadChannels({loadSelectedPoints = false} = {}) {
     if (!state.selected) state.selected = requested ? (state.channels.some(x => id(x) === requested) ? requested : null) : (state.channels.length ? id(state.channels[0]) : null);
     if (previous !== state.selected) state.pointOffset = 0;
     renderChannels();
-    if (loadSelectedPoints || previous !== state.selected) await loadPoints();
+    if (pending.loadSelectedPoints || previous !== state.selected) await loadPoints();
   } catch (error) { if (request === channelRequest) throw error; }
   finally { pendingChannels--; }
 }
@@ -113,7 +124,7 @@ async function loadPoints({background=false}={}){
     if(state.pointReloadPending){state.pointReloadPending=false;queueMicrotask(()=>loadPoints().catch(e=>toast(e.message)))}
   }
 }
-async function control(cid,a){await api(`/api/trans/channels/${cid}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels({loadSelectedPoints:true});if(state.page==="processes")await loadProcesses({fresh:true})}
+async function control(cid,a){await api(`/api/trans/channels/${cid}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels({loadSelectedPoints:true,fresh:true});if(state.page==="processes")await loadProcesses({fresh:true})}
 let pendingProcesses=null, previousProcessesHtml=null;
 function loadProcesses({fresh=false}={}){
   if(pendingProcesses)return fresh?pendingProcesses.catch(()=>{}).then(()=>loadProcesses()):pendingProcesses;
@@ -183,7 +194,7 @@ async function saveEditor(e){
   try{
     if(type==="channel"){
       if(item)await send(`/api/trans/channels/${id(item)}`,"PATCH",values,item._version);else await send("/api/trans/channels","POST",values);
-      await loadChannels({loadSelectedPoints:true});
+      await loadChannels({loadSelectedPoints:true,fresh:true});
     }else{
       if(!channel||channel!==state.selected)throw Error("通道已切换，请重新选择测点");
       if(state.batch){
@@ -198,9 +209,9 @@ async function saveEditor(e){
     $("#editor").close();toast("已保存");
   }catch(err){$("#editor-error").textContent=err.message}
 }
-document.addEventListener("click",async e=>{const b=e.target.closest("button");if(!b)return;try{if(b.dataset.pointTab){state.pointOffset=0;state.pointScope="";previousRows=null;setPointTab(b.dataset.pointTab);await loadPoints();return}if(b.dataset.page)return setPage(b.dataset.page);if(b.dataset.control)return await control(b.dataset.id,b.dataset.control);if(b.dataset.edit){state.selected=b.dataset.edit;renderChannels();return openEditor("channel",selected())}if(b.dataset.delete){if(confirm(`删除转发通道 ${b.dataset.delete} 及全部点映射？`)){await api(`/api/trans/channels/${b.dataset.delete}`,{method:"DELETE",headers:versionHeaders(b.dataset.version)});state.selected=null;await loadChannels({loadSelectedPoints:true})}return}if(b.dataset.pointEdit)return openEditor("point",state.points.find(x=>String(pno(x))===b.dataset.pointEdit&&x.kind===b.dataset.pointKind));if(b.dataset.pointDelete){if(b.dataset.owner!==state.selected)return;if(confirm(`删除点映射 ${b.dataset.pointDelete}？`)){await api(`/api/trans/channels/${b.dataset.owner}/points/${encodeURIComponent(b.dataset.pointKind)}/${b.dataset.pointDelete}`,{method:"DELETE",headers:versionHeaders(b.dataset.version)});await loadPoints()}return}if(b.dataset.log){state.log=b.dataset.log;return loadLog()}if(b.dataset.logChannel){$("#log-channel").value=b.dataset.logChannel;state.log=null;return setPage("logs")}}catch(err){toast(err.message)}});
+document.addEventListener("click",async e=>{const b=e.target.closest("button");if(!b)return;try{if(b.dataset.pointTab){state.pointOffset=0;state.pointScope="";previousRows=null;setPointTab(b.dataset.pointTab);await loadPoints({fresh:true});return}if(b.dataset.page)return setPage(b.dataset.page);if(b.dataset.control)return await control(b.dataset.id,b.dataset.control);if(b.dataset.edit){state.selected=b.dataset.edit;renderChannels();return openEditor("channel",selected())}if(b.dataset.delete){if(confirm(`删除转发通道 ${b.dataset.delete} 及全部点映射？`)){await api(`/api/trans/channels/${b.dataset.delete}`,{method:"DELETE",headers:versionHeaders(b.dataset.version)});state.selected=null;await loadChannels({loadSelectedPoints:true,fresh:true})}return}if(b.dataset.pointEdit)return openEditor("point",state.points.find(x=>String(pno(x))===b.dataset.pointEdit&&x.kind===b.dataset.pointKind));if(b.dataset.pointDelete){if(b.dataset.owner!==state.selected)return;if(confirm(`删除点映射 ${b.dataset.pointDelete}？`)){await api(`/api/trans/channels/${b.dataset.owner}/points/${encodeURIComponent(b.dataset.pointKind)}/${b.dataset.pointDelete}`,{method:"DELETE",headers:versionHeaders(b.dataset.version)});await loadPoints()}return}if(b.dataset.log){state.log=b.dataset.log;return loadLog()}if(b.dataset.logChannel){$("#log-channel").value=b.dataset.logChannel;state.log=null;return setPage("logs")}}catch(err){toast(err.message)}});
 $("#channels")?.addEventListener("click",async e=>{if(e.target.closest("button"))return;const r=e.target.closest("tr[data-select]");if(r){state.selected=r.dataset.select;state.pointOffset=0;renderChannels();await loadPoints()}});$("#selected-channel")?.addEventListener("change",async e=>{state.selected=e.target.value||null;state.pointOffset=0;const url=new URL(location.href);if(state.selected)url.searchParams.set("channel_id",state.selected);else url.searchParams.delete("channel_id");history.replaceState(null,"",url);renderChannels();await loadPoints()});$("#kind-filter")?.addEventListener("change",()=>{state.pointOffset=0;state.pointScope="";previousRows=null;setPointTab(activePointKind());loadPoints().catch(e=>toast(e.message))});$("#point-limit")?.addEventListener("change",e=>{state.pointLimit=Number(e.target.value);state.pointOffset=0;loadPoints().catch(e=>toast(e.message))});$("#point-prev")?.addEventListener("click",()=>{state.pointOffset=Math.max(0,state.pointOffset-state.pointLimit);loadPoints().catch(e=>toast(e.message))});$("#point-next")?.addEventListener("click",()=>{state.pointOffset+=state.pointLimit;loadPoints().catch(e=>toast(e.message))});$("#log-channel")?.addEventListener("change",()=>{state.log=null;loadLogs().catch(e=>toast(e.message))});$("#log-keyword")?.addEventListener("input",()=>loadLog().catch(e=>toast(e.message)));if($("#new-channel"))$("#new-channel").onclick=()=>openEditor("channel");if($("#edit-channel"))$("#edit-channel").onclick=()=>selected()?openEditor("channel",selected()):toast("请选择通道");if($("#new-point"))$("#new-point").onclick=()=>state.selected?openEditor("point"):toast("请选择通道");if($("#batch-point"))$("#batch-point").onclick=()=>state.selected?openEditor("point",null,true):toast("请选择通道");if($("#refresh"))$("#refresh").onclick=()=>loadChannels({loadSelectedPoints:true}).catch(e=>toast(e.message));if($("#refresh-processes"))$("#refresh-processes").onclick=()=>loadProcesses().catch(e=>toast(e.message));if($("#refresh-logs"))$("#refresh-logs").onclick=()=>loadLogs().catch(e=>toast(e.message));if($("#reload-log"))$("#reload-log").onclick=()=>loadLog().catch(e=>toast(e.message));if($("#close-editor"))$("#close-editor").onclick=$("#cancel-editor").onclick=()=>$("#editor").close();if($("#editor-form"))$("#editor-form").addEventListener("submit",saveEditor);
 setPointTab(activePointKind());
 $("#point-live-refresh")?.addEventListener("change",()=>loadPoints().catch(e=>toast(e.message)));
-async function boot(){try{await api("/api/health");$("#connection").textContent="Web 已连接";$("#connection").classList.add("ok");await loadChannels({loadSelectedPoints:true})}catch(e){$("#connection").textContent="连接失败";$("#connection").classList.add("bad");toast(e.message)}}boot();setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;(state.page==="channels"?loadChannels:state.page==="processes"?loadProcesses:loadLogs)().catch(e=>toast(e.message))},5000);
+async function boot(){try{await api("/api/health");$("#connection").textContent="Web 已连接";$("#connection").classList.add("ok");await loadChannels({loadSelectedPoints:true,fresh:true})}catch(e){$("#connection").textContent="连接失败";$("#connection").classList.add("bad");toast(e.message)}}boot();setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;(state.page==="channels"?loadChannels:state.page==="processes"?loadProcesses:loadLogs)().catch(e=>toast(e.message))},5000);
 setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;if(pointTableBody()&&$("#point-live-refresh")?.checked)loadPoints({background:true}).catch(e=>toast(e.message))},2000);

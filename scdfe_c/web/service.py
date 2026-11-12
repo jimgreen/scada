@@ -8,6 +8,7 @@ number of idle connections; other callers use short-lived connections.
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
+from itertools import groupby
 import hashlib
 import json
 from pathlib import Path
@@ -846,6 +847,8 @@ class ScadaStore:
             if present('trans_type') and values['trans_type'] == 9:
                 if not present('offset_bit') or not present('all_bit'):
                     raise ApiError(400, '多位数据必须提供 offset_bit 和 all_bit')
+                if values['offset_bit'] + values['all_bit'] > 16:
+                    raise ApiError(400, 'offset_bit 与 all_bit 之和不能超过 16')
         elif table == 'fes_channel_modbus_define_ytyk':
             integer_field('ifyk', 0, 1)
             integer_field('cnt', 0, 2**31 - 1)
@@ -1069,16 +1072,15 @@ class ScadaStore:
 
     def _normalise(self, table: str, values: dict[str, Any], *, partial: bool = False,
                    validate_row: bool = True, generated_key: str | None = None) -> dict[str, Any]:
-        canonical, columns, primary_keys = self._table_parts(table)
+        canonical, columns, primary_keys, by_name, _ = self._table_metadata(table)
         if not isinstance(values, dict):
             raise ApiError(400, "请求体必须是 JSON 对象")
         values = self._normalise_channel_values(canonical, values)
-        allowed = {c["eng_name"] for c in columns}
-        unknown = sorted(set(values) - allowed)
+        unknown = sorted(values.keys() - by_name.keys())
         if unknown:
             raise ApiError(400, "包含未知字段", details={"unknown_fields": unknown})
         result: dict[str, Any] = {}
-        for column in columns:
+        for column in (by_name[name] for name in values) if partial else columns:
             name = column["eng_name"]
             if name in values:
                 result[name] = self._coerce(
@@ -1099,11 +1101,10 @@ class ScadaStore:
         return result
 
     def _key_values(self, table: str, raw: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
-        canonical, columns, primary_keys = self._table_parts(table)
+        canonical, columns, primary_keys, by_name, _ = self._table_metadata(table)
         values = raw if isinstance(raw, (list, tuple)) else raw.split(",")
         if len(values) != len(primary_keys):
             raise ApiError(400, f"主键需要 {len(primary_keys)} 个值: {','.join(primary_keys)}")
-        by_name = {c["eng_name"]: c for c in columns}
         coerced = [self._coerce(values[index], by_name[name], required=True)
                    for index, name in enumerate(primary_keys)]
         # Existing RTU-scoped URLs used the RTU number as the first key.  If
@@ -1122,16 +1123,11 @@ class ScadaStore:
                     pass
         return {name: coerced[index] for index, name in enumerate(primary_keys)}
 
-    @staticmethod
-    def _public_row(row: sqlite3.Row, columns: list[dict[str, Any]]) -> dict[str, Any]:
-        result = {}
-        for column in columns:
-            value = row[column["eng_name"]]
-            if column["data_type"] == "bool" and value is not None:
-                value = bool(value)
-            result[column["eng_name"]] = _json_value(value)
-        result["_version"] = int(row["_version"])
-        return result
+    @classmethod
+    def _public_row(cls, row: sqlite3.Row, columns: list[dict[str, Any]]) -> dict[str, Any]:
+        # sqlite3.Row name lookup is linear in the column count. Reuse the
+        # positional converter for wide single-row reads and update responses.
+        return cls._public_rows([row], columns)[0]
 
     @staticmethod
     def _public_rows(rows: list[sqlite3.Row], columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1545,8 +1541,22 @@ class ScadaStore:
         try:
             with self.connection() as connection:
                 connection.execute('BEGIN IMMEDIATE')
-                for change in changes:
-                    self._apply_update(connection, change)
+                # Only adjacent, equivalent statements are combined. Duplicate
+                # keys retain their order, triggers and per-update versions.
+                for sql, adjacent in groupby(changes, key=lambda change: change[3]):
+                    group = list(adjacent)
+                    table = group[0][0]
+                    merge_validation = table.startswith('fes_channel_modbus_') or table in {
+                        'fes_scdfe_t_define', 'fes_scdfe_t_point_define'}
+                    if len(group) == 1 or merge_validation:
+                        for change in group:
+                            self._apply_update(connection, change)
+                    elif connection.executemany(sql, (change[4] for change in group)).rowcount != len(group):
+                        # The write transaction still rolls the whole batch back.
+                        # Keep the existing 404 versus 409 error contract.
+                        for change in group:
+                            self._read(connection, change[0], change[1])
+                        raise ApiError(409, '更新未写入', code='conflict')
                 result = ([self._read(connection, change[0], change[1]) for change in changes]
                           if return_rows else len(changes))
                 connection.commit()

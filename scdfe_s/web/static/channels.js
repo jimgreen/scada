@@ -91,7 +91,13 @@
     if ($("#point-editor-error")) $("#point-editor-error").textContent = "";
     showEditor("#point-editor");
   }
-  async function loadChannels() {
+  let pendingChannels = null;
+  function loadChannels({fresh = false} = {}) {
+    if (pendingChannels) return fresh ? pendingChannels.catch(() => {}).then(() => loadChannels()) : pendingChannels;
+    pendingChannels = performLoadChannels().finally(() => { pendingChannels = null; });
+    return pendingChannels;
+  }
+  async function performLoadChannels() {
     const request = ++channelsRequest;
     try {
       const rows = [];
@@ -189,7 +195,16 @@
     });
     return body;
   }
-  async function loadPoints() {
+  let pendingPoints = null, previousPointHtml = null, previousPointBody = null;
+  function loadPoints({fresh = false} = {}) {
+    const key = JSON.stringify([selected?.rtu_id, activeKind(), offset, limit]);
+    if (pendingPoints?.key === key) return fresh ? pendingPoints.promise.catch(() => {}).then(() => loadPoints()) : pendingPoints.promise;
+    const pending = {key};
+    pending.promise = performLoadPoints().finally(() => { if (pendingPoints === pending) pendingPoints = null; });
+    pendingPoints = pending;
+    return pending.promise;
+  }
+  async function performLoadPoints() {
     const kind = activeKind(), body = pointTableBody(kind);
     if (!body) return;
     setPointTab(kind);
@@ -198,6 +213,7 @@
     const commandPoint = ["yk", "yt"].includes(kind);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
+      previousPointHtml = null;
       const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
       body.innerHTML = `<tr><td colspan="${columnCount}">正在读取测点…</td></tr>`;
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
@@ -221,7 +237,9 @@
         return values;
       });
       const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
-      body.innerHTML = rows.map(row => `<tr>${row.map((value, index) => `<td>${index === row.length - 1 ? value : esc(value)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      const html = rows.map(row => `<tr>${row.map((value, index) => `<td>${index === row.length - 1 ? value : esc(value)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      if (html !== previousPointHtml || body !== previousPointBody) body.innerHTML = html;
+      previousPointHtml = html; previousPointBody = body;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
       $("#point-next").disabled = offset + points.length >= total;
@@ -245,7 +263,7 @@
   const pointBody = () => ({pnt_no:keyValue($("#point-no").value),name:$("#point-name").value,value:Number($("#point-value").value),status:Number($("#point-status").value)});
   if ($("#channel-form")) $("#channel-form").onsubmit = async event => {
     event.preventDefault();
-    try { await api("/api/channels", {method:"POST",body:JSON.stringify(channelBody())}); closeEditor("#channel-editor"); await loadChannels(); notice("#channel-message", "通道已新增"); }
+    try { await api("/api/channels", {method:"POST",body:JSON.stringify(channelBody())}); closeEditor("#channel-editor"); await loadChannels({fresh:true}); notice("#channel-message", "通道已新增"); }
     catch (error) { if ($("#channel-editor-error")) $("#channel-editor-error").textContent = error.message; notice("#channel-message", error.message, true); }
   };
   if ($("#update-channel")) $("#update-channel").onclick = async () => {
@@ -255,7 +273,7 @@
       if (body.rtu_id !== selected.rtu_id) throw new Error("修改通道时不能变更 RTU 编号；请新建通道");
       delete body.rtu_id;
       selected = (await api(`/api/channels/${selected.rtu_id}`, {method:"PATCH",headers:versionHeaders(selected._version),body:JSON.stringify(body)})).item;
-      closeEditor("#channel-editor"); await loadChannels(); await loadParameters(); notice("#channel-message", "通道已保存");
+      closeEditor("#channel-editor"); await loadChannels({fresh:true}); await loadParameters(); notice("#channel-message", "通道已保存");
     } catch (error) { if ($("#channel-editor-error")) $("#channel-editor-error").textContent = error.message; notice("#channel-message", error.message, true); }
   };
   if ($("#parameter-form")) $("#parameter-form").onsubmit = async event => {
@@ -289,13 +307,13 @@
       const result = await api(`/api/channels/${owner}/points/${kind}/${edited.pnt_no}`, {method:"PATCH",headers:versionHeaders(edited._version),body:JSON.stringify(body)});
       if (selectedPoint !== edited || selected?.rtu_id !== owner) return;
       selectedPoint = {...result.item,kind};
-      await loadPoints(); closeEditor("#point-editor"); notice("#point-message", "测点已保存");
+      await loadPoints({fresh:true}); closeEditor("#point-editor"); notice("#point-message", "测点已保存");
       return;
     }
     const result = await api(`/api/channels/${owner}/points/${kind}`, {method:"POST",body:JSON.stringify(body)});
     if (owner !== selected?.rtu_id || activeKind() !== kind) return;
     selectedPoint = {...result.item,kind}; setPointTab(kind); offset = 0;
-    await loadPoints(); closeEditor("#point-editor"); notice("#point-message", "测点已新增");
+    await loadPoints({fresh:true}); closeEditor("#point-editor"); notice("#point-message", "测点已新增");
   }
   if ($("#point-form")) $("#point-form").onsubmit = async event => {
     event.preventDefault();
@@ -333,9 +351,9 @@
     try {
       if (tab) { selectedPoint = null; offset = 0; setPointTab(tab.dataset.pointTab); await loadPoints(); return; }
       if (edit) fillChannel(JSON.parse(edit.dataset.edit));
-      if (del && confirm("确定删除该通道及其四遥点？")) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; renderParameters(null); await loadChannels(); }
+      if (del && confirm("确定删除该通道及其四遥点？")) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; renderParameters(null); await loadChannels({fresh:true}); }
       if (pointEdit) fillPoint(JSON.parse(pointEdit.dataset.pointEdit));
-      if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints(); }
+      if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints({fresh:true}); }
     } catch (error) { notice(pointTableBody() ? "#point-message" : "#channel-message", error.message, true); }
   });
   if ($("#new-point")) $("#new-point").onclick = prepareNewPoint;

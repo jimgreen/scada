@@ -35,4 +35,5 @@ POST /api/can-server/schedule
 <p><strong>最新接口独立验收：</strong>12 passed, 20 subtests passed in 12.60s。</p><p>定向验证包括真实 IEC104 TCP 总召、周期/变位数据、质量单独变化及恢复、CP56 遥控/遥调执行与撤销、CLI 数据库同步；Modbus TCP 工程值读写、四种字序、地址偏移、非法地址和三端联动；CAN virtual 总线周期次数、回放顺序、停止清理和非法帧校验。</p>
 <p>RTU 本轮验证了共享编解码与串口入口构造，未进行物理串口和 CAN 硬件测试；无长时间稳定性、EMI、温度或物理波形认证结论。</p>
 <p class="muted">机器证据位于 reports/protocol_function_audit_20261112：repair_results.json、repair_regression_final.txt、repair_compatibility.txt、repair_browser.json。修复前的 audit.html、probe_results.json 保留为历史对照。</p></section>
+<section id="efficiency-round3"><h2>第三轮效率与交互更新</h2><p>C 表格、S 四遥页和 T 通道选择列表会合并同一范围的重叠读取；保存后仍会再次读取最新结果，切换 RTU 或通道时旧响应不能覆盖新范围。C 的“常用/实时/全部字段”切换会按视图重新查询；S 四遥页内容不变时保留已有表格行。</p><p>共用数据库接口减少字段处理和逐点 SQL 调用，T 批量写入转发状态，CAN 密集信号共享报文整数转换。Modbus 多位数据的 offset_bit 与 all_bit 之和不得超过 16。<a href="scdfe_efficiency_round3_20261112.html">查看本轮性能对比、验证与边界</a>。</p></section>
 <footer class="muted">单文件 HTML；样式和内容已内嵌，可离线打开。</footer></main></html>

@@ -1,0 +1,7 @@
+{
+  "summary": "573 passed, 1 skipped, 450 subtests passed in 306.58s (0:05:06)",
+  "frontend_checks": 19,
+  "frontend_regression_checks": 62,
+  "full_test_command": "python -m pytest tests scdfe_c/web/test_server.py scdfe_c/web/test_protocol_seed_data.py -vv -rs -o faulthandler_timeout=30",
+  "scope": "Temporary databases, protocol loopback tests and intercepted browser APIs; no hardware acceptance claim."
+}

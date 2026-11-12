@@ -296,6 +296,7 @@ class CanMaster(_CanTransport):
         self._point_index: dict[tuple[str, int], dict] = {}
         self._frame_index: dict[tuple[int, bool], tuple[dict, ...]] = {}
         self._frame_decoders = {}
+        self._frame_word_orders = {}
         super().__init__(auto_start=auto_start, **kwargs)
 
     @classmethod
@@ -468,6 +469,12 @@ class CanMaster(_CanTransport):
                 frame_index.setdefault((int(frame_id), bool(row.get('is_extended_id', False))), []).append(row)
         decoders = {key: tuple(self._compile_decoder(row) for row in rows)
                     for key, rows in frame_index.items()}
+        # Dense frames share one full-payload integer per byte order. Sparse
+        # frames keep the existing slice decoder to avoid preparation overhead.
+        word_orders = {key: tuple(dict.fromkeys(row['byte_order'] for row in rows
+                                               if row['value_type'] != 'float'))
+                       for key, rows in frame_index.items()
+                       if sum(row['value_type'] != 'float' for row in rows) >= 4}
         with self._receive_lock:
             self._points = checked
             self._point_index = {(row['kind'], row['pnt_no']): row for row in checked}
@@ -475,6 +482,7 @@ class CanMaster(_CanTransport):
                 key: tuple(rows) for key, rows in frame_index.items()
             }
             self._frame_decoders = decoders
+            self._frame_word_orders = word_orders
         return self
 
     @staticmethod
@@ -492,15 +500,20 @@ class CanMaster(_CanTransport):
         q_offset = -1 if q_offset is None else int(q_offset)
         q_mask = int(row.get('quality_mask') or 0xFF)
         point_no, kind = row['pnt_no'], row['kind']
+        little = order == 'little'
+        whole_shift = start * 8 + offset + (0 if little else bits)
 
-        def decode(frame, rtu_id):
+        def decode(frame, rtu_id, words=None):
             raw = frame.data
             if end > len(raw):
                 raise ValueError(f"CAN 帧 {frame.arbitration_id:#x} 数据长度不足")
             if unpack is not None:
                 value = unpack(raw, start)[0] * scale + bias
             else:
-                number = (int.from_bytes(raw[start:end], order) >> shift) & mask
+                if words is None:
+                    number = (int.from_bytes(raw[start:end], order) >> shift) & mask
+                else:
+                    number = (words[order] >> (whole_shift if little else len(raw)*8-whole_shift)) & mask
                 if typ == 'bool':
                     value = bool(number)
                 else:
@@ -672,10 +685,20 @@ class CanMaster(_CanTransport):
         if not frame_index:
             return frames
         decoded = []
-        for frame in frames:
-            for decode in frame_index.get((frame.arbitration_id, bool(frame.is_extended_id)), ()):
-                try:
+        if not self._frame_word_orders:
+            for frame in frames:
+                for decode in frame_index.get((frame.arbitration_id, bool(frame.is_extended_id)), ()):
                     value = decode(frame, self.rtu_id)
+                    if value is not None:
+                        decoded.append(value)
+            return decoded
+        for frame in frames:
+            key = (frame.arbitration_id, bool(frame.is_extended_id))
+            orders = self._frame_word_orders.get(key)
+            words = {order: int.from_bytes(frame.data, order) for order in orders} if orders else None
+            for decode in frame_index.get(key, ()):
+                try:
+                    value = decode(frame, self.rtu_id, words)
                 except ValueError:
                     # A frame with the right ID but a short payload is a
                     # malformed sample; leave it to the caller as a protocol

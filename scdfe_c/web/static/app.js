@@ -742,15 +742,10 @@ function guardTableScope(ctx) {
   body.hidden = stale;
   body.inert = stale;
 }
-async function loadRows() {
-  if (!state.schemas.size || ["processes", "scdfe", "logs"].includes(state.resource)) return;
-  const sequence = ++state.request;
-  state.loading = true;
+let pendingRows = null;
+function loadRows({fresh = false} = {}) {
+  if (!state.schemas.size || ["processes", "scdfe", "logs"].includes(state.resource)) return Promise.resolve();
   const ctx = context();
-  guardTableScope(ctx);
-  showView();
-  $("#table-error").hidden = true;
-  $("#add").disabled = true;
   const params = new URLSearchParams({
     limit: String(state.limit),
     offset: String(state.offset),
@@ -767,8 +762,25 @@ async function loadRows() {
   params.set("fields", visibleColumns().map((column) => column.eng_name).join(","));
   if (ctx.rtu && !pointKinds.includes(ctx.resource))
     params.set("rtu_id", ctx.rtu);
+  const key = pathFor(ctx) + "?" + params;
+  if (pendingRows?.key === key && pendingRows.request === state.request) {
+    return fresh ? pendingRows.promise.catch(() => {}).then(() => loadRows()) : pendingRows.promise;
+  }
+  const pending = {key};
+  pending.promise = performLoadRows(ctx, key).finally(() => { if (pendingRows === pending) pendingRows = null; });
+  pending.request = state.request;
+  pendingRows = pending;
+  return pending.promise;
+}
+async function performLoadRows(ctx, path) {
+  const sequence = ++state.request;
+  state.loading = true;
+  guardTableScope(ctx);
+  showView();
+  $("#table-error").hidden = true;
+  $("#add").disabled = true;
   try {
-    const data = await api(pathFor(ctx) + "?" + params);
+    const data = await api(path);
     if (sequence !== state.request) return;
     if (state.offset && state.offset >= data.total) {
       state.offset = Math.max(
@@ -1067,7 +1079,7 @@ $("#command-form").onsubmit = async (event) => {
     });
     $("#command-dialog").close();
     toast("指令已提交，等待通信线程下发");
-    await loadRows();
+    await loadRows({fresh:true});
   } catch (error) {
     $("#command-error").textContent = error.message;
   } finally {
@@ -1560,7 +1572,7 @@ async function saveRow(event) {
     });
     $("#editor").close();
     toast(ctx.row ? "记录已更新" : "记录已创建");
-    await loadRows();
+    await loadRows({fresh:true});
     await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     $("#form-error").textContent = error.message;
@@ -1609,7 +1621,7 @@ async function removeRow(row) {
     if (state.resource === "rtus" && String(state.rtu) === String(row.rtu_id)) {
       state.rtu = "";
     }
-    await loadRows();
+    await loadRows({fresh:true});
     await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     toast(error.message, true);
@@ -2856,7 +2868,7 @@ for (const view of ["common", "live", "all"])
   $("#view-" + view).onclick = () => {
     state.view = view;
     showView();
-    renderTable();
+    loadRows();
   };
 $("#page-size").onchange = () => {
   state.limit = Number($("#page-size").value);

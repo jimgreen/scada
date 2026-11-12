@@ -1,0 +1,67 @@
+{
+  "baseline": "1d21c03",
+  "checks": [
+    "c/before no browser errors",
+    "s/before no browser errors",
+    "t/before no browser errors",
+    "c merges five identical reads",
+    "C view switch reloads projection",
+    "C renders formerly unqueried values",
+    "C all-fields response includes a formerly hidden field",
+    "c fresh read after write is not lost",
+    "c scope change discards older point response",
+    "c/after no browser errors",
+    "s merges five identical reads",
+    "s fresh read after write is not lost",
+    "S unchanged read preserves DOM row",
+    "s scope change discards older point response",
+    "s/after no browser errors",
+    "t merges five identical reads",
+    "t fresh read after write is not lost",
+    "t scope change discards older point response",
+    "t/after no browser errors"
+  ],
+  "measurements": [
+    {
+      "role": "c",
+      "variant": "before",
+      "overlapping_requests": 5
+    },
+    {
+      "role": "c",
+      "variant": "before",
+      "all_fields_queries": 0
+    },
+    {
+      "role": "s",
+      "variant": "before",
+      "overlapping_requests": 5
+    },
+    {
+      "role": "t",
+      "variant": "before",
+      "overlapping_requests": 5
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "overlapping_requests": 1
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "all_fields_queries": 1
+    },
+    {
+      "role": "s",
+      "variant": "after",
+      "overlapping_requests": 1
+    },
+    {
+      "role": "t",
+      "variant": "after",
+      "overlapping_requests": 1
+    }
+  ],
+  "scope": "Chromium with intercepted APIs; no real station traffic"
+}
