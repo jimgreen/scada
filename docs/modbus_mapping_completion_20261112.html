@@ -50,8 +50,9 @@ scdfe_s → modbus-tcp / modbus-rtu:
 <p>随后移除普通通道不需要的切片发布与解码调用，追加 19 项定向回归、20 个子测试通过（4.78 秒），保留单次编码和相邻宽寄存器测试。</p>
 <p>使用临时数据库和真实回环 TCP，覆盖共享位段、字节序、取反、特殊遥控、数据库独立修改同步、失败整批回滚以及扫描与写入竞争。串口共用编码路径；本轮未连接物理串口或 CAN 设备。</p>
 <p>证据：<a href="../reports/modbus_completion_20261112/verification.json">测试记录</a>。完整日志保存在同目录的 <code>pytest-full.txt</code>。</p></section>
+<section><h2>保存与运行</h2><p>代码提交 <code>c19d18f</code> 已保存并成功推送至远端 master，此前积累的本地提交也已一并推送。三端 Web 已重启，8877/8878/8879 健康接口均返回 200，实际页面无脚本或 HTTP 错误；S 新能力接口已生效。</p><p>已检查本文及关联说明在 1440/390 像素宽度下的显示，修复使用说明的手机表格溢出。运行数据库、备份、日志与原有五项文档删除未纳入提交。</p></section>
 <section class="pending"><h2>仍需后续处理</h2>
 <p>IEC104 CP24、独立选择阶段、ASDU 长度强制组帧限制，以及 CAN 的 DBC 文件解析和 CANopen/J1939/UDS 完整协议栈，仍未完成。T 偶发停止延迟的根因尚未确定。物理层、故障注入和长期稳定性仍需设备验收。</p>
-<p>Git 远端发布此前因 github.com:443 超时受阻；发布结果以本轮最终操作记录为准。</p></section>
+</section>
 <p><a href="protocol_interface_updates.html">规约接口使用说明</a> · <a href="scdfe_closeout_20261112.html">今日前序执行复核</a></p>
 </main></body></html>
