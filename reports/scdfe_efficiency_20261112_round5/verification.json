@@ -1,0 +1,37 @@
+{
+  "status": "passed",
+  "date": "2026-11-13",
+  "baseline": "c1e9509",
+  "summary": "2026-11-13 完整回归：584 passed、1 skipped、450 subtests passed，耗时 486.33 秒。唯一跳过项为 Windows 无符号链接权限。此前停止时限失败的测试已按真实 Web 连接池生命周期修正并通过复验。",
+  "frontend_summary": "Chromium 104 项检查通过：本轮 10 项，既有交互 62 项，第三轮 19 项，第四轮 13 项。",
+  "initial_full": {
+    "passed": 583,
+    "failed": 1,
+    "skipped": 1,
+    "subtests_passed": 450,
+    "seconds": 499.83
+  },
+  "stop_repeat": {
+    "passed": 30,
+    "seconds": 56.378,
+    "change": "Test observer uses the same persistent pool lifecycle as Web; one-second assertion unchanged. First failure stack at final SQLite connection.close, after communication loop exits."
+  },
+  "scope": "Temporary databases and local TCP loopback. Live browser checks are read-only; no field commands or physical serial/CAN certification.",
+  "completed_at": "2026-11-13T00:08:51.145478+08:00",
+  "full_regression": {
+    "passed": 584,
+    "failed": 0,
+    "skipped": 1,
+    "subtests_passed": 450,
+    "seconds": 486.33,
+    "command": "D:/anaconda3/python.exe -m pytest tests scdfe_c/web/test_server.py scdfe_c/web/test_protocol_seed_data.py -q -rs -o faulthandler_timeout=45"
+  },
+  "static_validation": {
+    "python_compile": "passed",
+    "javascript_syntax": "passed",
+    "git_diff_check": "passed",
+    "production_source_hashes_match": 8,
+    "standalone_html_documents": 2
+  },
+  "live_verification": "C/S/T HTTP health 200 with the expected D: databases. Chromium pages and T source selection passed; reports render at 1440 and 390 pixels without horizontal overflow."
+}

@@ -8,6 +8,7 @@ same operators and obey the same optimistic-version rules.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from itertools import groupby
 from pathlib import Path
 import subprocess
 import threading
@@ -269,7 +270,7 @@ class TransStore:
         page["items"] = [self._point_response(row) for row in page["items"]]
         return page
 
-    def source_catalog(self, kind: str, rtu_id: Any | None = None) -> dict[str, Any]:
+    def source_catalog(self, kind: str, rtu_id: Any | None = None, *, include_rtus=True) -> dict[str, Any]:
         """List selectable source RTUs and points from the C acquisition tables."""
         kind = str(kind or "").lower()
         table = KIND_TABLES.get(kind)
@@ -288,7 +289,7 @@ class TransStore:
                 f"COUNT(p.pnt_no) AS point_count "
                 f"FROM fes_rtu_define r JOIN {table} p ON p.rtu_id=r.rtu_id "
                 "GROUP BY r.rtu_id,r.name,r.channel_type ORDER BY r.rtu_id"
-            )]
+            )] if include_rtus else []
             points = []
             if selected_rtu is not None:
                 points = [dict(row) for row in con.execute(
@@ -299,9 +300,11 @@ class TransStore:
             row["kind"] = kind
         return {"kind": kind, "rtus": rtus, "items": points, "rtu_id": selected_rtu}
 
-    def _point_values(self, channel_id: Any, body: dict[str, Any], *, allow_missing_pnt_no: bool = False) -> tuple[int, dict[str, Any]]:
+    def _point_values(self, channel_id: Any, body: dict[str, Any], *, allow_missing_pnt_no: bool = False,
+                      check_channel=True) -> tuple[int, dict[str, Any]]:
         cid = self._channel_key(channel_id)[0]
-        self.get_channel(cid)
+        if check_channel:
+            self.get_channel(cid)
         columns = self._columns(POINT_TABLE)
         runtime_fields = set(body) & POINT_RUNTIME_FIELDS
         if runtime_fields:
@@ -345,11 +348,12 @@ class TransStore:
         if not isinstance(items, list) or not items or len(items) > 500:
             raise ApiError(400, "批量点映射 items 必须包含 1..500 项")
         cid = self._channel_key(channel_id)[0]
+        self.get_channel(cid)
         prepared = []
         for item in items:
             if not isinstance(item, dict):
                 raise ApiError(400, "批量点映射每一项必须是对象")
-            prepared.append(self._point_values(cid, item, allow_missing_pnt_no=True)[1])
+            prepared.append(self._point_values(cid, item, allow_missing_pnt_no=True, check_channel=False)[1])
         explicit = [item["pnt_no"] for item in prepared if item.get("pnt_no") is not None]
         if len(explicit) != len(set(explicit)):
             raise ApiError(409, "批量点映射包含重复的转发点号", code="conflict")
@@ -361,6 +365,8 @@ class TransStore:
                     f"SELECT COALESCE(MAX(pnt_no),0)+1 FROM {POINT_TABLE} WHERE channel_id=?", (cid,)
                 ).fetchone()[0]
                 used = set(explicit)
+                inserts = []
+                columns = self.store.schema(POINT_TABLE)["columns"]
                 for values in prepared:
                     if values.get("pnt_no") is None:
                         while next_no in used:
@@ -369,16 +375,16 @@ class TransStore:
                         used.add(next_no)
                         next_no += 1
                     normalised = self.store._normalise(POINT_TABLE, values)
-                    columns = self.store.schema(POINT_TABLE)["columns"]
-                    names = [column["eng_name"] for column in columns if column["eng_name"] in normalised]
-                    con.execute(
+                    names = tuple(column["eng_name"] for column in columns if column["eng_name"] in normalised)
+                    inserts.append((names, [normalised[name] for name in names]))
+                for names, adjacent in groupby(inserts, key=lambda item:item[0]):
+                    con.executemany(
                         f"INSERT INTO {POINT_TABLE} ({', '.join(names)}) "
                         f"VALUES ({', '.join('?' for _ in names)})",
-                        [normalised[name] for name in names],
+                        (values for _, values in adjacent),
                     )
-                rows = [self._point_response(self.store._read(
-                    con, POINT_TABLE, [cid, values["pnt_no"], values["kind"]]
-                )) for values in prepared]
+                rows = [self._point_response(row) for row in self.store._read_many(con, [
+                    (POINT_TABLE, (cid, values["pnt_no"], values["kind"])) for values in prepared])]
                 con.commit()
         return rows
 

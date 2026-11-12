@@ -660,34 +660,53 @@ class IEC104Server(PacketTrace):
             native = c104.ShortInfo(native).value
         return self._plain(native)
 
-    def update_monitoring(self, updates, *, transmit=True, cause='SPONTANEOUS'):
+    def update_monitoring(self, updates, *, transmit=True, cause='SPONTANEOUS', isolate_errors=False):
         """Publish (kind, number, value, quality) samples grouped by native type.
 
         Validate the complete input before mutation. A native send failure is
         reported to the caller, which must retry the unconfirmed samples.
         lib60870 splits each type group to its native ASDU size limit.
+        With isolate_errors, return errors by point key and continue unrelated
+        points/type groups. Successful native submission is not peer execution.
         """
         cot = self._cause(cause)
         with self._lock:
-            prepared, seen = [], set()
+            prepared, seen, errors = [], set(), {}
             for kind, no, value, quality in updates:
                 key = (kind, int(no))
-                if kind not in ('yc', 'yx') or key not in self._points or key in seen:
-                    raise IEC104ServerError(f'无效或重复的监视点 {kind}/{no}')
+                if key in seen:
+                    raise IEC104ServerError(f'重复的监视点 {kind}/{no}')
                 seen.add(key)
-                prepared.append((self._points[key], self._as_value(kind, self._point_types[key], value),
-                                 None if quality is None else c104.Quality(quality)))
+                try:
+                    if kind not in ('yc', 'yx') or key not in self._points:
+                        raise IEC104ServerError(f'无效的监视点 {kind}/{no}')
+                    prepared.append((key, self._points[key], self._as_value(kind, self._point_types[key], value),
+                                     None if quality is None else c104.Quality(quality)))
+                except Exception as exc:
+                    if not isolate_errors:
+                        raise
+                    errors[key] = exc
             groups = {}
-            for point, value, quality in prepared:
-                point.value = value
-                if quality is not None:
-                    point.quality = quality
-                if transmit:
-                    groups.setdefault(point.type, []).append(point)
-            for points in groups.values():
-                if not self._server.transmit_batch(c104.Batch(cot, points)):
-                    raise IEC104ServerError('IEC104 变化量批量上送失败')
-        return len(prepared)
+            for key, point, value, quality in prepared:
+                try:
+                    point.value = value
+                    if quality is not None:
+                        point.quality = quality
+                    if transmit:
+                        groups.setdefault(point.type, []).append((key, point))
+                except Exception as exc:
+                    if not isolate_errors:
+                        raise
+                    errors[key] = exc
+            for entries in groups.values():
+                try:
+                    if not self._server.transmit_batch(c104.Batch(cot, [point for _, point in entries])):
+                        raise IEC104ServerError('IEC104 变化量批量上送失败')
+                except Exception as exc:
+                    if not isolate_errors:
+                        raise
+                    errors.update((key, exc) for key, _ in entries)
+        return errors if isolate_errors else len(prepared)
 
     def transmit_many(self, kind, values, *, cause='SPONTANEOUS'):
         """批量更新同一类型点并用 c104.Batch 一次上送。"""

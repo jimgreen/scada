@@ -109,6 +109,11 @@ class TransWebReviewTests(unittest.TestCase):
         self.assertEqual(catalog["rtus"][0]["rtu_id"], 7)
         self.assertEqual(catalog["items"][0]["pnt_no"], 3)
         self.assertEqual(catalog["items"][0]["name"], "母线电压")
+        status, detail = self.request(server, "/api/trans/source-catalog?kind=yc&rtu_id=7&include_rtus=0")
+        self.assertEqual(status, 200)
+        self.assertEqual(detail['items'], catalog['items'])
+        self.assertEqual(detail['rtus'], [])
+        self.assertEqual(self.request(server, "/api/trans/source-catalog?kind=yc&include_rtus=invalid")[0],400)
 
     def test_runtime_status_projection_contains_diagnostic_snapshot(self):
         server = self.http_server()

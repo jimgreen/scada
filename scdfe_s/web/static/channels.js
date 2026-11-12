@@ -119,7 +119,9 @@
         const previous = selected?.rtu_id;
         const requested = previous ?? new URLSearchParams(location.search).get("rtu_id");
         selected = (requested ? rows.find(r => String(r.rtu_id) === String(requested)) : rows[0]) || null;
-        $("#point-rtu").innerHTML = '<option value="">请选择通道</option>' + rows.map(r => `<option value="${esc(r.rtu_id)}">${esc(r.rtu_id)} · ${esc(r.name || r.channel_type)}</option>`).join("");
+        const selector = $("#point-rtu");
+        const markup = '<option value="">请选择通道</option>' + rows.map(r => `<option value="${esc(r.rtu_id)}">${esc(r.rtu_id)} · ${esc(r.name || r.channel_type)}</option>`).join("");
+        if (selector._rtuMarkup !== markup) { selector.innerHTML = markup; selector._rtuMarkup = markup; }
         $("#point-rtu").value = selected?.rtu_id || "";
         if (previous !== selected?.rtu_id) { selectedPoint = null; offset = 0; }
         await loadPoints();

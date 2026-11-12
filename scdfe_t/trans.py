@@ -636,11 +636,42 @@ class TransRuntime:
         self._reconnect_count += 1
         self.logger.process(f"转发通道启动，规约={spec.protocol}")
 
+    def _refresh_iec104(self, current):
+        changes = []
+        for key, point in self.points.items():
+            if point.kind not in {'yc', 'yx'}:
+                continue
+            value, quality, source_time = self._sample_parts(current[key]) if key in current else (
+                self.values.get(key, 0), self.qualities.get(key, 0) | 128, 0)
+            self._record_sample(key, value, quality, source_time)
+            if self.values.get(key) != value or self.qualities.get(key) != quality:
+                changes.append((*key, value, quality))
+        if changes:
+            try:
+                errors = self.server.update_monitoring(changes, isolate_errors=True,
+                            transmit=self.server.active_connection_count > 0)
+            except Exception as exc:
+                errors = {(kind, no): exc for kind, no, _, _ in changes}
+            stamp = now_ms()
+            for kind, no, value, quality in changes:
+                key = (kind, no)
+                if key in errors:
+                    self._runtime_error(errors[key])
+                    self.logger.error(f'转发点 {kind}/{no} 更新失败: {errors[key]}')
+                    continue
+                self.values[key], self.qualities[key] = value, quality
+                self._queue_point_runtime(key, forward_time=stamp)
+                self._tx_count += 1
+                self._last_tx_time = stamp
+        self._flush_point_runtime()
+
     def refresh(self):
         current = self._read_sources(self._scan_plan, True, True)
         if current:
             self._rx_count += len(current)
             self._last_rx_time = now_ms()
+        if getattr(type(self.server), 'update_monitoring', None) is not None:
+            return self._refresh_iec104(current)
         if getattr(type(self.server), "update_many", None) is not None:
             changes = []
             for key, sample in current.items():

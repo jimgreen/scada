@@ -2,7 +2,9 @@
 const fs=require('fs'),path=require('path'),assert=require('assert/strict');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const {fixture}=require('./frontend_efficiency_round3.cjs');
-const root=path.resolve(__dirname,'..'),report=path.join(root,'reports/scdfe_efficiency_20261112_round4');
+const root=path.resolve(__dirname,'..'),outputArg=process.argv.indexOf('--output');
+const output=outputArg<0?path.join(root,'reports/scdfe_efficiency_20261112_round4/frontend.json'):path.resolve(process.argv[outputArg+1]);
+const report=path.dirname(output);
 const baseline='a9f0978',checks=[],measurements=[];
 const check=(ok,label)=>{assert.ok(ok,label);checks.push(label)};
 (async()=>{fs.mkdirSync(report,{recursive:true});const browser=await chromium.launch({headless:true});try{
@@ -43,6 +45,6 @@ const check=(ok,label)=>{assert.ok(ok,label);checks.push(label)};
   }
   await f.close();
  }
- fs.writeFileSync(path.join(report,'frontend.json'),JSON.stringify({baseline,checks,measurements,scope:'Chromium fixture; 50 visible rows with all values changed'},null,2)+'\n');
+ fs.writeFileSync(output,JSON.stringify({baseline,checks,measurements,scope:'Chromium fixture; 50 visible rows with all values changed'},null,2)+'\n');
  console.log(JSON.stringify({checks:checks.length,measurements},null,2));
 }finally{await browser.close()}})().catch(error=>{console.error(error);process.exitCode=1});

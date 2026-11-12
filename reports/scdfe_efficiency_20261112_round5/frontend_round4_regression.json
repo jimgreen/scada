@@ -1,0 +1,69 @@
+{
+  "baseline": "a9f0978",
+  "checks": [
+    "c value changes preserve 50 DOM rows",
+    "c updates preserve button focus",
+    "c updated value is visible",
+    "s value changes preserve 50 DOM rows",
+    "s updates preserve button focus",
+    "s updated value is visible",
+    "S editor data carries latest value and version",
+    "S delete uses latest version",
+    "S modal opens with refreshed value",
+    "t value changes preserve 50 DOM rows",
+    "t updates preserve button focus",
+    "t updated value is visible",
+    "T unchanged headers are retained"
+  ],
+  "measurements": [
+    {
+      "role": "c",
+      "variant": "before",
+      "preserved_rows": 0,
+      "focus_preserved": false,
+      "added_rows": 50,
+      "added_headers": 0
+    },
+    {
+      "role": "s",
+      "variant": "before",
+      "preserved_rows": 0,
+      "focus_preserved": false,
+      "added_rows": 50,
+      "added_headers": 0
+    },
+    {
+      "role": "t",
+      "variant": "before",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "added_rows": 0,
+      "added_headers": 13
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "added_rows": 0,
+      "added_headers": 0
+    },
+    {
+      "role": "s",
+      "variant": "after",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "added_rows": 0,
+      "added_headers": 0
+    },
+    {
+      "role": "t",
+      "variant": "after",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "added_rows": 0,
+      "added_headers": 0
+    }
+  ],
+  "scope": "Chromium fixture; 50 visible rows with all values changed"
+}

@@ -579,8 +579,13 @@ async function refreshSummary() {
     .join("");
   $("#database-path").textContent = data.database;
 }
-let rtuOptionsRequest = 0;
-async function loadRtuOptions() {
+let rtuOptionsRequest = 0, pendingRtuOptions = null;
+function loadRtuOptions({fresh = false} = {}) {
+  if (pendingRtuOptions) return fresh ? pendingRtuOptions.catch(() => {}).then(() => loadRtuOptions()) : pendingRtuOptions;
+  pendingRtuOptions = fetchRtuOptions().finally(() => { pendingRtuOptions = null; });
+  return pendingRtuOptions;
+}
+async function fetchRtuOptions() {
   const request = ++rtuOptionsRequest;
   const items = new Map();
   for (let offset = 0; ; ) {
@@ -605,11 +610,12 @@ async function loadRtuOptions() {
   // RTU list.  Keep the datalist as a suggestion source for editor/debug
   // inputs that still accept a numeric RTU value.
   const filter = $("#rtu-filter");
-  filter.innerHTML = '<option value="">全部 RTU</option>' + options;
+  const markup = '<option value="">全部 RTU</option>' + options;
+  if (filter._rtuMarkup !== markup) { filter.innerHTML = markup; filter._rtuMarkup = markup; }
   filter.value = rows.some((row) => String(row.rtu_id) === state.rtu)
     ? state.rtu
     : "";
-  $("#rtu-options").innerHTML = rows
+  const suggestions = rows
     .map(
       (row) =>
         '<option value="' +
@@ -619,6 +625,8 @@ async function loadRtuOptions() {
         '"></option>',
     )
     .join("");
+  const datalist = $("#rtu-options");
+  if (datalist._rtuMarkup !== suggestions) { datalist.innerHTML = suggestions; datalist._rtuMarkup = suggestions; }
 }
 let channelOptionsRequest = 0;
 async function fetchChannelOptions(channelType = "", isCurrent = () => true) {
@@ -1575,7 +1583,7 @@ async function saveRow(event) {
     $("#editor").close();
     toast(ctx.row ? "记录已更新" : "记录已创建");
     await loadRows({fresh:true});
-    await Promise.all([refreshSummary(), loadRtuOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true})]);
   } catch (error) {
     $("#form-error").textContent = error.message;
   } finally {
@@ -1624,7 +1632,7 @@ async function removeRow(row) {
       state.rtu = "";
     }
     await loadRows({fresh:true});
-    await Promise.all([refreshSummary(), loadRtuOptions()]);
+    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true})]);
   } catch (error) {
     toast(error.message, true);
   }

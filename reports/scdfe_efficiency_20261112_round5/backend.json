@@ -1,0 +1,220 @@
+{
+  "baseline": "c1e9509",
+  "python": "3.11.15",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "results": [
+    {
+      "name": "500 mappings from 200 RTUs",
+      "before_ms": 69.2297,
+      "after_ms": 37.739,
+      "reduction_percent": 45.487269192268634,
+      "samples_ms": [
+        [
+          69.5524,
+          84.5777,
+          68.9849,
+          70.8745,
+          70.316,
+          69.3031,
+          75.7647,
+          68.7753,
+          68.283,
+          70.1157,
+          69.1388,
+          67.1867,
+          68.3923,
+          69.6875,
+          67.8454,
+          68.3755,
+          68.0342,
+          70.6145,
+          69.2297,
+          70.8783,
+          67.7468
+        ],
+        [
+          36.6716,
+          36.0264,
+          37.0481,
+          40.5166,
+          38.192,
+          39.7701,
+          58.6698,
+          36.8865,
+          38.149,
+          37.496,
+          37.1707,
+          37.6899,
+          37.2285,
+          39.0069,
+          37.8689,
+          39.0194,
+          38.445,
+          37.8255,
+          37.739,
+          36.398,
+          36.9477
+        ]
+      ],
+      "read_queries": [
+        1002,
+        5
+      ]
+    },
+    {
+      "name": "selected RTU detail from 40000 source points",
+      "before_ms": 5.5626,
+      "after_ms": 0.5827,
+      "reduction_percent": 89.52468270233345,
+      "samples_ms": [
+        [
+          7.3224,
+          7.4954,
+          7.5456,
+          6.8388,
+          5.5626,
+          5.547,
+          5.4709,
+          6.4407,
+          7.2629,
+          7.2179,
+          6.8362,
+          7.6481,
+          6.1515,
+          5.2414,
+          5.3074,
+          5.2601,
+          5.2311,
+          5.4994,
+          5.2048,
+          5.4311,
+          5.4099
+        ],
+        [
+          0.6669,
+          0.7945,
+          0.762,
+          0.6081,
+          0.5827,
+          0.5104,
+          0.5127,
+          0.6768,
+          0.6969,
+          0.6332,
+          0.7323,
+          0.6974,
+          0.657,
+          0.4918,
+          0.4756,
+          0.4897,
+          0.4768,
+          0.4967,
+          0.4729,
+          0.5311,
+          0.4965
+        ]
+      ],
+      "response_bytes": [
+        32634,
+        17744
+      ]
+    }
+  ],
+  "wire": [
+    {
+      "variant": "after",
+      "scan_ms": 8.2001,
+      "delivery_ms": 103.149,
+      "frames": 6,
+      "apdu_bytes": 1130
+    },
+    {
+      "variant": "before",
+      "scan_ms": 50.1008,
+      "delivery_ms": 114.5637,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "before",
+      "scan_ms": 20.5413,
+      "delivery_ms": 110.9691,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "after",
+      "scan_ms": 8.783,
+      "delivery_ms": 100.7719,
+      "frames": 6,
+      "apdu_bytes": 1130
+    },
+    {
+      "variant": "after",
+      "scan_ms": 8.4261,
+      "delivery_ms": 110.7085,
+      "frames": 6,
+      "apdu_bytes": 1130
+    },
+    {
+      "variant": "before",
+      "scan_ms": 24.3149,
+      "delivery_ms": 111.6754,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "before",
+      "scan_ms": 22.001,
+      "delivery_ms": 107.3704,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "after",
+      "scan_ms": 9.2468,
+      "delivery_ms": 99.6737,
+      "frames": 6,
+      "apdu_bytes": 1130
+    },
+    {
+      "variant": "after",
+      "scan_ms": 8.7703,
+      "delivery_ms": 110.9081,
+      "frames": 6,
+      "apdu_bytes": 1130
+    },
+    {
+      "variant": "before",
+      "scan_ms": 21.5561,
+      "delivery_ms": 134.7632,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "before",
+      "scan_ms": 18.9976,
+      "delivery_ms": 88.188,
+      "frames": 160,
+      "apdu_bytes": 3440
+    },
+    {
+      "variant": "after",
+      "scan_ms": 9.0668,
+      "delivery_ms": 98.8986,
+      "frames": 6,
+      "apdu_bytes": 1130
+    }
+  ],
+  "source_sha256_lf": {
+    "scdfe_c/web/service.py": "b758a9c7fa032282e718ad4e9e6252c0815e59ea9f4183f7a4c8b4133feee214",
+    "scdfe_t/web/service.py": "9175073e2905025d7aafd275f8ba7df6cda3ad11d7f9885b42666d675d4ce638",
+    "scdfe_t/web/server.py": "0079de4d325453eaf2f3703d9caab0b06b2c0d29a01cc39ae6c05fdad7b9bd92",
+    "scdfe_t/trans.py": "c8cf1ab954404d26ac81188e894ac5bf2dbe221693b1bb1db2aab0a78a4bbc53",
+    "server/iec104_server.py": "c254c16130d5e6661f1ecd4e9897f6bb365f06948e076fbe6909a3fb7f480ae0",
+    "scdfe_c/web/static/app.js": "1ec4627d644ff787ae3fcedc14c9c511a72128e438eb7bddfc900e7d604011c4",
+    "scdfe_s/web/static/channels.js": "2e22a3ebde2178949858aed8b4dbc3b7fd354c068cf134319046807202abbd0f",
+    "scdfe_t/web/static/app.js": "43e68a4ac132bfb5693ccc452a16f69e0662d72ef74f4b527b6a36bf96b2affc"
+  },
+  "scope": "Temporary SQLite DBs, mapping reset excluded from timing; T real TCP loopback with 80 source RTUs / 160 points. No field-device benchmark."
+}

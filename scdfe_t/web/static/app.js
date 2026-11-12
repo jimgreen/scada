@@ -146,19 +146,44 @@ function editorProtocol(){const select=$("#editor-fields [name=\"protocol\"]");r
 function editorFields(type){const protocol=editorProtocol();return type==="channel"?[...channelCommonFields,...channelProtocolFields.iec104,...channelProtocolFields["modbus-tcp"]]:[...pointCommonFields,...pointProtocolFields.iec104,...pointProtocolFields["modbus-tcp"]]}
 function setEditorProtocolVisibility(){const protocol=editorProtocol();if(typeof document.querySelectorAll!=="function")return;document.querySelectorAll("#editor-fields [data-protocol-field]").forEach(label=>{label.hidden=label.dataset.protocolField!==protocol})}
 function sourceKind(){return String($("#editor-fields [name=\"kind\"]")?.value||"yc").toLowerCase()}
+let sourceCatalogRequest=0, sourcePointRequest=0;
 async function loadSourceCatalog(){
-  if(state.edit?.type!=="point")return;
-  const kind=sourceKind(), response=await api(`/api/trans/source-catalog?kind=${encodeURIComponent(kind)}`);
-  state.sourceCatalog=response;
+  const edit=state.edit;
+  if(edit?.type!=="point")return;
+  const kind=sourceKind(), request=++sourceCatalogRequest;
+  ++sourcePointRequest;
   const rtu=$("#editor-fields [name=\"source_rtu_id\"]"), point=$("#editor-fields [name=\"source_pnt_no\"]");
   if(!rtu||!point)return;
-  const currentRtu=rtu.value||String(state.edit.item?.source_rtu_id||"");
-  rtu.innerHTML='<option value="">请选择源 RTU</option>'+response.rtus.map(x=>`<option value="${esc(x.rtu_id)}">${esc(x.rtu_id)} · ${esc(x.name||"")} · ${esc(x.channel_type||"")}（${esc(x.point_count)}点）</option>`).join("");
-  rtu.value=response.rtus.some(x=>String(x.rtu_id)===String(currentRtu))?String(currentRtu):"";
-  const renderPoints=(items)=>{const selected=point.multiple?Array.from(point.selectedOptions||[]).map(x=>x.value):[String(state.edit.item?.source_pnt_no||point.value||"")];const empty=point.multiple&&!items.length?"<option disabled>请选择源 RTU 后加载源点</option>":"";point.innerHTML=empty+(point.multiple?"":"<option value=\"\">请选择源点</option>")+items.map(x=>`<option value="${esc(x.pnt_no)}">${esc(x.pnt_no)} · ${esc(x.name||"")}（值 ${esc(x.value??"")}）</option>`).join("");Array.from(point.options).forEach(o=>{if(selected.includes(o.value))o.selected=true})};
-  const refreshPoints=async()=>{const selectedRtu=rtu.value;if(!selectedRtu){renderPoints([]);return}const detail=await api(`/api/trans/source-catalog?kind=${encodeURIComponent(kind)}&rtu_id=${encodeURIComponent(selectedRtu)}`);state.sourceCatalog=detail;renderPoints(detail.items||[])};
-  rtu.onchange=()=>refreshPoints().catch(err=>$("#editor-error").textContent=err.message);
-  await refreshPoints();
+  const currentRtu=rtu.value||String(edit.item?.source_rtu_id||"");
+  const current=()=>request===sourceCatalogRequest&&state.edit===edit&&sourceKind()===kind&&rtu.isConnected&&$("#editor").open;
+  rtu.disabled=point.disabled=true;
+  point.innerHTML='<option value="">正在加载源点…</option>';
+  try{
+    const response=await api(`/api/trans/source-catalog?kind=${encodeURIComponent(kind)}`);
+    if(!current())return;
+    state.sourceCatalog=response;
+    rtu.innerHTML='<option value="">请选择源 RTU</option>'+response.rtus.map(x=>`<option value="${esc(x.rtu_id)}">${esc(x.rtu_id)} · ${esc(x.name||"")} · ${esc(x.channel_type||"")}（${esc(x.point_count)}点）</option>`).join("");
+    rtu.value=response.rtus.some(x=>String(x.rtu_id)===currentRtu)?currentRtu:"";
+    rtu.disabled=false;
+    const refreshPoints=async(initial=false)=>{
+      const selectedRtu=rtu.value, pointRequest=++sourcePointRequest;
+      const valid=()=>current()&&pointRequest===sourcePointRequest&&rtu.value===selectedRtu;
+      point.disabled=true;point.innerHTML='<option value="">'+(selectedRtu?'正在加载源点…':'请选择源 RTU 后加载源点')+'</option>';
+      if(!selectedRtu)return;
+      try{
+        const detail=await api(`/api/trans/source-catalog?kind=${encodeURIComponent(kind)}&rtu_id=${encodeURIComponent(selectedRtu)}&include_rtus=0`);
+        if(!valid())return;
+        state.sourceCatalog=detail;
+        point.innerHTML=(point.multiple?'':'<option value="">请选择源点</option>')+(detail.items||[]).map(x=>`<option value="${esc(x.pnt_no)}">${esc(x.pnt_no)} · ${esc(x.name||"")}（值 ${esc(x.value??"")}）</option>`).join("");
+        if(initial&&String(edit.item?.source_rtu_id)===selectedRtu&&edit.item?.kind===kind)
+          Array.from(point.options).forEach(o=>o.selected=o.value===String(edit.item.source_pnt_no));
+        point.disabled=false;
+        $("#editor-error").textContent="";
+      }catch(err){if(valid()){$("#editor-error").textContent=err.message;point.innerHTML='<option value="">源点加载失败，请重新选择 RTU</option>';}}
+    };
+    rtu.onchange=()=>refreshPoints();
+    await refreshPoints(true);
+  }catch(err){if(current()){$("#editor-error").textContent=err.message;rtu.disabled=false;}}
 }
 function setPointSourceControls(batch){
   const rtu=$("#editor-fields [name=\"source_rtu_id\"]"), point=$("#editor-fields [name=\"source_pnt_no\"]");
@@ -197,6 +222,7 @@ async function saveEditor(e){
       await loadChannels({loadSelectedPoints:true,fresh:true});
     }else{
       if(!channel||channel!==state.selected)throw Error("通道已切换，请重新选择测点");
+      if($("#editor-fields [name=\"source_rtu_id\"]")?.disabled||$("#editor-fields [name=\"source_pnt_no\"]")?.disabled)throw Error("请等待源点加载完成后再保存");
       if(state.batch){
         const pointSelect=$("#editor-fields [name=\"source_pnt_no\"]"), rtu=values.source_rtu_id;
         const selectedPoints=Array.from(pointSelect?.selectedOptions||[]).map(option=>option.value).filter(Boolean);

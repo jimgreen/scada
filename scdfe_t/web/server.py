@@ -190,9 +190,11 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if resource == "source-catalog":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "源数据目录只支持 GET")
-            if set(query) - {"kind", "rtu_id"} or query.get("kind", "") not in {"yc", "yx", "yk", "yt"}:
+            if (set(query) - {"kind", "rtu_id", "include_rtus"} or query.get("kind", "") not in {"yc", "yx", "yk", "yt"}
+                    or query.get("include_rtus", "1") not in {"0", "1"}):
                 raise ApiError(400, "源数据目录参数不正确")
-            return self._json(200, self.service.source_catalog(query["kind"], query.get("rtu_id")))
+            return self._json(200, self.service.source_catalog(query["kind"], query.get("rtu_id"),
+                              include_rtus=query.get("include_rtus", "1") == "1"))
         if resource == "processes":
             if method != "GET" or len(tail) != 1:
                 raise ApiError(405, "进程状态只支持 GET")

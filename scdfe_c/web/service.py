@@ -1566,12 +1566,17 @@ class ScadaStore:
 
     def _read_updated_rows(self, connection, changes):
         """Read final batch receipts in bounded, indexed groups in this transaction."""
-        if len(changes) < 4:
-            return [self._read(connection, change[0], change[1]) for change in changes]
+        return self._read_many(connection, [
+            (table, tuple(params[-len(self._table_metadata(table)[2]):]))
+            for table, _, _, _, params in changes])
+
+    def _read_many(self, connection, requests):
+        """Read (table, coerced key tuple) requests in their existing transaction."""
+        if len(requests) < 4:
+            return [self._read(connection, table, key) for table, key in requests]
         groups, ordered = {}, []
-        for table, _, _, _, params in changes:
-            keys = self._table_metadata(table)[2]
-            key = tuple(params[-len(keys):])  # already coerced by _prepare_update
+        for table, key in requests:
+            key = tuple(key)
             ordered.append((table, key))
             groups.setdefault(table, {})[key] = None
         found = {}

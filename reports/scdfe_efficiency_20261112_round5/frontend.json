@@ -1,0 +1,57 @@
+{
+  "baseline": "c1e9509",
+  "checks": [
+    "C coalesces five overlapping RTU catalogs",
+    "c retains unchanged RTU options",
+    "C saved catalog is read after in-flight old query",
+    "s retains unchanged RTU options",
+    "T disables stale source points while loading",
+    "T late RTU response cannot replace current source points",
+    "T source-detail reads omit global RTU counts",
+    "T ignores errors from an obsolete RTU request",
+    "T old editor request cannot populate a reopened editor",
+    "T batch save uses the current RTU and selected points"
+  ],
+  "measurements": [
+    {
+      "role": "c",
+      "variant": "before",
+      "overlapping_queries": 5
+    },
+    {
+      "role": "c",
+      "variant": "before",
+      "preserved_options": 0
+    },
+    {
+      "role": "s",
+      "variant": "before",
+      "preserved_options": 0
+    },
+    {
+      "role": "t",
+      "variant": "before",
+      "latest_source_retained": false
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "overlapping_queries": 1
+    },
+    {
+      "role": "c",
+      "variant": "after",
+      "preserved_options": 3
+    },
+    {
+      "role": "s",
+      "variant": "after",
+      "preserved_options": 3
+    },
+    {
+      "role": "t",
+      "variant": "after",
+      "latest_source_retained": true
+    }
+  ]
+}

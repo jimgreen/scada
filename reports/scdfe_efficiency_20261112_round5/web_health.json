@@ -1,0 +1,32 @@
+[
+  {
+    "role": "c",
+    "url": "http://127.0.0.1:8877/api/health",
+    "status": 200,
+    "body": {
+      "status": "ok",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    }
+  },
+  {
+    "role": "s",
+    "url": "http://127.0.0.1:8878/api/health",
+    "status": 200,
+    "body": {
+      "status": "ok",
+      "service": "scdfe_s",
+      "database_role": "simulator",
+      "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+    }
+  },
+  {
+    "role": "t",
+    "url": "http://127.0.0.1:8879/api/health",
+    "status": 200,
+    "body": {
+      "status": "ok",
+      "service": "scdfe_t",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    }
+  }
+]

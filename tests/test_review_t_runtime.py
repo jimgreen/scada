@@ -251,6 +251,11 @@ class TransmissionReviewTests(unittest.TestCase):
         server.stop.assert_called_once()
 
     def test_managed_stop_is_prompt_even_with_a_long_data_scan(self):
+        # Match the Web controller's persistent connection pool. Otherwise the
+        # worker owns the last WAL connection and the one-second assertion also
+        # measures OS checkpoint/file cleanup after communication has stopped.
+        self.store.connection_pool_size = 1
+        self.addCleanup(self.store.close)
         self.store.update_row("fes_scdfe_t_define", [1], {
             "process_enable": 1, "scan_interval_ms": 60000,
         })
