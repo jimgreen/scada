@@ -24,6 +24,9 @@
   let channelCatalog = new Map();
   let cursors = [""], batch = 0, nextCursor = null, searchVersion = 0, listVersion = 0;
   let controller, debounce, busy = false, refreshing = false;
+  let directoryController, directoryRecord;
+  const browser = document.querySelector(".log-browser");
+  const visible = () => !document.hidden && !browser?.closest("[hidden]");
   const closed = new Set();
   const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -143,7 +146,7 @@
     channelCatalog = new Map((rows || []).filter((row) => row?.channel_id != null)
       .map((row) => [String(row.channel_id), row]));
     const select = $("channel");
-    if (!select) return;
+    if (!select || select.tagName !== "SELECT") return;
     const value = select.value;
     const options = '<option value="">全部通信通道</option>'
       + [...channelCatalog.values()].sort((a, b) => Number(a.channel_id) - Number(b.channel_id))
@@ -318,6 +321,8 @@
     return html + esc(text.slice(start));
   }
   async function search(preserveScroll = false) {
+    clearTimeout(debounce);
+    if (!visible()) return;
     const version = ++searchVersion;
     controller?.abort();
     controller = new AbortController();
@@ -369,14 +374,18 @@
     }
   }
   async function refresh(follow = false) {
-    if (follow && (refreshing || busy)) return;
+    if (!visible() || (refreshing && directoryRecord === activeRecord) || (follow && busy)) return;
     const version = ++listVersion;
+    directoryRecord = activeRecord;
+    directoryController?.abort();
+    directoryController = new AbortController();
+    const signal = directoryController.signal;
     refreshing = true;
     status("正在读取文件目录…");
     try {
       const [result, channels] = await Promise.all([
-        api("/api/log-files?record=" + encodeURIComponent(activeRecord)),
-        module === "s" ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc") : Promise.resolve(null),
+        api("/api/log-files?record=" + encodeURIComponent(activeRecord), signal),
+        module === "s" ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc", signal) : Promise.resolve(null),
       ]);
       if (version !== listVersion) return;
       files = result.items;
@@ -399,7 +408,7 @@
   $("refresh").addEventListener("click", () => refresh());
   document.querySelectorAll(".lb-record-tab").forEach((tab) => tab.addEventListener("click", () => {
     const record = tab.dataset.record;
-    if (!record || record === activeRecord || refreshing) return;
+    if (!record || record === activeRecord) return;
     activeRecord = record;
     document.querySelectorAll(".lb-record-tab").forEach((node) =>
       node.setAttribute("aria-selected", String(node.dataset.record === activeRecord)));
@@ -480,6 +489,7 @@
   // reloading the shared hourly-file browser.  Keep the browser's own
   // directory, pagination and search state authoritative while changing only
   // the process filter.
+  let lastProcessContext = "";
   document.addEventListener("scada:log-process", (event) => {
     const process = String(event.detail?.process || "");
     // Older protocol pages only supplied the process.  On the unified test
@@ -487,6 +497,11 @@
     // fallback for the selected RTU channel.
     const metricChannel = document.getElementById("metric-channel")?.textContent?.trim() || "";
     const channel = String(event.detail?.channel_id ?? metricChannel);
+    const context = JSON.stringify([process, channel]);
+    // Status polling repeats this event. Preserve the reader's file, filters
+    // and pagination until the selected RTU actually changes.
+    if (context === lastProcessContext) return;
+    lastProcessContext = context;
     if (manualProcess && channel && activeChannel === channel) return;
     activeChannel = channel;
     manualProcess = false;
@@ -517,6 +532,18 @@
   // hourly file (or a growing runtime/packet file) appears without a manual
   // refresh.  `refresh` preserves the selected file and filters when follow
   // is off; with follow on it advances to the newest hour for that process.
-  setInterval(() => { if (!document.hidden) refresh(true); }, 5000);
+  let wasVisible = visible();
+  const visibilityChanged = () => {
+    const nowVisible = visible();
+    if (nowVisible && !wasVisible) refresh(true);
+    wasVisible = nowVisible;
+  };
+  // Embedded protocol tabs use the hidden attribute. Load on first reveal,
+  // including tabs revealed without a click, instead of polling hidden data.
+  const visibilityObserver = new MutationObserver(visibilityChanged);
+  for (let node = browser; node; node = node.parentElement)
+    visibilityObserver.observe(node, {attributes: true, attributeFilter: ["hidden"]});
+  document.addEventListener("visibilitychange", visibilityChanged);
+  setInterval(() => { if (visible()) refresh(true); }, 5000);
   refresh();
 })();

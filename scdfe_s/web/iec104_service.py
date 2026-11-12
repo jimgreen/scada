@@ -72,6 +72,7 @@ class IEC104Service:
         self._log_lock = threading.RLock()
         self._packet_sink = service_packet_recorder(self._record, None, None)
         self._server: IEC104Server | None = None
+        self._database_samples = {}
         self._database_sync_stop = threading.Event()
         self._database_sync_thread: threading.Thread | None = None
         self._config_error = None
@@ -272,6 +273,7 @@ class IEC104Service:
                 self._file_log.end_session()
                 raise IEC104ServiceError(str(exc)) from exc
             self._server = server
+            self._database_samples.clear()
             self._database_sync_stop.clear()
             self._database_sync_thread = threading.Thread(
                 target=self._database_sync_loop,
@@ -352,25 +354,39 @@ class IEC104Service:
             if server is None or not server.running:
                 return 0
             rtu_id = int(server.rtu_id)
-            snapshot = server.snapshot()
             transmit = bool(server.active_connection_count)
             changed = []
+            candidates = []
+            present = set()
             for table, kind in (("fes_yc_define", "yc"), ("fes_yx_define", "yx")):
                 rows = connection.execute(
-                    f"SELECT pnt_no, value FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
+                    f"SELECT pnt_no, value, status FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
                     (rtu_id,),
                 )
                 for row in rows:
-                    point_no, value = int(row[0]), row[1]
+                    point_no, value, quality = int(row[0]), row[1], int(row[2] or 0)
+                    key = (kind, point_no)
+                    present.add(key)
+                    sample = (value, quality)
+                    if self._database_samples.get(key) == sample:
+                        continue
                     try:
                         actual = server.prepare_value(kind, point_no, value)
                     except Exception as exc:
                         LOG.warning("IEC104 数据库值无法转换 %s/%s: %s", kind, point_no, exc)
                         continue
-                    if snapshot.get((kind, point_no)) == actual:
-                        continue
-                    server.update(kind, point_no, value, transmit=transmit)
-                    changed.append((kind, point_no, actual))
+                    candidates.append((key, sample, actual))
+            snapshot = server.monitoring_snapshot(key for key, _, _ in candidates) if candidates else {}
+            for key, sample, actual in candidates:
+                value, quality = sample
+                if snapshot.get(key) != (actual, quality):
+                    server.update(*key, value, quality=quality, transmit=transmit)
+                    changed.append((*key, actual))
+                # Store source values, not float32 wire-rounding artifacts.
+                # Failed native updates never advance the source snapshot.
+                self._database_samples[key] = sample
+            for key in self._database_samples.keys() - present:
+                del self._database_samples[key]
             if changed:
                 LOG.debug(
                     "IEC104 数据库值同步 RTU=%s points=%s transmit=%s",
@@ -573,6 +589,8 @@ class IEC104Service:
                     details={"item": item, "cause": str(event.cause)},
                 )
                 return True
+            if not cause_name.endswith('ACTIVATION'):
+                return False
             fields = self._point_update(event.kind, event.point_no, value, rtu_id)[2]
             fields["cmd_handle_time"] = fields["refresh_time"]
             item = self.store.update_row(table, key, fields)

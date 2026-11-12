@@ -246,7 +246,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             "bacnet-server": self.server.bacnet_server_service,
         }
 
-    def _channel_service_map(self):
+    def _channel_service_map(self, *, rtu_id=None):
         """Return one protocol service instance for every configured RTU.
 
         The protocol pages still expose the historical singleton service APIs,
@@ -254,7 +254,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         Keeping the instances on the HTTP server makes the lifecycle stable
         across the five-second polling performed by the Web UI.
         """
-        return self.server.channel_services()
+        return self.server.channel_services(rtu_id=rtu_id)
 
     def _monitor_control(self, parts, query, method):
         """Aggregated pages for process, communications and runtime logs."""
@@ -273,16 +273,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 if requested_rtu_id <= 0:
                     raise ApiError(400, "rtu_id 必须是正整数")
         channel_services = (
-            self._channel_service_map()
+            self._channel_service_map(rtu_id=requested_rtu_id)
             if len(parts) >= 3 and parts[2] in {"processes", "communications"}
             else {}
         )
-        if requested_rtu_id is not None:
-            suffix = f"-rtu-{requested_rtu_id}"
-            channel_services = {
-                slug: service for slug, service in channel_services.items()
-                if slug.endswith(suffix)
-            }
         point_counts = (
             _rtu_point_counts(
                 self.store,
@@ -617,6 +611,13 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             body = self._body()
             if "value" not in body: raise ApiError(400, "缺少字段: value")
             return self._json(200, {"item": service.command(parts[3], int(parts[4]), body["value"])})
+        if slug in {"can", "can-server"} and parts == ["api", slug, "schedule"]:
+            if method != "POST" or query:
+                raise ApiError(405, "CAN 报文调度接口只支持 POST")
+            body = self._body()
+            if not body or set(body) - {'frame_id', 'replay_group'}:
+                raise ApiError(400, "指定 frame_id 或 replay_group")
+            return self._json(200, {"item": service.schedule_frames(**body)})
         if slug in {"can", "can-server"} and parts == ["api", slug, "frame"]:
             if method != "POST" or query: raise ApiError(405, "CAN 发帧接口只支持 POST")
             body = self._body()
@@ -661,6 +662,21 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         method = "GET" if self.command == "HEAD" else self.command
         if self._packet_recording(parts, query, method) is not False:
             return
+        if len(parts) == 5 and parts[:2] == ['api', 'rtus'] and parts[3] == 'service':
+            if method != 'POST':
+                raise ApiError(405, 'RTU 服务控制只支持 POST')
+            if query or self._body():
+                raise ApiError(400, 'RTU 服务控制使用路径中的站号，且请求体必须为空对象')
+            action = parts[4]
+            if action not in {'start', 'stop', 'poll'}:
+                raise ApiError(404, '服务操作不存在', code='not_found')
+            rtu_id = self._rtu_id(parts[2])
+            rtu = self.store.get_row('fes_rtu_define', [rtu_id])
+            service = self.server.channel_services(rtu_id=rtu_id).get(f"{rtu['channel_type']}-rtu-{rtu_id}")
+            operation = getattr(service, action, None)
+            if not callable(operation):
+                raise ApiError(400, '当前 RTU 规约不支持此服务操作')
+            return self._json(200, {'item': operation()})
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -723,6 +739,11 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 return self._send(204, "image/x-icon", b"")
             if parts[:1] == ["static"]:
                 return self._static("/".join(parts[1:]))
+            if parts == ["api", "protocol-capabilities"]:
+                if self.command != "GET" or query:
+                    raise ApiError(400, "规约能力接口只接受无参数 GET")
+                from core.protocol_capabilities import protocol_capabilities
+                return self._json(200, protocol_capabilities('scdfe_s'))
             if parts == ["api", "health"]:
                 return self._json(200, {"status": "ok", "service": "scdfe_s", "database_role": "simulator", "database": str(self.store.db_path)})
             if len(parts) == 4 and parts[:2] == ["api", "rtus"] and parts[3] == "delete-preview":
@@ -909,13 +930,17 @@ class ScadaHTTPServer(ThreadingHTTPServer):
         finally:
             super().server_close()
 
-    def channel_services(self):
+    def channel_services(self, *, rtu_id=None):
         """Create/cache one independently controllable service per RTU.
 
         A protocol service owns its transport worker and log session.  Using a
         dedicated object per channel prevents one IEC104/Modbus/etc. channel
         from masking another channel in the monitor and gives every row its
         own start/stop endpoint.
+
+        A selected-RTU request must not scan or instantiate other stations.
+        Keep cached instances alive when switching scopes so an existing
+        transport is never replaced by a monitor request.
         """
         classes = {
             "iec104": IEC104Service,
@@ -927,26 +952,26 @@ class ScadaHTTPServer(ThreadingHTTPServer):
         }
         with self._channel_service_lock:
             with self.store.connection() as con:
+                where = " WHERE r.channel_type IS NOT NULL"
+                params = ()
+                if rtu_id is not None:
+                    where += " AND r.rtu_id=?"
+                    params = (int(rtu_id),)
                 rows = con.execute(
-                    "SELECT rtu_id, channel_type, name FROM fes_rtu_define "
-                    "WHERE channel_type IS NOT NULL ORDER BY rtu_id"
+                    "SELECT r.rtu_id, r.channel_type, r.name, p.remote_port "
+                    "FROM fes_rtu_define r LEFT JOIN fes_channel_iec104_define p "
+                    "ON r.channel_type='iec104' AND p.channel_id=r.channel_id"
+                    + where + " ORDER BY r.rtu_id", params,
                 ).fetchall()
-                iec_ports = {
-                    int(item[0]): item[1] for item in con.execute(
-                        "SELECT r.rtu_id, p.remote_port "
-                        "FROM fes_rtu_define r JOIN fes_channel_iec104_define p "
-                        "ON p.channel_id=r.channel_id"
-                    ) if item[1]
-                }
-            active = set()
+            selected = {}
             for row in rows:
                 rtu_id, channel_type = int(row[0]), str(row[1] or "")
                 cls = classes.get(channel_type)
                 if cls is None:
                     continue
                 slug = f"{channel_type}-rtu-{rtu_id}"
-                active.add(slug)
                 if slug in self._channel_service_cache:
+                    selected[slug] = self._channel_service_cache[slug]
                     continue
                 config_path = self.store.db_path.with_name(
                     f".scdfe_s_{channel_type.replace('-', '_')}_rtu_{rtu_id}.json"
@@ -961,16 +986,16 @@ class ScadaHTTPServer(ThreadingHTTPServer):
                 if channel_type == "iec104":
                     # IEC104 test definitions use remote_port as the listen
                     # port for each independent station.
-                    channel_port = iec_ports.get(rtu_id)
+                    channel_port = row[3]
                     if channel_port:
                         try:
                             service._config["port"] = int(channel_port)
                         except (TypeError, ValueError):
                             pass
                 self._channel_service_cache[slug] = service
+                selected[slug] = service
                 self._resources.callback(service.close)
-            return dict((slug, service) for slug, service in self._channel_service_cache.items()
-                        if slug in active)
+            return selected
 
 
 def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):

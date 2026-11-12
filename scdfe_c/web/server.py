@@ -531,6 +531,11 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 return self._send(204, "image/x-icon", b"")
             if parts[:1] == ["static"]:
                 return self._static("/".join(parts[1:]))
+            if parts == ["api", "protocol-capabilities"]:
+                if self.command != "GET" or query:
+                    raise ApiError(400, "规约能力接口只接受无参数 GET")
+                from core.protocol_capabilities import protocol_capabilities
+                return self._json(200, protocol_capabilities('scdfe_c'))
             if parts == ["api", "health"]:
                 return self._json(200, {"status": "ok", "database": str(self.store.db_path)})
             if len(parts) == 4 and parts[:2] == ["api", "rtus"] and parts[3] == "delete-preview":

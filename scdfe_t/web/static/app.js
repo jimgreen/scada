@@ -89,19 +89,22 @@ async function loadChannels({loadSelectedPoints = false} = {}) {
   } catch (error) { if (request === channelRequest) throw error; }
   finally { pendingChannels--; }
 }
-async function loadPoints(){
-  if(state.pointLoading){state.pointReloadPending=true;return}
+async function loadPoints({background=false}={}){
+  // Polls join the current read; explicit edits/navigation still request one
+  // trailing read, so a save during an in-flight GET cannot lose its refresh.
+  if(state.pointLoading){if(!background)state.pointReloadPending=true;return}
   state.pointLoading=true;
   try{
     const kind=activePointKind(),body=pointTableBody(kind);if(!body)return;setPointTab(kind);
     const request=++state.pointRequest;
     if(!state.selected){state.points=[];state.pointTotal=0;state.pointOffset=0;renderPoints();return}
-    const cid=state.selected,offset=state.pointOffset,q=new URLSearchParams({limit:String(state.pointLimit),offset:String(offset),kind});
+    const cid=state.selected,offset=state.pointOffset,limit=state.pointLimit,q=new URLSearchParams({limit:String(limit),offset:String(offset),kind});
+    const current=()=>request===state.pointRequest&&cid===state.selected&&kind===activePointKind()&&offset===state.pointOffset&&limit===state.pointLimit;
     const scope=cid+"/"+kind;
     if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;body.innerHTML='<tr><td colspan="13">正在读取点映射…</td></tr>'}
     let page;
-    try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(request!==state.pointRequest)return;throw error}
-    if(request!==state.pointRequest||cid!==state.selected||kind!==activePointKind()||offset!==state.pointOffset)return;
+    try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(!current())return;throw error}
+    if(!current())return;
     state.pointTotal=page.total??0;
     if(offset>0&&offset>=state.pointTotal){state.pointOffset=Math.max(0,Math.floor((state.pointTotal-1)/state.pointLimit)*state.pointLimit);state.pointReloadPending=true;return}
     state.points=page.items||[];renderPoints()
@@ -110,15 +113,23 @@ async function loadPoints(){
     if(state.pointReloadPending){state.pointReloadPending=false;queueMicrotask(()=>loadPoints().catch(e=>toast(e.message)))}
   }
 }
-async function control(cid,a){await api(`/api/trans/channels/${cid}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels({loadSelectedPoints:true});if(state.page==="processes")await loadProcesses()}
-async function loadProcesses(){const r=(await api("/api/trans/processes")).items||[];$("#process-summary").textContent=`运行 ${r.filter(x=>x.alive).length} / 总数 ${r.length}`;$("#processes").innerHTML=r.length?r.map(x=>`<tr><td>${id(x)} · ${esc(x.name||"")}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid||"—"}</td><td>${fmt(x.process_start_time)}</td><td>${fmt(x.process_heartbeat_time,true)}</td><td title="${esc(x.process_error)}">${esc(x.process_error)||"—"}</td><td class="actions"><button data-control="start" data-id="${id(x)}">启动</button><button data-control="stop" data-id="${id(x)}">停止</button><button data-log-channel="${id(x)}">日志</button></td></tr>`).join(""):'<tr><td colspan="8" class="muted">暂无通道</td></tr>'}
+async function control(cid,a){await api(`/api/trans/channels/${cid}/${a}`,{method:"POST",body:"{}"});toast(a==="start"?"启动请求已发送":"停止请求已发送");await loadChannels({loadSelectedPoints:true});if(state.page==="processes")await loadProcesses({fresh:true})}
+let pendingProcesses=null, previousProcessesHtml=null;
+function loadProcesses({fresh=false}={}){
+  if(pendingProcesses)return fresh?pendingProcesses.catch(()=>{}).then(()=>loadProcesses()):pendingProcesses;
+  pendingProcesses=fetchProcesses().finally(()=>{pendingProcesses=null});
+  return pendingProcesses;
+}
+async function fetchProcesses(){const r=(await api("/api/trans/processes")).items||[];$("#process-summary").textContent=`运行 ${r.filter(x=>x.alive).length} / 总数 ${r.length}`;const html=r.length?r.map(x=>`<tr><td>${id(x)} · ${esc(x.name||"")}</td><td>${esc(x.protocol)}</td><td>${badge(x)}</td><td>${x.process_pid||"—"}</td><td>${fmt(x.process_start_time)}</td><td>${fmt(x.process_heartbeat_time,true)}</td><td title="${esc(x.process_error)}">${esc(x.process_error)||"—"}</td><td class="actions"><button data-control="start" data-id="${id(x)}">启动</button><button data-control="stop" data-id="${id(x)}">停止</button><button data-log-channel="${id(x)}">日志</button></td></tr>`).join(""):'<tr><td colspan="8" class="muted">暂无通道</td></tr>';if(html!==previousProcessesHtml){$("#processes").innerHTML=html;previousProcessesHtml=html}}
 async function loadLogs(){const c=$("#log-channel")?.value||"";state.logsChannel=c;const q=new URLSearchParams({record:state.logRecord||"runtime"});if(c)q.set("channel_id",c);const v=await api(`/api/trans/logs?${q}`);state.logs=v.items||[];$("#log-count").textContent=`${v.total||0} 个文件`;$("#log-files").innerHTML=state.logs.map(x=>`<button class="log-file ${state.log===x.filename?"active":""}" data-log="${esc(x.filename)}">${esc(x.filename)}<small>${(x.size/1024).toFixed(1)} KB · ${fmt(x.mtime)}</small></button>`).join("")||'<div class="muted">暂无日志</div>';if(state.log&&!state.logs.some(x=>x.filename===state.log))state.log=null;if(!state.log&&state.logs.length)state.log=state.logs[0].filename;if(state.log)await loadLog();else {$("#log-name").textContent="请选择日志文件";$("#log-content").textContent="—"}}
 async function loadLog(){if(!state.log)return;const q=new URLSearchParams({filename:state.log,tail:"2000",record:state.logRecord||"runtime"}),v=await api(`/api/trans/log?${q}`),k=$("#log-keyword")?.value.trim().toLowerCase()||"";$("#log-name").textContent=state.log;$("#log-content").textContent=(v.lines||[]).filter(x=>!k||x.toLowerCase().includes(k)).join("\n")||"（没有匹配内容）";document.querySelectorAll(".log-file").forEach(e=>e.classList.toggle("active",e.dataset.log===state.log))}
 const channelCommonFields=[["name","名称","text"],["protocol","规约","protocol"],["bind_host","监听地址","text"],["bind_port","监听端口","number"],["scan_interval_ms","读取周期(ms)","number"],["log_retention_hours","日志保留小时","number"],["packet_recording","保存报文","bool"],["process_enable","自动运行","bool"]];
-const channelProtocolFields={"iec104":[["common_address","IEC104 公共地址","number"],["report_interval_ms","全量上送周期(ms)","number"]],"modbus-tcp":[["unit_id","Modbus 从站地址","number"]]};
+const channelProtocolFields={"iec104":[["common_address","IEC104 公共地址","number"],["report_interval_ms","全量上送周期(ms)","number"],["k","发送窗口 k","number"],["w","接收确认窗口 w","number"],["t1","确认超时 t1(s)","float"],["t2","延迟确认 t2(s)","float"],["t3","空闲测试 t3(s)","float"],["max_asdu_length","ASDU 长度诊断阈值（非组帧限制）","number"]],"modbus-tcp":[["unit_id","Modbus 从站地址","number"]]};
 const pointCommonFields=[["pnt_no","转发点号","number"],["name","名称","text"],["kind","转发类型","kind"],["source_rtu_id","源 RTU","number"],["source_pnt_no","源点号（默认同转发点号）","number"],["enabled","启用","bool"]];
-const pointProtocolFields={"iec104":[["io_address","IEC IOA","number"],["type_id","IEC 类型号","number"],["command_mode","命令方式","mode"]],"modbus-tcp":[["register_area","Modbus 数据区","area"],["address","Modbus 地址","number"],["data_type","数据类型","dtype"],["byte_order","字节序","order"],["word_order","字序","order"],["scale","比例","float"],["offset","偏移","float"]]};
+const pointProtocolFields={"iec104":[["io_address","IEC IOA","number"],["type_id","IEC 类型号","number"],["time_tag","时间标签","time_tag"],["command_mode","命令方式（确认表示写库受理）","mode"]],"modbus-tcp":[["register_area","Modbus 数据区","area"],["address","Modbus 地址","number"],["address_base","地址基准（0/1/10001/30001/40001）","number"],["data_type","数据类型","dtype"],["byte_order","字节序","order"],["word_order","字序","order"],["scale","比例","float"],["offset","偏移","float"]]};
 const defaults={protocol:"iec104",bind_host:"0.0.0.0",bind_port:2404,common_address:1,unit_id:1,scan_interval_ms:200,report_interval_ms:1000,log_retention_hours:720,packet_recording:0,process_enable:0,kind:"yc",enabled:1,io_address:0,type_id:0,command_mode:"DIRECT",register_area:"holding",address:0,data_type:"float32",byte_order:"big",word_order:"big",scale:1,offset:0};
+Object.assign(defaults,{k:12,w:8,t1:15,t2:10,t3:20,max_asdu_length:249,time_tag:"NONE",address_base:0});
+function timeTagInput(value){const tags=["NONE","CP56Time2a"];if(value&&!tags.includes(value))tags.push(value);return `<select name="time_tag">${tags.map(tag=>`<option value="${esc(tag)}" ${value===tag?"selected":""}>${esc(tag)}${["NONE","CP56Time2a"].includes(tag)?"":"（当前驱动不支持，请重新选择）"}</option>`).join("")}</select>`}
 function input(k,t,v,disabled){const d=disabled?" disabled":"";if(t==="protocol")return `<select name="${k}"><option value="iec104" ${v==="iec104"?"selected":""}>IEC104</option><option value="modbus-tcp" ${v==="modbus-tcp"?"selected":""}>Modbus TCP</option></select>`;if(t==="kind")return `<select name="${k}"${d}>${Object.entries(kindName).map(([x,n])=>`<option value="${x}" ${v===x?"selected":""}>${n}</option>`).join("")}</select>`;if(t==="bool")return `<select name="${k}"><option value="1" ${Number(v)?"selected":""}>是</option><option value="0" ${!Number(v)?"selected":""}>否</option></select>`;if(t==="mode")return `<select name="${k}"><option value="DIRECT" ${v==="DIRECT"?"selected":""}>直接执行</option><option value="SELECT_AND_EXECUTE" ${v==="SELECT_AND_EXECUTE"?"selected":""}>选择并执行</option></select>`;if(t==="area")return `<select name="${k}">${["coil","discrete","holding","input"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="dtype")return `<select name="${k}">${["bool","uint16","int16","uint32","int32","float32","float64","uint64","int64"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="order")return `<select name="${k}"><option value="big" ${v==="big"?"selected":""}>big</option><option value="little" ${v==="little"?"selected":""}>little</option></select>`;return `<input name="${k}" type="${t==="float"?"number":t}" step="${t==="float"?"any":"1"}" value="${esc(v)}"${d}>`}
 function editorProtocol(){const select=$("#editor-fields [name=\"protocol\"]");return String(select?.value||selected()?.protocol||defaults.protocol).toLowerCase()}
 function editorFields(type){const protocol=editorProtocol();return type==="channel"?[...channelCommonFields,...channelProtocolFields.iec104,...channelProtocolFields["modbus-tcp"]]:[...pointCommonFields,...pointProtocolFields.iec104,...pointProtocolFields["modbus-tcp"]]}
@@ -155,7 +166,7 @@ async function openEditor(type,item,batch=false){
     const group=type==="channel"?(channelProtocolFields.iec104.some(x=>x[0]===k)?"iec104":channelProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":""):(pointProtocolFields.iec104.some(x=>x[0]===k)?"iec104":pointProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":"");
     const hidden=batch&&type==="point"&&k==="pnt_no";
     const value = k === "kind" && type === "point" ? pointKind : (item?.[k] ?? defaults[k] ?? "");
-    return `<label data-field="${k}"${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${input(k,t,value,Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)))}</label>`;
+    return `<label data-field="${k}"${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${t==="time_tag"?timeTagInput(value):input(k,t,value,Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)))}</label>`;
   }).join("");
   if(type==="point")setPointSourceControls(batch);
   $("#editor").classList.toggle("batch-editor", Boolean(batch));
@@ -192,4 +203,4 @@ $("#channels")?.addEventListener("click",async e=>{if(e.target.closest("button")
 setPointTab(activePointKind());
 $("#point-live-refresh")?.addEventListener("change",()=>loadPoints().catch(e=>toast(e.message)));
 async function boot(){try{await api("/api/health");$("#connection").textContent="Web 已连接";$("#connection").classList.add("ok");await loadChannels({loadSelectedPoints:true})}catch(e){$("#connection").textContent="连接失败";$("#connection").classList.add("bad");toast(e.message)}}boot();setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;(state.page==="channels"?loadChannels:state.page==="processes"?loadProcesses:loadLogs)().catch(e=>toast(e.message))},5000);
-setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;if(pointTableBody()&&$("#point-live-refresh")?.checked)loadPoints().catch(e=>toast(e.message))},2000);
+setInterval(()=>{if(document.hidden||pendingChannels||$("#editor")?.open)return;if(pointTableBody()&&$("#point-live-refresh")?.checked)loadPoints({background:true}).catch(e=>toast(e.message))},2000);

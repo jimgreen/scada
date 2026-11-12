@@ -346,8 +346,16 @@ class TransRuntime:
             targets = grouped.setdefault((tables[p.kind], p.source_rtu_id), {})
             targets.setdefault(p.source_pnt_no, []).append((p.kind, p.pnt_no))
         plan = []
+        ranges = {}
         for (table, rtu), targets in grouped.items():
             numbers = sorted(targets)
+            runs = []
+            for no in numbers:
+                if runs and no == runs[-1][1] + 1:
+                    runs[-1][1] = no
+                else:
+                    runs.append([no, no])
+            ranges.setdefault(table, []).extend((rtu, lo, hi, targets) for lo, hi in runs)
             # Sequential point numbers form one bounded primary-key range.
             # Sparse mappings still use exact lookups; never read intervening rows.
             projection = f"SELECT pnt_no,value,status,refresh_time FROM {table} WHERE rtu_id=? AND "
@@ -360,6 +368,27 @@ class TransRuntime:
                 batch = numbers[start:start+900]
                 sql = projection + f"pnt_no IN ({','.join('?' for _ in batch)})"
                 plan.append((sql, (rtu, *batch), targets))
+        # A VALUES range table lets one indexed SELECT cover many RTUs. Keep
+        # the old exact-IN plan for sparse/single-RTU inputs when it is cheaper.
+        # For dense per-RTU scans the extra SQL join costs more than the saved
+        # executes. Batch small source sets; keep direct ranges for dense sets.
+        if (sum(len(targets) for targets in grouped.values()) <= 16 * len(grouped)
+                and sum((len(rows)+224)//225 for rows in ranges.values()) < len(plan)):
+            combined = []
+            for table, rows in ranges.items():
+                for start in range(0, len(rows), 225):
+                    batch = rows[start:start+225]
+                    params, targets = [], {}
+                    for rtu, lo, hi, scoped in batch:
+                        base = len(targets) - lo
+                        params.extend((rtu,lo,hi,base))
+                        for no in range(lo,hi+1):
+                            targets[base+no] = scoped[no]
+                    sql = ('WITH wanted(rtu_id,lo,hi,base) AS (VALUES ' + ','.join('(?,?,?,?)' for _ in batch)
+                           + f') SELECT p.pnt_no+w.base,p.value,p.status,p.refresh_time FROM wanted w '
+                           + f'JOIN {table} p ON p.rtu_id=w.rtu_id AND p.pnt_no BETWEEN w.lo AND w.hi')
+                    combined.append((sql,tuple(params),targets))
+            plan = combined
         return tuple(plan)
 
     def _read_sources(self, plan, include_quality, include_timestamp=False):
@@ -503,6 +532,21 @@ class TransRuntime:
         self._flush_point_runtime()
         return True
 
+    def _iec104_command(self, point, event):
+        """Selection/deactivation must never enqueue an execute operation."""
+        cause = str(getattr(event.cause, 'name', event.cause)).upper()
+        if cause.endswith('DEACTIVATION'):
+            try:
+                self.logger.normal(f"收到撤销命令 {point.kind}/{point.pnt_no}，未提交执行；已提交的命令不回滚")
+            except OSError:
+                logging.getLogger(__name__).exception("记录命令撤销失败")
+            return True
+        if not cause.endswith('ACTIVATION'):
+            return False
+        if event.selected:
+            return True
+        return self.command(point, event.value)
+
     def build_server(self, spec, points):
         self._flush_point_runtime()
         self.values.clear()
@@ -521,7 +565,7 @@ class TransRuntime:
                                   **spec.protocol_config.as_dict())
             server.set_packet_handler(self.logger.packet)
             for key, p in self.points.items():
-                handler = (lambda event, point=p: self.command(point, event.value)) if p.kind in {"yk", "yt"} else None
+                handler = (lambda event, point=p: self._iec104_command(point, event)) if p.kind in {"yk", "yt"} else None
                 value, quality, source_time = self._sample_parts(initial_samples.get(key))
                 try:
                     server.add_point(p.kind, p.pnt_no, data_type=p.type_id, value=value,

@@ -29,7 +29,7 @@ class FakeBus:
         except queue.Empty:
             return None
 
-    def send(self, message):
+    def send(self, message, timeout=None):
         if self.send_error:
             raise self.send_error
 

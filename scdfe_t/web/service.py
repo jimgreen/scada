@@ -251,7 +251,11 @@ class TransStore:
     def _point_response(row):
         # The old trans API exposed both names. Derive its read-only alias;
         # the DB, generic table API and operator form have just one type.
-        return {**row, "source_kind": row["kind"]}
+        result = {**row, "source_kind": row["kind"]}
+        if row['kind'] in {'yk', 'yt'}:
+            result['command_confirmation_scope'] = 'writer_commit'
+            result['device_execution_confirmed'] = None
+        return result
 
     def point_page(self, channel_id: Any, *, limit: int = 100, offset: int = 0,
                    kind: str | None = None) -> dict[str, Any]:

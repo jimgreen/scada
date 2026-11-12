@@ -1,0 +1,37 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCDFE 规约接口修复与使用说明 · 2026-11-12</title><link rel="icon" href="data:,">
+<style>body{font:16px/1.75 system-ui,"Microsoft YaHei",sans-serif;margin:0;background:#f1f5f9;color:#183044}main{max-width:1100px;margin:auto;padding:32px}h1{font-size:30px;line-height:1.4}h2{font-size:22px;margin-top:32px}header,section{background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid #d7e3eb}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #dce4eb;padding:12px;text-align:left;vertical-align:top}th{width:180px}code,pre{font-family:Consolas,monospace;background:#eef4f7}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;border-radius:6px}.limit{border-left:5px solid #ba6717}a{color:#006e88}.muted{color:#526775}@media(max-width:650px){main{padding:10px}header,section{padding:16px}th{width:90px;font-size:14px}}</style>
+<main><header><p class="muted">D:\codex\scada · 2026-11-12</p><h1>规约接口修复与使用说明</h1>
+<p>范围：C/S 的 IEC104、Modbus TCP/RTU 和 CAN；T 仅 IEC104 与 Modbus TCP 转发。本文件记录已落地的接口和验证边界，不代表已完成全部规约符合性认证。</p>
+<nav><a href="#changes">修复内容</a> · <a href="#usage">接口用法</a> · <a href="#limits">尚存限制</a> · <a href="#tests">验证证据</a></nav></header>
+<section id="changes"><h2>已落地修改</h2><table><tr><th>IEC104 撤销</th><td>T 对 DEACTIVATION 单独处理，不再重复提交执行；新增遥调 cancel_yt_point。撤销不回滚已提交命令。</td></tr><tr><th>IEC104 质量状态</th><td>S 同时比较值和质量状态，质量单独变化及恢复也会主动上送，不依赖人机页面调用。</td></tr><tr><th>CP56 命令</th><td>修正 45→58、46→59、48→61、49→62、50→63 映射；发送和撤销均保留配置时标及限定词。</td></tr><tr><th>IEC104 测试接口</th><td>test_command() 发送应用测试命令；原 test_fr() 明确拒绝主动 U 帧请求，U TESTFR 由原生驱动 t3 定时器管理。</td></tr><tr><th>S 命令行入口</th><td>run_iec104_server.py 复用 Web 服务的独立数据库同步与命令接收落库逻辑；退出关闭服务和数据库。</td></tr><tr><th>S Modbus 工程值</th><td>有点映射时从数据库加载地址、功能码和编码，支持 16/32 位整数、浮点和四种 32 位字序。TCP 与真实 RTU 入口共用编码器。</td></tr><tr><th>S Modbus 自主同步</th><td>每 50ms 检查数据库 data_version，有提交变化时扫描 YC/YX；浮点不再被写库接口截断成整数。保持寄存器/线圈可由对端写入并同步数据库。</td></tr><tr><th>CAN 报文定义</th><td>C 与 S 接入 fes_channel_can_frame_define，支持周期次数、手动发送和按 sequence_no 排序的数据库回放组。每总线一个调度线程，停止服务时清空队列。</td></tr><tr><th>配置与查询接口</th><td>C/S/T 新增 GET /api/protocol-capabilities；CP24 配置明确拒绝，CAN 非法帧启动前校验，故障注入和外部回放文件不再被误当作可执行调度。</td></tr><tr><th>Web 表单</th><td>C 补全受支持的 IEC 类型；T 增加 k/w/t1/t2/t3、时标、ASDU 诊断阈值和 Modbus 地址基准，并注明命令确认表示写库受理。</td></tr></table></section>
+<section id="usage"><h2>接口用法</h2><p>三个 Web 服务均提供能力查询。实际服务地址、通道与 RTU 仍以本机配置为准。</p>
+<pre>GET /api/protocol-capabilities
+
+# S 通信测试页：严格控制所选 RTU，不调用默认规约服务
+POST /api/rtus/{rtu_id}/service/start  # 请求体 {}
+POST /api/rtus/{rtu_id}/service/stop   # 请求体 {}
+POST /api/rtus/{rtu_id}/service/poll   # Modbus/CAN 等支持采集的规约
+
+# IEC104 Python 客户端
+master.send_yk_point(1, True)  # 按点定义选择 DIRECT 或 SELECT_AND_EXECUTE
+master.send_yt_point(1, 12.5)
+master.cancel_yk_point(1, True)
+master.cancel_yt_point(1, 12.5)
+master.test_command(with_time=True)
+
+# S 的 CAN / CAN 服务端：从已启用的数据库定义发送
+POST /api/can/schedule
+{"frame_id": 12}
+
+POST /api/can-server/schedule
+{"replay_group": "验收回放"}</pre>
+<p>CAN 的 <code>frame_id</code> 是报文定义表主键 <code>id</code>，不是仲裁 ID；只触发 manual 模式。回放只选 replay 模式且分组匹配的记录，按序号及 id 排序。periodic 模式随服务启动，repeat_count=0 表示持续发送；手动与回放的 0 表示发送一次。period_ms 表示相邻调度间隔，单位毫秒。</p>
+<p>S 的 Modbus 工程值来自四遥表，地址和编码来自既有 call/data/ytyk 映射表。先配置通道与 RTU，再定义点及映射；使用同一站号。地址基准只转换一次。四字节字序 0/1/2/3 分别对应 DCBA/BADC/CDAB/ABCD。编辑数据库后，S 自主刷新运行点值。</p>
+<p>没有新增业务表，也没有修改现场数据库；原有数据库运行态及用户已删除的旧文档均保留。</p></section>
+<section id="limits" class="limit"><h2>尚存能力限制</h2><table><tr><th>CP24Time2a</th><td>当前 c104 2.2.1+scada.1 不支持。数据库保存和运行时注册返回明确错误；需要原生协议库扩展，未静默转换为 CP56。</td></tr><tr><th>独立选择阶段</th><td>支持直接执行、自动选择并执行和撤销；当前驱动未开放“仅选择、稍后单独执行”的接口。</td></tr><tr><th>ASDU 长度</th><td>max_asdu_length 是诊断阈值，不是发送组帧或接收丢弃的强制限制。原生上限为 249。</td></tr><tr><th>T 命令确认</th><td>IEC104/Modbus 应答表示 writer 已受理写库，不能证明现场设备动作完成；API 返回 confirmation_scope=writer_commit，device_execution_confirmed=null。</td></tr><tr><th>S Modbus 特殊映射</th><td>工程点适配器尚不支持寄存器位/字节切片、反相位和特殊寄存器遥控；明确配置这些映射会拒绝启动。无映射时保留原始寄存器模拟模式，RTU simulation 模式仍是内存模拟器。</td></tr><tr><th>CAN 高层与硬件</th><td>DBC 文件解析、CANopen/J1939/UDS 完整协议栈尚未实现。扩展表字段不等于运行能力。ACK/CRC/位填充错误注入、Bus-off 实测、波形与环境试验仍需专用硬件；本轮仅使用 virtual 总线。</td></tr><tr><th>CAN 调度边界</th><td>period_ms 使用报文定义表；点映射中的 period_ms/DBC 名称不构成独立调度或 DBC 导入。replay_source 外部文件导入未实现，周期发送不提供硬实时保证。</td></tr></table></section>
+<section id="tests"><h2>验证证据</h2><p><strong>Python 回归：</strong>552 passed, 1 skipped, 434 subtests passed in 438.95s (0:07:18)</p><p><strong>Chromium：</strong>62 项断言通过；使用仓库实际 HTML/JavaScript 和隔离的 API 响应，覆盖刷新竞态、隐藏面板、T 通道字段与时标表单。</p>
+<p><strong>最新接口独立验收：</strong>12 passed, 20 subtests passed in 12.60s。</p><p>定向验证包括真实 IEC104 TCP 总召、周期/变位数据、质量单独变化及恢复、CP56 遥控/遥调执行与撤销、CLI 数据库同步；Modbus TCP 工程值读写、四种字序、地址偏移、非法地址和三端联动；CAN virtual 总线周期次数、回放顺序、停止清理和非法帧校验。</p>
+<p>RTU 本轮验证了共享编解码与串口入口构造，未进行物理串口和 CAN 硬件测试；无长时间稳定性、EMI、温度或物理波形认证结论。</p>
+<p class="muted">机器证据位于 reports/protocol_function_audit_20261112：repair_results.json、repair_regression_final.txt、repair_compatibility.txt、repair_browser.json。修复前的 audit.html、probe_results.json 保留为历史对照。</p></section>
+<footer class="muted">单文件 HTML；样式和内容已内嵌，可离线打开。</footer></main></html>

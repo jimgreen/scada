@@ -153,6 +153,11 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         return self._json(200, item)
 
     def _api(self, method, parts, query):
+        if parts == ["api", "protocol-capabilities"]:
+            if method != 'GET' or query:
+                raise ApiError(400, "规约能力接口只接受无参数 GET")
+            from core.protocol_capabilities import protocol_capabilities
+            return self._json(200, protocol_capabilities('scdfe_t'))
         if self._packet_recording(parts, query, method) is not False:
             return
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):

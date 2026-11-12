@@ -291,9 +291,11 @@ class CanMaster(_CanTransport):
         self._receive_lock = threading.RLock()
         self._send_lock = threading.RLock()
         self._pending = deque()
+        self._frame_schedule = None
         self._points: list[dict] = []
         self._point_index: dict[tuple[str, int], dict] = {}
         self._frame_index: dict[tuple[int, bool], tuple[dict, ...]] = {}
+        self._frame_decoders = {}
         super().__init__(auto_start=auto_start, **kwargs)
 
     @classmethod
@@ -350,8 +352,17 @@ class CanMaster(_CanTransport):
                 kwargs['filters'] = filters
         kwargs.setdefault('rtu_id', rtu_id)
         master = cls(interface=interface, channel=bus_channel, **kwargs)
-        if point_rows:
-            master.configure(point_rows)
+        try:
+            if point_rows:
+                master.configure(point_rows)
+            from core.can_schedule import CanFrameSchedule, load_frame_definitions
+            master._frame_schedule = CanFrameSchedule(lambda *a, **kw: master.send(*a, timeout=.5, **kw),
+                                                      load_frame_definitions(store, rtu_id), fd=master.fd)
+            if master.connected:
+                master._frame_schedule.start()
+        except Exception:
+            master.close()
+            raise
         return master
 
     @classmethod
@@ -455,13 +466,51 @@ class CanMaster(_CanTransport):
             frame_id = row.get('frame_id')
             if frame_id is not None:
                 frame_index.setdefault((int(frame_id), bool(row.get('is_extended_id', False))), []).append(row)
+        decoders = {key: tuple(self._compile_decoder(row) for row in rows)
+                    for key, rows in frame_index.items()}
         with self._receive_lock:
             self._points = checked
             self._point_index = {(row['kind'], row['pnt_no']): row for row in checked}
             self._frame_index = {
                 key: tuple(rows) for key, rows in frame_index.items()
             }
+            self._frame_decoders = decoders
         return self
+
+    @staticmethod
+    def _compile_decoder(row):
+        """Resolve offsets, masks and codecs once per configuration."""
+        start, bits, offset = row['byte_offset'], row['bit_length'], row['bit_offset']
+        end = start + (offset + bits + 7) // 8
+        order, typ = row['byte_order'], row['value_type']
+        shift = (end - start) * 8 - offset - bits if order == 'big' else offset
+        mask, sign, wrap = (1 << bits) - 1, 1 << (bits - 1), 1 << bits
+        scale, bias = row['scale'], row['offset']
+        unpack = struct.Struct(('>' if order == 'big' else '<') +
+                               ('f' if bits == 32 else 'd')).unpack_from if typ == 'float' else None
+        q_offset = row.get('quality_byte_offset')
+        q_offset = -1 if q_offset is None else int(q_offset)
+        q_mask = int(row.get('quality_mask') or 0xFF)
+        point_no, kind = row['pnt_no'], row['kind']
+
+        def decode(frame, rtu_id):
+            raw = frame.data
+            if end > len(raw):
+                raise ValueError(f"CAN 帧 {frame.arbitration_id:#x} 数据长度不足")
+            if unpack is not None:
+                value = unpack(raw, start)[0] * scale + bias
+            else:
+                number = (int.from_bytes(raw[start:end], order) >> shift) & mask
+                if typ == 'bool':
+                    value = bool(number)
+                else:
+                    if typ == 'int' and number & sign:
+                        number -= wrap
+                    value = number * scale + bias
+            quality = raw[q_offset] & q_mask if 0 <= q_offset < len(raw) else 0
+            return CanValue(rtu_id, point_no, kind, value, quality, frame,
+                            frame.timestamp or time.time())
+        return decode
 
     @staticmethod
     def _extract_value(frame, row):
@@ -505,14 +554,28 @@ class CanMaster(_CanTransport):
 
     def connect(self):
         with self._receive_lock, self._send_lock:
-            return super().connect()
+            result = super().connect()
+            if self._frame_schedule is not None:
+                self._frame_schedule.start()
+            return result
 
     def close(self):
+        if self._frame_schedule is not None:
+            self._frame_schedule.stop()
         with self._receive_lock, self._send_lock:
             try:
                 super().close()
             finally:
                 self._pending.clear()
+
+    def schedule_frames(self, **selection):
+        if self._frame_schedule is None:
+            raise ValueError('尚未加载 CAN 报文定义')
+        return self._frame_schedule.trigger(**selection)
+
+    @property
+    def diagnostics(self):
+        return {'frame_schedule': self._frame_schedule.status() if self._frame_schedule else None}
 
     def send(self, arbitration_id, data=b'', *, timeout=None, **kwargs):
         if timeout is not None:
@@ -605,14 +668,14 @@ class CanMaster(_CanTransport):
 
     def _decode_frames(self, frames):
         """Decode configured four遥 mappings; without mappings preserve raw frames."""
-        frame_index = self._frame_index
+        frame_index = self._frame_decoders
         if not frame_index:
             return frames
         decoded = []
         for frame in frames:
-            for row in frame_index.get((frame.arbitration_id, bool(frame.is_extended_id)), ()):
+            for decode in frame_index.get((frame.arbitration_id, bool(frame.is_extended_id)), ()):
                 try:
-                    value = self._decode_point(frame, row, self.rtu_id)
+                    value = decode(frame, self.rtu_id)
                 except ValueError:
                     # A frame with the right ID but a short payload is a
                     # malformed sample; leave it to the caller as a protocol

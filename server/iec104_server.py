@@ -402,6 +402,8 @@ class IEC104Server(PacketTrace):
         if data_type is None:
             data_type = 1 if kind in ('yx', 'yc', 'yk') else 3
         data_type = self._canonical_type_id(kind, data_type, time_tag)
+        from core.protocol_capabilities import validate_iec104_runtime_type
+        validate_iec104_runtime_type(data_type)
         try:
             return getattr(c104.Type, self.TYPE_IDS[kind][data_type])
         except KeyError as exc:
@@ -420,13 +422,15 @@ class IEC104Server(PacketTrace):
         if not time_tag or str(time_tag).upper() in {'', 'NONE'}:
             return canonical
         tag = str(time_tag).upper().replace('-', '')
+        if tag == 'CP24TIME2A' and kind in {'yk', 'yt'}:
+            raise ValueError('IEC104 控制命令不使用 CP24Time2a；请使用 CP56Time2a')
         tagged = {
             'CP24TIME2A': {
                 'yx': {1: 2, 3: 4, 5: 6}, 'yc': {9: 10, 11: 12, 13: 14},
-                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
             },
             'CP56TIME2A': {
                 'yx': {1: 30, 3: 31, 5: 32}, 'yc': {9: 34, 11: 35, 13: 36},
+                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
             },
         }
         return tagged.get(tag, {}).get(kind, {}).get(canonical, canonical)
@@ -731,3 +735,15 @@ class IEC104Server(PacketTrace):
     def snapshot(self):
         with self._lock:
             return {key: self._plain(point.value) for key, point in self._points.items()}
+
+    def monitoring_snapshot(self, keys=None):
+        """Read each monitoring value and quality from one information object."""
+        with self._lock:
+            result = {}
+            points = self._points.items() if keys is None else ((key,self._points[key]) for key in keys if key in self._points)
+            for key, point in points:
+                if key[0] not in {'yc', 'yx'}:
+                    continue
+                info = point.info
+                result[key] = (self._plain(info.value), int(info.quality or 0))
+            return result

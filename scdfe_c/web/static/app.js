@@ -315,7 +315,7 @@ const PROTOCOL_RULES = {
     pnt_no: { min: 1, step: 1 },
     io_address: { min: 1, max: 16777215, step: 1, required: true },
     type_id: {
-      options: [1, 2, 3, 9, 11, 13, 45, 46, 48, 49, 50],
+      options: [1, 2, 3, 5, 9, 11, 13, 21, 30, 31, 32, 34, 35, 36, 45, 46, 48, 49, 50, 58, 59, 61, 62, 63],
       labels: {
         1: "1 · 单点/浮点",
         2: "2 · 双点/标度",
@@ -331,6 +331,7 @@ const PROTOCOL_RULES = {
       },
     },
     report_ms: { min: 0, step: 100 },
+      time_tag: {options: ["NONE", "CP56Time2a"], labels: {NONE:"无时标", CP56Time2a:"CP56Time2a"}},
     command_mode: {
       options: ["DIRECT", "SELECT_AND_EXECUTE"],
       labels: { DIRECT: "直接执行", SELECT_AND_EXECUTE: "选择后执行" },
@@ -1439,10 +1440,10 @@ function validateProtocolValue(schema, values) {
     requireField("io_address");
     const kind = String(values.kind || "");
     const allowed = {
-      yx: [1, 2, 3],
-      yc: [1, 2, 3, 9, 11, 13],
-      yk: [1, 2, 45, 46],
-      yt: [1, 2, 3, 48, 49, 50],
+        yx: [1, 2, 3, 5, 30, 31, 32],
+        yc: [1, 2, 3, 9, 11, 13, 21, 34, 35, 36],
+        yk: [1, 2, 45, 46, 58, 59],
+        yt: [1, 2, 3, 48, 49, 50, 61, 62, 63],
     }[kind];
     if (present("type_id") && allowed && !allowed.includes(Number(values.type_id)))
       throw new Error("IEC104 类型标识与点类型不匹配");
@@ -1904,7 +1905,13 @@ function renderProcesses() {
   );
   for (const id of ["process-all-start", "process-all-stop", "debug-start"]) $("#" + id).disabled = processMonitor.busy;
 }
-async function loadProcesses() {
+let pendingProcesses = null;
+function loadProcesses({fresh = false} = {}) {
+  if (pendingProcesses) return fresh ? pendingProcesses.then(() => loadProcesses()) : pendingProcesses;
+  pendingProcesses = fetchProcesses().finally(() => { pendingProcesses = null; });
+  return pendingProcesses;
+}
+async function fetchProcesses() {
   const request = ++processMonitor.request;
   processMonitor.loading = true;
   try {
@@ -1938,7 +1945,7 @@ async function controlProcess(target, action, extra = {}) {
   } catch (error) {
     toast(error.message, true);
   } finally {
-    await loadProcesses();
+    await loadProcesses({fresh:true});
   }
 }
 function openProcessLogs(name) {
@@ -2784,12 +2791,19 @@ $("#log-download").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 initLogFilterToggle();
+let manualRefreshPending = false;
 $("#refresh").onclick = async () => {
-  await loadRows();
+  if (manualRefreshPending) return;
+  manualRefreshPending = true;
+  $("#refresh").disabled = true;
   try {
+    await loadRows();
     await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    manualRefreshPending = false;
+    $("#refresh").disabled = false;
   }
 };
 $("#add").onclick = () =>

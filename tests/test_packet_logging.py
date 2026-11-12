@@ -200,10 +200,18 @@ class LivePacketLoggingTests(unittest.TestCase):
         try:
             for _ in range(2):
                 self.assertEqual(receiver.recv(2).arbitration_id, 0x123)
+            # Delivery precedes the sender's logging callback. python-can's
+            # stop/close is not a callback join; observe logging while the
+            # connection and log directory are still alive, as for IEC104.
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if self.content("scdfe_c-rtu-10").count("报文 TX") >= 2:
+                    break
+                time.sleep(.01)
+            self.assertGreaterEqual(self.content("scdfe_c-rtu-10").count("报文 TX"), 2)
         finally:
             task.stop()
             sender.close()
-        self.assertGreaterEqual(self.content("scdfe_c-rtu-10").count("报文 TX"), 2)
 
     def test_modbus_rtu_serial_transport_logs_crc_bytes(self):
         from client.modbus_rtu import ModbusRtuMaster

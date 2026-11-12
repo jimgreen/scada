@@ -15,6 +15,9 @@
   const runtimeKeys = new Set(["_version", "raw_value", "raw_status", "raw_time", "refresh_time", "process_status", "process_pid", "process_start_time", "process_stop_time", "process_heartbeat_time", "process_exit_code", "process_error"]);
   const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0, editingPoint:null, loading:false};
   const PAGE_SIZE = 25;
+  state.totals = {yc:0,yx:0,yk:0,yt:0};
+  state.pointRequests = {yc:0,yx:0,yk:0,yt:0};
+  let pendingRtu = null;
   const commandKinds = new Set(["yk", "yt"]);
   const rawStatusKinds = new Set(["yc", "yt"]);
   async function api(path, options = {}) {
@@ -59,18 +62,19 @@
     $("#metric-protocol").textContent = protocol.label;
     $("#metric-channel").textContent = item.channel_id ?? "—";
     $("#metric-packet").textContent = Number(item.packet_recording) ? "开启" : "关闭";
-    $("#metric-points").textContent = Object.values(state.points).reduce((n, rows) => n + rows.length, 0);
+    $("#metric-points").textContent = Object.values(state.totals).reduce((n, total) => n + total, 0);
     $("#channel-table").innerHTML = table(channelRows(item));
     $("#parameter-table").innerHTML = table(parameterRows(state.channel.parameter, state.channel.parameter_schema), "该规约尚未配置参数");
   }
   function renderPointKind(kind) {
     const rows = state.points[kind] || [];
     const page = state.pages[kind] || 0;
-    const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    const slice = rows;
+    const total = state.totals[kind];
     const body = $(`[data-point-body="${kind}"]`);
     const command = commandKinds.has(kind);
     const rawStatus = rawStatusKinds.has(kind);
-    body.innerHTML = slice.length ? slice.map(point => {
+    const html = slice.length ? slice.map(point => {
       const states = [point.status];
       if (rawStatus) states.push(point.raw_status);
       const times = [formatPointTime(point.refresh_time)];
@@ -80,8 +84,9 @@
         times.map(value => `<td>${esc(value)}</td>`).join("") +
         `<td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${command ? "下发" : "更新"}</button></td></tr>`;
     }).join("") : `<tr><td colspan="${6 + (rawStatus ? 1 : 0) + (command ? 1 : 0)}" class="muted">暂无定义</td></tr>`;
-    const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-    $(`[data-point-pager="${kind}"]`).innerHTML = rows.length > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${rows.length} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${rows.length} 点</span>`;
+    if (body._pointHtml !== html) { body.innerHTML = html; body._pointHtml = html; }
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    $(`[data-point-pager="${kind}"]`).innerHTML = total > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${total} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${total} 点</span>`;
   }
   function renderPoints() { ["yc","yx","yk","yt"].forEach(renderPointKind); renderSummary(); }
   function renderService(status) {
@@ -94,20 +99,28 @@
     $("#service-stop").disabled = !state.service || !item.running;
     $("#service-poll").disabled = !state.service || !item.running || !["modbus-tcp","modbus-rtu","can"].includes(state.service);
   }
-  async function fetchPoints(rtuId) {
-    async function fetchPointKind(kind) {
-      const result = [];
-      const fields = pointFields(kind).join(",");
-      const first = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=0&fields=${fields}`);
-      result.push(...(first.items || []));
-      for (let offset = result.length; offset < (first.total || result.length); offset += 500) {
-        const next = await api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=500&offset=${offset}&fields=${fields}`);
-        result.push(...(next.items || []));
-        if (!(next.items || []).length) break;
-      }
-      return [kind, result];
+  async function fetchPointPage(rtuId, kind, page) {
+    const fields = pointFields(kind).join(",");
+    const read = offset => api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=${PAGE_SIZE}&offset=${offset}&fields=${fields}`);
+    let result = await read(page * PAGE_SIZE);
+    const last = Math.max(0, Math.ceil((result.total || 0) / PAGE_SIZE) - 1);
+    if (page > last) { page = last; result = await read(page * PAGE_SIZE); }
+    return {items:result.items || [], total:result.total ?? (result.items || []).length, page};
+  }
+  function acceptPointPage(kind, result) {
+    state.points[kind] = result.items; state.totals[kind] = result.total; state.pages[kind] = result.page;
+  }
+  async function changePointPage(kind, direction) {
+    if (!state.rtu) return;
+    const id = state.rtu.rtu_id, scope = state.request, request = ++state.pointRequests[kind];
+    const page = Math.max(0, state.pages[kind] + direction);
+    try {
+      const result = await fetchPointPage(id, kind, page);
+      if (scope !== state.request || request !== state.pointRequests[kind]) return;
+      acceptPointPage(kind, result); renderPointKind(kind); renderSummary();
+    } catch (error) {
+      if (scope === state.request && request === state.pointRequests[kind]) message(error.message, true);
     }
-    return Object.fromEntries(await Promise.all(["yc","yx","yk","yt"].map(fetchPointKind)));
   }
   function refreshStatus(text, active = false, error = false) {
     const node = $("#test-refresh-status");
@@ -115,9 +128,22 @@
     node.textContent = text;
     node.className = `refresh-status${active ? " is-active" : ""}${error ? " is-error" : ""}`;
   }
-  async function loadRtu(id) {
-    if (state.loading && state.rtu && String(state.rtu.rtu_id) === String(id)) return;
+  function loadRtu(id, {fresh = false} = {}) {
+    if (pendingRtu && String(pendingRtu.id) === String(id)) {
+      return fresh ? pendingRtu.promise.then(() => String($("#rtu-select").value) === String(id) ? loadRtu(id) : undefined) : pendingRtu.promise;
+    }
+    const pending = {id};
+    pending.promise = performLoadRtu(id).finally(() => { if (pendingRtu === pending) pendingRtu = null; });
+    pendingRtu = pending;
+    return pending.promise;
+  }
+  async function performLoadRtu(id) {
     const request = ++state.request;
+    if (String(state.rtu?.rtu_id) !== String(id)) {
+      state.pages = {yc:0,yx:0,yk:0,yt:0}; state.points = {yc:[],yx:[],yk:[],yt:[]};
+      state.totals = {yc:0,yx:0,yk:0,yt:0}; state.channel = null;
+      closePointUpdate(); renderPoints(); renderService({});
+    }
     state.rtu = state.rtus.find(item => String(item.rtu_id) === String(id)) || null;
     if (!state.rtu) { state.loading = false; refreshStatus("请选择 RTU"); return; }
     state.loading = true;
@@ -125,14 +151,17 @@
     state.protocol = protocol; state.service = protocol.service;
     refreshStatus("正在刷新…", true);
     try {
-      const [channel, points, communications, status] = await Promise.all([
-        api(`/api/rtus/${encodeURIComponent(id)}/channel`), fetchPoints(id), api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`), protocol.service ? api(`/api/${protocol.service}/status`) : Promise.resolve({item:{}})
+      const pointRequests = Object.fromEntries(Object.keys(state.points).map(kind => [kind, ++state.pointRequests[kind]]));
+      const [channel, points, communications] = await Promise.all([
+        api(`/api/rtus/${encodeURIComponent(id)}/channel`),
+        Promise.all(Object.keys(state.points).map(async kind => [kind, await fetchPointPage(id, kind, state.pages[kind])])),
+        api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`)
       ]);
       if (request !== state.request) return;
-      state.channel = channel; state.points = points; state.pages = {yc:0,yx:0,yk:0,yt:0};
-      const match = (communications.items || []).find(item => String(item.rtu_id) === String(id))
-        || (communications.items || []).find(item => item.name === protocol.service);
-      renderPoints(); renderService(match || status.item || {});
+      state.channel = channel;
+      for (const [kind, result] of points) if (pointRequests[kind] === state.pointRequests[kind]) acceptPointPage(kind, result);
+      const match = (communications.items || []).find(item => String(item.rtu_id) === String(id));
+      renderPoints(); renderService(match || {rtu_id:id, last_error:"未取得当前 RTU 的运行状态"});
       // Scope the shared log browser to the RTU currently selected above.
       // The protocol process remains a fallback for manager-only logs, while
       // channel files are preferred whenever they exist.
@@ -157,8 +186,12 @@
   }
   async function loadRtus() {
     try {
-      const data = await api("/api/rtus?limit=500&fields=rtu_id,channel_id,channel_type,name");
-      state.rtus = data.items || [];
+      state.rtus = [];
+      for (let offset = 0; ; offset += 500) {
+        const data = await api(`/api/rtus?limit=500&offset=${offset}&fields=rtu_id,channel_id,channel_type,name`);
+        state.rtus.push(...(data.items || []));
+        if (!(data.items || []).length || state.rtus.length >= (data.total ?? state.rtus.length)) break;
+      }
       const select = $("#rtu-select");
       select.innerHTML = state.rtus.map(item => `<option value="${esc(item.rtu_id)}">RTU ${esc(item.rtu_id)} · ${esc(item.name || "未命名")} · ${esc(protocolFor(item.channel_type).label)}</option>`).join("");
       if (!state.rtus.length) { select.innerHTML = '<option value="">暂无 RTU</option>'; return; }
@@ -168,13 +201,26 @@
     } catch (error) { message(error.message, true); refreshStatus("刷新失败", false, true); }
   }
   async function serviceAction(action) {
-    if (!state.service) return;
-    try { await api(`/api/${state.service}/${action}`, {method:"POST", body:"{}"}); await loadRtu($("#rtu-select").value); message(action === "start" ? "规约服务已启动" : "规约服务已停止"); }
-    catch (error) { message(error.message, true); }
+    if (!state.service || !state.rtu) return;
+    const id = state.rtu.rtu_id;
+    try {
+      await api(`/api/rtus/${encodeURIComponent(id)}/service/${action}`, {method:"POST", body:"{}"});
+      if (String(state.rtu?.rtu_id) !== String(id)) return;
+      await loadRtu(id, {fresh:true});
+      if (String(state.rtu?.rtu_id) === String(id)) message(action === "start" ? "规约服务已启动" : "规约服务已停止");
+    }
+    catch (error) { if (String(state.rtu?.rtu_id) === String(id)) message(error.message, true); }
   }
   async function poll() {
-    try { await api(`/api/${state.service}/poll`, {method:"POST", body:"{}"}); await loadRtu($("#rtu-select").value); message("采集已完成"); }
-    catch (error) { message(error.message, true); }
+    if (!state.rtu) return;
+    const id = state.rtu.rtu_id;
+    try {
+      await api(`/api/rtus/${encodeURIComponent(id)}/service/poll`, {method:"POST", body:"{}"});
+      if (String(state.rtu?.rtu_id) !== String(id)) return;
+      await loadRtu(id, {fresh:true});
+      if (String(state.rtu?.rtu_id) === String(id)) message("采集已完成");
+    }
+    catch (error) { if (String(state.rtu?.rtu_id) === String(id)) message(error.message, true); }
   }
   function closePointUpdate() {
     const dialog = $("#point-update-dialog");
@@ -184,7 +230,7 @@
   }
   function openPointUpdate(kind, pointNo) {
     const current = (state.points[kind] || []).find(point => String(point.pnt_no) === String(pointNo)) || {};
-    state.editingPoint = {kind, pointNo, current};
+    state.editingPoint = {kind, pointNo, current, rtuId:state.rtu.rtu_id};
     $("#point-update-title").textContent = `${pointLabels[kind]} ${pointNo} · ${commandKinds.has(kind) ? "下发" : "更新"}`;
     $("#point-update-value").value = current.value ?? 0;
     $("#point-update-status").value = current.status ?? 0;
@@ -199,7 +245,7 @@
   async function submitPointUpdate() {
     const edit = state.editingPoint;
     if (!edit) return;
-    const {kind, pointNo} = edit;
+    const {kind, pointNo, rtuId} = edit;
     const number = Number($("#point-update-value").value);
     if (!Number.isFinite(number)) { $("#point-update-error").textContent = "请输入有限数字"; return; }
     const value = kind === "yx" || kind === "yk" ? (number ? 1 : 0) : number;
@@ -209,10 +255,12 @@
       return;
     }
     try {
-      const path = commandKinds.has(kind) ? `/api/rtus/${state.rtu.rtu_id}/commands/${kind}/${encodeURIComponent(pointNo)}` : `/api/rtus/${state.rtu.rtu_id}/points/${kind}/${encodeURIComponent(pointNo)}`;
+      const path = commandKinds.has(kind) ? `/api/rtus/${rtuId}/commands/${kind}/${encodeURIComponent(pointNo)}` : `/api/rtus/${rtuId}/points/${kind}/${encodeURIComponent(pointNo)}`;
       await api(path, {method:commandKinds.has(kind) ? "POST" : "PATCH", body:JSON.stringify(commandKinds.has(kind) ? {value} : {value, status})});
-      closePointUpdate();
-      await loadRtu(state.rtu.rtu_id); message(kind === "yk" || kind === "yt" ? "指令已提交" : "点值已更新");
+      if (String(state.rtu?.rtu_id) === String(rtuId)) {
+        closePointUpdate();
+        await loadRtu(rtuId, {fresh:true}); message(kind === "yk" || kind === "yt" ? "指令已提交" : "点值已更新");
+      }
     } catch (error) { message(error.message, true); }
   }
   function initTabs() {
@@ -225,7 +273,7 @@
   $("#service-start").addEventListener("click", () => serviceAction("start"));
   $("#service-stop").addEventListener("click", () => serviceAction("stop"));
   $("#service-poll").addEventListener("click", poll);
-  $("#point-panels").addEventListener("click", event => { const action = event.target.closest("[data-point-action]"); if (action) openPointUpdate(action.dataset.pointAction, action.dataset.pointNo); const page = event.target.closest("[data-point-page]"); if (page) { const kind = page.dataset.pointKind; state.pages[kind] = Math.max(0, state.pages[kind] + (page.dataset.pointPage === "next" ? 1 : -1)); renderPointKind(kind); } });
+  $("#point-panels").addEventListener("click", event => { const action = event.target.closest("[data-point-action]"); if (action) openPointUpdate(action.dataset.pointAction, action.dataset.pointNo); const page = event.target.closest("[data-point-page]"); if (page) changePointPage(page.dataset.pointKind, page.dataset.pointPage === "next" ? 1 : -1); });
   $("#point-update-form").addEventListener("submit", event => { event.preventDefault(); submitPointUpdate(); });
   $("#point-update-close").addEventListener("click", closePointUpdate);
   $("#point-update-cancel").addEventListener("click", closePointUpdate);

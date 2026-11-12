@@ -1,0 +1,66 @@
+{
+  "checks": [
+    "S/before: total point count",
+    "s/before: no browser exceptions",
+    "c/before: no browser exceptions",
+    "t/before: no browser exceptions",
+    "S/after: total point count",
+    "S: only four page queries",
+    "S: query limited to 25 rows",
+    "S: catalog contains RTUs beyond first 500",
+    "S: page change queries only selected point kind",
+    "S: second page displays point 26",
+    "S: refresh preserves page",
+    "S: fresh read after save replaces stale response",
+    "S: late old response keeps selected RTU",
+    "S: late failure does not overwrite current status",
+    "S: RTU 600 data accessible",
+    "S: service control targets selected RTU 600",
+    "S: default protocol service is not controlled",
+    "S: deletion clamps missing last page",
+    "s/after: no browser exceptions",
+    "c: concurrent process refresh merged",
+    "c: fresh request reads post-write state",
+    "c: failed request permits retry",
+    "c/after: no browser exceptions",
+    "t: concurrent process refresh merged",
+    "t: fresh request reads post-write state",
+    "t: failed request permits retry",
+    "t/after: no browser exceptions"
+  ],
+  "measurements": [
+    {
+      "module": "S",
+      "variant": "before",
+      "point_requests": 80,
+      "point_response_bytes": 4953152
+    },
+    {
+      "module": "C",
+      "variant": "before",
+      "concurrent_refresh_requests": 3
+    },
+    {
+      "module": "T",
+      "variant": "before",
+      "concurrent_refresh_requests": 3
+    },
+    {
+      "module": "S",
+      "variant": "after",
+      "point_requests": 4,
+      "point_response_bytes": 12028
+    },
+    {
+      "module": "C",
+      "variant": "after",
+      "concurrent_refresh_requests": 1
+    },
+    {
+      "module": "T",
+      "variant": "after",
+      "concurrent_refresh_requests": 1
+    }
+  ],
+  "scope": "Chromium real UI, deterministic intercepted APIs. No real station writes."
+}

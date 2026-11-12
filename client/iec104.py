@@ -388,15 +388,19 @@ class IEC104Master(PacketTrace):
             self._client.stop()
             self._started = False
 
-    def test_fr(self, *, with_time=True, wait_for_response=True):
-        """Send a TESTFR request and wait for its confirmation if requested."""
+    def test_command(self, *, with_time=True, wait_for_response=True):
+        """Send the ASDU application test command (104/107), not U TESTFR."""
         if not self.connected:
             raise IEC104Error('未连接，请先 connect()')
         if not self._connection.test(
                 self.common_address, with_time=bool(with_time),
                 wait_for_response=bool(wait_for_response)):
-            raise IEC104Error('TESTFR 测试帧失败')
+            raise IEC104Error('IEC104 应用测试命令失败')
         return True
+
+    def test_fr(self, **kwargs):
+        """U TESTFR is managed by the native connection's t3 timer."""
+        raise NotImplementedError('当前驱动仅自动发送 U TESTFR；应用测试请调用 test_command()')
 
     def __enter__(self):
         return self.connect()
@@ -433,6 +437,8 @@ class IEC104Master(PacketTrace):
             else:
                 data_type = self.yt_execute_type
         data_type = self._canonical_type_id(kind, data_type, time_tag)
+        from core.protocol_capabilities import validate_iec104_runtime_type
+        validate_iec104_runtime_type(data_type)
         try:
             return getattr(c104.Type, self.TYPE_IDS[kind][data_type])
         except KeyError as exc:
@@ -454,13 +460,15 @@ class IEC104Master(PacketTrace):
         if not time_tag or str(time_tag).upper() in {'', 'NONE'}:
             return canonical
         tag = str(time_tag).upper().replace('-', '')
+        if tag == 'CP24TIME2A' and kind in {'yk', 'yt'}:
+            raise ValueError('IEC104 控制命令不使用 CP24Time2a；请使用 CP56Time2a')
         tagged = {
             'CP24TIME2A': {
                 'yx': {1: 2, 3: 4, 5: 6}, 'yc': {9: 10, 11: 12, 13: 14},
-                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
             },
             'CP56TIME2A': {
                 'yx': {1: 30, 3: 31, 5: 32}, 'yc': {9: 34, 11: 35, 13: 36},
+                'yk': {45: 58, 46: 59}, 'yt': {48: 61, 49: 62, 50: 63},
             },
         }
         return tagged.get(tag, {}).get(kind, {}).get(canonical, canonical)
@@ -539,7 +547,7 @@ class IEC104Master(PacketTrace):
         value = binary_command_value(value)
         definition = self._point_definitions.get(('yk', int(point_no)), {})
         type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
-        canonical_type = self._canonical_type_id('yk', type_id)
+        canonical_type = self._canonical_type_id('yk', type_id, field(definition, 'time_tag'))
         if double is None:
             double = canonical_type in {46, 59}
         if select_execute is None:
@@ -563,13 +571,13 @@ class IEC104Master(PacketTrace):
         return self.value('yk', point_no)
 
     def _write_yt_command(self, point_no, value, *, data_type=None, qualifier=None,
-                           recorded_at=None):
+                           recorded_at=None, cause=None):
         # 旧 CRtu104::TxdData_2SETPNT 使用 0x32（短浮点）设点；
         # 因而遥调未显式指定类型时沿用短浮点，而非遥测配置。
         definition = self._point_definitions.get(('yt', int(point_no)), {})
         data_type = field(definition, 'data_type', field(definition, 'type_id', 3)) if data_type is None else data_type
         data_type = 3 if data_type is None else int(data_type)
-        data_type = self._canonical_type_id('yt', data_type)
+        data_type = self._canonical_type_id('yt', data_type, field(definition, 'time_tag'))
         if qualifier is None:
             qualifier = field(definition, 'qualifier', 0)
         point = self._point('yt', point_no, data_type=data_type)
@@ -592,7 +600,7 @@ class IEC104Master(PacketTrace):
                                        recorded_at=recorded_at)
         else:
             raise ValueError(f'yt 不支持 data_type={data_type}')
-        if not point.transmit(c104.Cot.ACTIVATION):
+        if not point.transmit(c104.Cot.ACTIVATION if cause is None else cause):
             raise IEC104Error(f'遥调点 {point_no} 未被 c104 接受')
         return self.value('yt', point_no)
 
@@ -706,9 +714,15 @@ class IEC104Master(PacketTrace):
                                        select_execute=select_execute, qualifier=qualifier,
                                        recorded_at=recorded_at)
 
-    def send_yt_point(self, point_no, value, *, data_type=None, qualifier=0, recorded_at=None):
+    def send_yt_point(self, point_no, value, *, data_type=None, qualifier=None, recorded_at=None):
         return self._write_yt_command(point_no, value, data_type=data_type,
                                        qualifier=qualifier, recorded_at=recorded_at)
+
+    def cancel_yt_point(self, point_no, value, *, data_type=None, qualifier=None, recorded_at=None):
+        """Send a set-point deactivation, preserving the configured type/time tag."""
+        return self._write_yt_command(point_no, value, data_type=data_type,
+                                     qualifier=qualifier, recorded_at=recorded_at,
+                                     cause=c104.Cot.DEACTIVATION)
 
     def cancel_yk_point(self, point_no, value, *, double=None, qualifier=None,
                         recorded_at=None):
@@ -716,7 +730,7 @@ class IEC104Master(PacketTrace):
         value = binary_command_value(value)
         definition = self._point_definitions.get(('yk', int(point_no)), {})
         type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
-        canonical_type = self._canonical_type_id('yk', type_id)
+        canonical_type = self._canonical_type_id('yk', type_id, field(definition, 'time_tag'))
         double = canonical_type in {46, 59} if double is None else bool(double)
         wire_type = canonical_type if canonical_type in {45, 46, 58, 59} else (46 if double else 45)
         point = self._point('yk', point_no, data_type=wire_type)
@@ -724,6 +738,8 @@ class IEC104Master(PacketTrace):
         point.command_mode = (c104.CommandMode.SELECT_AND_EXECUTE
                               if mode in {'SELECT_AND_EXECUTE', 'SELECT-AND-EXECUTE', 'SELECT'}
                               else c104.CommandMode.DIRECT)
+        if qualifier is None:
+            qualifier = field(definition, 'qualifier')
         qoc = c104.Qoc.NONE if qualifier is None else (
             qualifier if isinstance(qualifier, c104.Qoc) else c104.Qoc(int(qualifier)))
         if double:

@@ -1,0 +1,13 @@
+{
+  "client/can.py": "788034639e5710ea863afe9d79fbee743e321393f19a28963b905090772be3fe",
+  "server/modbus_trans_server.py": "225371f0fcdfd71dc8629ef40d74587f98ce3c94a521def52602301a5dc53ed7",
+  "server/modbus_mapped_server.py": "9cfd4d2275d9f43f8bbb18eb9bbc0e9bb6dafb8ce5471767a11f120f97988e5e",
+  "server/iec104_server.py": "c3798d84db115df3836734f6447226ecfe34b25119d3ceeb2d5314557a35d9a9",
+  "scdfe_s/web/iec104_service.py": "f3f5169f7d75ea19a64c15413f4ab19f12974b0f5b17e18ff66a64e8788d6140",
+  "scdfe_t/trans.py": "ba4917ef28afabc5de39f1af3bd4edfd080754b47409d1d4e5a9a3f462e971a6",
+  "scdfe_c/__init__.py": "0ccc48a3faba20bb6a2a98c0bedc0fdd6a8dc1686422fb3033de96b28a79abf6",
+  "scdfe_c/web/static/app.js": "07867b4f15c564b57f27033ca9b105c23fe17df06d0c6fdb6bea311405e08660",
+  "scdfe_s/web/static/test.js": "7c73b5ea54bbc572ae7b9d23781a67f8e7489544e8a61c0863ce74748ae13035",
+  "scdfe_t/web/static/app.js": "41045e346128636fc6202519616853f86c5adbffa96f8361f61eb5184128c0af",
+  "scdfe_t/web/static/processes.js": "cd203df5a1946e07f74bf3c17d85598e369c548b1d24fae73544d15137589e9d"
+}

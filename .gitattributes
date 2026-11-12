@@ -1,0 +1,2 @@
+# Benchmark baselines are byte-frozen and verified by SHA256.
+reports/scdfe_efficiency_20261112_round2/before/*.snapshot -text -diff

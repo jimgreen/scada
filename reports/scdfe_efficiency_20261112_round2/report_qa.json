@@ -1,0 +1,13 @@
+{
+  "desktop": "1440x1050",
+  "mobile": "390x844",
+  "page_errors": [],
+  "horizontal_page_overflow": false,
+  "headings": [
+    "同规模运行性能对比",
+    "页面交互与传输量",
+    "修改与使用说明",
+    "验证结果",
+    "方法与验证边界"
+  ]
+}

@@ -620,7 +620,7 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
     if len(messages) == 1:
         fast_grouped: dict[str, list[tuple[Any, ...]]] = {}
         fast_seen: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]] = {}
-        fast_unique: set[tuple[str, tuple[str, ...]]] = set()
+        fast_unique: dict[tuple[str, tuple[str, ...]], tuple[list, int]] = {}
         fast_path = True
         for group in _message_groups(messages[0]):
             table, key_names, value_names, value_indexes, rows = _validated_batch_group(group)
@@ -634,18 +634,26 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
             prepared_rows = fast_grouped.setdefault(sql, [])
             unique_rows = group.get("_unique_rows") is True
             key_group = (table, canonical_keys)
-            # The producer guarantees uniqueness within its group only. If
-            # another group touches the same keys, use the general merger
-            # so partial updates still increment a point's version just once.
-            if key_group in fast_unique or (unique_rows and key_group in fast_seen):
-                fast_path = False
-                break
-            if unique_rows:
-                fast_unique.add(key_group)
-            # Table and key names are fixed for the entire group. Hash them
-            # once per group instead of wrapping every point key in a token.
-            seen_keys = (None if unique_rows else
-                         fast_seen.setdefault(key_group, set()))
+            # A producer's changed and heartbeat groups share a table but
+            # normally have disjoint keys. Defer building the first group's
+            # key set until a second group needs it; full-change scans still
+            # avoid that allocation. Only actual overlaps need the merger.
+            previous_unique = fast_unique.pop(key_group, None)
+            if previous_unique is not None:
+                previous_rows, previous_count = previous_unique
+                seen_keys = {row[previous_count:] for row in previous_rows}
+                if len(seen_keys) != len(previous_rows):
+                    fast_path = False
+                    break
+                fast_seen[key_group] = seen_keys
+            else:
+                seen_keys = fast_seen.get(key_group)
+            if seen_keys is None:
+                if unique_rows:
+                    # Retain normalized rows, including tuple subclasses.
+                    fast_unique[key_group] = (prepared_rows, value_count)
+                else:
+                    seen_keys = fast_seen.setdefault(key_group, set())
             for row in rows:
                 if type(row) is not tuple:
                     if not isinstance(row, (tuple, list)):
@@ -653,7 +661,7 @@ def _prepare_batch_updates(messages: list[Mapping[str, Any]]) -> dict[str, list[
                     row = tuple(row)
                 if len(row) != param_count:
                     raise ValueError("批量写入行参数数量不匹配")
-                if not unique_rows:
+                if seen_keys is not None:
                     keys = row[value_count:]
                     if keys in seen_keys:  # also rejects unhashable keys
                         fast_path = False
@@ -738,14 +746,22 @@ def _flush_batch(
             [_prepare_batch_updates([message]) for message in messages]
             if preserve_versions else [_prepare_batch_updates(messages)]
         )
+        # Only concatenate adjacent identical statements. Every original row
+        # update/version bump and cross-table/field ordering stays intact.
+        executions = []
+        for prepared in prepared_batches:
+            for sql, params in prepared.items():
+                if executions and executions[-1][0] == sql:
+                    executions[-1][1].extend(params)
+                else:
+                    executions.append((sql,list(params)))
         if active_connection is None:
             active_connection = store.open_connection()
         for attempt in range(BATCH_WRITER_LOCK_RETRIES):
             try:
                 active_connection.execute("BEGIN IMMEDIATE")
-                for prepared in prepared_batches:
-                    for sql, params in prepared.items():
-                        active_connection.executemany(sql, params)
+                for sql, params in executions:
+                    active_connection.executemany(sql, params)
                 active_connection.commit()
                 return True
             except sqlite3.OperationalError as exc:

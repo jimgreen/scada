@@ -9,6 +9,26 @@ from scdfe_s.web.server import _rtu_point_counts, make_server
 
 
 class ScdfeSWebMonitorTests(unittest.TestCase):
+    def test_selected_rtu_controls_only_its_service(self):
+        from unittest.mock import Mock, patch
+        for rid in (1,2):
+            self.store.create_row('fes_rtu_define',dict(rtu_id=rid,channel_id=rid,channel_type='modbus-tcp'))
+        first,second=Mock(),Mock()
+        for action in ('start','stop','poll'):
+            getattr(second,action).return_value={'rtu_id':2}
+        self.httpd._channel_service_cache.update({'modbus-tcp-rtu-1':first,'modbus-tcp-rtu-2':second})
+        with patch.object(self.httpd.modbus_tcp_service,'start') as default_start:
+            for action in ('start','stop','poll'):
+                status,body=self.request('POST',f'/api/rtus/2/service/{action}',{})
+                self.assertEqual(status,200,body)
+                self.assertEqual(body['item']['rtu_id'],2)
+                getattr(second,action).assert_called_once_with()
+                getattr(first,action).assert_not_called()
+            default_start.assert_not_called()
+        self.assertEqual(self.request('GET','/api/rtus/2/service/start')[0],405)
+        self.assertEqual(self.request('POST','/api/rtus/999/service/start',{})[0],404)
+        self.assertEqual(self.request('POST','/api/rtus/2/service/start',{'rtu_id':1})[0],400)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "scada.sqlite3"
@@ -77,10 +97,40 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["items"][0]["rtu_id"], 2)
+        self.assertEqual(set(self.httpd._channel_service_cache), {"iec104-rtu-2"})
+        selected_service = self.httpd._channel_service_cache["iec104-rtu-2"]
+        status, payload = self.request("GET", "/api/monitor/communications")
+        self.assertEqual(status, 200)
+        self.assertEqual({item["rtu_id"] for item in payload["items"]}, {1, 2})
+        self.assertIs(self.httpd._channel_service_cache["iec104-rtu-2"], selected_service)
+        status, payload = self.request("GET", "/api/monitor/communications?rtu_id=99")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"items": [], "total": 0})
         status, _ = self.request(
             "GET", "/api/monitor/communications?rtu_id=invalid"
         )
         self.assertEqual(status, 400)
+
+    def test_scoped_channel_services_keep_protocol_port_and_binding(self):
+        for rtu_id, protocol in ((1, "iec104"), (2, "modbus-tcp")):
+            self.store.create_row("fes_rtu_define", {
+                "rtu_id": rtu_id, "channel_id": 100 + rtu_id,
+                "channel_type": protocol, "name": f"RTU-{rtu_id}",
+                "process_enable": 0,
+            })
+        with self.store.connection() as connection:
+            connection.execute(
+                "INSERT INTO fes_channel_iec104_define(channel_id, remote_port) VALUES(101, 24041)"
+            )
+        services = self.httpd.channel_services(rtu_id=1)
+        self.assertEqual(set(services), {"iec104-rtu-1"})
+        self.assertEqual(services["iec104-rtu-1"]._config["port"], 24041)
+        self.assertEqual(services["iec104-rtu-1"]._config["rtu_id"], 1)
+        other = self.httpd.channel_services(rtu_id=2)
+        self.assertEqual(set(other), {"modbus-tcp-rtu-2"})
+        self.assertIs(self.httpd.channel_services(rtu_id=1)["iec104-rtu-1"], services["iec104-rtu-1"])
+        self.store.update_row("fes_rtu_define", [1], {"channel_type": "can"})
+        self.assertEqual(set(self.httpd.channel_services(rtu_id=1)), {"can-rtu-1"})
 
     def test_channel_and_point_crud_alias(self):
         status, payload = self.request("POST", "/api/channels", {

@@ -1,0 +1,10 @@
+test_managed_stop_is_prompt_even_with_a_long_data_scan (tests.test_review_t_runtime.TransmissionReviewTests.test_managed_stop_is_prompt_even_with_a_long_data_scan) ... ok
+test_managed_stop_is_prompt_even_with_a_long_data_scan (tests.test_review_t_runtime.TransmissionReviewTests.test_managed_stop_is_prompt_even_with_a_long_data_scan) ... ok
+test_managed_stop_is_prompt_even_with_a_long_data_scan (tests.test_review_t_runtime.TransmissionReviewTests.test_managed_stop_is_prompt_even_with_a_long_data_scan) ... ok
+test_managed_stop_is_prompt_even_with_a_long_data_scan (tests.test_review_t_runtime.TransmissionReviewTests.test_managed_stop_is_prompt_even_with_a_long_data_scan) ... ok
+test_managed_stop_is_prompt_even_with_a_long_data_scan (tests.test_review_t_runtime.TransmissionReviewTests.test_managed_stop_is_prompt_even_with_a_long_data_scan) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 11.020s
+
+OK

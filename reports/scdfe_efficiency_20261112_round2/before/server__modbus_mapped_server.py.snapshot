@@ -1,0 +1,202 @@
+"""S server engineering-value adapter using the shared Modbus wire codec."""
+from __future__ import annotations
+
+import math
+import sqlite3
+import threading
+import time
+from contextlib import closing
+
+from client.modbus_tcp import field, normalize_modbus_address
+from .modbus_trans_server import ModbusTcpTransServer
+
+
+def _numeric_mapping(row, typ):
+    types = {1:'int16', 2:'uint16', 3:'int32', 4:'uint32', 5:'float32', 10:'int64', 11:'uint64'}
+    if typ not in types:
+        raise ValueError(f'S Modbus 工程点暂不支持寄存器位/字节切片类型 {typ}，不能回退为原始寄存器')
+    byte_order, word_order = 'big', 'big'
+    if typ in (1, 2):
+        byte_order = 'little' if field(row, 'twobytedata_byteseq', 0) else 'big'
+    if typ in (3, 4, 5):
+        order = int(field(row, 'fourbytedata_byteseq', 0))
+        if order not in range(4):
+            raise ValueError('四字节字序必须在 0..3')
+        byte_order, word_order = [('little','big'), ('little','little'),
+                                 ('big','little'), ('big','big')][order]
+    return dict(data_type=types[typ], byte_order=byte_order, word_order=word_order)
+
+
+def simulator_mappings(store, rtu_id, unit_id):
+    """Load the channel's persisted C/S mapping contract in one read snapshot."""
+    if rtu_id is None:
+        return []
+    with store.connection() as con:
+        con.execute('BEGIN')
+        rtu = con.execute('SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?', (rtu_id,)).fetchone()
+        if rtu is None:
+            raise ValueError(f'RTU {rtu_id} 不存在')
+        channel = rtu[0]
+        calls = {r['call_seq']: dict(r) for r in con.execute(
+            'SELECT * FROM fes_channel_modbus_define_call WHERE channel_id=?', (channel,))}
+        samples = [dict(r) for r in con.execute(
+            'SELECT * FROM fes_channel_modbus_define_data WHERE channel_id=?', (channel,))]
+        commands = [dict(r) for r in con.execute(
+            'SELECT * FROM fes_channel_modbus_define_ytyk WHERE channel_id=?', (channel,))]
+    mappings = []
+    for row in samples:
+        call = calls.get(row['call_seq'])
+        if call is None:
+            raise ValueError('Modbus 数据点缺少召唤定义')
+        if int(field(call, 'irtuaddr', unit_id)) != unit_id:
+            raise ValueError('S Modbus 服务的点映射必须使用同一站号')
+        fc = int(call['icode'])
+        area = {1:'coil', 2:'discrete', 3:'holding', 4:'input'}.get(fc)
+        if area is None:
+            raise ValueError('读取功能码必须为 01/02/03/04')
+        kind = 'yx' if field(row, 'if_yx', fc < 3) else 'yc'
+        address = normalize_modbus_address(row['reg_addr'], field(call, 'address_base', 0))
+        start = normalize_modbus_address(call['iplace'], field(call, 'address_base', 0))
+        if fc < 3:
+            if row['trans_type'] != 8 or field(row, 'if_reverse', 0):
+                raise ValueError('S Modbus 位区暂只支持未取反的 trans_type=8')
+            codec = dict(data_type='bool')
+        else:
+            if kind == 'yx':
+                raise ValueError('S Modbus 寄存器遥信位切片尚未实现')
+            codec = _numeric_mapping(row, row['trans_type'])
+        size = ModbusTcpTransServer._TYPE_SIZES.get(codec['data_type'], 1)
+        if address < start or address + size > start + int(call['inum']):
+            raise ValueError('数据点编码范围超出召唤定义')
+        mappings.append(dict(kind=kind, pnt_no=row['cnt'], address=address,
+                             register_area=area, **codec))
+    for row in commands:
+        if int(field(row, 'irtuaddr', unit_id)) != unit_id:
+            raise ValueError('S Modbus 服务的命令映射必须使用同一站号')
+        kind = 'yk' if row['ifyk'] else 'yt'
+        if kind == 'yk':
+            if field(row, 'icode', 5) not in (5,15) or field(row, 'ifreverse', 0):
+                raise ValueError('S Modbus 工程遥控暂支持未取反的 05/15 线圈命令')
+            codec, area = dict(data_type='bool'), 'coil'
+        else:
+            codec, area = _numeric_mapping(row, row['ytyk_type']), 'holding'
+            factor = float(field(row, 'multi_para', 1))
+            codec['scale'] = 1 / factor if abs(factor) > 1e-7 else 1
+        mappings.append(dict(kind=kind, pnt_no=row['cnt'], register_area=area,
+                             address=normalize_modbus_address(row['reg_addr'], field(row,'address_base',0)), **codec))
+    return mappings
+
+
+class ModbusMappedServer(ModbusTcpTransServer):
+    """TCP/RTU simulator, with database-owned values and command receipts."""
+    # S simulates the device's writable holding/coil areas. T measurements
+    # remain read-only: only commands may be forwarded to the acquisition side.
+    ALLOW_MEASUREMENT_WRITES = True
+    def __init__(self, *, store, rtu_id, points, **kwargs):
+        self.store, self.rtu_id = store, int(rtu_id)
+        values = {}
+        with store.connection() as con:
+            con.execute('BEGIN')
+            for kind in ('yc','yx','yk','yt'):
+                values.update({(kind,int(r[0])): r[1] if r[1] is not None else 0 for r in con.execute(
+                    f'SELECT pnt_no,value FROM fes_{kind}_define WHERE rtu_id=?', (rtu_id,))})
+        missing = {(p['kind'], p['pnt_no']) for p in points} - values.keys()
+        if missing:
+            raise ValueError(f'Modbus 映射缺少四遥定义: {sorted(missing)}')
+        self._sync_stop = threading.Event()
+        self._sync_thread = None
+        self._database_samples = {k:v for k,v in values.items() if k[0] in {'yc','yx'}}
+        super().__init__(points=points, point_values=values, command_handler=self._command, **kwargs)
+
+    def _encode(self, row, value):
+        if not math.isfinite(float(value)):
+            raise ValueError('Modbus 值必须为有限数字')
+        if row['data_type'].startswith('uint') and (value-row['offset'])/(row['scale'] or 1) < 0:
+            raise ValueError('无符号寄存器不能表示负数')
+        return super()._encode(row,value)
+
+    def _command(self, kind, no, value):
+        now = int(time.time()*1000)
+        fields = dict(value=int(value) if kind in {'yx','yk'} else value,
+                      status=0, refresh_time=now)
+        if kind in {'yk','yt'}:
+            fields.update(status=1,cmd_handle_time=now)
+        self.store.update_row(f'fes_{kind}_define', [self.rtu_id,no],fields)
+        return True
+
+    def _prepare_sample(self, kind, point_no, value):
+        key = (kind, int(point_no))
+        row = self._mappings[key]
+        area = row['register_area']
+        if not math.isfinite(float(value)):
+            raise ValueError('Modbus 值必须为有限数字')
+        if area in {'coil', 'discrete'}:
+            if value not in (0,1):
+                raise ValueError('Modbus 位值必须为 0/1')
+            raw = [bool(value)]
+        else:
+            raw = self._encode(row,value)
+        return key, row, area, raw
+
+    def prepare_updates(self, updates):
+        batch, seen = [], set()
+        for kind, no, value in updates:
+            key, row, area, raw = self._prepare_sample(kind, int(no), value)
+            if key in seen:
+                raise ValueError('批次点号不能重复')
+            seen.add(key)
+            value = bool(raw[0]) if area in {'coil','discrete'} else self._decode(row,raw)
+            batch.append((*key,value))
+        return batch
+
+    def publish_updates(self, batch):
+        failed = self.update_many(batch)
+        if failed:
+            raise next(iter(failed.values()))
+
+    def update_point(self, kind, point_no, value):
+        batch = self.prepare_updates([(kind,point_no,value)])
+        self.publish_updates(batch)
+        return batch[0][2]
+
+    def snapshot(self):
+        return self._on_datastore(lambda: [dict(kind=k, pnt_no=n, value=v)
+                                          for (k,n),v in self._values.items()])
+
+    def _sync(self):
+        with closing(sqlite3.connect(str(self.store.db_path), timeout=2, isolation_level=None)) as con:
+            version = None
+            while not self._sync_stop.wait(.05):
+                try:
+                    current = con.execute('PRAGMA data_version').fetchone()[0]
+                    if current == version:
+                        continue
+                    changed = []
+                    for kind in ('yc','yx'):
+                        for no,value in con.execute(f'SELECT pnt_no,value FROM fes_{kind}_define WHERE rtu_id=?', (self.rtu_id,)):
+                            value = 0 if value is None else value
+                            if (kind,no) in self._mappings and value != self._database_samples.get((kind,no)):
+                                changed.append((kind,no,value))
+                    self.publish_updates(self.prepare_updates(changed))
+                    self._database_samples.update({(kind,no):value for kind,no,value in changed})
+                    version = current
+                except Exception as exc:
+                    self._log('ERROR', f'Modbus 数据库同步失败: {exc}')
+
+    def start(self):
+        super().start()
+        self._sync_stop.clear()
+        self._sync_thread = threading.Thread(target=self._sync, name='modbus-db-sync', daemon=True)
+        self._sync_thread.start()
+
+    def close(self):
+        self._sync_stop.set()
+        if self._sync_thread is not None:
+            self._sync_thread.join(3)
+            self._sync_thread = None
+        super().close()
+
+    @property
+    def diagnostics(self):
+        return dict(value_mode='engineering_mapping', mapped_points=len(self._mappings),
+                    database_sync_interval_ms=50, command_confirmation_scope='simulator_database')

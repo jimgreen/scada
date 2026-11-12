@@ -889,6 +889,10 @@ class ScadaStore:
         }
         kind = values.get('kind')
         type_id = values.get('type_id')
+        if (str(values.get('time_tag') or '').upper() == 'CP24TIME2A'
+                or type_id in {4, 6, 10, 12, 14}):
+            raise ApiError(400, '当前 c104 驱动不支持 CP24Time2a，请明确选择 NONE 或 CP56Time2a',
+                           code='protocol_capability_unsupported')
         if type_id is not None and not (allow_unset_type and type_id == 0):
             allowed = type_ids.get(kind) if kind in type_ids else set().union(*type_ids.values())
             if type_id not in allowed:

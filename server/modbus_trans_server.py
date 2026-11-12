@@ -55,6 +55,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
     remote write is not committed.
     """
 
+    ALLOW_MEASUREMENT_WRITES = False
+
     _TYPE_SIZES = {
         "float32": 2, "single": 2, "int32": 2, "uint32": 2,
         "float64": 4, "double": 4, "int64": 4, "uint64": 4,
@@ -64,7 +66,7 @@ class ModbusTcpTransServer(ModbusTcpServer):
                  points: Sequence[Mapping[str, Any]] = (),
                  point_values: Mapping[tuple[str, int], Any] | None = None,
                  command_handler: Callable[[str, int, Any], bool] | None = None,
-                 log=lambda level, message: None, **kwargs):
+                 log=lambda level, message: None, tcp=True, serial=None, **kwargs):
         self.unit_id = int(unit_id)
         if not 0 <= self.unit_id <= 247:
             raise ValueError("unit_id 必须在 0..247")
@@ -80,8 +82,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
         # ModbusAsyncServer expects a pymodbus context, and pymodbus 3.x accepts
         # SimDevice directly.  This avoids the deprecated ModbusDeviceContext
         # wrapper and lets writes reach the async action callback.
-        ModbusAsyncServer.__init__(self, sim_device, tcp=True, host=host,
-                                   port=int(port), log=log, **kwargs)
+        ModbusAsyncServer.__init__(self, sim_device, tcp=tcp, host=host,
+                                   port=int(port), serial=serial, log=log, **kwargs)
 
     @staticmethod
     def _point_no(row: Mapping[str, Any]) -> int:
@@ -133,6 +135,7 @@ class ModbusTcpTransServer(ModbusTcpServer):
 
     def _simdata(self):
         blocks: list[list[SimData]] = [[], [], [], []]
+        self._sim_blocks = {}
         # A sparse SimData list needs at least one entry.  A non-mapped default
         # point at zero leaves all other addresses invalid until explicitly
         # configured, which is safer than exposing an accidental full register
@@ -153,12 +156,13 @@ class ModbusTcpTransServer(ModbusTcpServer):
                                                  values=value, datatype=DataType.BITS))
                 else:
                     raw = self._encode(row, self._values.get((row.get("kind"), row.get("pnt_no")), row.get("value", 0)))
-                    # ``count`` defaults to one even when ``values`` has
-                    # multiple registers.  Set it to the encoded width so a
-                    # float32/64 mapping is fully readable by remote clients.
-                    blocks[index].append(SimData(address=row["address"], count=len(raw),
+                    # A list already contains every register. count repeats
+                    # the entire list and would overlap adjacent wide points.
+                    blocks[index].append(SimData(address=row["address"], count=1,
                                                  values=raw, datatype=DataType.REGISTERS,
-                                                 readonly=area == "input" or row.get("kind") in {"yc", "yx"}))
+                                                 readonly=area == "input" or
+                                                 (not self.ALLOW_MEASUREMENT_WRITES and row.get("kind") in {"yc", "yx"})))
+                self._sim_blocks[(area,row['address'])] = blocks[index][-1]
         return tuple(blocks)
 
     def _encode(self, row: Mapping[str, Any], engineering: Any) -> list[int]:
@@ -224,7 +228,7 @@ class ModbusTcpTransServer(ModbusTcpServer):
         candidates = []
         for offset in range(write_count):
             row = self._by_address.get((area, int(address) + offset))
-            if row is None or row["kind"] not in {"yk", "yt"}:
+            if row is None or (not self.ALLOW_MEASUREMENT_WRITES and row["kind"] not in {"yk", "yt"}):
                 return ExcCodes.ILLEGAL_ADDRESS
             if row not in candidates:
                 candidates.append(row)
@@ -276,13 +280,15 @@ class ModbusTcpTransServer(ModbusTcpServer):
                 registers[index:index + len(raw)] = raw
         elif hasattr(runtime, "simdata"):
             blocks = runtime.simdata[_AREA_TO_INDEX[area]]
-            target = None
-            for candidate in blocks:
-                begin = int(candidate.address)
-                count = int(candidate.count)
-                if begin <= row["address"] and row["address"] + len(raw) <= begin + count:
-                    target = candidate
-                    break
+            target = self._sim_blocks.get((area,row['address'])) if runtime is self.context else None
+            if target is None:
+                for candidate in blocks:
+                    begin = int(candidate.address)
+                    width = len(candidate.values) if isinstance(candidate.values,list) else 1
+                    count = int(candidate.count) * width
+                    if begin <= row["address"] and row["address"] + len(raw) <= begin + count:
+                        target = candidate
+                        break
             if target is None:
                 raise KeyError(f"Modbus 地址未映射: {area}/{row['address']}")
             index = row["address"] - int(target.address)
@@ -306,6 +312,11 @@ class ModbusTcpTransServer(ModbusTcpServer):
                 ready.append((*self._prepare_sample(kind, no, value), value))
             except Exception as exc:
                 failed[(kind, no)] = exc
+        return self._publish_ready(ready, failed)
+
+    def _publish_ready(self, ready, failed=None):
+        """Publish already validated wire values in one datastore handoff."""
+        failed = {} if failed is None else failed
         if not ready:
             return failed
         runtime = getattr(self.server, "context", None)

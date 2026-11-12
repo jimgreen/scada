@@ -292,6 +292,27 @@ class ProtocolService:
     def _build_engine(self):
         raise NotImplementedError
 
+    def _mapped_modbus_server(self, config, *, tcp):
+        from server.modbus_mapped_server import ModbusMappedServer, simulator_mappings
+        rtu_id = self._configured_rtu()
+        mappings = simulator_mappings(self.store, rtu_id, config['unit_id'])
+        if not mappings:
+            return None  # Keep the standalone raw-register test mode.
+        options = dict(host=config['bind_ip'], port=config['listen_port']) if tcp else dict(
+            serial=config['serial_port'], baudrate=config['baudrate'], bytesize=config['bytesize'],
+            parity=config['parity'], stopbits=config['stopbits'], timeout=config['response_timeout'])
+        return ModbusMappedServer(store=self.store, rtu_id=rtu_id, points=mappings,
+                                  unit_id=config['unit_id'], tcp=tcp, log=self._record, **options)
+
+    def schedule_frames(self, **selection):
+        with self._lock:
+            if not self.running or not hasattr(self._engine, 'schedule_frames'):
+                raise ProtocolServiceError('CAN 服务或报文调度接口未启动')
+            try:
+                return self._engine.schedule_frames(**selection)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ProtocolServiceError(str(exc)) from exc
+
     def start(self):
         with self._lock:
             if self._config_error:
@@ -611,7 +632,7 @@ class ProtocolService:
             rtu = self._effective_rtu()
             now = _now_ms()
             rows = self.store.update_rows(((f"fes_{kind}_define", [rtu, no],
-                {"value": int(value), "status": 0, "refresh_time": now}) for kind, no, value in batch), return_rows=True)
+                {"value": int(value) if kind in {'yx','yk'} else value, "status": 0, "refresh_time": now}) for kind, no, value in batch), return_rows=True)
         except Exception as exc:
             self._record("ERROR", f"模拟点更新未提交: {exc}", alert=True)
             raise ProtocolServiceError(str(exc)) from exc
@@ -749,6 +770,9 @@ class ModbusTcpService(ProtocolService):
     def _build_engine(self):
         config = self._transport_config("fes_channel_modbus_tcp_define")
         if config["mode"] == "server":
+            mapped = self._mapped_modbus_server(config, tcp=True)
+            if mapped is not None:
+                return mapped
             return ModbusTcpServer(host=config["bind_ip"], port=config["listen_port"], unit_id=config["unit_id"], context=self._server_context(config["unit_id"]), points=self.points(), log=self._record)
         rtu_id = self.config().get("effective_rtu_id")
         options = dict(unit_id=config["unit_id"], timeout=config["response_timeout"],
@@ -840,6 +864,9 @@ class ModbusRtuService(ProtocolService):
                     {"kind": "yt", "pnt_no": 1, "name": "YT_1", "value": 0},
                 ]
                 return ModbusRtuServerSimulator(unit_id=config["unit_id"], points=rows, log=self._record)
+            mapped = self._mapped_modbus_server(config, tcp=False)
+            if mapped is not None:
+                return mapped
             return ModbusRtuServer(serial=config["serial_port"], unit_id=config["unit_id"], context=self._server_context(config["unit_id"]), points=self.points(), baudrate=config["baudrate"], bytesize=config["bytesize"], parity=config["parity"], stopbits=config["stopbits"], timeout=config["response_timeout"], log=self._record)
         rtu_id = self.config().get("effective_rtu_id")
         options = dict(baudrate=config["baudrate"], bytesize=config["bytesize"],
@@ -1091,6 +1118,7 @@ class CanServerService(StandaloneServerService):
 
     def _build_server(self, config, points):
         cls = CanServerSimulator if config.get("simulation") else CanServer
+        from core.can_schedule import load_frame_definitions
         return cls(interface=config["interface"], channel=config["channel"], bitrate=config["bitrate"],
                    data_bitrate=config["data_bitrate"], fd=bool(config["fd"]),
                    receive_own_messages=bool(config["receive_own_messages"]),
@@ -1101,7 +1129,8 @@ class CanServerService(StandaloneServerService):
                    receive_error_frames=bool(config["receive_error_frames"]),
                    receive_timeout=config["receive_timeout"], request_id=config["request_id"],
                    response_id=config["response_id"], response_data=config["response_data"],
-                   points=points, on_log=self._record)
+                   points=points, on_log=self._record,
+                   frame_definitions=load_frame_definitions(self.store, self._configured_rtu()))
 
     def send_frame(self, arbitration_id, data, *, extended=None):
         if not self.running:

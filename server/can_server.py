@@ -45,7 +45,8 @@ class CanServer(PacketTrace):
                  bus_off_recovery_ms=0, receive_timeout=0.1,
                  request_id=None, response_id=None, response_data="",
                  points: Iterable[Mapping[str, Any]] | None = None,
-                 simulation=False, on_log: Callable[[str, str], Any] | None = None):
+                 simulation=False, on_log: Callable[[str, str], Any] | None = None,
+                 frame_definitions=()):
         self.interface = str(interface)
         self.channel = str(channel)
         self.bitrate = int(bitrate)
@@ -78,6 +79,8 @@ class CanServer(PacketTrace):
         self._error: Exception | None = None
         self._frames: deque[dict[str, Any]] = deque(maxlen=500)
         self._connections = 0
+        from core.can_schedule import CanFrameSchedule
+        self._frame_schedule = CanFrameSchedule(self.send_frame, frame_definitions, fd=self.fd)
 
     @property
     def connected(self) -> bool:
@@ -152,19 +155,14 @@ class CanServer(PacketTrace):
                 kwargs["fd"] = True
                 kwargs["data_bitrate"] = self.data_bitrate
             try:
-                try:
-                    self._bus = can.Bus(**kwargs)
-                except TypeError:
-                    # Older python-can releases reject these bus options.
-                    kwargs.pop("fd", None)
-                    kwargs.pop("data_bitrate", None)
-                    self._bus = can.Bus(**kwargs)
+                self._bus = can.Bus(**kwargs)
                 self._thread = threading.Thread(target=self._receive_loop, name="can-server", daemon=True)
                 self._thread.start()
             except Exception as exc:
                 self._fail(exc, "CAN 启动失败", self._bus)
                 raise CanServerError(str(exc)) from exc
             self._log("INFO", f"CAN 服务端已启动 {self.interface}/{self.channel}")
+            self._frame_schedule.start()
             return self
 
     def _receive_loop(self):
@@ -202,17 +200,21 @@ class CanServer(PacketTrace):
         }
 
     def send_frame(self, arbitration_id: int, data: bytes | bytearray | str,
-                   *, is_extended_id=False, bitrate_switch=None, log_direction="TX"):
+                   *, is_extended_id=False, bitrate_switch=None, log_direction="TX",
+                   is_fd=None, is_remote_frame=False, dlc=None):
         if not self.connected:
             raise CanServerError("CAN 服务端未启动")
         payload = bytes.fromhex(str(data).replace(" ", "")) if isinstance(data, str) else bytes(data)
-        message = can.Message(arbitration_id=int(arbitration_id), data=payload,
-                              is_extended_id=bool(is_extended_id), is_fd=self.fd,
+        if is_fd and not self.fd:
+            raise ValueError('CAN FD 报文需要启用通道 fd 参数')
+        message = can.Message(arbitration_id=int(arbitration_id), data=payload, check=True,
+                              is_extended_id=bool(is_extended_id), is_fd=self.fd if is_fd is None else is_fd,
+                              is_remote_frame=is_remote_frame, dlc=dlc,
                               bitrate_switch=(self.bitrate_switch if bitrate_switch is None
                                               else bool(bitrate_switch)))
         bus = self._bus
         try:
-            bus.send(message)
+            bus.send(message, timeout=.5)
             self._trace_can("TX", message)
         except Exception as exc:
             self._fail(exc, "CAN 发送失败", bus)
@@ -251,6 +253,7 @@ class CanServer(PacketTrace):
         return self.point_store.snapshot()
 
     def close(self):
+        self._frame_schedule.stop()
         with self._lifecycle_lock:
             self._stop.set()
             self._release_bus(self._bus)
@@ -261,6 +264,13 @@ class CanServer(PacketTrace):
                 if not thread.is_alive():
                     self._thread = None
             self._log("INFO", "CAN 服务端已停止")
+
+    def schedule_frames(self, **selection):
+        return self._frame_schedule.trigger(**selection)
+
+    @property
+    def diagnostics(self):
+        return {'frame_schedule': self._frame_schedule.status()}
 
     def __enter__(self):
         return self.start()

@@ -106,7 +106,7 @@ class ReviewProtocolServicesTests(unittest.TestCase):
         engine = service._build_engine()
         self.addCleanup(engine.close)
         self.assertEqual(engine.unit_id, 5)
-        self.assertEqual(list(engine.context._devices), [5])
+        self.assertEqual(engine.context.id, 5)  # Engineering maps use pymodbus SimDevice.
         engine.update_point("yc", 1, 12)
 
     def test_rtu_server_context_uses_effective_database_unit(self):
@@ -116,7 +116,7 @@ class ReviewProtocolServicesTests(unittest.TestCase):
         engine = service._build_engine()
         self.addCleanup(engine.close)
         self.assertEqual(engine.unit_id, 5)
-        self.assertEqual(list(engine.context._devices), [5])
+        self.assertEqual(engine.context.id, 5)
         engine.update_point("yc", 1, 12)
 
     def test_rtu_simulation_poll_preserves_snapshot(self):
