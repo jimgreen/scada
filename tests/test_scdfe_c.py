@@ -874,7 +874,17 @@ class ScdfeCTest(unittest.TestCase):
             log_dir=self.root / "logs", scan_interval=0.1,
             poll_interval=1.0, retry_interval=5.0,
         )
-        self.addCleanup(supervisor.stop)
+        def shutdown():
+            # stop() is cooperative and can return False while the writer
+            # still owns SQLite. Match the production retry loop before the
+            # TemporaryDirectory cleanup attempts to unlink the database.
+            deadline = time.monotonic() + 20
+            while not supervisor.stop():
+                if time.monotonic() >= deadline:
+                    self.fail('重载测试的 supervisor 未能完成停止')
+                time.sleep(.05)
+            supervisor.store.close()
+        self.addCleanup(shutdown)
         self.assertEqual(supervisor.reconcile()["started"], 1)
         key = next(iter(supervisor.workers))
         old_thread = supervisor.workers[key].thread

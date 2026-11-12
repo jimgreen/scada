@@ -51,7 +51,7 @@ function renderPoints(){
   const r=state.points, kind=activePointKind(), body=pointTableBody(kind), protocol=String(selected()?.protocol||"iec104").toLowerCase();
   if(!body)return;
   const head=pointTableHead(kind);
-  if(head)head.innerHTML=["类型","转发点号","源 RTU","源点号","名称",protocol==="iec104"?"IEC IOA":"Modbus 区/地址","实时值","状态","刷新时间","指令接收时间","最后转发","启用","操作"].map(x=>`<th>${x}</th>`).join("");
+  if(head){const markup=["类型","转发点号","源 RTU","源点号","名称",protocol==="iec104"?"IEC IOA":"Modbus 区/地址","实时值","状态","刷新时间","指令接收时间","最后转发","启用","操作"].map(x=>`<th>${x}</th>`).join("");if(head._pointMarkup!==markup){head.innerHTML=markup;head._pointMarkup=markup;}}
   const rows=r.map(x=>({owner:String(x.channel_id),kind:x.kind,no:String(pno(x)),version:String(x._version),
     cells:[kindName[x.kind]||x.kind,pno(x),x.source_rtu_id,x.source_pnt_no,x.name,
       protocol==="iec104"?(x.io_address??"—"):(x.register_area??"—")+" / "+(x.address??"—"),

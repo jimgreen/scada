@@ -195,7 +195,7 @@
     });
     return body;
   }
-  let pendingPoints = null, previousPointHtml = null, previousPointBody = null;
+  let pendingPoints = null, previousPointRows = null, previousPointBody = null;
   function loadPoints({fresh = false} = {}) {
     const key = JSON.stringify([selected?.rtu_id, activeKind(), offset, limit]);
     if (pendingPoints?.key === key) return fresh ? pendingPoints.promise.catch(() => {}).then(() => loadPoints()) : pendingPoints.promise;
@@ -213,7 +213,7 @@
     const commandPoint = ["yk", "yt"].includes(kind);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
-      previousPointHtml = null;
+      previousPointRows = null;
       const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
       body.innerHTML = `<tr><td colspan="${columnCount}">正在读取测点…</td></tr>`;
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
@@ -233,13 +233,23 @@
         if (pointHasRawStatus(kind)) values.push(p.raw_status);
         values.push(formatPointTime(p.refresh_time));
         if (commandPoint) values.push(formatPointTime(p.cmd_handle_time));
-        values.push(`<button data-point-edit='${esc(JSON.stringify({...p,kind}))}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(p._version)}" data-point-delete="${kind}" data-point-no="${esc(p.pnt_no)}">删除</button>`);
-        return values;
+        return {key: `${rtu}/${kind}/${p.pnt_no}`, cells: values.map(v => String(v ?? "")),
+          edit: JSON.stringify({...p,kind}), version: String(p._version), no: String(p.pnt_no)};
       });
       const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
-      const html = rows.map(row => `<tr>${row.map((value, index) => `<td>${index === row.length - 1 ? value : esc(value)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
-      if (html !== previousPointHtml || body !== previousPointBody) body.innerHTML = html;
-      previousPointHtml = html; previousPointBody = body;
+      const stable = body === previousPointBody && previousPointRows && rows.length === previousPointRows.length &&
+        rows.every((row, i) => row.key === previousPointRows[i].key);
+      if (!stable) {
+        body.innerHTML = rows.map(row => `<tr>${row.cells.map(value => `<td>${esc(value)}</td>`).join("")}<td><button data-point-edit='${esc(row.edit)}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(row.version)}" data-point-delete="${kind}" data-point-no="${esc(row.no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+      } else {
+        rows.forEach((row, i) => {
+          const old = previousPointRows[i], node = body.rows[i];
+          row.cells.forEach((value, j) => { if (value !== old.cells[j]) node.cells[j].textContent = value; });
+          if (row.edit !== old.edit) node.querySelector('[data-point-edit]').dataset.pointEdit = row.edit;
+          if (row.version !== old.version) node.querySelector('[data-point-delete]').dataset.version = row.version;
+        });
+      }
+      previousPointRows = rows; previousPointBody = body;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
       $("#point-next").disabled = offset + points.length >= total;

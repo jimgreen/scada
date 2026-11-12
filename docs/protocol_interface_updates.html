@@ -36,4 +36,5 @@ POST /api/can-server/schedule
 <p>RTU 本轮验证了共享编解码与串口入口构造，未进行物理串口和 CAN 硬件测试；无长时间稳定性、EMI、温度或物理波形认证结论。</p>
 <p class="muted">机器证据位于 reports/protocol_function_audit_20261112：repair_results.json、repair_regression_final.txt、repair_compatibility.txt、repair_browser.json。修复前的 audit.html、probe_results.json 保留为历史对照。</p></section>
 <section id="efficiency-round3"><h2>第三轮效率与交互更新</h2><p>C 表格、S 四遥页和 T 通道选择列表会合并同一范围的重叠读取；保存后仍会再次读取最新结果，切换 RTU 或通道时旧响应不能覆盖新范围。C 的“常用/实时/全部字段”切换会按视图重新查询；S 四遥页内容不变时保留已有表格行。</p><p>共用数据库接口减少字段处理和逐点 SQL 调用，T 批量写入转发状态，CAN 密集信号共享报文整数转换。Modbus 多位数据的 offset_bit 与 all_bit 之和不得超过 16。<a href="scdfe_efficiency_round3_20261112.html">查看本轮性能对比、验证与边界</a>。</p></section>
+<section id="efficiency-round4"><h2>第四轮效率与交互更新</h2><p>S 的 IEC104 数据库同步按信息体类型批量上送变化值和质量；发送失败保留待重发标记，避免内存值已经改变而漏发。原生驱动负责 ASDU 拆分，50ms 数据库检查间隔保持不变。共用批量更新接口按表和主键分块返回记录，保持事务原子性与最终版本。</p><p>C/S 数据变化时局部更新单元格并保留按钮焦点；S 编辑、删除使用最新值和版本；T 不再重复重建相同表头。<a href="scdfe_efficiency_round4_20261112.html">查看性能对比、真实 TCP 回环和浏览器验证</a>。</p></section>
 <footer class="muted">单文件 HTML；样式和内容已内嵌，可离线打开。</footer></main></html>

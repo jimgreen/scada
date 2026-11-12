@@ -1557,12 +1557,44 @@ class ScadaStore:
                         for change in group:
                             self._read(connection, change[0], change[1])
                         raise ApiError(409, '更新未写入', code='conflict')
-                result = ([self._read(connection, change[0], change[1]) for change in changes]
+                result = (self._read_updated_rows(connection, changes)
                           if return_rows else len(changes))
                 connection.commit()
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, '引用的 RTU 不存在或数据违反约束', code='conflict') from exc
         return result
+
+    def _read_updated_rows(self, connection, changes):
+        """Read final batch receipts in bounded, indexed groups in this transaction."""
+        if len(changes) < 4:
+            return [self._read(connection, change[0], change[1]) for change in changes]
+        groups, ordered = {}, []
+        for table, _, _, _, params in changes:
+            keys = self._table_metadata(table)[2]
+            key = tuple(params[-len(keys):])  # already coerced by _prepare_update
+            ordered.append((table, key))
+            groups.setdefault(table, {})[key] = None
+        found = {}
+        for table, wanted in groups.items():
+            _, columns, keys = self._table_parts(table)
+            names = ','.join(quote_identifier(k) for k in keys)
+            predicate = ' AND '.join(f'p.{quote_identifier(k)}=w.{quote_identifier(k)}' for k in keys)
+            chunk_size = max(1, min(900, connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)) // len(keys))
+            wanted = list(wanted)
+            for offset in range(0, len(wanted), chunk_size):
+                chunk = wanted[offset:offset + chunk_size]
+                placeholders = ','.join('(' + ','.join('?' for _ in keys) + ')' for _ in chunk)
+                rows = connection.execute(
+                    f'WITH wanted({names}) AS (VALUES {placeholders}) '
+                    f'SELECT p.* FROM wanted w JOIN {quote_identifier(table)} p ON {predicate}',
+                    [value for key in chunk for value in key],
+                ).fetchall()
+                for row in self._public_rows(rows, columns):
+                    found[(table, tuple(row[k] for k in keys))] = row
+        if any(item not in found for item in ordered):
+            # A trigger may remove an earlier row; keep the atomic 404 contract.
+            raise ApiError(404, '记录不存在', code='not_found')
+        return [dict(found[item]) for item in ordered]
 
     def update_row(self, table: str, key: str | list[Any] | tuple[Any, ...], values: dict[str, Any], if_match: int | None = None) -> dict[str, Any]:
         change = self._prepare_update(table, key, values)

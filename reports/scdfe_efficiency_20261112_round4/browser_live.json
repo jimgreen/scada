@@ -1,0 +1,44 @@
+[
+  {
+    "role": "c",
+    "url": "http://127.0.0.1:8877/#yc",
+    "errors": [],
+    "rows": 50
+  },
+  {
+    "role": "s",
+    "url": "http://127.0.0.1:8878/points",
+    "errors": [],
+    "rows": 100
+  },
+  {
+    "role": "t",
+    "url": "http://127.0.0.1:8879/points.html",
+    "errors": [],
+    "rows": 1
+  },
+  {
+    "file": "scdfe_efficiency_round4_20261112.html",
+    "width": 1440,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "file": "scdfe_efficiency_round4_20261112.html",
+    "width": 390,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "file": "protocol_interface_updates.html",
+    "width": 1440,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "file": "protocol_interface_updates.html",
+    "width": 390,
+    "overflow": false,
+    "errors": []
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "Port": 8877,
+    "OldPid": 39620,
+    "Database": "scada.sqlite3",
+    "NewPid": 16992,
+    "Role": "c"
+  },
+  {
+    "Port": 8878,
+    "OldPid": 8012,
+    "Database": "scdfe_s.sqlite3",
+    "NewPid": 4492,
+    "Role": "s"
+  },
+  {
+    "Port": 8879,
+    "OldPid": 30000,
+    "Database": "scada.sqlite3",
+    "NewPid": 32464,
+    "Role": "t"
+  }
+]

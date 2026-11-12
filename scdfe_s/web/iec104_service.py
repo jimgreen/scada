@@ -73,6 +73,7 @@ class IEC104Service:
         self._packet_sink = service_packet_recorder(self._record, None, None)
         self._server: IEC104Server | None = None
         self._database_samples = {}
+        self._database_pending = set()
         self._database_sync_stop = threading.Event()
         self._database_sync_thread: threading.Thread | None = None
         self._config_error = None
@@ -274,6 +275,7 @@ class IEC104Service:
                 raise IEC104ServiceError(str(exc)) from exc
             self._server = server
             self._database_samples.clear()
+            self._database_pending.clear()
             self._database_sync_stop.clear()
             self._database_sync_thread = threading.Thread(
                 target=self._database_sync_loop,
@@ -368,7 +370,7 @@ class IEC104Service:
                     key = (kind, point_no)
                     present.add(key)
                     sample = (value, quality)
-                    if self._database_samples.get(key) == sample:
+                    if key not in self._database_pending and self._database_samples.get(key) == sample:
                         continue
                     try:
                         actual = server.prepare_value(kind, point_no, value)
@@ -379,14 +381,22 @@ class IEC104Service:
             snapshot = server.monitoring_snapshot(key for key, _, _ in candidates) if candidates else {}
             for key, sample, actual in candidates:
                 value, quality = sample
-                if snapshot.get(key) != (actual, quality):
-                    server.update(*key, value, quality=quality, transmit=transmit)
-                    changed.append((*key, actual))
+                if key in self._database_pending or snapshot.get(key) != (actual, quality):
+                    changed.append((*key, value, quality))
+            if changed:
+                # Updating native memory is not proof of successful delivery.
+                # Retain pending keys until every type group is accepted, even
+                # when a retry sees the same value already in native memory.
+                self._database_pending.update((k, n) for k, n, _, _ in changed)
+                server.update_monitoring(changed, transmit=transmit)
+                self._database_pending.difference_update((k, n) for k, n, _, _ in changed)
+            for key, sample, _ in candidates:
                 # Store source values, not float32 wire-rounding artifacts.
                 # Failed native updates never advance the source snapshot.
                 self._database_samples[key] = sample
             for key in self._database_samples.keys() - present:
                 del self._database_samples[key]
+            self._database_pending.intersection_update(present)
             if changed:
                 LOG.debug(
                     "IEC104 数据库值同步 RTU=%s points=%s transmit=%s",

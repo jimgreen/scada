@@ -1,14 +1,17 @@
 /* Chromium fixtures: no live station reads or writes. */
 const fs=require('fs'), path=require('path'), assert=require('assert/strict'), {execFileSync}=require('child_process');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
-const root=path.resolve(__dirname,'..'), report=path.join(root,'reports/scdfe_efficiency_20261112_round3');
+const root=path.resolve(__dirname,'..');
+const outputArg=process.argv.indexOf('--output');
+const output=outputArg<0?path.join(root,'reports/scdfe_efficiency_20261112_round3/frontend.json'):path.resolve(process.argv[outputArg+1]);
+const report=path.dirname(output);
 const baseline='1d21c03', checks=[], measurements=[], sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function check(ok,label){assert.ok(ok,label);checks.push(label)}
 async function until(fn){for(let i=0;i<600;i++){if(await fn())return;await sleep(10)}throw Error('fixture timeout')}
 const schemas=JSON.parse(execFileSync('D:/anaconda3/python.exe',['-c',"import json;from scdfe_c.web.service import SchemaCatalog;c=SchemaCatalog();print(json.dumps([c.public(t) for t in ('fes_yc_define','fes_rtu_define')]))"],{cwd:root,encoding:'utf8'}));
 const ycSchema=schemas.find(s=>s.head.eng_name==='fes_yc_define');
-async function fixture(browser,role,variant){
- const context=await browser.newContext({viewport:{width:1600,height:1000}}),page=await context.newPage(),calls=[],held=[],errors=[],mock={active:0,hold:false,value:10};
+async function fixture(browser,role,variant,{baseline:sourceBaseline=baseline,count=1}={}){
+ const context=await browser.newContext({viewport:{width:1600,height:1000}}),page=await context.newPage(),calls=[],held=[],errors=[],mock={active:0,hold:false,value:10,version:1};
  page.on('pageerror',e=>errors.push(e.message));await page.addInitScript(()=>{window.setInterval=()=>0});
  const filename=role==='c'?'index.html':'points.html', js=role==='s'?'channels.js':'app.js';
  function payload(url,method){
@@ -24,7 +27,7 @@ async function fixture(browser,role,variant){
    let row={rtu_id:id,channel_id:id,kind:'yc',pnt_no:1,name:'点'+id,value:mock.value,status:0,refresh_time:1000,_version:1};
    if(role==='c')for(const c of ycSchema.columns)if(!(c.eng_name in row))row[c.eng_name]=c.data_type==='str'?'完整字段':19357;
    if(q.has('fields'))row=Object.fromEntries(['rtu_id','pnt_no','_version',...q.get('fields').split(',')].map(k=>[k,row[k]]));
-   return {items:[row],total:1};
+   return {items:Array.from({length:count},(_,index)=>({...row,pnt_no:index+1,_version:mock.version})),total:count};
   }
   return {items:[],total:0,item:{}};
  }
@@ -39,7 +42,7 @@ async function fixture(browser,role,variant){
    const name=path.basename(u.pathname),relative=`scdfe_${role}/web/static/${name}`;
    const local=fs.existsSync(path.join(root,relative))?path.join(root,relative):path.join(root,'core/web_static',name);
    if(!fs.existsSync(local))return route.fulfill({status:404,body:''});
-   let source=name===js&&variant==='before'?execFileSync('git',['show',`${baseline}:${relative}`],{cwd:root,encoding:'utf8'}):fs.readFileSync(local,'utf8');
+   let source=name===js&&variant==='before'?execFileSync('git',['show',`${sourceBaseline}:${relative}`],{cwd:root,encoding:'utf8'}):fs.readFileSync(local,'utf8');
    if(role==='s'&&name===js)source=source.replace(/\}\)\(\);\s*$/, 'window.__loadPoints=loadPoints; window.__api=api;})();');
    return route.fulfill({contentType:name.endsWith('.js')?'application/javascript':'text/css',body:source});
   }
@@ -52,7 +55,8 @@ async function fixture(browser,role,variant){
  await page.goto('http://round3.test/'+(role==='c'?'#yc':''));await settle();
  return {page,calls,held,mock,settle,close:async()=>{await context.close();check(!errors.length,role+'/'+variant+' no browser errors')}};
 }
-(async()=>{fs.mkdirSync(report,{recursive:true});const browser=await chromium.launch({headless:true});try{
+module.exports={fixture};
+if(require.main===module)(async()=>{fs.mkdirSync(report,{recursive:true});const browser=await chromium.launch({headless:true});try{
  for(const variant of ['before','after'])for(const role of ['c','s','t']){
   const f=await fixture(browser,role,variant),{page,calls,held,mock}=f;
   const start=calls.length;mock.hold=true;
@@ -99,5 +103,5 @@ async function fixture(browser,role,variant){
   await f.close();
  }
  const result={baseline,checks,measurements,scope:'Chromium with intercepted APIs; no real station traffic'};
- fs.writeFileSync(path.join(report,'frontend.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result,null,2));
+ fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result,null,2));
  }finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

@@ -660,6 +660,35 @@ class IEC104Server(PacketTrace):
             native = c104.ShortInfo(native).value
         return self._plain(native)
 
+    def update_monitoring(self, updates, *, transmit=True, cause='SPONTANEOUS'):
+        """Publish (kind, number, value, quality) samples grouped by native type.
+
+        Validate the complete input before mutation. A native send failure is
+        reported to the caller, which must retry the unconfirmed samples.
+        lib60870 splits each type group to its native ASDU size limit.
+        """
+        cot = self._cause(cause)
+        with self._lock:
+            prepared, seen = [], set()
+            for kind, no, value, quality in updates:
+                key = (kind, int(no))
+                if kind not in ('yc', 'yx') or key not in self._points or key in seen:
+                    raise IEC104ServerError(f'无效或重复的监视点 {kind}/{no}')
+                seen.add(key)
+                prepared.append((self._points[key], self._as_value(kind, self._point_types[key], value),
+                                 None if quality is None else c104.Quality(quality)))
+            groups = {}
+            for point, value, quality in prepared:
+                point.value = value
+                if quality is not None:
+                    point.quality = quality
+                if transmit:
+                    groups.setdefault(point.type, []).append(point)
+            for points in groups.values():
+                if not self._server.transmit_batch(c104.Batch(cot, points)):
+                    raise IEC104ServerError('IEC104 变化量批量上送失败')
+        return len(prepared)
+
     def transmit_many(self, kind, values, *, cause='SPONTANEOUS'):
         """批量更新同一类型点并用 c104.Batch 一次上送。"""
         if kind not in ('yx', 'yc'):

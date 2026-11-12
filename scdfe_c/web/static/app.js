@@ -847,7 +847,7 @@ function reconcileBody(body, rows, cache, patchCells = false) {
     });
   }
   let cells = null;
-  if (patchCells && rows.length === cache.rows.length && changed.length > rows.length / 4) {
+  if (patchCells && changed.length && rows.length === cache.rows.length) {
     // Monitoring rows have fixed <tr> markup and escaped cell text. Many rows
     // may change only their heartbeat; avoid rebuilding all their controls.
     const updates = [];
@@ -913,6 +913,8 @@ function renderTable() {
     $("#table-head").innerHTML = head;
     tableRender.head = head;
   }
+  const stableKeys = state.items.length === tableRender.entries.length && state.items.every(
+    (item, index) => tableRender.entries[index]?.key === keyOf(item, schema));
   const rows = state.items.length
     ? state.items.map((item, index) => {
         const key = keyOf(item, schema);
@@ -977,7 +979,7 @@ function renderTable() {
     : ['<tr><td class="empty" colspan="' +
       (columns.length + 1) +
       '">没有匹配的记录</td></tr>'];
-  reconcileBody($("#table-body"), rows, tableRender);
+  reconcileBody($("#table-body"), rows, tableRender, stableKeys);
   tableRender.entries.length = state.items.length;
   $("#result-count").textContent =
     "共 " +

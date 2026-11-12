@@ -82,21 +82,22 @@ class DatabaseSampleTests(unittest.TestCase):
         def snapshot(keys):
             keys = list(keys); seen.append(keys)
             return {k:native[k] for k in keys}
-        def update(kind,no,value,quality,transmit):
-            native[(kind,no)] = (struct.unpack('f',struct.pack('f',value))[0],quality)
+        def update(updates,transmit):
+            for kind,no,value,quality in updates:
+                native[(kind,no)] = (struct.unpack('f',struct.pack('f',value))[0],quality)
         server = SimpleNamespace(rtu_id=1,running=True,active_connection_count=1,
                                  prepare_value=lambda kind,no,value:value,
-                                 monitoring_snapshot=Mock(side_effect=snapshot),update=Mock(side_effect=update))
-        service = SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={})
+                                 monitoring_snapshot=Mock(side_effect=snapshot),update_monitoring=Mock(side_effect=update))
+        service = SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={},_database_pending=set())
         sync = lambda: IEC104Service._sync_database_values(service,con)
         self.assertEqual(sync(),1)
         self.assertEqual(sync(),0)  # float32 rounding must not cause repeated spontaneous reports
         self.assertEqual(seen,[[('yc',1)]])
         con.execute('UPDATE fes_yc_define SET status=128')
-        server.update.side_effect = OSError('offline')
+        server.update_monitoring.side_effect = OSError('offline')
         with self.assertRaises(OSError): sync()
         self.assertEqual(service._database_samples[('yc',1)],(.1,0))
-        server.update.side_effect = update
+        server.update_monitoring.side_effect = update
         self.assertEqual(sync(),1)
         self.assertEqual(native[('yc',1)][1],128)
         con.execute('DELETE FROM fes_yc_define'); sync()

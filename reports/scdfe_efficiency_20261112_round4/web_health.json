@@ -1,0 +1,29 @@
+[
+  {
+    "Status": 200,
+    "Port": 8877,
+    "Body": {
+      "status": "ok",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    }
+  },
+  {
+    "Status": 200,
+    "Port": 8878,
+    "Body": {
+      "status": "ok",
+      "service": "scdfe_s",
+      "database_role": "simulator",
+      "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+    }
+  },
+  {
+    "Status": 200,
+    "Port": 8879,
+    "Body": {
+      "status": "ok",
+      "service": "scdfe_t",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    }
+  }
+]

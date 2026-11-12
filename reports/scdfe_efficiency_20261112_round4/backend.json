@@ -1,0 +1,246 @@
+{
+  "baseline": "a9f0978",
+  "python": "3.11.15",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "results": [
+    {
+      "name": "200 RTUs x 10 points with receipts",
+      "before": {
+        "median_ms": 137.9429,
+        "samples_ms": [
+          135.2571,
+          144.8597,
+          135.044,
+          138.3729,
+          135.6842,
+          136.5803,
+          145.4177,
+          142.6382,
+          144.7307,
+          137.8477,
+          137.2848,
+          134.6453,
+          146.2965,
+          134.9722,
+          146.8669,
+          144.3732,
+          146.4322,
+          134.2862,
+          136.1596,
+          137.9429,
+          142.7364
+        ]
+      },
+      "after": {
+        "median_ms": 98.0802,
+        "samples_ms": [
+          90.8674,
+          100.9077,
+          120.3327,
+          93.4497,
+          94.3472,
+          114.5166,
+          92.4744,
+          94.3761,
+          112.0205,
+          100.9676,
+          94.8245,
+          114.7361,
+          105.7792,
+          91.7623,
+          124.6497,
+          96.5333,
+          96.978,
+          111.2225,
+          93.652,
+          98.0802,
+          116.0311
+        ]
+      },
+      "reduction_percent": 28.897971551997237,
+      "read_queries": [
+        2000,
+        5
+      ]
+    },
+    {
+      "name": "200 RTUs x 10 points without receipts control",
+      "before": {
+        "median_ms": 48.855,
+        "samples_ms": [
+          69.0363,
+          47.9627,
+          49.6036,
+          50.2917,
+          47.8255,
+          52.2695,
+          84.0835,
+          54.1259,
+          49.659,
+          48.3853,
+          47.8378,
+          49.7932,
+          71.2359,
+          47.6334,
+          48.1351,
+          47.1176,
+          48.855,
+          47.5041,
+          66.707,
+          47.3223,
+          48.4454
+        ]
+      },
+      "after": {
+        "median_ms": 48.5944,
+        "samples_ms": [
+          47.6178,
+          49.7775,
+          48.818,
+          51.2279,
+          49.2504,
+          397.5919,
+          62.9054,
+          50.3389,
+          47.9883,
+          48.415,
+          47.8458,
+          49.6788,
+          48.3361,
+          49.5721,
+          48.5944,
+          49.5763,
+          47.4385,
+          47.6697,
+          48.4333,
+          47.7149,
+          48.1899
+        ]
+      },
+      "reduction_percent": 0.5334152082693611,
+      "read_queries": [
+        0,
+        0
+      ]
+    }
+  ],
+  "wire": [
+    {
+      "variant": "after",
+      "repeat": 0,
+      "sync_ms": 5.7344,
+      "delivery_ms": 102.9223,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 0,
+      "sync_ms": 15.9599,
+      "delivery_ms": 123.6972,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 1,
+      "sync_ms": 18.0398,
+      "delivery_ms": 103.1834,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "after",
+      "repeat": 1,
+      "sync_ms": 7.2844,
+      "delivery_ms": 103.4326,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    },
+    {
+      "variant": "after",
+      "repeat": 2,
+      "sync_ms": 6.625,
+      "delivery_ms": 108.4194,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 2,
+      "sync_ms": 18.7174,
+      "delivery_ms": 116.0358,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 3,
+      "sync_ms": 16.7913,
+      "delivery_ms": 107.816,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "after",
+      "repeat": 3,
+      "sync_ms": 7.6501,
+      "delivery_ms": 98.457,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    },
+    {
+      "variant": "after",
+      "repeat": 4,
+      "sync_ms": 6.6732,
+      "delivery_ms": 108.3953,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 4,
+      "sync_ms": 19.0688,
+      "delivery_ms": 129.0888,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "before",
+      "repeat": 5,
+      "sync_ms": 18.8679,
+      "delivery_ms": 110.2791,
+      "frames": 160,
+      "apdu_bytes": 3440,
+      "objects": 160
+    },
+    {
+      "variant": "after",
+      "repeat": 5,
+      "sync_ms": 7.0641,
+      "delivery_ms": 96.8947,
+      "frames": 6,
+      "apdu_bytes": 1130,
+      "objects": 160
+    }
+  ],
+  "source_sha256_lf": {
+    "scdfe_c/web/service.py": "3a31f3146c1c89b3262310d3095aeb5b8b83b73282618ae843c90bd33db54853",
+    "server/iec104_server.py": "98a86176a60e4face017770076cb5a019bc7c098b29b1fa65f3d143bbaf98c5e",
+    "scdfe_s/web/iec104_service.py": "32165c38e9a35f302a32c40ac3c6feb315c8a889908e57cdb615d18ddc01b03c",
+    "scdfe_c/web/static/app.js": "98a515123a399ed68e7dc9a911dff6d66b07d42a30e5cde0b92cac9352b9848d",
+    "scdfe_s/web/static/channels.js": "e08260ef488f85918bdde8043084478988c3c77c1cbd55ba203ed454c9ed7c65",
+    "scdfe_t/web/static/app.js": "27f55bdb83ddd8e89043968b436b6e5c578d3d0c6487e86be1e27efd9dca0884"
+  },
+  "scope": "Temporary SQLite; IEC104 localhost TCP, 160 mixed YC/YX NONE/CP56 points; APDU bytes exclude TCP headers/ACKs. No field-device throughput claim."
+}

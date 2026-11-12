@@ -1,0 +1,11 @@
+{
+  "baseline": "a9f0978",
+  "summary": "整套回归首次为 577 通过、1 跳过、450 子测试通过，另 1 项在线程重载测试清理临时数据库时发生 WinError 32。已修正该测试，等待协作停止接口返回成功后再清理；随后相关 41 项测试及 27 子测试全部通过（包括新增单主键用例）。合计覆盖 579 个通过的独立测试，1 项 Windows 符号链接权限跳过；未宣称修复后重跑了整套套件。",
+  "full_run": {"passed":577,"failed":1,"skipped":1,"subtests_passed":450,"seconds":607.63},
+  "followup": {"passed":41,"subtests_passed":27,"seconds":37.89,"command":"python -m pytest tests/test_scdfe_c.py tests/test_efficiency_round4.py -q -o faulthandler_timeout=30"},
+  "frontend_summary": "真实 Chromium：新增局部刷新检查 13 项、原有页面回归 62 项、上一轮请求合并与陈旧响应检查 19 项，共 94 项通过。",
+  "frontend_checks":94,
+  "static_checks":["Python compile","JavaScript syntax","git diff --check"],
+  "test_boundary":"Temporary databases, IEC104 localhost TCP, virtual CAN and intercepted browser APIs. No field-device commands.",
+  "failure_boundary":"Production stop() intentionally returns False while resources remain; the test cleanup had ignored that return value. The production shutdown implementation was not changed."
+}
