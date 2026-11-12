@@ -30,5 +30,11 @@ class CapabilityApiContracts(unittest.TestCase):
                         self.assertEqual(iec['confirmation_scope'],'writer_commit')
                     else:
                         self.assertFalse(body['protocols']['can']['uds_stack'])
+                    if component == 'scdfe_s':
+                        for protocol in ('modbus-tcp', 'modbus-rtu'):
+                            capability = body['protocols'][protocol]
+                            self.assertTrue(capability['register_slices'])
+                            self.assertTrue(capability['atomic_request_database_write'])
+                            self.assertEqual(capability['confirmation_scope'], 'simulator_database')
                 finally:
                     client.close(); server.shutdown(); thread.join(3); server.server_close()

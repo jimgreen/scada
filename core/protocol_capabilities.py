@@ -31,6 +31,12 @@ def protocol_capabilities(component):
                        'address_bases': [0,1,10001,30001,40001],
                        'confirmation_scope': 'writer_commit' if component == 'scdfe_t' else 'remote_response'},
     }
+    if component == 'scdfe_s':
+        protocols['modbus-tcp'].update(
+            engineering_value_mapping=True, register_slices=True,
+            shared_register_slices='disjoint_masks_only', inverted_bits=True,
+            register_yk=True, atomic_request_database_write=True,
+            confirmation_scope='simulator_database')
     if component != 'scdfe_t':
         protocols['modbus-rtu'] = deepcopy(protocols['modbus-tcp'])
         protocols['can'] = {

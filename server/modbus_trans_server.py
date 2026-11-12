@@ -120,18 +120,21 @@ class ModbusTcpTransServer(ModbusTcpServer):
         key = (kind, point_no)
         if key in self._mappings:
             raise ValueError(f"重复转发点 {kind}/{point_no}")
-        for offset in range(size):
-            if (area, address + offset) in self._by_address:
-                raise ValueError(f"Modbus 地址冲突 {area}/{address + offset}")
         row.update(kind=kind, pnt_no=point_no, source_pnt_no=source_point_no, register_area=area,
                    address=address, address_base=address_base, data_type=dtype, size=size,
                    scale=_number(row.get("scale"), 1.0), offset=_number(row.get("offset"), 0.0),
                    byte_order=_text(row.get("byte_order"), "big"),
                    word_order=_text(row.get("word_order"), "big"))
+        self._validate_mapping_overlap(row)
         self._mappings[key] = row
         for offset in range(size):
             self._by_address[(area, address + offset)] = row
         self._values[key] = point_values.get(key, row.get("value", False if kind in {"yx", "yk"} else 0))
+
+    def _validate_mapping_overlap(self, row):
+        for offset in range(row['size']):
+            if (row['register_area'], row['address'] + offset) in self._by_address:
+                raise ValueError(f"Modbus 地址冲突 {row['register_area']}/{row['address'] + offset}")
 
     def _simdata(self):
         blocks: list[list[SimData]] = [[], [], [], []]
@@ -249,9 +252,9 @@ class ModbusTcpTransServer(ModbusTcpServer):
                     accepted = self._command_handler(row["kind"], row["pnt_no"], value)
                 except Exception as exc:  # callbacks must not kill pymodbus loop
                     self._log("ERROR", f"Modbus 转发命令回调失败: {exc}")
-                    return ExcCodes.SLAVE_DEVICE_FAILURE
+                    return ExcCodes.DEVICE_FAILURE
                 if not accepted:
-                    return ExcCodes.SLAVE_DEVICE_FAILURE
+                    return ExcCodes.DEVICE_FAILURE
             with self._lock:
                 self._values[(row["kind"], row["pnt_no"])] = value
         return None

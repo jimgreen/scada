@@ -1,0 +1,256 @@
+[
+  {
+    "role": "c",
+    "port": 8877,
+    "http_status": 200,
+    "health": {
+      "status": "ok",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    },
+    "capabilities": {
+      "component": "scdfe_c",
+      "protocols": {
+        "iec104": {
+          "general_interrogation": true,
+          "spontaneous": true,
+          "periodic": true,
+          "direct_execute": true,
+          "select_and_execute": true,
+          "separate_select": false,
+          "cancel_yk": true,
+          "cancel_yt": true,
+          "cancel_scope": "protocol_deactivation",
+          "time_tags": [
+            "NONE",
+            "CP56Time2a"
+          ],
+          "cp24": false,
+          "u_testfr": "native_t3_timer",
+          "explicit_u_testfr": false,
+          "application_test_command": true,
+          "max_asdu_length_scope": "diagnostic_threshold",
+          "native_max_asdu_length": 249,
+          "confirmation_scope": "remote_acceptance"
+        },
+        "modbus-tcp": {
+          "function_codes": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            15,
+            16
+          ],
+          "address_bases": [
+            0,
+            1,
+            10001,
+            30001,
+            40001
+          ],
+          "confirmation_scope": "remote_response"
+        },
+        "modbus-rtu": {
+          "function_codes": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            15,
+            16
+          ],
+          "address_bases": [
+            0,
+            1,
+            10001,
+            30001,
+            40001
+          ],
+          "confirmation_scope": "remote_response"
+        },
+        "can": {
+          "standard": true,
+          "extended": true,
+          "fd": "driver_dependent",
+          "signal_mapping": true,
+          "dbc_file_parser": false,
+          "database_periodic_frames": true,
+          "database_replay_groups": true,
+          "canopen_stack": false,
+          "j1939_stack": false,
+          "uds_stack": false,
+          "physical_diagnostics": "hardware_dependent",
+          "fault_injection": "hardware_dependent"
+        }
+      },
+      "scope": "implementation_capabilities_not_device_certification"
+    }
+  },
+  {
+    "role": "s",
+    "port": 8878,
+    "http_status": 200,
+    "health": {
+      "status": "ok",
+      "service": "scdfe_s",
+      "database_role": "simulator",
+      "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+    },
+    "capabilities": {
+      "component": "scdfe_s",
+      "protocols": {
+        "iec104": {
+          "general_interrogation": true,
+          "spontaneous": true,
+          "periodic": true,
+          "direct_execute": true,
+          "select_and_execute": true,
+          "separate_select": false,
+          "cancel_yk": true,
+          "cancel_yt": true,
+          "cancel_scope": "protocol_deactivation",
+          "time_tags": [
+            "NONE",
+            "CP56Time2a"
+          ],
+          "cp24": false,
+          "u_testfr": "native_t3_timer",
+          "explicit_u_testfr": false,
+          "application_test_command": false,
+          "max_asdu_length_scope": "diagnostic_threshold",
+          "native_max_asdu_length": 249,
+          "confirmation_scope": "simulator_database"
+        },
+        "modbus-tcp": {
+          "function_codes": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            15,
+            16
+          ],
+          "address_bases": [
+            0,
+            1,
+            10001,
+            30001,
+            40001
+          ],
+          "confirmation_scope": "simulator_database",
+          "engineering_value_mapping": true,
+          "register_slices": true,
+          "shared_register_slices": "disjoint_masks_only",
+          "inverted_bits": true,
+          "register_yk": true,
+          "atomic_request_database_write": true
+        },
+        "modbus-rtu": {
+          "function_codes": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            15,
+            16
+          ],
+          "address_bases": [
+            0,
+            1,
+            10001,
+            30001,
+            40001
+          ],
+          "confirmation_scope": "simulator_database",
+          "engineering_value_mapping": true,
+          "register_slices": true,
+          "shared_register_slices": "disjoint_masks_only",
+          "inverted_bits": true,
+          "register_yk": true,
+          "atomic_request_database_write": true
+        },
+        "can": {
+          "standard": true,
+          "extended": true,
+          "fd": "driver_dependent",
+          "signal_mapping": true,
+          "dbc_file_parser": false,
+          "database_periodic_frames": true,
+          "database_replay_groups": true,
+          "canopen_stack": false,
+          "j1939_stack": false,
+          "uds_stack": false,
+          "physical_diagnostics": "hardware_dependent",
+          "fault_injection": "hardware_dependent"
+        }
+      },
+      "scope": "implementation_capabilities_not_device_certification"
+    }
+  },
+  {
+    "role": "t",
+    "port": 8879,
+    "http_status": 200,
+    "health": {
+      "status": "ok",
+      "service": "scdfe_t",
+      "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+    },
+    "capabilities": {
+      "component": "scdfe_t",
+      "protocols": {
+        "iec104": {
+          "general_interrogation": true,
+          "spontaneous": true,
+          "periodic": true,
+          "direct_execute": true,
+          "select_and_execute": true,
+          "separate_select": false,
+          "cancel_yk": true,
+          "cancel_yt": true,
+          "cancel_scope": "local_selection_only",
+          "time_tags": [
+            "NONE",
+            "CP56Time2a"
+          ],
+          "cp24": false,
+          "u_testfr": "native_t3_timer",
+          "explicit_u_testfr": false,
+          "application_test_command": false,
+          "max_asdu_length_scope": "diagnostic_threshold",
+          "native_max_asdu_length": 249,
+          "confirmation_scope": "writer_commit"
+        },
+        "modbus-tcp": {
+          "function_codes": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            15,
+            16
+          ],
+          "address_bases": [
+            0,
+            1,
+            10001,
+            30001,
+            40001
+          ],
+          "confirmation_scope": "writer_commit"
+        }
+      },
+      "scope": "implementation_capabilities_not_device_certification"
+    }
+  }
+]

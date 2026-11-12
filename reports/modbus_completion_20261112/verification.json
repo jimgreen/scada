@@ -1,0 +1,16 @@
+{
+  "command": "python -m pytest tests scdfe_c/web/test_server.py scdfe_c/web/test_protocol_seed_data.py -vv -rs -o faulthandler_timeout=30",
+  "summary": "567 passed, 1 skipped, 450 subtests passed in 315.41s (0:05:15)",
+  "passed": 567,
+  "skipped": 1,
+  "subtests_passed": 450,
+  "skip_reason": "Windows symlink creation privilege",
+  "targeted_passed": 41,
+  "test_boundary": "Temporary databases and TCP loopback; serial hardware and CAN hardware not tested in this follow-up.",
+  "after_fast_path_change": {
+    "command": "python -m pytest tests/test_modbus_special_mappings.py tests/test_modbus_mapped_server.py tests/test_runtime_efficiency_round2.py tests/test_t_efficiency.py -q --tb=short -o faulthandler_timeout=30",
+    "passed": 19,
+    "subtests_passed": 20,
+    "seconds": 4.78
+  }
+}

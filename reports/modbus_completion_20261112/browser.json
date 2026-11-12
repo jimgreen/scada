@@ -1,0 +1,86 @@
+[
+  {
+    "doc": "modbus_mapping_completion_20261112.html",
+    "width": 1440,
+    "dimensions": {
+      "scroll": 1440,
+      "viewport": 1440
+    },
+    "errors": [],
+    "title": "S Modbus 映射补齐与验证 · 2026-11-12"
+  },
+  {
+    "doc": "protocol_interface_updates.html",
+    "width": 1440,
+    "dimensions": {
+      "scroll": 1440,
+      "viewport": 1440
+    },
+    "errors": [],
+    "title": "SCDFE 规约接口修复与使用说明 · 2026-11-12"
+  },
+  {
+    "doc": "scdfe_closeout_20261112.html",
+    "width": 1440,
+    "dimensions": {
+      "scroll": 1440,
+      "viewport": 1440
+    },
+    "errors": [],
+    "title": "SCADA 2026-11-12 执行复核与收尾记录"
+  },
+  {
+    "doc": "modbus_mapping_completion_20261112.html",
+    "width": 390,
+    "dimensions": {
+      "scroll": 390,
+      "viewport": 390
+    },
+    "errors": [],
+    "title": "S Modbus 映射补齐与验证 · 2026-11-12"
+  },
+  {
+    "doc": "protocol_interface_updates.html",
+    "width": 390,
+    "dimensions": {
+      "scroll": 390,
+      "viewport": 390
+    },
+    "errors": [],
+    "title": "SCDFE 规约接口修复与使用说明 · 2026-11-12"
+  },
+  {
+    "doc": "scdfe_closeout_20261112.html",
+    "width": 390,
+    "dimensions": {
+      "scroll": 390,
+      "viewport": 390
+    },
+    "errors": [],
+    "title": "SCADA 2026-11-12 执行复核与收尾记录"
+  },
+  {
+    "role": "c",
+    "port": 8877,
+    "title": "SCADA · 运行工作台",
+    "errors": [],
+    "http_errors": [],
+    "blocked": []
+  },
+  {
+    "role": "s",
+    "port": 8878,
+    "title": "scdfe_s · 通信测试",
+    "errors": [],
+    "http_errors": [],
+    "blocked": []
+  },
+  {
+    "role": "t",
+    "port": 8879,
+    "title": "scdfe_t · 进程监控",
+    "errors": [],
+    "http_errors": [],
+    "blocked": []
+  }
+]
