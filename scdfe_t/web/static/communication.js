@@ -5,6 +5,7 @@
   const statuses = {0:"停止",1:"启动中",2:"运行",3:"停止中",4:"处理中",5:"错误"};
   let loading = false;
   let lastMarkup = "";
+  let lastKeys = "", lastRows = [];
   const statusText = (runtime, fallback) => {
     const names = {unknown:"未知", stopped:"已停止", starting:"启动中", running:"运行中", stopping:"停止中", error:"错误", degraded:"降级"};
     return names[runtime.state] || fallback;
@@ -45,7 +46,16 @@
         return `<tr><td>${esc(x.channel_id)} · ${esc(x.name)}</td><td>${esc(x.protocol)}</td><td>${esc(x.bind_host)}:${esc(x.bind_port)}</td><td><span class="status-badge ${isRunning ? "running" : isError ? "error" : ""}">${esc(state)}</span></td><td>${esc(runtime.connection_state || "未知")}</td><td>${esc(x.scan_interval_ms)} ms</td><td class="mono">${esc(counts)}</td><td>${esc(clock(runtime.process_heartbeat_time || x.process_heartbeat_time))}</td><td title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td><a href="/points.html?channel_id=${cid}">四遥数据</a> · <a href="/processes.html">进程</a> · <a href="/logs.html?channel_id=${cid}">日志报文</a></td></tr>`;
       }).join("") || '<tr><td colspan="10" class="muted">暂无转发通道，可前往“通道数据”新建。</td></tr>';
       if (lastMarkup !== markup) {
-        $("#communication-rows").innerHTML = markup;
+        const body=$("#communication-rows"),keys=rows.map(x=>String(x.channel_id)).join(',');
+        const next=markup.match(/<tr\b[\s\S]*?<\/tr>/g)||[],cells=text=>text.match(/<td\b[\s\S]*?<\/td>/g)||[];
+        if(rows.length && keys===lastKeys && body.rows.length===rows.length){
+          next.forEach((row,i)=>{
+            if(row===lastRows[i])return;
+            const old=cells(lastRows[i]);
+            cells(row).forEach((cell,j)=>{if(cell!==old[j])body.rows[i].cells[j].outerHTML=cell});
+          });
+        }else body.innerHTML=markup;
+        lastKeys=keys;lastRows=next;
         lastMarkup = markup;
       }
       $("#message").textContent = "";

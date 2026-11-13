@@ -40,8 +40,26 @@ function renderChannels() {
   $("#channel-count").textContent = `${rows.length} 个通道`;
   $("#summary").textContent = `运行 ${rows.filter(x => x.runtime_status?.state === "running" || Number(x.runtime_status?.running) === 1 || Number(x.process_status) === 2).length} / 总数 ${rows.length}`;
   const markup = rows.length ? rows.map(x => { const r=x.runtime_status||{}; const d=r.diagnostic||{}; return `<tr class="${id(x) === state.selected ? "selected" : ""}" data-select="${id(x)}"><td>${id(x)}</td><td>${esc(x.name)}</td><td>${esc(x.protocol)}</td><td>${runtimeBadge(r)}</td><td>${esc(r.connection_state || "—")}</td><td class="mono">${esc([r.rx_count||0,r.tx_count||0,r.error_count||0,r.reconnect_count||0].join(" / "))}</td><td class="mono">${esc(fmt(r.process_heartbeat_time||x.process_heartbeat_time,true))}<small class="cell-sub">${esc(fmt(r.sampled_at,true))}</small></td><td title="${esc(JSON.stringify(d))}">${esc(Object.keys(d).length ? `${Object.keys(d).length} 项` : "—")}<small class="cell-sub">${esc(r.last_error||x.process_error||"")}</small></td><td class="actions"><a href="/points.html?channel_id=${id(x)}">四遥数据</a><a href="/logs.html?channel_id=${id(x)}">日志报文</a><button data-edit="${id(x)}">编辑</button><button data-version="${esc(x._version)}" data-delete="${id(x)}" class="danger">删除</button></td></tr>`; }).join("") : '<tr><td colspan="9" class="muted">暂无转发通道</td></tr>';
-  // Stable refreshes preserve focus and the selected channel.
-  if (body.dataset.markup !== markup) { body.innerHTML = markup; body.dataset.markup = markup; }
+  // Heartbeats and counters change on every poll. Preserve action nodes and
+  // their focus while updating cells; a changed row identity rebuilds safely.
+  if (body._channelMarkup !== markup) {
+    const keys=rows.map(id).join(','), next=markup.match(/<tr\b[\s\S]*?<\/tr>/g)||[];
+    const cells=text=>text.match(/<td\b[\s\S]*?<\/td>/g)||[];
+    if(rows.length && keys===body._channelKeys && body.rows.length===rows.length){
+      next.forEach((row,i)=>{
+        if(row===body._channelRows[i])return;
+        const old=cells(body._channelRows[i]);
+        cells(row).forEach((cell,j)=>{
+          if(cell===old[j])return;
+          if(j===8 && cell.replace(/ data-version="[^"]*"/g,'')===old[j].replace(/ data-version="[^"]*"/g,''))
+            body.rows[i].querySelector('[data-delete]').dataset.version=String(rows[i]._version);
+          else body.rows[i].cells[j].outerHTML=cell;
+        });
+        body.rows[i].classList.toggle('selected',id(rows[i])===state.selected);
+      });
+    }else body.innerHTML=markup;
+    body._channelKeys=keys;body._channelRows=next;body._channelMarkup=markup;
+  }
   renderSelects(); renderDetail();
 }
 function renderDetail(){if(!$("#channel-detail"))return;const x=selected();if(!x){$("#channel-detail").innerHTML='<dt>通道</dt><dd>未选择</dd>';return}const protocol=String(x.protocol||"").toLowerCase(),r=x.runtime_status||{};const common={channel_id:"编号",name:"名称",protocol:"规约",bind_host:"监听地址",bind_port:"监听端口",scan_interval_ms:"读取周期(ms)",log_retention_hours:"日志保留小时",packet_recording:"保存报文",process_enable:"自动运行",process_pid:"进程号",process_start_time:"启动时间",process_stop_time:"停止时间",process_heartbeat_time:"心跳",process_error:"错误"};const specific=protocol==="iec104"?{common_address:"IEC104 公共地址",report_interval_ms:"全量上送周期(ms)"}:{unit_id:"Modbus 从站地址"};const n={...common,...specific};const fields=Object.entries(n).filter(([k])=>k in x).map(([k,v])=>`<dt>${v}</dt><dd>${k.includes("time")?fmt(x[k],k.includes("heartbeat")):k==="process_enable"||k==="packet_recording"?(Number(x[k])?"是":"否"):esc(x[k])||"—"}`).join("");$("#channel-detail").innerHTML=fields+`<dt>运行状态</dt><dd>${runtimeBadge(r)}</dd><dt>连接状态</dt><dd>${esc(r.connection_state||"—")}</dd><dt>收/发/错/重连</dt><dd class="mono">${esc([r.rx_count||0,r.tx_count||0,r.error_count||0,r.reconnect_count||0].join(" / "))}</dd><dt>最近错误</dt><dd>${esc(r.last_error||"—")}</dd><dt>诊断</dt><dd class="mono">${esc(JSON.stringify(r.diagnostic||{}))}</dd>`}

@@ -1,0 +1,48 @@
+{
+  "summary": "扩展回归：45 passed、1 failed、4 subtests passed（84.07 秒）。失败项为两 RTU 同源点号遥控的 TCP 响应超时，独立复测 1 passed（4.19 秒）。本轮新增目录快照与监控字段检查均通过。",
+  "browser_summary": "Chromium 新增 20 项断言通过；C/S/T 既有四遥表格回归 13 项断言通过。包含动态值、焦点、删除版本与目标、排序、选择及空列表恢复。",
+  "live_summary": "已重载 T Web，C/S/T 健康接口均返回 200，数据库路径正确；内置浏览器已看到实际监听地址 0.0.0.0:2404/2405 和扫描周期 200 ms。",
+  "timing_note": "较早的定向回归出现一次真实进程启动/停止超时，该项独立复测通过（17.59 秒），并在扩展回归中通过；没有放宽生产或测试超时参数。两次偶发超时的原因未确定，不能据此宣称时延或长时间稳定性已充分验证。",
+  "evidence": {
+    "pytest.txt": ".........F............                                               [100%]\n================================== FAILURES ===================================\n_ TransWebReviewTests.test_real_web_start_stop_and_restart_preserve_listener_ownership _\ntests\\test_review_t_web.py:211: in test_real_web_start_stop_and_restart_preserve_listener_ownership\n    started = self.service.start(1)\n              ^^^^^^^^^^^^^^^^^^^^^\nscdfe_t\\web\\service.py:488: in start\n    return self._wait_started(cid, launch_time=launch_time)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nscdfe_t\\web\\service.py:522: in _wait_started\n    raise ApiError(409, \"转发进程未在规定时间内就绪，请查看进程状态和日志\", code=\"trans_start_timeout\")\nE   scdfe_c.web.service.ApiError: 转发进程未在规定时间内就绪，请查看进程状态和日志\n\nDuring handling of the above exception, another exception occurred:\ntests\\test_review_t_web.py:225: in test_real_web_start_stop_and_restart_preserve_listener_ownership\n    self.service.stop(1)\nscdfe_t\\web\\service.py:527: in stop\n    return self._stop_locked(cid)\n           ^^^^^^^^^^^^^^^^^^^^^^\nscdfe_t\\web\\service.py:538: in _stop_locked\n    raise ApiError(409, message, code=\"trans_stop_timeout\")\nE   scdfe_c.web.service.ApiError: 转发进程尚未退出，已请求停止，请稍后重试\n=========================== short test summary info ===========================\nFAILED tests/test_review_t_web.py::TransWebReviewTests::test_real_web_start_stop_and_restart_preserve_listener_ownership\n1 failed, 21 passed, 4 subtests passed in 48.34s\n",
+    "pytest-final.txt": "..........................................F...                       [100%]\n================================== FAILURES ===================================\n_ TransmissionReviewTests.test_same_source_number_in_two_rtus_keeps_commands_separate _\ntests\\test_review_t_runtime.py:100: in test_same_source_number_in_two_rtus_keeps_commands_separate\n    self.assertFalse(client.write_coil(0, True, device_id=1).isError())\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nD:\\anaconda3\\Lib\\site-packages\\pymodbus\\client\\mixin.py:192: in write_coil\n    return self.execute(no_response_expected, pdu)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nD:\\anaconda3\\Lib\\site-packages\\pymodbus\\client\\base.py:187: in execute\n    return self.transaction.sync_execute(no_response_expected, request)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nD:\\anaconda3\\Lib\\site-packages\\pymodbus\\transaction\\transaction.py:182: in sync_execute\n    raise self._io_exception_from_request(txt, request)\nE   pymodbus.exceptions.ModbusIOException: Modbus Error: [Input/Output] No response received after 0 retries, continue with next request\n------------------------------ Captured log call ------------------------------\nERROR    pymodbus.logging:transaction.py:181 No response received after 0 retries, continue with next request\n>>>>> send: 0x0 0x7 0x0 0x0 0x0 0x4 0x1 0x1 0x1 0x1\n>>>>> recv: 0x0 0x1 0x0 0x0 0x0 0x8 0x1 0xf 0x0 0x0 0x0 0x2 0x1 0x3 extra data: \n>>>>> send: 0x0 0x1 0x0 0x0 0x0 0x3 0x1 0x8f 0x2\n>>>>> recv: 0x0 0x2 0x0 0x0 0x0 0x6 0x1 0x1 0x0 0x0 0x0 0x2 extra data: \n>>>>> send: 0x0 0x2 0x0 0x0 0x0 0x4 0x1 0x1 0x1 0x0\n>>>>> recv: 0x0 0x1 0x0 0x0 0x0 0x6 0x1 0x3 0x0 0xa 0x0 0x1 extra data: \n>>>>> send: 0x0 0x1 0x0 0x0 0x0 0x5 0x1 0x3 0x2 0x0 0x7\n>>>>> recv: 0x0 0x2 0x0 0x0 0x0 0x6 0x1 0x6 0x0 0xa 0x0 0x8 extra data: \n>>>>> send: 0x0 0x2 0x0 0x0 0x0 0x6 0x1 0x6 0x0 0xa 0x0 0x8\n>>>>> recv: 0x0 0x1 0x0 0x0 0x0 0x6 0x1 0x4 0x0 0x0 0x0 0x1 extra data: \n>>>>> send: 0x0 0x1 0x0 0x0 0x0 0x5 0x1 0x4 0x2 0x0 0x2a\n>>>>> recv: 0x0 0x2 0x0 0x0 0x0 0x6 0x1 0x4 0x0 0x0 0x0 0x1 extra data: \n>>>>> send: 0x0 0x2 0x0 0x0 0x0 0x5 0x1 0x4 0x2 0x0 0x2a\n>>>>> recv: 0x0 0x3 0x0 0x0 0x0 0x6 0x1 0x4 0x0 0x0 0x0 0x1 extra data: \n>>>>> send: 0x0 0x3 0x0 0x0 0x0 0x5 0x1 0x4 0x2 0x0 0x2a\n>>>>> recv: 0x0 0x4 0x0 0x0 0x0 0x6 0x1 0x4 0x0 0x0 0x0 0x1 extra data: \n>>>>> send: 0x0 0x4 0x0 0x0 0x0 0x5 0x1 0x4 0x2 0x0 0x2a\n>>>>> recv: 0x0 0x5 0x0 0x0 0x0 0x6 0x1 0x4 0x0 0x0 0x0 0x1 extra data: \n>>>>> send: 0x0 0x5 0x0 0x0 0x0 0x5 0x1 0x4 0x2 0x0 0x49\n>>>>> recv: 0x0 0x1 0x0 0x0 0x0 0x6 0x1 0x5 0x0 0x0 0xff 0x0 extra data:\n=========================== short test summary info ===========================\nFAILED tests/test_review_t_runtime.py::TransmissionReviewTests::test_same_source_number_in_two_rtus_keeps_commands_separate\n1 failed, 45 passed, 4 subtests passed in 84.07s (0:01:24)\n",
+    "pytest-lifecycle.txt": "============================= test session starts =============================\nplatform win32 -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0 -- D:\\anaconda3\\python.exe\ncachedir: .pytest_cache\nrootdir: D:\\codex\\scada\nplugins: anyio-4.13.0\ncollecting ... collected 1 item\n\ntests/test_review_t_web.py::TransWebReviewTests::test_real_web_start_stop_and_restart_preserve_listener_ownership PASSED [100%]\n\n============================= 1 passed in 17.59s ==============================\n",
+    "pytest-command-followup.txt": "============================= test session starts =============================\nplatform win32 -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0 -- D:\\anaconda3\\python.exe\ncachedir: .pytest_cache\nrootdir: D:\\codex\\scada\nplugins: anyio-4.13.0\ncollecting ... collected 1 item\n\ntests/test_review_t_runtime.py::TransmissionReviewTests::test_same_source_number_in_two_rtus_keeps_commands_separate PASSED [100%]\n\n============================== 1 passed in 4.19s ==============================\n"
+  },
+  "scope": "Targeted regression, localhost/virtual transports and read-only live Web checks; no full repository suite or field hardware certification.",
+  "static_checks": "Python compilation, JavaScript syntax, HTML parsing, offline dependencies, benchmark source hashes and git diff --check passed.",
+  "browser_render_checks": [
+    {
+      "view": "channels",
+      "rows": 3,
+      "config_visible": true,
+      "errors": []
+    },
+    {
+      "view": "communication",
+      "rows": 3,
+      "config_visible": true,
+      "errors": []
+    },
+    {
+      "file": "scdfe_efficiency_round8_20261113.html",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "file": "scdfe_efficiency_round8_20261113.html",
+      "width": 390,
+      "overflow": false
+    },
+    {
+      "file": "protocol_interface_updates.html",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "file": "protocol_interface_updates.html",
+      "width": 390,
+      "overflow": false
+    }
+  ]
+}

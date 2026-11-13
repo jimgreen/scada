@@ -1,0 +1,56 @@
+{
+  "baseline": "3e36657",
+  "checks": [
+    "channels/before no script errors",
+    "channels preserves all 50 rows when counters/heartbeat change",
+    "channels preserves action focus",
+    "channels refreshes diagnostic text",
+    "Channel delete uses refreshed optimistic version",
+    "Selection highlight changes with selector",
+    "Selected channel detail shows listener port",
+    "channels reorder binds the correct channel",
+    "Reordered delete dispatches correct id and latest version",
+    "channels empty state after recoverable request failure",
+    "channels restores rows after empty result",
+    "channels/after no script errors",
+    "communication/before no script errors",
+    "communication preserves all 50 rows when counters/heartbeat change",
+    "communication preserves action focus",
+    "communication refreshes diagnostic text",
+    "communication reorder binds the correct channel",
+    "communication empty state after recoverable request failure",
+    "communication restores rows after empty result",
+    "communication/after no script errors"
+  ],
+  "measurements": [
+    {
+      "view": "channels",
+      "variant": "before",
+      "preserved_rows": 0,
+      "focus_preserved": false,
+      "removed_rows": 50
+    },
+    {
+      "view": "channels",
+      "variant": "after",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "removed_rows": 0
+    },
+    {
+      "view": "communication",
+      "variant": "before",
+      "preserved_rows": 0,
+      "focus_preserved": false,
+      "removed_rows": 50
+    },
+    {
+      "view": "communication",
+      "variant": "after",
+      "preserved_rows": 50,
+      "focus_preserved": true,
+      "removed_rows": 0
+    }
+  ],
+  "scope": "Actual repository HTML/JavaScript, mocked HTTP data in Chromium. No field commands."
+}

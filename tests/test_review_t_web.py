@@ -122,6 +122,9 @@ class TransWebReviewTests(unittest.TestCase):
         self.assertEqual(payload["total"], 1)
         item = payload["items"][0]
         self.assertEqual(item["channel_id"], 1)
+        for field in ('bind_host', 'bind_port', 'scan_interval_ms', 'report_interval_ms',
+                      'common_address', 'unit_id', 'log_retention_hours'):
+            self.assertEqual(item[field], self.channel[field], field)
         self.assertIn("runtime_status", item)
         runtime = item["runtime_status"]
         self.assertEqual(runtime["service_name"], "scdfe_t")

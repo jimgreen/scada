@@ -1,0 +1,34 @@
+[
+  {
+    "view": "channels",
+    "rows": 3,
+    "config_visible": true,
+    "errors": []
+  },
+  {
+    "view": "communication",
+    "rows": 3,
+    "config_visible": true,
+    "errors": []
+  },
+  {
+    "file": "scdfe_efficiency_round8_20261113.html",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "file": "scdfe_efficiency_round8_20261113.html",
+    "width": 390,
+    "overflow": false
+  },
+  {
+    "file": "protocol_interface_updates.html",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "file": "protocol_interface_updates.html",
+    "width": 390,
+    "overflow": false
+  }
+]

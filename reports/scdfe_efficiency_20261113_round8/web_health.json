@@ -1,0 +1,54 @@
+{
+  "health": [
+    {
+      "port": 8877,
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+      }
+    },
+    {
+      "port": 8878,
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "service": "scdfe_s",
+        "database_role": "simulator",
+        "database": "D:\\codex\\scada\\db\\scdfe_s.sqlite3"
+      }
+    },
+    {
+      "port": 8879,
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "service": "scdfe_t",
+        "database": "D:\\codex\\scada\\db\\scada.sqlite3"
+      }
+    }
+  ],
+  "T_status_fields": [
+    {
+      "channel_id": 1,
+      "protocol": "iec104",
+      "bind_host": "0.0.0.0",
+      "bind_port": 2404,
+      "scan_interval_ms": 200
+    },
+    {
+      "channel_id": 2,
+      "protocol": "iec104",
+      "bind_host": "0.0.0.0",
+      "bind_port": 2405,
+      "scan_interval_ms": 200
+    },
+    {
+      "channel_id": 3,
+      "protocol": "modbus-tcp",
+      "bind_host": "0.0.0.0",
+      "bind_port": 2404,
+      "scan_interval_ms": 200
+    }
+  ]
+}

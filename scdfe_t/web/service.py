@@ -131,7 +131,9 @@ class TransStore:
     def runtime_status(self) -> dict[str, Any]:
         """Return transmission channels with one uniform live-status snapshot."""
         status_fields = (
-            "channel_id,name,protocol,process_enable,process_status,process_pid,"
+            "channel_id,name,protocol,bind_host,bind_port,common_address,unit_id,"
+            "scan_interval_ms,report_interval_ms,log_retention_hours,"
+            "process_enable,process_status,process_pid,"
             "process_start_time,process_stop_time,process_heartbeat_time,"
             "process_exit_code,process_error,packet_recording"
         )
@@ -283,12 +285,16 @@ class TransStore:
         if selected_rtu is not None and selected_rtu <= 0:
             raise ApiError(400, "源 RTU 必须是正整数")
         with self.store.connection() as con:
+            # Counts and selected points must describe the same committed
+            # snapshot, even if a C writer adds/removes a point between reads.
+            if include_rtus and selected_rtu is not None:
+                con.execute('BEGIN')
             rtus = [dict(row) for row in con.execute(
                 f"SELECT r.rtu_id, COALESCE(r.name,'') AS name, "
                 f"COALESCE(r.channel_type,'') AS channel_type, "
-                f"COUNT(p.pnt_no) AS point_count "
-                f"FROM fes_rtu_define r JOIN {table} p ON p.rtu_id=r.rtu_id "
-                "GROUP BY r.rtu_id,r.name,r.channel_type ORDER BY r.rtu_id"
+                "p.point_count FROM "
+                f"(SELECT rtu_id,COUNT(*) AS point_count FROM {table} GROUP BY rtu_id) p "
+                "JOIN fes_rtu_define r ON r.rtu_id=p.rtu_id ORDER BY r.rtu_id"
             )] if include_rtus else []
             points = []
             if selected_rtu is not None:
