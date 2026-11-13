@@ -1,0 +1,10 @@
+{
+  "summary": "相关回归 41 passed、9 subtests passed（30.24 秒）；新增 HTTP 失败可见性与单 RTU 隔离断言后，4 项本轮测试再次通过（7.00 秒）。包括 IEC104 本机 TCP 总召、变位和命令，Modbus TCP 回环与 CAN virtual 生命周期。",
+  "browser_summary": "Chromium 实际检查 C/S/T 进程监控、S 通信监控与通信测试共 5 个页面，刷新和 RTU 选择保持正常，无页面脚本或 HTTP 错误；2 份 HTML 在 1440/390 像素宽度均无横向溢出。",
+  "pytest_command": "D:/anaconda3/python.exe -m pytest tests/test_efficiency_round7.py tests/test_scdfe_s_web_monitor.py tests/test_s_efficiency.py tests/test_review_s_web.py tests/test_iec104_service.py tests/test_protocol_services.py tests/test_runtime_status.py tests/test_scdfe_s_web_ui.py -q --tb=short",
+  "followup_command": "D:/anaconda3/python.exe -m pytest tests/test_efficiency_round7.py -q --tb=short",
+  "browser_scope": "GET/HEAD only; no channel start/stop, field writes or commands.",
+  "static_checks": "Python compilation, JavaScript syntax and git diff --check passed.",
+  "pytest_output": ".........................................                       [100%]\n41 passed, 9 subtests passed in 30.24s",
+  "followup_output": "....                                                                     [100%]\n4 passed in 7.00s"
+}

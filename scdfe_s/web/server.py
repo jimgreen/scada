@@ -256,10 +256,50 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         """
         return self.server.channel_services(rtu_id=rtu_id)
 
+    def _monitor_statuses(self, services, point_counts, rtu_id=None):
+        # Acquire service locks in a stable order before entering a database
+        # transaction. A stop/start must not overtake its captured snapshot,
+        # and a competing monitor must never take these locks in reverse.
+        with ExitStack() as locks:
+            for service in sorted(set(services.values()), key=id):
+                locks.enter_context(service._lock)
+            return self._locked_monitor_statuses(services, point_counts, rtu_id)
+
+    def _locked_monitor_statuses(self, services, point_counts, rtu_id):
+        with self.store.connection() as con:
+            sql = 'SELECT rtu_id, channel_id, name FROM fes_rtu_define'
+            params = ()
+            if rtu_id is not None:
+                sql += ' WHERE rtu_id=?'
+                params = (rtu_id,)
+            channel_info = {int(row[0]): (int(row[1] or row[0]), str(row[2] or ''))
+                            for row in con.execute(sql, params)}
+        pending = []
+        statuses = [(slug, service.status(point_counts=point_counts, runtime_batch=pending,
+                                         channel_info=channel_info)) for slug, service in services.items()]
+        if pending:
+            try:
+                with self.store.connection() as con:
+                    con.execute('BEGIN IMMEDIATE')
+                    try:
+                        for publisher, channel_id, values in pending:
+                            publisher.upsert(channel_id, values, connection=con)
+                        con.commit()
+                    except BaseException:
+                        con.rollback()
+                        raise
+            except Exception as exc:
+                for publisher, channel_id, _ in pending:
+                    publisher.invalidate(channel_id)
+                raise ApiError(503, '保存通道诊断快照失败，请重试', code='runtime_snapshot_failed') from exc
+        return statuses, channel_info
+
     def _monitor_control(self, parts, query, method):
         """Aggregated pages for process, communications and runtime logs."""
         if not parts[:2] == ["api", "monitor"]:
             return False
+        if len(parts) == 3 and parts[2] in {"processes", "communications"} and method != "GET":
+            raise ApiError(405, '监控查询接口只支持 GET')
         services = self._service_map()
         requested_rtu_id = None
         if len(parts) >= 3 and parts[2] == "communications":
@@ -301,30 +341,16 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if method != "GET" or query:
                 raise ApiError(405, "进程监控接口只支持 GET")
             items = []
-            for slug, service in channel_services.items():
-                status = service.status(point_counts=point_counts)
+            statuses, _ = self._monitor_statuses(channel_services, point_counts)
+            for slug, status in statuses:
                 items.append({"name": slug, "label": status.get("label", slug),
                               "rtu_id": status.get("rtu_id"),
                               "running": bool(status.get("running")),
                               "status": status})
             return self._json(200, {"items": items, "total": len(items)})
         if parts == ["api", "monitor", "communications"]:
-            # Resolve every RTU-to-channel relation in one read.  The monitor
-            # is polled every five seconds; opening one SQLite read connection
-            # per protocol service scales poorly once several RTUs are
-            # configured.
-            with self.store.connection() as connection:
-                relation_sql = "SELECT rtu_id, channel_id FROM fes_rtu_define"
-                relation_params = ()
-                if requested_rtu_id is not None:
-                    relation_sql += " WHERE rtu_id=?"
-                    relation_params = (requested_rtu_id,)
-                channel_by_rtu = {
-                    int(row[0]): int(row[1])
-                    for row in connection.execute(
-                        relation_sql, relation_params
-                    )
-                }
+            statuses, channel_info = self._monitor_statuses(channel_services, point_counts, requested_rtu_id)
+            channel_by_rtu = {rtu: info[0] for rtu, info in channel_info.items()}
             runtime_rows = runtime_status_rows(
                 self.store,
                 service_name="scdfe_s",
@@ -334,8 +360,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 int(row["channel_id"]): row for row in runtime_rows
             }
             items = []
-            for slug, service in channel_services.items():
-                status = service.status(point_counts=point_counts)
+            for slug, status in statuses:
                 rtu_id = status.get("rtu_id", status.get("config", {}).get("effective_rtu_id"))
                 runtime = runtime_by_channel.get(channel_by_rtu.get(int(rtu_id))) if rtu_id is not None else None
                 items.append({"name": slug, "label": status.get("label", slug),

@@ -1,0 +1,179 @@
+{
+  "baseline": "0b0f5d6",
+  "results": [
+    {
+      "channels": 1,
+      "before_ms": 15.1126,
+      "after_ms": 14.6207,
+      "reduction_percent": 3.254899884864293,
+      "samples_ms": [
+        [
+          14.9164,
+          111.1668,
+          1.1133,
+          16.4239,
+          16.4093,
+          15.685,
+          1.4396,
+          14.5102,
+          15.1126,
+          15.6215,
+          2.3333,
+          26.9741,
+          1.0565,
+          15.4217,
+          11.753
+        ],
+        [
+          1.4281,
+          1.4703,
+          14.0817,
+          14.6207,
+          16.1816,
+          1.7535,
+          14.6992,
+          15.5097,
+          15.569,
+          16.246,
+          2.28,
+          16.1284,
+          14.8642,
+          2.6059,
+          2.0895
+        ]
+      ],
+      "evidence": [
+        {
+          "variant": "after",
+          "commits": 1,
+          "relation_reads": 0,
+          "same_refresh_diagnostics": true
+        },
+        {
+          "variant": "before",
+          "commits": 1,
+          "relation_reads": 1,
+          "same_refresh_diagnostics": false
+        }
+      ]
+    },
+    {
+      "channels": 60,
+      "before_ms": 33.0338,
+      "after_ms": 27.3431,
+      "reduction_percent": 17.226900931772914,
+      "samples_ms": [
+        [
+          1193.5215,
+          10.2353,
+          9.5044,
+          26.9309,
+          43.0469,
+          43.9088,
+          35.3286,
+          31.2105,
+          61.361,
+          11.9533,
+          36.7902,
+          33.0338,
+          40.5734,
+          20.8573,
+          30.804
+        ],
+        [
+          29.0245,
+          7.5901,
+          7.3446,
+          7.4106,
+          8.042,
+          33.201,
+          30.5974,
+          9.1258,
+          27.3431,
+          49.8353,
+          21.2916,
+          27.8697,
+          31.0407,
+          32.1265,
+          10.509
+        ]
+      ],
+      "evidence": [
+        {
+          "variant": "after",
+          "commits": 1,
+          "relation_reads": 0,
+          "same_refresh_diagnostics": true
+        },
+        {
+          "variant": "before",
+          "commits": 60,
+          "relation_reads": 60,
+          "same_refresh_diagnostics": false
+        }
+      ]
+    },
+    {
+      "channels": 300,
+      "before_ms": 113.0367,
+      "after_ms": 65.4661,
+      "reduction_percent": 42.08420804924419,
+      "samples_ms": [
+        [
+          105.4013,
+          130.7427,
+          122.0984,
+          94.3356,
+          113.0367,
+          107.4117,
+          91.9486,
+          139.5965,
+          122.8819,
+          81.0119,
+          115.4943,
+          93.4871,
+          126.2283,
+          110.2975,
+          210.2072
+        ],
+        [
+          63.0276,
+          87.0348,
+          45.9113,
+          65.4661,
+          81.344,
+          95.3638,
+          123.0154,
+          42.6468,
+          51.711,
+          65.7583,
+          67.6346,
+          58.9167,
+          72.6152,
+          47.4907,
+          54.1738
+        ]
+      ],
+      "evidence": [
+        {
+          "variant": "after",
+          "commits": 1,
+          "relation_reads": 0,
+          "same_refresh_diagnostics": true
+        },
+        {
+          "variant": "before",
+          "commits": 300,
+          "relation_reads": 300,
+          "same_refresh_diagnostics": false
+        }
+      ]
+    }
+  ],
+  "source_sha256_lf": {
+    "scdfe_s/web/server.py": "3f9ee29b0e6c4114d1fc570e363810db32ebf27a5143d518d9c233d192b31b5b",
+    "scdfe_s/web/iec104_service.py": "7a272f51cd5624a264cb1d40329f8f7f4acc428a3d458746260fb3875a582152",
+    "scdfe_s/web/protocol_service.py": "3b3f777521a3fcc4f82267569d48fa0cfc47e5985845108cb62da1247c43775f"
+  },
+  "scope": "Actual HTTP API, private SQLite WAL database; mixed IEC104/Modbus TCP/CAN services are stopped. No field transport or commands. 15 alternating pairs after two warmups; same DB and connection pool."
+}

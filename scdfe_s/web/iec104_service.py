@@ -616,16 +616,20 @@ class IEC104Service:
             self._record("ERROR", f"处理 {event.kind}/{event.point_no} 命令失败: {exc}", alert=True)
             return False
 
-    def _persist_runtime_status(self, item: dict[str, Any], *, force: bool = False) -> None:
+    def _persist_runtime_status(self, item: dict[str, Any], *, force: bool = False,
+                                runtime_batch=None, channel_info=None) -> None:
         rtu_id = item.get("rtu_id")
         if rtu_id is None:
             return
         try:
-            with self.store.connection() as connection:
-                row = connection.execute(
-                    "SELECT channel_id, name FROM fes_rtu_define WHERE rtu_id=?",
-                    (int(rtu_id),),
-                ).fetchone()
+            if channel_info is not None:
+                row = channel_info.get(int(rtu_id))
+            else:
+                with self.store.connection() as connection:
+                    row = connection.execute(
+                        "SELECT channel_id, name FROM fes_rtu_define WHERE rtu_id=?",
+                        (int(rtu_id),),
+                    ).fetchone()
             channel_id = int(row[0] or rtu_id) if row else int(rtu_id)
             channel_name = str(row[1] or "") if row else ""
             error = str(item.get("last_error") or "")
@@ -639,7 +643,7 @@ class IEC104Service:
                 "protocol_errors": item.get("protocol_errors", []),
                 "unexpected_messages": item.get("unexpected_messages", []),
             }
-            self._runtime_status.upsert(channel_id, {
+            values = {
                 "protocol": "iec104",
                 "channel_name": channel_name,
                 "state": state_for(2 if item.get("running") else 0, item.get("running"), error),
@@ -660,11 +664,16 @@ class IEC104Service:
                 "last_error_time": self._last_error_time,
                 "last_error": error,
                 "diagnostic_json": diagnostic,
-            }, force=force)
+            }
+            if runtime_batch is not None:
+                runtime_batch.append((self._runtime_status, channel_id, values))
+            else:
+                self._runtime_status.upsert(channel_id, values, force=force)
         except Exception:
             LOG.exception("写入 IEC104 通道运行状态失败: rtu_id=%s", rtu_id)
 
-    def status(self, *, point_counts: dict[int, int] | None = None) -> dict[str, Any]:
+    def status(self, *, point_counts: dict[int, int] | None = None,
+               runtime_batch=None, channel_info=None) -> dict[str, Any]:
         with self._lock:
             server = self._server
             config = self.config()
@@ -704,7 +713,7 @@ class IEC104Service:
                 "last_tx_time": self._last_tx_time,
                 "last_error_time": self._last_error_time,
             }
-            self._persist_runtime_status(item)
+            self._persist_runtime_status(item, runtime_batch=runtime_batch, channel_info=channel_info)
             return item
 
     def points(self, kind: str | None = None, *, table_view=False) -> list[dict[str, Any]]:

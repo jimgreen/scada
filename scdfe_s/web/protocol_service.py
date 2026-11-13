@@ -375,8 +375,10 @@ class ProtocolService:
         value = getattr(engine, "diagnostics", None) if engine is not None else None
         return _json_value(value) if isinstance(value, Mapping) else {}
 
-    def _persist_runtime_status(self, item, *, force=False):
-        channel_id, channel_name = self._runtime_channel(item.get("rtu_id"))
+    def _persist_runtime_status(self, item, *, force=False, runtime_batch=None, channel_info=None):
+        rtu_id = item.get("rtu_id")
+        channel_id, channel_name = (channel_info.get(int(rtu_id), (int(rtu_id), ""))
+            if channel_info is not None and rtu_id is not None else self._runtime_channel(rtu_id))
         if channel_id is None:
             return
         diagnostic = {
@@ -410,6 +412,9 @@ class ProtocolService:
             "last_error": error,
             "diagnostic_json": diagnostic,
         }
+        if runtime_batch is not None:
+            runtime_batch.append((self._runtime_status, channel_id, values))
+            return
         try:
             self._runtime_status.upsert(channel_id, values, force=force)
         except Exception:
@@ -444,7 +449,7 @@ class ProtocolService:
             with self._lock:
                 self._file_log.end_session()
 
-    def status(self, *, point_counts: Mapping[int, int] | None = None):
+    def status(self, *, point_counts: Mapping[int, int] | None = None, runtime_batch=None, channel_info=None):
         with self._lock:
             engine = self._engine
             connection_count = int(getattr(engine, "connections", 0)) if engine else 0
@@ -479,7 +484,7 @@ class ProtocolService:
                 "last_error_time": self._last_error_time,
                 "diagnostic": self._engine_diagnostic(engine),
             }
-            self._persist_runtime_status(item)
+            self._persist_runtime_status(item, runtime_batch=runtime_batch, channel_info=channel_info)
             return item
 
     def _point_count(self, rtu_id) -> int:
