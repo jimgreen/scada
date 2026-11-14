@@ -22,6 +22,7 @@ from core.process_registry import PROCESS_TABLE, process_is_alive
 from core.runtime_status import runtime_status_rows
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core import operation_audit as audit
 from core.web_workbench import ASSET_DIR
 from scdfe_c.web.process_control import ProcessController
 
@@ -79,8 +80,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+        self._audit_delivered = True
 
     def _json(self, status, payload):
+        audit.response(self, status, payload)
         headers = {}
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
@@ -706,12 +709,15 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"deleted": True})
         raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
 
+    @audit.audit_request('c')
     def _handle(self):
         try:
             self._dispatch()
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            audit.exception()
             LOG.debug("client disconnected")
         except ApiError as error:
+            audit.exception()
             payload = {"code": error.code, "message": error.message}
             if error.details is not None:
                 payload["details"] = error.details
@@ -720,12 +726,15 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                 LOG.debug("client disconnected while sending API error")
         except ValueError:
+            audit.exception()
             self._json(400, {"error": {"code": "bad_request", "message": "无效的请求参数"}})
         except sqlite3.OperationalError:
-            LOG.exception("database operation failed")
+            audit.exception()
+            LOG.exception("database operation failed trace_id=%s", audit.trace_id())
             self._json(503, {"error": {"code": "database_error", "message": "数据库暂不可用，请稍后重试"}})
         except Exception:
-            LOG.exception("unhandled request error")
+            audit.exception()
+            LOG.exception("unhandled request error trace_id=%s", audit.trace_id())
             self._json(500, {"error": {"code": "internal_error", "message": "服务器内部错误，请查看服务日志"}})
 
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _handle
@@ -733,9 +742,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _static(self, name):
         allowed = {"index.html": "text/html", "api.html": "text/html",
                    "app.css": "text/css", "app.js": "application/javascript",
+                   "audit-client.js": "application/javascript",
                    "log-browser.css": "text/css",
                    "layout-resizer.js": "application/javascript"}
-        path = ASSET_DIR / name if name in {"log-browser.css", "layout-resizer.js"} else STATIC_DIR / name
+        path = ASSET_DIR / name if name in {"log-browser.css", "layout-resizer.js", "audit-client.js"} else STATIC_DIR / name
         if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
         self._send(200, allowed[name] + "; charset=utf-8", path.read_bytes())

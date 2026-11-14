@@ -15,6 +15,7 @@ import threading
 import time
 from typing import Any
 from weakref import WeakValueDictionary
+from core import operation_audit as audit
 
 from core.scdfe_control import InstanceLock
 from core.runtime_status import runtime_status_rows, state_for
@@ -224,6 +225,7 @@ class TransStore:
                 definition = self._definition(dict(row))
                 con.execute(f"UPDATE {CHANNEL_TABLE} SET process_enable=0, _version=_version+1 WHERE channel_id=?", (cid,))
                 con.commit()
+                audit.change(CHANNEL_TABLE, [cid], dict(row), {'process_enable': 0}, reason='删除通道前停用')
             self._stop_locked(cid)
             with self.store.connection() as con:
                 con.execute("BEGIN IMMEDIATE")
@@ -235,9 +237,10 @@ class TransStore:
                 # valid DELETE conflict with itself.
                 if self._definition(dict(row)) != definition:
                     raise ApiError(409, "通道定义在停止期间发生变化，请重新加载", code="version_conflict")
-                con.execute(f"DELETE FROM {POINT_TABLE} WHERE channel_id=?", (cid,))
+                deleted_points = con.execute(f"DELETE FROM {POINT_TABLE} WHERE channel_id=?", (cid,)).rowcount
                 con.execute(f"DELETE FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,))
                 con.commit()
+                audit.change(CHANNEL_TABLE, [cid], dict(row), None, deleted_points=deleted_points)
 
     def points(self, channel_id: Any) -> list[dict[str, Any]]:
         """Return all mappings for in-process callers; HTTP uses point_page."""
@@ -392,6 +395,8 @@ class TransStore:
                 rows = [self._point_response(row) for row in self.store._read_many(con, [
                     (POINT_TABLE, (cid, values["pnt_no"], values["kind"])) for values in prepared])]
                 con.commit()
+                audit.emit('数据库已提交', table=POINT_TABLE, channel_id=cid,
+                           operation='批量新增映射', count=len(rows), before=None, after=rows)
         return rows
 
     def get_point(self, channel_id: Any, key: list[Any]) -> dict[str, Any]:
@@ -436,6 +441,7 @@ class TransStore:
         return [runtime_python(), "-B", "-m", "scdfe_t", "--db", str(self.db_path),
                 "--schema-dir", str(self.schema_dir), "--channel-id", str(channel_id), "--managed-start"]
 
+    @audit.control_action('t')
     def start(self, channel_id: Any) -> dict[str, Any]:
         cid = self._channel_key(channel_id)[0]
         with self._control(cid):
@@ -521,6 +527,7 @@ class TransStore:
             time.sleep(.05)
         raise ApiError(409, "转发进程未在规定时间内就绪，请查看进程状态和日志", code="trans_start_timeout")
 
+    @audit.control_action('t')
     def stop(self, channel_id: Any) -> dict[str, Any]:
         cid = self._channel_key(channel_id)[0]
         with self._control(cid):

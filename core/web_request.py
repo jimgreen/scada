@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlsplit
 
 from scdfe_c.web.service import ApiError
+from core import operation_audit as audit
 
 
 def _object(pairs):
@@ -21,6 +22,13 @@ def _invalid_number(value):
 
 
 class RequestBodyMixin:
+    def send_response(self, code, message=None):
+        if audit.active():
+            self._audit_status = int(code)
+        super().send_response(code, message)
+        if audit.active():
+            self.send_header('X-Scada-Trace', audit.trace_id())
+
     def finish(self):
         try:
             super().finish()
@@ -77,4 +85,5 @@ class RequestBodyMixin:
             raise ApiError(400, "请求体必须是有效 UTF-8 JSON 对象") from exc
         if not isinstance(value, dict):
             raise ApiError(400, "请求体必须是 JSON 对象")
+        audit.request_body(value)
         return value

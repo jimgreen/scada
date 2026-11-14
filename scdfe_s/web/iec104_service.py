@@ -24,6 +24,7 @@ from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
 from scdfe_s.web.configuration import apply_config, write_config
+from scdfe_s.web.lifecycle import traced_lifecycle
 
 
 LOG = logging.getLogger(__name__)
@@ -252,10 +253,12 @@ class IEC104Service:
             command_handlers=handlers,
         )
         server.set_connect_handler(self._on_connect)
+        sink.business.bind_points(server)
         server.set_raw_handlers(on_receive=partial(sink, 'RX', detail='IEC104 APDU'),
                                 on_send=partial(sink, 'TX', detail='IEC104 APDU'))
         return server
 
+    @traced_lifecycle
     def start(self) -> dict[str, Any]:
         with self._lock:
             if self._config_error:
@@ -273,7 +276,8 @@ class IEC104Service:
                     server.require_soe_support()
                     self._soe_forwarder = SoeForwarder(
                         self.store, f's:rtu:{server.rtu_id}', 'S',
-                        lambda row: self._route_soe(server, row), rtu_id=int(server.rtu_id))
+                        lambda row: self._route_soe(server, row), rtu_id=int(server.rtu_id),
+                        on_event=self._packet_sink.business.soe)
                 server.start()
             except Exception as exc:
                 self._last_error = str(exc)
@@ -300,19 +304,24 @@ class IEC104Service:
             )
             return self.status()
 
+    @traced_lifecycle
     def stop(self) -> dict[str, Any]:
+        from .lifecycle import stop_cause
         sync_thread = None
         with self._lock:
             server = self._server
             self._database_sync_stop.set()
             if server is not None:
+                detail = (f'停止原因={stop_cause()}；RTU编号={server.rtu_id} '
+                          f'通道编号={self._file_log.channel_id} 监听={server.ip}:{server.port}')
+                self._record('INFO', 'IEC104 服务开始停止 ' + detail)
                 try:
                     server.stop()
                 except Exception as exc:
                     self._last_error = str(exc)
-                    self._record("ERROR", f"IEC104 服务停止失败: {exc}", alert=True)
+                    self._record("ERROR", f"IEC104 服务停止失败: {exc}；{detail}", alert=True)
                     raise IEC104ServiceError(str(exc)) from exc
-                self._record("INFO", "IEC104 服务已停止")
+                self._record("INFO", "IEC104 服务已停止 " + detail)
             self._server = None
             if self._soe_forwarder is not None:
                 self._soe_forwarder.close()
@@ -327,14 +336,17 @@ class IEC104Service:
         return result
 
     def close(self) -> None:
+        from .lifecycle import lifecycle_cause
         try:
-            self.stop()
+            with lifecycle_cause('Web服务关闭或资源释放'):
+                self.stop()
         except IEC104ServiceError:
             pass
         finally:
             with self._lock:
                 self._file_log.end_session()
 
+    @traced_lifecycle
     def configure(self, values: dict[str, Any]) -> dict[str, Any]:
         allowed = set(self.DEFAULT_CONFIG)
         unknown = set(values) - allowed
@@ -369,10 +381,11 @@ class IEC104Service:
             transmit = bool(server.active_connection_count)
             changed = []
             candidates = []
+            source_times = {}
             present = set()
             for table, kind in (("fes_yc_define", "yc"), ("fes_yx_define", "yx")):
                 rows = connection.execute(
-                    f"SELECT pnt_no, value, status FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
+                    f"SELECT pnt_no, value, status, refresh_time FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
                     (rtu_id,),
                 )
                 for row in rows:
@@ -388,6 +401,7 @@ class IEC104Service:
                         LOG.warning("IEC104 数据库值无法转换 %s/%s: %s", kind, point_no, exc)
                         continue
                     candidates.append((key, sample, actual))
+                    source_times[key] = row[3]
             snapshot = server.monitoring_snapshot(key for key, _, _ in candidates) if candidates else {}
             for key, sample, actual in candidates:
                 value, quality = sample
@@ -401,10 +415,25 @@ class IEC104Service:
                 soe_keys = server.soe_point_keys if self._soe_forwarder else set()
                 current_only = [item for item in changed if item[:2] in soe_keys]
                 ordinary = [item for item in changed if item[:2] not in soe_keys]
-                if current_only:
-                    server.update_monitoring(current_only, transmit=False)
-                if ordinary:
-                    server.update_monitoring(ordinary, transmit=transmit)
+                details = [{'四遥': kind.upper(), '点号': no,
+                            '旧值': snapshot.get((kind, no), ('未知', '未知'))[0],
+                            '旧质量': snapshot.get((kind, no), ('未知', '未知'))[1],
+                            '新值': value, '新质量': quality,
+                            '源刷新时刻': source_times.get((kind, no)),
+                            '发布方式': '当前值缓存，SOE另行投递' if (kind, no) in soe_keys else
+                                '突发传送提交' if transmit else '仅缓存，无活动连接'}
+                           for kind, no, value, quality in changed]
+                self._packet_sink.business.rows('检测到数据库实时变化', details, RTU编号=rtu_id)
+                try:
+                    if current_only:
+                        server.update_monitoring(current_only, transmit=False)
+                    if ordinary:
+                        server.update_monitoring(ordinary, transmit=transmit)
+                except Exception as exc:
+                    self._packet_sink.business.rows('实时变化批次未完成，保留重试', details,
+                                                    RTU编号=rtu_id, 错误=str(exc))
+                    raise
+                self._packet_sink.business.rows('实时变化已同步到协议服务', details, RTU编号=rtu_id)
                 self._database_pending.difference_update((k, n) for k, n, _, _ in changed)
             for key, sample, _ in candidates:
                 # Store source values, not float32 wire-rounding artifacts.
@@ -640,7 +669,9 @@ class IEC104Service:
             self._record(
                 "INFO",
                 f"收到{event.kind}命令 点号={event.point_no} 值={value} "
-                f"选择={event.selected} OA={event.originator_address}",
+                f"选择={event.selected} OA={event.originator_address} RTU编号={key[0]} "
+                f"数据库已提交 质量={item.get('status')} "
+                f"指令接收时刻={item.get('cmd_handle_time')} 刷新时刻={item.get('refresh_time')}",
                 details={"item": item, "cause": str(event.cause)},
             )
             return True

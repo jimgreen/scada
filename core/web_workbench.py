@@ -5,6 +5,7 @@ import re
 
 ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
+          "audit-client.js": "application/javascript; charset=utf-8",
           "workbench.js": "application/javascript; charset=utf-8",
           "log-browser.css": "text/css; charset=utf-8",
           "log-browser.js": "application/javascript; charset=utf-8",
@@ -64,6 +65,7 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
 <nav aria-label="主导航">{''.join(links)}</nav>
 <div class="side-note">本地数据库<code id="workbench-database">读取中…</code></div></aside>'''
     html = data.decode("utf-8")
+    html = html.replace("<head>", '<head><script src="/static/audit-client.js"></script>', 1)
     html = html.replace("</head>", '<link rel="stylesheet" href="/static/workbench.css">'
                         '<script defer src="/static/workbench.js"></script>'
                         '<script defer src="/static/layout-resizer.js"></script></head>', 1)

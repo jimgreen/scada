@@ -34,6 +34,7 @@
   const size = (bytes) => bytes < 1024 ? bytes + " B" : bytes < 1048576
     ? (bytes / 1024).toFixed(1) + " KB" : (bytes / 1048576).toFixed(1) + " MB";
   const processName = (name) => {
+    if (/^scdfe_[cst]-operations-\d+$/.test(name)) return '操作审计 · 进程 ' + name.split('-').pop();
     if (module === "s") {
       const channel = String(name || "").match(/^scdfe_s-channel-([1-9]\d*)$/);
       if (channel) return channelName({process: name, channel_id: channel[1]});

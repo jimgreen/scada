@@ -23,6 +23,7 @@ from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
 from scdfe_s.web.configuration import apply_config, write_config
+from scdfe_s.web.lifecycle import traced_lifecycle
 
 from client.can import CanMaster
 from client.modbus_rtu import ModbusRtuMaster
@@ -240,6 +241,7 @@ class ProtocolService:
     def _configured_rtu(self, con=None):
         return self._bound_rtu_id if self._binding_active else self._config.get("rtu_id") or self._default_rtu_id(con)
 
+    @traced_lifecycle
     def configure(self, values):
         if not isinstance(values, dict):
             raise ProtocolServiceError("配置必须是对象")
@@ -313,6 +315,7 @@ class ProtocolService:
             except (ValueError, KeyError, TypeError) as exc:
                 raise ProtocolServiceError(str(exc)) from exc
 
+    @traced_lifecycle
     def start(self):
         with self._lock:
             if self._config_error:
@@ -330,8 +333,10 @@ class ProtocolService:
                 self._file_log.bind_channel(channel)
                 self._file_log.start_session()
                 self._engine = self._build_engine()
+                recorder = service_packet_recorder(self._record, self._bound_rtu_id, channel)
+                self._business_log = recorder.business
                 if hasattr(self._engine, "set_packet_handler"):
-                    self._engine.set_packet_handler(service_packet_recorder(self._record, self._bound_rtu_id, channel))
+                    self._engine.set_packet_handler(recorder)
                 self._start_engine(self._engine)
             except Exception as exc:
                 if self._engine is not None:
@@ -420,17 +425,22 @@ class ProtocolService:
         except Exception:
             LOG.exception("写入 scdfe_s 通道运行状态失败: channel_id=%s", channel_id)
 
+    @traced_lifecycle
     def stop(self):
+        from .lifecycle import stop_cause
         with self._lock:
             engine = self._engine
             if engine is not None:
+                detail = (f'停止原因={stop_cause()}；RTU编号={self._bound_rtu_id} '
+                          f'通道编号={self._file_log.channel_id}')
+                self._record('INFO', f'{self.LABEL} 服务开始停止 {detail}')
                 try:
                     self._stop_engine(engine)
                 except Exception as exc:
                     self._last_error = str(exc)
-                    self._record("ERROR", f"{self.LABEL} 服务停止失败: {exc}", alert=True)
+                    self._record("ERROR", f"{self.LABEL} 服务停止失败: {exc}；{detail}", alert=True)
                     raise ProtocolServiceError(str(exc)) from exc
-                self._record("INFO", f"{self.LABEL} 服务已停止")
+                self._record("INFO", f"{self.LABEL} 服务已停止 {detail}")
             self._engine = None
             self._binding_active = False
             self._stopped_at = _now_ms()
@@ -441,8 +451,10 @@ class ProtocolService:
         engine.close()
 
     def close(self):
+        from .lifecycle import lifecycle_cause
         try:
-            self.stop()
+            with lifecycle_cause('Web服务关闭或资源释放'):
+                self.stop()
         except ProtocolServiceError:
             pass
         finally:
@@ -706,7 +718,7 @@ class ProtocolService:
             except Exception as exc:
                 self._record("ERROR", f"采集失败: {exc}", alert=True)
                 raise ProtocolServiceError(str(exc)) from exc
-            items = []
+            items, changes = [], []
             for value in values or ():
                 item = _json_value(value)
                 if not isinstance(item, dict):
@@ -717,11 +729,21 @@ class ProtocolService:
                     item["pnt_no"] = int(point)
                     # Keep diagnostic samples private to this service.  A test
                     # master must not overwrite scdfe_c's acquisition database.
-                    self._latest_values[(kind, int(point))] = {
+                    key = (kind, int(point))
+                    previous = self._latest_values.get(key)
+                    sample = {
                         "value": item["value"], "status": item.get("status", item.get("quality", 0)),
                         "refresh_time": _now_ms(),
                     }
+                    if previous is None or (previous['value'], previous['status']) != (sample['value'], sample['status']):
+                        changes.append(dict(四遥=kind.upper(), 点号=point,
+                            旧值=previous['value'] if previous else '初值', 新值=sample['value'],
+                            旧质量=previous['status'] if previous else '初值', 新质量=sample['status'],
+                            采集时刻=sample['refresh_time']))
+                    self._latest_values[key] = sample
                 items.append(item)
+            if changes and getattr(self, '_business_log', None) is not None:
+                self._business_log.rows('测试采集值变化，仅更新诊断缓存', changes, 规约=self.PROTOCOL)
             self._record("INFO", f"单次采集完成: {len(items)} 个值")
             return {"items": items, "count": len(items)}
 

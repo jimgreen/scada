@@ -33,10 +33,12 @@ from scdfe_s.web.protocol_service import (
 )
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core import operation_audit as audit
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 from core.runtime_status import now_ms, runtime_status_rows
+from scdfe_s.web.lifecycle import controlled_call
 
 
 def _rtu_point_counts(store, *, rtu_ids=None) -> dict[int, int]:
@@ -114,8 +116,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+        self._audit_delivered = True
 
     def _json(self, status, payload):
+        audit.response(self, status, payload)
         headers = {}
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
@@ -336,7 +340,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             if service is None:
                 raise ApiError(404, "服务不存在", code="not_found")
             action = parts[4]
-            return self._json(200, {"item": service.start() if action == "start" else service.stop()})
+            return self._json(200, {"item": controlled_call(self, service, action, getattr(service, action))})
         if parts == ["api", "monitor", "processes"]:
             if method != "GET" or query:
                 raise ApiError(405, "进程监控接口只支持 GET")
@@ -479,18 +483,20 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts == ["api", "iec104", "start"]:
             if method != "POST" or query:
                 raise ApiError(405, "IEC104 启动接口只支持 POST")
-            return self._json(200, {"item": service.start()})
+            return self._json(200, {"item": controlled_call(self, service, 'start', service.start)})
         if parts == ["api", "iec104", "stop"]:
             if method != "POST" or query:
                 raise ApiError(405, "IEC104 停止接口只支持 POST")
-            return self._json(200, {"item": service.stop()})
+            return self._json(200, {"item": controlled_call(self, service, 'stop', service.stop)})
         if parts == ["api", "iec104", "config"]:
             if query:
                 raise ApiError(400, "IEC104 配置接口不接受查询参数")
             if method == "GET":
                 return self._json(200, {"item": service.config()})
             if method == "PATCH":
-                return self._json(200, {"item": service.configure(self._body())})
+                body = self._body()
+                return self._json(200, {"item": controlled_call(
+                    self, service, 'configure', lambda: service.configure(body))})
             raise ApiError(405, "IEC104 配置接口只支持 GET 或 PATCH")
         if len(parts) == 3 and parts[2] == "points":
             if method == "GET":
@@ -577,11 +583,15 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts == ["api", slug, "config"]:
             if query: raise ApiError(400, "配置接口不接受查询参数")
             if method == "GET": return self._json(200, {"item": service.config()})
-            if method == "PATCH": return self._json(200, {"item": service.configure(self._body())})
+            if method == "PATCH":
+                body = self._body()
+                return self._json(200, {"item": controlled_call(
+                    self, service, 'configure', lambda: service.configure(body))})
             raise ApiError(405, "配置接口只支持 GET 或 PATCH")
         if parts in (["api", slug, "start"], ["api", slug, "stop"]):
             if method != "POST" or query: raise ApiError(405, "启停接口只支持 POST")
-            return self._json(200, {"item": service.start() if parts[-1] == "start" else service.stop()})
+            action = parts[-1]
+            return self._json(200, {"item": controlled_call(self, service, action, getattr(service, action))})
         if parts == ["api", slug, "logs"]:
             if method != "GET": raise ApiError(405, "日志接口只支持 GET")
             if set(query) - {"limit", "record"}: raise ApiError(400, "未知日志查询参数")
@@ -704,7 +714,8 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             operation = getattr(service, action, None)
             if not callable(operation):
                 raise ApiError(400, '当前 RTU 规约不支持此服务操作')
-            return self._json(200, {'item': operation()})
+            return self._json(200, {'item': (controlled_call(self, service, action, operation)
+                                          if action in {'start', 'stop'} else operation())})
         if len(parts) == 6 and parts[:2] == ['api', 'rtus'] and parts[3] == 'commands':
             if method != 'POST':
                 raise ApiError(405, '指令下发只支持 POST')
@@ -876,12 +887,15 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"deleted": True})
         raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
 
+    @audit.audit_request('s')
     def _handle(self):
         try:
             self._dispatch()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            audit.exception()
             LOG.debug("client disconnected")
         except ApiError as error:
+            audit.exception()
             payload = {"code": error.code, "message": error.message}
             if error.details is not None:
                 payload["details"] = error.details
@@ -890,14 +904,18 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                 LOG.debug("client disconnected while sending API error")
         except (IEC104ServiceError, ProtocolServiceError) as error:
+            audit.exception()
             self._json(409, {"error": {"code": "protocol_service_error", "message": str(error)}})
         except ValueError:
+            audit.exception()
             self._json(400, {"error": {"code": "bad_request", "message": "无效的请求参数"}})
         except sqlite3.OperationalError:
-            LOG.exception("database operation failed")
+            audit.exception()
+            LOG.exception("database operation failed trace_id=%s", audit.trace_id())
             self._json(503, {"error": {"code": "database_error", "message": "数据库暂不可用，请稍后重试"}})
         except Exception:
-            LOG.exception("unhandled request error")
+            audit.exception()
+            LOG.exception("unhandled request error trace_id=%s", audit.trace_id())
             self._json(500, {"error": {"code": "internal_error", "message": "服务器内部错误，请查看服务日志"}})
 
     do_GET = do_HEAD = do_POST = do_PATCH = do_DELETE = do_PUT = _handle

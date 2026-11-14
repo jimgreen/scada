@@ -131,6 +131,7 @@ body[data-points] .point-filters > label:not(.visually-hidden) select { width:28
 .key-values dd { margin:0; color:#203847; overflow-wrap:anywhere; }
 .table-pager { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding-top:10px; color:#718694; font-size:12px; }
 .table-pager button { padding:5px 9px; }
+.service-control-group { display:inline-flex; gap:6px; white-space:nowrap; vertical-align:middle; }
 .point-tabs { margin-top:4px; }
 .point-tabs-row { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
 .point-tabs-row .point-tabs { flex:1; margin:0; }

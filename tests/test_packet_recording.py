@@ -172,7 +172,12 @@ class PacketRecordingTests(unittest.TestCase):
         switch.set_channel(107, False)
         saved = content()
         service._on_send_raw(b'\x68\x04\x0b\x00\x00\x00')
-        self.assertEqual(content(), saved)
+        # Packet policy does not disable runtime business observations.
+        current = content()
+        self.assertEqual([line for line in current.splitlines() if '[报文]' in line],
+                         [line for line in saved.splitlines() if '[报文]' in line])
+        self.assertEqual(current.count('业务事件 链路控制'), saved.count('业务事件 链路控制')+1)
+        self.assertIn('通道编号=107', current)
 
     def test_three_apis_switch_existing_loggers_without_removing_history(self):
         worker=ChannelWorker(self.store,ChannelSpec(7,7,'modbus-tcp','test'),log_dir=self.root/'logs')
@@ -210,13 +215,20 @@ class PacketRecordingTests(unittest.TestCase):
                     self.assertTrue(api('PUT',{'enabled':True})['enabled'])
                     writers[family]('enabled')
                     saved=''.join(p.read_text(encoding='utf-8') for p in all_paths())
+                    historical_bytes={p:p.read_bytes() for p in all_paths()}
                     self.assertIn('[报文]',saved)
                     self.assertTrue(PacketLogSwitch(self.sim.db_path if family=='s' else self.store.db_path,family).enabled())
                     api('PUT',{'enabled':'false'},400)
                     self.assertTrue(api()['enabled'])
                     self.assertFalse(api('PUT',{'enabled':False})['enabled'])
                     writers[family]('disabled-after')
-                    self.assertEqual(''.join(p.read_text(encoding='utf-8') for p in all_paths()),saved)
+                    current=''.join(p.read_text(encoding='utf-8') for p in all_paths())
+                    self.assertEqual(sorted(line for line in current.splitlines() if '[报文]' in line),
+                                     sorted(line for line in saved.splitlines() if '[报文]' in line))
+                    for path,before in historical_bytes.items():
+                        self.assertTrue(path.read_bytes().startswith(before))
+                    # Successful and rejected toggle operations remain auditable.
+                    self.assertIn('操作审计',current)
                     normals[family]('ordinary-after')
                     self.assertIn('ordinary-after',''.join(p.read_text(encoding='utf-8') for p in all_paths()))
                     for other in {'c','s','t'}-{family}:

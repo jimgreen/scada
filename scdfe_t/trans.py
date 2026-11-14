@@ -155,6 +155,8 @@ class TransRuntime:
                                   runtime_packet_compat=self.require_enabled,
                                   packet_switch=packet_log_switch(self.db_path, 't').for_channel(self.channel_id))
         self.server = None
+        from core.communication_log import CommunicationLog
+        self.business = CommunicationLog(self.logger.business_lines, 组件='T', 通道编号=self.channel_id)
         self._soe_forwarder = None
         self._soe_keys = set()
         self.points: dict[tuple[str, int], TransPoint] = {}
@@ -162,6 +164,8 @@ class TransRuntime:
         self.values: dict[tuple[str, int], Any] = {}
         self.qualities: dict[tuple[str, int], int] = {}
         self._sample_seen: dict[tuple[str, int], tuple[Any, int, int]] = {}
+        self._business_events = []
+        self._business_lock = threading.Lock()
         self._point_runtime_state: dict[tuple[str, int], dict[str, Any]] = {}
         self._point_runtime_pending: dict[tuple[str, int], dict[str, Any]] = {}
         self.signature = None
@@ -443,7 +447,15 @@ class TransRuntime:
         if changed:
             self._point_runtime_pending.setdefault(key, {}).update(changed)
 
+    def _record_business(self, event):
+        with self._business_lock:
+            self._business_events.append(event)
+
     def _flush_point_runtime(self):
+        with self._business_lock:
+            events, self._business_events = self._business_events, []
+        for action, group in groupby(events, key=lambda item: item[0]):
+            self.business.rows(action, (item[1] for item in group))
         if not self._point_runtime_pending:
             return True
         pending = {key: dict(values) for key, values in self._point_runtime_pending.items()}
@@ -476,8 +488,18 @@ class TransRuntime:
 
     def _record_sample(self, key, value, quality, source_time=0):
         sample = (value, int(quality), int(source_time or 0))
-        if self._sample_seen.get(key) == sample:
+        previous = self._sample_seen.get(key)
+        if previous == sample:
             return False
+        if previous is None or previous[:2] != sample[:2]:
+            point = self.points.get(key)
+            self._record_business(('转发源值变化', {
+                '四遥': key[0].upper(), '转发点号': key[1],
+                '源RTU': getattr(point, 'source_rtu_id', None),
+                '源点号': getattr(point, 'source_pnt_no', None),
+                '旧值': previous[0] if previous else '未知', '新值': value,
+                '旧质量': previous[1] if previous else '未知', '新质量': quality,
+                '源刷新时刻': source_time}))
         self._sample_seen[key] = sample
         self._queue_point_runtime(
             key, value=value, status=int(quality),
@@ -520,13 +542,19 @@ class TransRuntime:
             writer = self._writer_client()
             payload = [(p.source_rtu_id, p.kind, p.source_pnt_no, value)
                        for p, _, value in prepared]
+            self.business.rows('转发指令请求写源库', (
+                {'四遥': p.kind.upper(), '转发点号': no, '源RTU': p.source_rtu_id,
+                 '源点号': p.source_pnt_no, '值': value, '接收时刻': received_at}
+                for p, no, value in prepared))
             if hasattr(writer, 'submit_commands'):
-                writer.submit_commands(payload, timeout=5)
+                receipts = writer.submit_commands(payload, timeout=5)
             else:  # Compatibility for injected single-command test adapters.
+                receipts = []
                 for item in payload:
-                    writer.submit_command(*item, timeout=5)
+                    receipts.append(writer.submit_command(*item, timeout=5))
         except Exception as exc:
             self._runtime_error(exc)
+            self.business.event('转发指令写源库失败', 错误=str(exc))
             try:
                 self.logger.error(f"转发命令写库失败: {exc}")
             except OSError:
@@ -539,7 +567,12 @@ class TransRuntime:
         except OSError:
             logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
         self._command_count += len(prepared)
-        for p, point_no, value in prepared:
+        for index, (p, point_no, value) in enumerate(prepared):
+            receipt = receipts[index] if isinstance(receipts, (list, tuple)) and index < len(receipts) else {}
+            self._record_business(('转发指令已入源库，等待C处理', {
+                '四遥': p.kind.upper(), '转发点号': point_no, '源RTU': p.source_rtu_id,
+                '源点号': p.source_pnt_no, '值': value,
+                '命令时标': receipt.get('cmd_time') if isinstance(receipt, dict) else None}))
             self.values[(p.kind, point_no)] = value
             self.qualities[(p.kind, point_no)] = 0
             self._queue_point_runtime(
@@ -584,7 +617,7 @@ class TransRuntime:
             server = IEC104Server(ip=spec.bind_host, port=spec.bind_port,
                                   common_address=spec.common_address, tick_rate_ms=50,
                                   **spec.protocol_config.as_dict())
-            server.set_packet_handler(self.logger.packet)
+            server.set_packet_handler(self.business.wrap_packet(self.logger.packet))
             for key, p in self.points.items():
                 handler = (lambda event, point=p: self._iec104_command(point, event)) if p.kind in {"yk", "yt"} else None
                 value, quality, source_time = self._sample_parts(initial_samples.get(key))
@@ -612,6 +645,7 @@ class TransRuntime:
             # makes the method useful for callers that build a server for
             # diagnostics before invoking ``rebuild``.
             self.server = server
+            self.business.bind_points(server)
             self._flush_point_runtime()
             return server
         from server.modbus_trans_server import ModbusTcpTransServer
@@ -632,7 +666,7 @@ class TransRuntime:
             points=[p.__dict__ for p in points], point_values=initial,
             command_handler=on_command, command_batch_handler=on_commands,
             log=lambda level, message: self.logger.emit("normal", message, level=level))
-        server.set_packet_handler(self.logger.packet)
+        server.set_packet_handler(self.business.wrap_packet(self.logger.packet))
         # The constructor already encoded the initial samples into the datastore.
         for key, sample in initial_samples.items():
             value, quality, source_time = self._sample_parts(sample)
@@ -644,6 +678,7 @@ class TransRuntime:
         return server
 
     def rebuild(self, spec, points, signature=None):
+        self.business.context['规约'] = spec.protocol
         if self.server is not None:
             try:
                 (self.server.stop() if hasattr(self.server, "stop") else self.server.close())
@@ -704,7 +739,8 @@ class TransRuntime:
             self._flush_point_runtime()
         source_rtus = {key[0] for key in routes}
         self._soe_forwarder = SoeForwarder(self.store,f't:channel:{self.channel_id}','C',route,
-            rtu_id=next(iter(source_rtus)) if len(source_rtus)==1 else None, on_ack=acknowledged)
+            rtu_id=next(iter(source_rtus)) if len(source_rtus)==1 else None, on_ack=acknowledged,
+            on_event=self.business.soe)
 
     def _pump_soe(self):
         if self._soe_forwarder is not None:
@@ -742,6 +778,10 @@ class TransRuntime:
                     self.logger.error(f'转发点 {kind}/{no} 更新失败: {errors[key]}')
                     continue
                 self.values[key], self.qualities[key] = value, quality
+                self._record_business(('转发协议缓存已更新', {
+                    '四遥': kind.upper(), '转发点号': no, '值': value, '质量': quality,
+                    '发布方式': 'SOE另行投递' if key in self._soe_keys else
+                        '突发传送已提交' if self.server.active_connection_count > 0 else '仅缓存，无活动连接'}))
                 if key not in self._soe_keys:
                     self._queue_point_runtime(key, forward_time=stamp)
                     self._tx_count += 1
@@ -788,6 +828,9 @@ class TransRuntime:
                     else:
                         sample = self._sample_parts(current[key])
                         self.values[key], self.qualities[key] = sample[0], sample[1]
+                        self._record_business(('Modbus寄存器已更新，等待对端读取', {
+                            '四遥': kind.upper(), '转发点号': no, '值': sample[0],
+                            '本地质量': sample[1], '源刷新时刻': sample[2]}))
                         self._queue_point_runtime(key, forward_time=now_ms())
                         self._tx_count += 1
                         self._last_tx_time = now_ms()
@@ -829,6 +872,9 @@ class TransRuntime:
                         self.server.update(point.kind, point.pnt_no, value)
                 self.values[key] = value
                 self.qualities[key] = quality
+                self._record_business(('转发协议缓存已更新', {
+                    '四遥': point.kind.upper(), '转发点号': point.pnt_no, '值': value,
+                    '质量': quality, '源刷新时刻': source_time}))
                 self._queue_point_runtime(key, forward_time=now_ms())
                 self._tx_count += 1
                 self._last_tx_time = now_ms()

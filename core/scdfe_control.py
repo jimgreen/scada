@@ -17,7 +17,7 @@ CONTROL_FIELDS = frozenset({
 })
 CONFIG_FIELDS = CONTROL_FIELDS - {"process_enable"}
 LOG_PATTERN = re.compile(
-    r"(?P<process>scdfe_c-(?:main|db-writer|command-server|(?:debug-)?rtu-\d+))-"
+    r"(?P<process>scdfe_c-(?:main|db-writer|command-server|operations-\d+|(?:debug-)?rtu-\d+))-"
     r"(?P<hour>\d{8}-\d{2})\.log$"
 )
 LOG_LEVEL_LABELS = {
@@ -33,7 +33,11 @@ LOG_IDENTITY = re.compile(r"\b(?:pid|rtu|channel|chanel|tid)\s*=\s*\d+\b", re.IG
 
 
 def sanitize_log_message(message):
-    """Keep runtime identity fields out of persisted log content."""
+    """Strip legacy bare identity tokens and keep each message on one line.
+
+    Lifecycle records use explicit labels such as RTU编号/通道编号/线程ID so
+    their diagnostic context survives; packet metadata retains its old format.
+    """
     value = LOG_WRITER_PID.sub("", str(message))
     value = LOG_IDENTITY.sub("", value)
     # A protocol error or peer-supplied detail is one record. Preserve the

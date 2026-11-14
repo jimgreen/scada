@@ -18,6 +18,7 @@ from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core import operation_audit as audit
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 
@@ -63,8 +64,10 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+        self._audit_delivered = True
 
     def _json(self, status, payload):
+        audit.response(self, status, payload)
         headers = {}
         item = payload.get("item") if isinstance(payload, dict) else None
         if isinstance(item, dict) and "_version" in item:
@@ -303,6 +306,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             data = render_workbench(data, "t", path.name)
         self._send(200, allowed[key], data)
 
+    @audit.audit_request('t')
     def _handle(self):
         try:
             self._prepare_request()
@@ -319,17 +323,22 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 return self._static(parts)
             raise ApiError(405, "只支持 GET/HEAD")
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            audit.exception()
             return
         except ApiError as error:
+            audit.exception()
             self._json(error.status, {"error": {"code": error.code, "message": error.message,
                                                   **({"details": error.details} if error.details is not None else {})}})
         except (ValueError, KeyError) as error:
+            audit.exception()
             self._json(400, {"error": {"code": "bad_request", "message": str(error)}})
         except sqlite3.OperationalError:
-            LOG.exception("database operation failed")
+            audit.exception()
+            LOG.exception("database operation failed trace_id=%s", audit.trace_id())
             self._json(503, {"error": {"code": "database_error", "message": "数据库暂不可用"}})
         except Exception:
-            LOG.exception("unhandled request error")
+            audit.exception()
+            LOG.exception("unhandled request error trace_id=%s", audit.trace_id())
             self._json(500, {"error": {"code": "internal_error", "message": "服务器内部错误，请查看服务日志"}})
 
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = _handle

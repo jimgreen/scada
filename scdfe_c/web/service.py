@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 from typing import Any, Iterator
+from core import operation_audit as audit
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1271,6 +1272,7 @@ class ScadaStore:
                     normalised[generated] = cursor.lastrowid
                 row = self._read(connection, table, [normalised[n] for n in primary_keys])
                 connection.commit()
+                audit.change(canonical, [normalised[n] for n in primary_keys], None, row)
                 return row
         except sqlite3.IntegrityError as exc:
             if "foreign key" in str(exc).lower():
@@ -1438,6 +1440,7 @@ class ScadaStore:
                 )
                 deleted_rows['fes_rtu_define'] = 1
                 connection.commit()
+                audit.change('fes_rtu_define', keys, parent, None, deleted_rows=deleted_rows)
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, 'RTU 仍被其他数据引用，不能删除', details=str(exc), code='conflict') from exc
         return {
@@ -1498,6 +1501,7 @@ class ScadaStore:
             )
             item = self._read(connection, table, key)
             connection.commit()
+            audit.change(table, key, row, item, command_time=command_time, command_state='已入库，等待通信进程处理')
         return item
 
     def _prepare_update(self, table, key, values):
@@ -1545,6 +1549,8 @@ class ScadaStore:
                 connection.execute('BEGIN IMMEDIATE')
                 # Only adjacent, equivalent statements are combined. Duplicate
                 # keys retain their order, triggers and per-update versions.
+                sample = changes[:audit.MAX_SAMPLES] if audit.active() else []
+                before = [self._read(connection, c[0], c[1]) for c in sample]
                 for sql, adjacent in groupby(changes, key=lambda change: change[3]):
                     group = list(adjacent)
                     table = group[0][0]
@@ -1561,7 +1567,13 @@ class ScadaStore:
                         raise ApiError(409, '更新未写入', code='conflict')
                 result = (self._read_updated_rows(connection, changes)
                           if return_rows else len(changes))
+                after = [self._read(connection, c[0], c[1]) for c in sample]
                 connection.commit()
+                if sample:
+                    audit.emit('数据库已提交', operation='批量更新', count=len(changes),
+                               sampled=len(sample), truncated=len(changes) > len(sample),
+                               targets=[{'table': c[0], 'key': c[1]} for c in sample],
+                               before=before, after=after)
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, '引用的 RTU 不存在或数据违反约束', code='conflict') from exc
         return result
@@ -1608,9 +1620,11 @@ class ScadaStore:
         try:
             with self.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                before = self._read(connection, table, key) if audit.active() else None
                 self._apply_update(connection, change, if_match)
                 row = self._read(connection, table, key)
                 connection.commit()
+                audit.change(change[0], key, before, row)
                 return row
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, '引用的 RTU 不存在或数据违反约束', code='conflict') from exc
@@ -1628,9 +1642,11 @@ class ScadaStore:
         try:
             with self.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                self._check_version(self._read(connection, table, key), if_match)
+                before = self._read(connection, table, key)
+                self._check_version(before, if_match)
                 connection.execute(f"DELETE FROM {quote_identifier(canonical)} WHERE {predicate}", params)
                 connection.commit()
+                audit.change(canonical, key, before, None)
         except sqlite3.IntegrityError as exc:
             raise ApiError(409, "记录仍被其他表引用，不能删除", details=str(exc), code="conflict") from exc
 

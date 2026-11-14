@@ -113,14 +113,29 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
     server: _CommandTCPServer
 
     def _send(self, payload: dict[str, Any]) -> None:
+        from core import operation_audit as audit
+        audit.emit('TCP指令返回', result=payload)
         try:
             raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
             self.wfile.write(raw + b"\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
+            audit.emit('TCP响应发送失败')
             return
 
     def handle(self) -> None:
+        from core import operation_audit as audit
+        owner = self.server.owner
+        directory = getattr(owner.logger, 'directory', None)
+        if not isinstance(directory, (str, Path)):
+            directory = owner.db_path.parent / 'logs'
+        with audit.scope('c', directory, source='TCP指令', peer_ip=self.client_address[0],
+                         peer_port=self.client_address[1]):
+            audit.emit('TCP请求到达')
+            return self._handle_command()
+
+    def _handle_command(self) -> None:
+        from core import operation_audit as audit
         owner = self.server.owner
         try:
             # A client that connects and never sends a newline must not keep
@@ -158,6 +173,8 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
                 self._send(owner.error_response("invalid_command", str(exc), 400))
                 return
             fingerprint = (rtu_id, kind, point_no, value)
+            audit.emit('TCP指令已验证', request_id=request_id, rtu_id=rtu_id,
+                       kind=kind, point_no=point_no, value=value, authentication='令牌验证通过')
             cached = owner.cached(request_id, fingerprint)
             if cached is not None:
                 self._send(cached)

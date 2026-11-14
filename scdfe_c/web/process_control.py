@@ -10,6 +10,8 @@ import sys
 import threading
 import time
 import uuid
+from contextvars import copy_context
+from core import operation_audit as audit
 
 from core.process_registry import PROCESS_TABLE, ensure_process, now_ms, process_is_alive
 from core.scdfe_control import (
@@ -230,6 +232,7 @@ class ProcessController:
         if rtu["channel_id"] is None or rtu["channel_type"] not in CHANNEL_PARAMETER_TABLES:
             raise ApiError(409, "该 RTU 尚未配置支持的通道")
 
+    @audit.control_action('c')
     def submit(self, body):
         if set(body) - {"target", "action", "include_in_all"}:
             raise ApiError(400, "未知进程控制参数")
@@ -268,12 +271,16 @@ class ProcessController:
                 self._operation = {"id": uuid.uuid4().hex, "target": target, "action": action,
                                    "status": "running", "stage": "准备执行", "steps": [],
                                    "started_at": now_ms(), "finished_at": 0, "error": ""}
-                self._thread = threading.Thread(target=self._execute, args=(target, action, lock),
+                self._operation['trace_id'] = audit.trace_id()
+                audit.emit('任务已受理', job_id=self._operation['id'], target=target, action=action)
+                context = copy_context()
+                self._thread = threading.Thread(target=context.run, args=(self._execute, target, action, lock),
                                                 name="scada-process-control", daemon=True)
                 try:
                     self._thread.start()
                 except Exception as exc:
                     self._operation.update(status="failed", error=str(exc), finished_at=now_ms())
+                    audit.emit('任务失败', job_id=self._operation['id'], error_type=type(exc).__name__, error=str(exc))
                     raise
                 return dict(self._operation)
             except Exception:
@@ -284,6 +291,7 @@ class ProcessController:
         with self._mutex:
             self._operation["stage"] = message
             self._operation["steps"].append({"time": now_ms(), "message": message})
+            audit.emit('任务步骤', job_id=self._operation['id'], message=message)
 
     def _wait(self, predicate, message):
         deadline = time.monotonic() + self.timeout
@@ -468,9 +476,12 @@ class ProcessController:
                     self._start(target)
             with self._mutex:
                 self._operation.update(status="completed", stage="操作完成", finished_at=now_ms())
+                audit.emit('任务完成', job_id=self._operation['id'], target=target, action=action)
         except Exception as exc:
             with self._mutex:
                 self._operation.update(status="failed", error=str(exc), finished_at=now_ms())
+                audit.emit('任务失败', job_id=self._operation['id'], target=target, action=action,
+                           error_type=type(exc).__name__, error=str(exc))
             # Error reporting must remain available even if the DB itself failed.
             try:
                 if target != "all":

@@ -146,12 +146,22 @@ class _CanTransport(PacketTrace):
             self.bus = can.Bus(**self._bus_options)
             send = self.bus.send
             def traced_send(message, *args, **kwargs):
-                result = send(message, *args, **kwargs)
+                try:
+                    result = send(message, *args, **kwargs)
+                except Exception as exc:
+                    self._business('CAN驱动发送失败', 帧ID=f'0x{message.arbitration_id:X}',
+                                   数据=bytes(message.data).hex(' '), 错误=str(exc))
+                    raise
                 self._trace_can("TX", message)
                 return result
             self.bus.send = traced_send
         except Exception as exc:
+            self._business('CAN总线打开失败', 接口=self.interface, 总线=self.channel, 错误=str(exc))
             raise CanError(f'打开 CAN 总线失败: {exc}') from exc
+        self._business('CAN总线已打开', 接口=self.interface, 总线=self.channel,
+                       波特率=self.bitrate, FD=self.fd, 数据波特率=self._bus_options.get('data_bitrate'),
+                       采样点=self.sample_point, 数据采样点=self.data_sample_point,
+                       诊断范围='ACK/CRC错误计数等仅由驱动实际报告')
 
     def connect(self):
         if self.bus is None:
@@ -203,7 +213,9 @@ class _CanTransport(PacketTrace):
         try:
             message = self.bus.recv(timeout)
         except Exception as exc:
+            self._business('CAN驱动接收失败', 错误=str(exc))
             raise CanError(f'接收 CAN 帧失败: {exc}') from exc
+        self._trace_can_state(self.bus)
         if message is not None:
             self._trace_can("RX", message)
         return None if message is None else CanFrame.from_message(message)
@@ -358,7 +370,7 @@ class CanMaster(_CanTransport):
                 master.configure(point_rows)
             from core.can_schedule import CanFrameSchedule, load_frame_definitions
             master._frame_schedule = CanFrameSchedule(lambda *a, **kw: master.send(*a, timeout=.5, **kw),
-                                                      load_frame_definitions(store, rtu_id), fd=master.fd)
+                load_frame_definitions(store, rtu_id), fd=master.fd, observe=master._business)
             if master.connected:
                 master._frame_schedule.start()
         except Exception:
@@ -482,6 +494,7 @@ class CanMaster(_CanTransport):
                 key: tuple(rows) for key, rows in frame_index.items()
             }
             self._frame_decoders = decoders
+            self._business_values = {}
             self._frame_word_orders = word_orders
         return self
 
@@ -638,8 +651,13 @@ class CanMaster(_CanTransport):
                     self._pending.append(frame)
                     raise
                 if matches:
+                    self._business('CAN匹配到设备应答', 请求ID=f'0x{arbitration_id:X}',
+                        响应ID=f'0x{response_id:X}', 匹配方式='ID/帧类型及配置的数据匹配条件',
+                        应答数据=frame.data.hex(' '))
                     return frame
                 self._pending.append(frame)
+        self._business('CAN等待应答超时', 请求ID=f'0x{arbitration_id:X}',
+                       响应ID=f'0x{response_id:X}', 超时秒=timeout, 自动重发=0)
         raise CanTimeout(f'等待 CAN 应答 {response_id:#x} 超时（{timeout} 秒）')
 
     def collect_once(self, *, timeout=0.1, max_frames=100):
@@ -691,6 +709,7 @@ class CanMaster(_CanTransport):
                     value = decode(frame, self.rtu_id)
                     if value is not None:
                         decoded.append(value)
+            self._log_decoded_changes(decoded)
             return decoded
         for frame in frames:
             key = (frame.arbitration_id, bool(frame.is_extended_id))
@@ -706,7 +725,28 @@ class CanMaster(_CanTransport):
                     raise
                 if value is not None:
                     decoded.append(value)
+        self._log_decoded_changes(decoded)
         return decoded
+
+    def _log_decoded_changes(self, values):
+        if self._business_logger() is None:
+            return
+        details = []
+        for sample in values:
+            key = (sample.kind, sample.point_no)
+            previous = self._business_values.get(key)
+            state = (sample.value, sample.quality)
+            if previous == state:
+                continue
+            row = self._point_index[key]
+            details.append(dict(四遥=sample.kind.upper(), 点号=sample.point_no,
+                帧ID=f'0x{sample.frame.arbitration_id:X}', 旧值=previous[0] if previous else '初值',
+                工程值=sample.value, 质量=sample.quality, 数据类型=row['value_type'],
+                字节偏移=row['byte_offset'], 位偏移=row['bit_offset'], 位宽=row['bit_length'],
+                字节序=row['byte_order'], 缩放=row['scale'], 偏移=row['offset'],
+                帧时标=sample.frame.timestamp, 原始数据=sample.frame.data.hex(' ')))
+            self._business_values[key] = state
+        self._business('CAN信号解析变化', rows=details)
 
     def _point_definition(self, kind, point_no, points=None):
         if points is None:
@@ -736,6 +776,10 @@ class CanMaster(_CanTransport):
         if start + needed > len(payload):
             payload.extend(b'\x00' * (start + needed - len(payload)))
         def send_payload(payload):
+            self._business('CAN点指令编码', 四遥=row['kind'].upper(), 点号=row['pnt_no'],
+                值=value, 发送ID=f'0x{int(tx_id):X}', 数据=bytes(payload).hex(' '),
+                字节序=order, 字节偏移=start, 位偏移=offset, 位宽=bits,
+                等待设备应答=wait_response, 响应ID=row.get('response_id'))
             if not wait_response:
                 return self.send(int(tx_id), payload,
                                  is_extended_id=bool(row.get('is_extended_id', False)),

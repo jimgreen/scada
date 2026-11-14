@@ -17,8 +17,9 @@ def load_frame_definitions(store, rtu_id):
 
 
 class CanFrameSchedule:
-    def __init__(self, send, rows=(), *, fd=False):
+    def __init__(self, send, rows=(), *, fd=False, observe=None):
         self.send = send
+        self.observe = observe
         self._condition = threading.Condition()
         self._thread = None
         self._stopped = True
@@ -111,19 +112,33 @@ class CanFrameSchedule:
                     self._condition.wait(wait)
                     continue
                 due,_,row,repeat = heapq.heappop(self._queue)
+            started = time.monotonic()
             try:
                 self.send(int(row['arbitration_id']),row['data'],**row['options'])
             except Exception as exc:
+                self._event('CAN调度发送失败，停止本任务', row, due, started, 错误=str(exc))
                 # Stop this task on failure; never retry an ambiguous send.
                 with self._condition:
                     self._errors += 1
                     self._last_error = str(exc)
                 continue
+            self._event('CAN调度帧已提交驱动', row, due, started)
             with self._condition:
                 self._sent += 1
                 if not self._stopped and (repeat == 0 or repeat > 1):
                     self._enqueue(row,max(due+row['period'],time.monotonic()+row['period']),
                                   repeat-1 if repeat else 0)
+
+    def _event(self, action, row, due, started, **extra):
+        if self.observe is not None:
+            try:
+                self.observe(action, 定义编号=row['id'], 调度模式=row['schedule_mode'],
+                    回放组=row.get('replay_group'), 帧ID=f"0x{int(row['arbitration_id']):X}",
+                    周期毫秒=row['period']*1000, 调度延迟毫秒=round(max(0,started-due)*1000,3),
+                    驱动调用毫秒=round((time.monotonic()-started)*1000,3), **extra)
+            except Exception:
+                # A logging observer must never stop a healthy periodic task.
+                pass
 
     def stop(self):
         with self._condition:

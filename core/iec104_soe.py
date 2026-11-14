@@ -163,6 +163,7 @@ class SoeReceiver:
         self.connection, self.last_message = None, None
         self.lock = threading.RLock()
         self.count, self.error = 0, None
+        self.on_commit = None
 
     def receive(self, message):
         with self.lock:
@@ -196,6 +197,12 @@ class SoeReceiver:
                     con.rollback()
                     raise
                 self.count += len(prepared)
+                if self.on_commit is not None:
+                    try:
+                        self.on_commit([dict(zip(FIELDS, row)) for row in prepared])
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception('SOE已入库，但业务日志失败')
             self.last_message = message
 
     def close(self):
@@ -211,7 +218,7 @@ class SoeForwarder:
     A failed/disconnected batch is retried. Crash after ACK before cursor commit
     can duplicate it. There is deliberately no timer that discards old events.
     """
-    def __init__(self, store, consumer, origin, route, *, rtu_id=None, batch_size=128, on_ack=None):
+    def __init__(self, store, consumer, origin, route, *, rtu_id=None, batch_size=128, on_ack=None, on_event=None):
         if not 1 <= batch_size <= 128: raise ValueError('SOE batch_size 必须在 1..128')
         self.store, self.consumer, self.origin, self.route = store, consumer, origin, route
         self.rtu_id, self.batch_size = rtu_id, batch_size
@@ -221,6 +228,7 @@ class SoeForwarder:
         self.acked = False
         self.error = None
         self.on_ack = on_ack
+        self.on_event = on_event
         self.pending_events = []
 
     def tick(self, sender):
@@ -233,6 +241,7 @@ class SoeForwarder:
             state = 1 if self.acked else sender.poll_soe()
             if state == 0: return 0
             if state < 0:
+                self._event('SOE未确认，保留游标重试', self.pending_events)
                 self.pending = None
                 self.pending_events = []
                 self.error = 'SOE 批次连接中断或发送未完成，保留游标等待重试'
@@ -241,6 +250,7 @@ class SoeForwarder:
             self._advance(self.pending)
             self.pending, self.acked, self.error = None, False, None
             delivered, self.pending_events = self.pending_events, []
+            self._event('SOE收到APCI确认并推进游标', delivered)
             if self.on_ack is not None:
                 self.on_ack(delivered, time.time_ns()//1_000_000)
         where, args = 'origin=? AND event_id>?', [self.origin,self.last_event_id]
@@ -259,7 +269,16 @@ class SoeForwarder:
         elif sender.submit_soe(events):
             self.pending = target
             self.pending_events = events
+            self._event('SOE已提交发送，等待APCI确认', events)
         return len(events)
+
+    def _event(self, action, events):
+        if self.on_event is not None:
+            try:
+                self.on_event(action, events)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('SOE业务日志失败；投递状态保持不变')
 
     def _advance(self, target):
         self.connection.execute('''INSERT INTO _scada_iec104_soe_cursor(consumer,last_event_id,ack_time_ms)

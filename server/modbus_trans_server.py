@@ -252,6 +252,10 @@ class ModbusTcpTransServer(ModbusTcpServer):
             else:
                 value = self._decode(row, values)
             decoded.append((row, value))
+        self._business('Modbus转发写请求解码', rows=(dict(四遥=row['kind'].upper(), 点号=row['pnt_no'],
+            工程值=value, 数据类型=row['data_type'], 字节序=row['byte_order'], 字序=row['word_order'])
+            for row,value in decoded), 站号=self.unit_id, 功能码=function_code,
+            数据区=area, 起始地址0基=address, 数量=write_count)
         if self._command_batch_handler is not None:
             try:
                 accepted = self._command_batch_handler([

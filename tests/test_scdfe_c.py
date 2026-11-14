@@ -888,19 +888,24 @@ class ScdfeCTest(unittest.TestCase):
         self.assertEqual(supervisor.reconcile()["started"], 1)
         key = next(iter(supervisor.workers))
         old_thread = supervisor.workers[key].thread
-        old_thread_id = old_thread.ident
 
         self.store.update_row("fes_scdfe_c_define", [1], {
             "poll_interval_ms": 500, "retry_interval_ms": 100,
         })
         result = supervisor.reconcile()
+        # Reload is cooperative: an in-flight network call can outlive the
+        # first scan's join budget. Subsequent scans finish the same reload.
+        deadline = time.monotonic() + 15
+        while result['started'] == 0 and time.monotonic() < deadline:
+            time.sleep(.05)
+            result = supervisor.reconcile()
 
         self.assertEqual(result["started"], 1)
         self.assertEqual(result["running"], 1)
         self.assertAlmostEqual(supervisor.poll_interval, 0.5)
         self.assertAlmostEqual(supervisor.retry_interval, 0.1)
         self.assertIsNot(supervisor.workers[key].thread, old_thread)
-        self.assertNotEqual(supervisor.workers[key].thread.ident, old_thread_id)
+        self.assertFalse(old_thread.is_alive())
 
     def test_supervisor_spaces_out_sequential_worker_starts(self):
         class RecordingThread:

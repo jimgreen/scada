@@ -156,6 +156,7 @@ class ModbusMappedServer(ModbusTcpTransServer):
         self._write_generation = 0
         self._special_register_codecs = any('slice_width' in row or 'yk_on_word' in row for row in points)
         self._database_samples = {k:v for k,v in values.items() if k[0] in {'yc','yx'}}
+        self._business_samples = {}
         super().__init__(points=points, point_values=values, command_handler=self._command, **kwargs)
         # Mappings are fixed for the service lifetime. Keep ordinary channels
         # on the original codec/publication path, without per-point slicing checks.
@@ -282,6 +283,10 @@ class ModbusMappedServer(ModbusTcpTransServer):
                 fields.update(status=1, cmd_handle_time=now)
             changes.append((f'fes_{kind}_define', [self.rtu_id,no], fields))
         self.store.update_rows(changes)
+        self._business('Modbus写入已提交模拟数据库', rows=(dict(四遥=kind.upper(), 点号=no,
+            值=value, 质量=1 if kind in {'yk','yt'} else 0, 刷新时刻=now,
+            指令接收时刻=now if kind in {'yk','yt'} else None) for kind,no,value in commands),
+            RTU编号=self.rtu_id, 站号=self.unit_id)
 
     async def _action(self, function_code, start_address, address, count, current_registers, set_values):
         if set_values is None or function_code not in {5, 6, 15, 16}:
@@ -309,8 +314,13 @@ class ModbusMappedServer(ModbusTcpTransServer):
             return ExcCodes.ILLEGAL_VALUE
         try:
             # All mapped points in one request commit or roll back together.
+            self._business('Modbus写请求解码', rows=(dict(四遥=kind.upper(), 点号=no, 工程值=value)
+                for kind,no,value in decoded), RTU编号=self.rtu_id, 站号=self.unit_id,
+                功能码=function_code, 数据区=area, 起始地址0基=address, 数量=len(set_values))
             self._commands(decoded)
         except Exception as exc:
+            self._business('Modbus写请求未提交数据库', RTU编号=self.rtu_id, 站号=self.unit_id,
+                功能码=function_code, 起始地址0基=address, 异常码=4, 错误=str(exc))
             self._log('ERROR', f'Modbus 批量写库失败: {exc}')
             return ExcCodes.DEVICE_FAILURE
         for kind, no, value in decoded:
@@ -382,14 +392,24 @@ class ModbusMappedServer(ModbusTcpTransServer):
                     current = con.execute('PRAGMA data_version').fetchone()[0]
                     if current == version:
                         continue
-                    changed = []
+                    changed, details, states = [], [], {}
                     con.execute('BEGIN')
                     try:
                         for kind in ('yc','yx'):
-                            for no,value in con.execute(f'SELECT pnt_no,value FROM fes_{kind}_define WHERE rtu_id=?', (self.rtu_id,)):
+                            for no,value,status,stamp in con.execute(f'SELECT pnt_no,value,status,refresh_time FROM fes_{kind}_define WHERE rtu_id=?', (self.rtu_id,)):
                                 value = 0 if value is None else value
                                 if (kind,no) in self._mappings and value != self._database_samples.get((kind,no)):
                                     changed.append((kind,no,value))
+                                if (kind,no) in self._mappings:
+                                    states[(kind,no)] = (value,status)
+                                    previous = self._business_samples.get((kind,no))
+                                    if previous != (value,status):
+                                        row = self._mappings[(kind,no)]
+                                        details.append(dict(四遥=kind.upper(), 点号=no, 数据区=row['register_area'],
+                                            地址0基=row['address'], 数据类型=row['data_type'], 字节序=row['byte_order'],
+                                            字序=row['word_order'], 旧值=previous[0] if previous else '初值',
+                                            新值=value, 旧质量=previous[1] if previous else '初值', 新质量=status,
+                                            源刷新时刻=stamp, 质量说明='本地状态，Modbus报文不携带质量位'))
                     finally:
                         con.rollback()
                     batch = self.prepare_updates(changed)
@@ -401,6 +421,9 @@ class ModbusMappedServer(ModbusTcpTransServer):
                             return False
                         self.publish_updates(batch)
                         self._database_samples.update({(kind,no):value for kind,no,value in changed})
+                        self._business_samples.update(states)
+                        self._business('数据库变化已同步Modbus映射，等待对端读取', rows=details,
+                                       RTU编号=self.rtu_id, 站号=self.unit_id)
                         return True
                     if self._on_datastore(publish_if_current):
                         version = current

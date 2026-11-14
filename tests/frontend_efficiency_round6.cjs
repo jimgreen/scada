@@ -2,7 +2,7 @@
 const fs=require('fs'),path=require('path'),assert=require('assert/strict'),{execFileSync}=require('child_process');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const {fixture:cFixture}=require('./frontend_efficiency_round3.cjs');
-const root=path.resolve(__dirname,'..'),report=path.join(root,'reports/scdfe_efficiency_20261113_round6');
+const root=path.resolve(__dirname,'..'),report=process.env.SCADA_TEST_REPORT_DIR||path.join(root,'reports/scdfe_efficiency_20261113_round6');
 const baseline='4f9aed9',checks=[],measurements=[],sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function check(ok,label){assert.ok(ok,label);checks.push(label)}
 async function until(fn){for(let n=0;n<600;n++){if(await fn())return;await sleep(10)}throw Error('fixture timeout')}
@@ -51,9 +51,9 @@ async function fixture(browser,role,variant,view='processes'){
   measurements.push({role:'c',variant,summary_nodes_preserved:kept});if(variant==='after')check(kept===4,'C preserves summary metric nodes on heartbeat');await c.close();
   for(const role of ['s','t']){
    const f=await fixture(browser,role,variant),{page,state}=f,body=role==='s'?'#rows':'#processes';
-   await page.evaluate(selector=>{window.saved=Array.from(document.querySelector(selector).querySelectorAll('button'));saved[0].focus();},body);
+   await page.evaluate(selector=>{window.saved=Array.from(document.querySelector(selector).querySelectorAll('button'));window.focused=saved.find(button=>!button.disabled);focused.focus();},body);
    state.tick++;await page.evaluate(()=>window.clock+=1000);await f.load();await f.settle();
-   const preserved=await page.evaluate(selector=>{const buttons=Array.from(document.querySelector(selector).querySelectorAll('button'));return {count:saved.filter((x,i)=>x===buttons[i]).length,focus:document.activeElement===saved[0],total:saved.length}},body);
+   const preserved=await page.evaluate(selector=>{const buttons=Array.from(document.querySelector(selector).querySelectorAll('button'));return {count:saved.filter((x,i)=>x===buttons[i]).length,focus:document.activeElement===focused,total:saved.length}},body);
    measurements.push({role,variant,...preserved});if(variant==='after'){check(preserved.count===preserved.total,role+' retains action buttons during heartbeat');check(preserved.focus,role+' preserves keyboard focus')}
    if(role==='s'){
     state.count=0;state.hold=true;
@@ -62,7 +62,7 @@ async function fixture(browser,role,variant,view='processes'){
     state.hold=false;state.held.splice(0).forEach(release=>release());await page.evaluate(()=>loads);await f.settle();
     if(variant==='after'){
      state.hold=true;await page.evaluate(()=>{window.oldRead=window.__load()});await until(()=>state.held.length===2);
-     await page.locator('button[data-service]').first().click();await until(()=>state.tick===2);
+     await page.locator('button[data-service]:not(:disabled)').first().click();await until(()=>state.tick===2);
      state.hold=false;state.held.splice(0).forEach(release=>release());await f.settle();
      await until(async()=>(await page.locator('#rows').textContent()).includes('generation-2'));
      check(true,'S control completion reads fresh state after an older request');

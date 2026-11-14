@@ -12,6 +12,21 @@
     can: "can", bacnet: "bacnet-server", opc: "opc-server",
   };
   const statusName = {0:"停止", 1:"启动中", 2:"运行", 3:"停止中", 4:"处理中", 5:"错误"};
+  const controlPending = new Set();
+  function serviceControls(service, running) {
+    const button = (action, label, unavailable) =>
+      `<button type="button" data-service="${esc(service)}" data-action="${action}" data-unavailable="${unavailable ? "1" : "0"}"${unavailable || controlPending.has(service) ? " disabled" : ""}>${label}</button>`;
+    // Fixed positions: a repeated click on START must never turn into STOP
+    // after a fast response or an automatic table refresh.
+    return `<span class="service-control-group">${button("start", "启动", !!running)}${button("stop", "停止", !running)}</span>`;
+  }
+  function setControlPending(service, pending) {
+    if (pending) controlPending.add(service); else controlPending.delete(service);
+    document.querySelectorAll("button[data-service]").forEach(button => {
+      if (button.dataset.service === service)
+        button.disabled = pending || button.dataset.unavailable === "1";
+    });
+  }
   async function api(path, options) {
     const r = await fetch(path, {headers: {"Content-Type":"application/json"}, ...(options || {})});
     const body = await r.json();
@@ -97,7 +112,7 @@
         const bound = !!service && String(effectiveRtu ?? channel.rtu_id) === String(channel.rtu_id);
         const running = bound && service.running;
         const error = bound ? (status.last_error || channel.process_error || "—") : (channel.process_error || "—");
-        const action = bound ? `<button data-service="${esc(serviceName)}" data-action="${running ? "stop" : "start"}">${running ? "停止" : "启动"}</button>` : "";
+        const action = bound ? serviceControls(serviceName, running) : "";
         const processName = serviceName ? `scdfe_s-${serviceName}` : "—";
         const startedAt = bound ? status.started_at : channel.process_start_time;
         const heartbeatAt = running ? Date.now() : channel.process_heartbeat_time;
@@ -132,9 +147,7 @@
         const traffic = bound ? `${fmt(runtime.last_rx_time ?? service.last_rx_time)} / ${fmt(runtime.last_tx_time ?? service.last_tx_time)}` : "—";
         const diagnostic = runtime.diagnostic || service.diagnostic || {};
         const diagnosticText = Object.keys(diagnostic).length ? `诊断字段 ${Object.keys(diagnostic).length} 项` : "暂无诊断";
-        const action = bound
-          ? `<button data-service="${esc(service.name)}" data-action="${service.running ? "stop" : "start"}">${service.running ? "停止" : "启动"}</button>`
-          : "";
+        const action = bound ? serviceControls(service.name, service.running) : "";
         return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || "未命名")}</strong></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
       }).join("") || `<tr><td colspan="12" class="empty">暂无通信通道</td></tr>`;
       show("#communication-rows", rows);
@@ -152,9 +165,11 @@
     } catch (e) { msg(e.message, true); }
   }
   async function action(button) {
-    button.disabled = true;
-    try { await api(`/api/monitor/communications/${encodeURIComponent(button.dataset.service)}/${button.dataset.action}`, {method:"POST", body:"{}"}); await (document.body.dataset.monitor === "processes" ? loadProcesses({fresh:true}) : loadCommunications({fresh:true})); msg("操作已完成"); }
-    catch (e) { msg(e.message, true); } finally { button.disabled = false; }
+    const service = button.dataset.service, operation = button.dataset.action;
+    if (button.disabled || controlPending.has(service) || !["start", "stop"].includes(operation)) return;
+    setControlPending(service, true);
+    try { await api(`/api/monitor/communications/${encodeURIComponent(service)}/${operation}`, {method:"POST", body:"{}"}); await (document.body.dataset.monitor === "processes" ? loadProcesses({fresh:true}) : loadCommunications({fresh:true})); msg("操作已完成"); }
+    catch (e) { msg(e.message, true); } finally { setControlPending(service, false); }
   }
   if (document.body.dataset.monitor) {
     const kind = document.body.dataset.monitor;

@@ -133,6 +133,7 @@ class ModbusAsyncServer(PacketTrace):
             "framer": FramerType.SOCKET if self.tcp else FramerType.RTU,
             "trace_connect": self._trace_connect,
             "trace_packet": self._trace_packet,
+            "trace_pdu": self._trace_modbus_pdu,
         }
         if self.tcp:
             kwargs["address"] = (self.host, self.port)
@@ -147,6 +148,8 @@ class ModbusAsyncServer(PacketTrace):
 
     def _trace_connect(self, connected):
         self.connections = max(0, self.connections + (1 if connected else -1))
+        self._business('Modbus客户端接入' if connected else 'Modbus客户端断开',
+                       链路=self._packet_endpoint, 连接数=self.connections)
 
     def close(self):
         if self.server is not None and self.loop is not None:

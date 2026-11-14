@@ -25,8 +25,8 @@ LOG_PATTERNS = {
     # protocol service is still present in the process monitor, but it is not
     # used as the log-file identity because one service can be rebound to
     # another RTU/channel over its lifetime.
-    "s": re.compile(r"(?P<process>scdfe_s-channel-[1-9]\d*|scdfe_s-(?:iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
-    "t": re.compile(r"(?P<process>scdfe_t-channel-[1-9]\d*)-(?P<hour>\d{8}-\d{2})\.log$"),
+    "s": re.compile(r"(?P<process>scdfe_s-channel-[1-9]\d*|scdfe_s-(?:operations-\d+|iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
+    "t": re.compile(r"(?P<process>scdfe_t-(?:channel-[1-9]\d*|operations-\d+))-(?P<hour>\d{8}-\d{2})\.log$"),
 }
 
 

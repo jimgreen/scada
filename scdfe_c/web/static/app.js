@@ -2178,6 +2178,7 @@ $("#scdfe-rtus").onclick = (event) => {
     return controlRtu(monitor.rows[index], "enable", button);
 };
 function processLabel(name) {
+  if (/^scdfe_c-operations-\d+$/.test(name)) return '操作审计 · 进程 ' + name.split('-').pop();
   if (name === "scdfe_c-main") return "主进程";
   if (name === "scdfe_c-db-writer") return "数据库写进程";
   if (name === "scdfe_c-command-server") return "TCP指令服务进程";

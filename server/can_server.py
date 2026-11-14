@@ -80,7 +80,7 @@ class CanServer(PacketTrace):
         self._frames: deque[dict[str, Any]] = deque(maxlen=500)
         self._connections = 0
         from core.can_schedule import CanFrameSchedule
-        self._frame_schedule = CanFrameSchedule(self.send_frame, frame_definitions, fd=self.fd)
+        self._frame_schedule = CanFrameSchedule(self.send_frame, frame_definitions, fd=self.fd, observe=self._business)
 
     @property
     def connected(self) -> bool:
@@ -171,6 +171,7 @@ class CanServer(PacketTrace):
         try:
             while not self._stop.is_set():
                 message = bus.recv(timeout=self.receive_timeout)
+                self._trace_can_state(bus)
                 if message is None:
                     continue
                 self._trace_can("RX", message)

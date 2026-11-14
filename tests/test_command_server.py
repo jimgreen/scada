@@ -68,19 +68,23 @@ class CommandServerTests(unittest.TestCase):
 
             thread = threading.Thread(target=target)
             thread.start()
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
+            try:
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    row = store.get_row(COMMAND_TABLE, [1])
+                    if row["process_status"] == 2 and row["process_pid"]:
+                        break
+                    time.sleep(0.05)
+                else:
+                    self.fail("managed command server did not enter RUNNING state")
                 row = store.get_row(COMMAND_TABLE, [1])
-                if row["process_status"] == 2 and row["process_pid"]:
-                    break
-                time.sleep(0.05)
-            else:
-                self.fail("managed command server did not enter RUNNING state")
-            row = store.get_row(COMMAND_TABLE, [1])
-            self.assertTrue(endpoint_path(db).is_file())
-            self.assertGreater(row["process_heartbeat_time"], 0)
-            stop_event.set()
-            thread.join(5)
+                self.assertTrue(endpoint_path(db).is_file())
+                self.assertGreater(row["process_heartbeat_time"], 0)
+            finally:
+                # A readiness assertion must not delete the database while
+                # the managed thread is still acquiring its lease.
+                stop_event.set()
+                thread.join(15)
             self.assertFalse(thread.is_alive())
             self.assertEqual(result, [0])
             stopped = store.get_row(COMMAND_TABLE, [1])

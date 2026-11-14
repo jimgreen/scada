@@ -13,6 +13,7 @@ import struct
 import threading
 from typing import NamedTuple
 from core.packet_trace import PacketTrace
+from core.communication_log import trace_modbus_operation
 
 __all__ = [
     'ModbusTcpMaster', 'ModbusError', 'ModbusValue', 'decode_point',
@@ -390,6 +391,7 @@ class _ModbusTcpTransport(_ModbusOperations):
             if self.native.is_open:
                 self.native._sock.settimeout(previous_timeout)
 
+    @trace_modbus_operation
     def _invoke(self, name, address, argument, unit_id):
         with self._lock:
             if not self.connected:
@@ -402,6 +404,8 @@ class _ModbusTcpTransport(_ModbusOperations):
             last_error = None
             attempts = self.retry_count + 1 if name.startswith('read_') else 1
             for attempt in range(attempts):
+                self._business('Modbus通信尝试', 操作=name, 站号=unit_id, 地址0基=address,
+                               尝试=attempt+1, 最大尝试=attempts)
                 try:
                     result = getattr(self.native, name)(address, argument)
                     if result is not None and result is not False:
@@ -412,7 +416,11 @@ class _ModbusTcpTransport(_ModbusOperations):
                         exception_code=self.native.last_except or None)
                 except OSError as exc:
                     last_error = ModbusError(f'{name} 失败: {exc}')
+                self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
+                               尝试=attempt+1, 错误=str(last_error),
+                               异常码=getattr(last_error, 'exception_code', None))
                 if attempt < attempts - 1 and not self.connected:
+                    self._business('Modbus断线重连', 链路=self._packet_endpoint, 错误=str(last_error))
                     if not self._open_native():
                         break
             raise last_error or ModbusError(f'{name} 失败')

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from .lifecycle import lifecycle_cause
 
 
 def write_config(path, data):
@@ -36,7 +37,8 @@ def apply_config(service, previous, candidate, adopt, error_type, *, active):
     was_running = active  # a disconnected engine can still own a reconnect loop
     try:
         if was_running and previous != candidate:
-            service.stop()
+            with lifecycle_cause('运行参数变更，停止旧实例后重载'):
+                service.stop()
         adopt(candidate)
         if was_running and previous != candidate:
             service.start()

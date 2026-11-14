@@ -24,6 +24,7 @@ from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -49,6 +50,7 @@ from core.log_paths import log_entries, packet_log_directory
 from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from .web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
+from .log_context import channel_context, channel_identity
 from .writer_ipc import (
     WriterClient, WriterIpcServer, WriterRequest, WriterRequestError, WriterUnavailable,
 )
@@ -243,7 +245,8 @@ class ScdfeLogger:
     每个逻辑进程独立使用一个按小时轮转的运行日志文件，例如
     ``2026/10/29/18/scdfe_c-main-20261029-18.log``。通信线程日志文件只使用
     RTU 编号，例如 ``2026/10/29/18/scdfe_c-rtu-7-20261029-18.log``。RTU 和通道编号
-    由文件名与数据库定义关联，不再写入每条日志正文。日志类型使用中文标签，且不再
+    由文件名与数据库定义关联；启停、连接、异常记录另外保留当时的通道上下文。
+    日志类型使用中文标签，且不再
     按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
     日期和小时由文件名提供。普通调用追加后关闭文件；通信线程在 session 中复用
     本线程日志文件，每条记录仍立即 flush，退出时关闭。文件不在进程间共享。
@@ -372,6 +375,10 @@ class ScdfeLogger:
 
     def normal(self, message: str) -> None:
         self.emit("normal", message)
+
+    def business_lines(self, lines):
+        """Flush a frame/change batch once while retaining every point record."""
+        self._emit_lines('normal', lines)
 
     def packet(self, direction, data, detail="") -> None:
         if self.packet_switch is not None and not self.packet_switch.enabled():
@@ -721,6 +728,22 @@ def _apply_batch_updates(connection: sqlite3.Connection,
         connection.executemany(sql, params)
 
 
+def _log_batch_receipts(logger, messages, action, **fields):
+    """No observer failure may turn a committed transaction into a retry."""
+    try:
+        from core.communication_log import CommunicationLog
+        receipts = [message['business'] for message in messages
+                    if isinstance(message, Mapping) and isinstance(message.get('business'), dict)]
+        if receipts:
+            def write_many(lines):
+                for line in lines:
+                    logger.normal(line)
+            CommunicationLog(getattr(logger, 'business_lines', write_many), 组件='C写库').rows(
+                action, receipts, **fields)
+    except Exception:
+        logging.getLogger(__name__).exception('数据库业务回执日志失败，事务结果保持不变')
+
+
 def _flush_batch(
     store: ScadaStore,
     logger: ScdfeLogger,
@@ -760,9 +783,13 @@ def _flush_batch(
         for attempt in range(BATCH_WRITER_LOCK_RETRIES):
             try:
                 active_connection.execute("BEGIN IMMEDIATE")
+                matched = 0
                 for sql, params in executions:
-                    active_connection.executemany(sql, params)
+                    matched += active_connection.executemany(sql, params).rowcount
                 active_connection.commit()
+                expected = sum(len(params) for _, params in executions)
+                _log_batch_receipts(logger, messages, '写库事务已提交', 事务请求行数=expected,
+                                    事务更新行数=matched, 未匹配行数=expected-matched)
                 return True
             except sqlite3.OperationalError as exc:
                 if active_connection.in_transaction:
@@ -770,6 +797,7 @@ def _flush_batch(
                 if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                     raise
                 if attempt == BATCH_WRITER_LOCK_RETRIES - 1:
+                    _log_batch_receipts(logger, messages, '写库锁冲突，批次保留重试', 错误=str(exc))
                     logger.alarm(
                         f"批量写数据库遇到锁，保留批次稍后重试（消息 {len(messages)}）: {exc}"
                     )
@@ -781,6 +809,7 @@ def _flush_batch(
                     active_connection.rollback()
                 raise
     except Exception as exc:  # noqa: BLE001 - malformed batch or database failure
+        _log_batch_receipts(logger, messages, '写库事务失败，未提交', 错误=str(exc))
         logger.error(f"批量写数据库失败（原始消息 {len(messages)}）: {exc}")
         return False
     finally:
@@ -1258,6 +1287,10 @@ class ChannelWorker:
                                  packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
                                  if store is not None else None)
         self.stats = WorkerStats()
+        self._log_context = channel_identity(spec)
+        from core.communication_log import CommunicationLog
+        self.business = CommunicationLog(self.logger.business_lines, 组件='C',
+            RTU编号=spec.rtu_id, 通道编号=spec.channel_id, 规约=spec.channel_type)
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
         self._last_signature: int | None = None
@@ -1336,9 +1369,10 @@ class ChannelWorker:
             if owned:
                 connection.close()
 
-    def _queue_groups(self, groups: list[dict[str, Any]]) -> None:
+    def _queue_groups(self, groups: list[dict[str, Any]], *, business=None) -> None:
         self.writer_queue.put(
-            {"op": "batch", "groups": groups, "_preserve_versions": True},
+            {"op": "batch", "groups": groups, "_preserve_versions": True,
+             **({'business': business} if business else {})},
             timeout=max(1.0, self.retry_interval),
         )
 
@@ -1361,7 +1395,11 @@ class ChannelWorker:
                              "value_names": value_names, "rows": []}
                     groups[shape] = group
                 group["rows"].append((*point_updates.values(), point_no, rtu_id))
-            self._queue_groups(list(groups.values()))
+            command_rows = [{'四遥表': table, 'RTU编号': rtu, '点号': no,
+                             '状态': updates.get('status'), '处理时刻': updates['cmd_handle_time']}
+                            for table, rtu, no, updates in rows if 'cmd_handle_time' in updates]
+            receipt = {'通道编号': self.spec.channel_id, '指令处理结果': command_rows} if command_rows else None
+            self._queue_groups(list(groups.values()), business=receipt)
             # The writer owns the connection, so existence is confirmed when
             # it commits. The worker's counters represent accepted updates.
             return [True] * len(rows)
@@ -1491,7 +1529,13 @@ class ChannelWorker:
             else:
                 row = (value, quality, now, point_no, rtu_id)
             group["rows"].append(row)
-        self._queue_groups(ordered)
+        receipt = None
+        if changed:
+            receipt = {'写库批次': f'{os.getpid()}-{time.time_ns()}',
+                       'RTU编号': rtu_id, '通道编号': self.spec.channel_id,
+                       '变化点数': len(changed)}
+        self._queue_groups(ordered, business=receipt)
+        return receipt
 
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
         if self._yc_scaling is None:
@@ -1602,21 +1646,38 @@ class ChannelWorker:
                 self.stats.errors += 1
                 self.logger.error(f"写回实时点失败: {exc}")
         if queued and candidate_cache:
-            self._queue_measurements(candidate_cache, changed_points, now)
+            receipt = self._queue_measurements(candidate_cache, changed_points, now)
+            if receipt:
+                self.business.rows('实时更新已入写库队列', (
+                    self._change_detail(key, self._measurement_cache.get(key), candidate_cache[key], now)
+                    for key in candidate_cache if key in changed_points), **receipt)
             # Publish cache state only after the entire message was accepted.
             # Full queues and failed puts leave every point eligible for retry.
             self._measurement_cache.update(candidate_cache)
         elif pending:
             changed = self._write_rows(pending)
+            details = []
             # _write_rows 保持输入顺序；数据库更新不存在的点时对应项为 False。
             for (kind, cache_key, state), was_changed in zip(metadata, changed):
                 if was_changed:
+                    previous = self._measurement_cache.get(cache_key)
+                    if previous is None or previous[:3] != state[:3]:
+                        details.append(self._change_detail(cache_key, previous, state, now))
                     self._measurement_cache[cache_key] = state
                     if kind == "yc":
                         yc += 1
                     else:
                         yx += 1
+            self.business.rows('实时更新已入库', details)
         return yc, yx
+
+    @staticmethod
+    def _change_detail(key, previous, state, stamp):
+        return {'四遥': key[0].upper(), '点号': key[1],
+                '变化': '初值' if previous is None else '值/质量变化',
+                '旧值': previous[1] if previous else '未知', '新值': state[1],
+                '原始值': state[0], '旧质量': previous[2] if previous else '未知',
+                '新质量': state[2], '刷新时刻': stamp}
 
     def _command_rows(self) -> list[tuple[str, dict[str, Any]]] | None:
         result: list[tuple[str, dict[str, Any]]] = []
@@ -1696,10 +1757,16 @@ class ChannelWorker:
                     not first_sync and self._command_seen.get(key) == current):
                 continue
             self._command_seen[key] = current
+            command_key = (f'RTU编号={self.spec.rtu_id} 类型={kind} 点号={row["pnt_no"]} '
+                           f'命令时标={int(row.get("cmd_time") or 0)}')
+            self.business.event('指令开始下发', 四遥=kind.upper(), 点号=row['pnt_no'],
+                                值=row.get('value'), 命令时标=row.get('cmd_time'))
             try:
-                self._send_command(kind, row)
+                result = self._send_command(kind, row)
+                self.business.event('指令驱动调用完成', 四遥=kind.upper(), 点号=row['pnt_no'],
+                                    值=row.get('value'), 命令时标=row.get('cmd_time'), 驱动返回=result)
                 now = max(_now_ms(), int(row.get("cmd_time") or 0))
-                self._write_row(
+                stored = self._write_row(
                     "fes_yk_define" if kind == "yk" else "fes_yt_define",
                     self.spec.rtu_id, int(row["pnt_no"]),
                     {"status": 1, "cmd_handle_time": now, "refresh_time": now},
@@ -1708,7 +1775,9 @@ class ChannelWorker:
                     sent_yk += 1
                 else:
                     sent_yt += 1
-                self.logger.normal(f"下发{kind.upper()}点 {row['pnt_no']} 成功，值={row.get('value')!r}")
+                self.business.event(('指令处理状态已入队' if self.writer_queue is not None else '指令处理状态已入库')
+                                    if stored else '指令处理状态写入未匹配测点',
+                                    命令=command_key, 状态=1, 处理时刻=now)
             except Exception as exc:  # noqa: BLE001 - 通道必须继续服务其他点
                 self.stats.errors += 1
                 self._write_row(
@@ -1716,7 +1785,7 @@ class ChannelWorker:
                     self.spec.rtu_id, int(row["pnt_no"]),
                     {"status": 3, "cmd_handle_time": max(_now_ms(), int(row.get("cmd_time") or 0))},
                 )
-                self.logger.error(f"下发{kind.upper()}点 {row['pnt_no']} 失败: {exc}")
+                self.business.event('指令下发或结果写入失败', 命令=command_key, 错误=str(exc), 状态=3)
         return sent_yk, sent_yt
 
     def _close_master(self) -> None:
@@ -1724,7 +1793,7 @@ class ChannelWorker:
             try:
                 self._master.close()
             except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"关闭通道失败: {exc}")
+                self._log_communication(f"关闭通道失败: {exc}", level='error')
             finally:
                 self._master = None
 
@@ -1768,14 +1837,14 @@ class ChannelWorker:
             details.append(f"异常 ASDU {len(new_unexpected)} 条")
         message = "IEC104 通信异常：" + "；".join(details)
         self.stats.errors += len(new_errors) + len(abnormal_states) + len(new_unexpected)
-        self.logger.error(message)
+        self._log_communication(message, level='error')
         try:
             self._write_process_state(
                 process_status=PROCESS_ERROR, process_pid=thread_id,
                 process_heartbeat_time=_now_ms(), process_error=message,
             )
         except Exception as exc:  # noqa: BLE001 - diagnostics cannot stop polling
-            self.logger.error(f"写入 IEC104 异常状态失败: {exc}")
+            self._log_communication(f"写入 IEC104 异常状态失败: {exc}", level='error')
 
     def _stop_requested(self) -> bool:
         return self.stop_event.is_set()
@@ -1784,6 +1853,9 @@ class ChannelWorker:
         with self.logger.session():
             return self._run(max_cycles=max_cycles)
 
+    def _log_communication(self, message: str, *, level: str = 'process') -> None:
+        getattr(self.logger, level)(f'{message}；{self._log_context}')
+
     def _run(self, *, max_cycles: int | None = None) -> WorkerStats:
         """运行采集循环；连接失败会告警并按 retry_interval 重试。
 
@@ -1791,9 +1863,14 @@ class ChannelWorker:
         scheduler.  A failure is converted into this thread's error state,
         the protocol object is closed, and the channel retries independently.
         """
-        self.logger.process(f"通信线程启动，规约={self.spec.channel_type}")
         cycles = 0
         thread_id = _current_thread_id()
+        self._log_context = (channel_context(self.store, self.spec)
+                             + f' 主进程PID={os.getpid()} 线程ID={thread_id}')
+        self._log_communication(
+            f'通信线程启动 采集间隔={self.poll_interval:g}s 重试间隔={self.retry_interval:g}s')
+        attempts = failures = 0
+        stop_reason = '收到停止请求'
         process_start = _now_ms()
         next_heartbeat = 0.0
         try:
@@ -1803,23 +1880,36 @@ class ChannelWorker:
                 process_exit_code=0, process_error="",
             )
         except Exception as exc:  # noqa: BLE001 - 状态记录失败不应阻断现场通讯
-            self.logger.error(f"写入通信线程启动状态失败: {exc}")
+            self._log_communication(f"写入通信线程启动状态失败: {exc}", level='error')
         try:
             while not self._stop_requested():
+                phase = '加载配置'
                 try:
                     current_signature = definition_version_token(
                         self.store, self.spec.rtu_id, self._read_connection(),
                     )
                     if self._last_signature is not None and current_signature != self._last_signature:
-                        self.logger.process("重连前检测到定义变化，退出并请求重载")
+                        stop_reason = '重连前检测到定义变化，退出并请求重载'
+                        self._log_communication(stop_reason)
                         return self.stats
                     self._last_signature = current_signature
                     self._load_yc_scaling()
                     self._master = self.master_factory(self.store, self.spec)
                     self._master_diagnostic_cursor = (0, 0, 0)
                     if hasattr(self._master, "set_packet_handler"):
-                        self._master.set_packet_handler(self.logger.packet)
+                        if self.spec.channel_type == 'iec104':
+                            self.business.bind_points(self._master)
+                            receiver = getattr(self._master, '_soe_receiver', None)
+                            if receiver is not None:
+                                receiver.on_commit = lambda rows: self.business.soe('SOE已入库', rows)
+                        self._master.set_packet_handler(self.business.wrap_packet(self.logger.packet))
+                    attempts += 1
+                    phase = '建立连接'
+                    self._log_communication(f'开始连接 连接尝试={attempts}')
+                    connect_started = time.monotonic()
                     self._master.connect()
+                    connect_ms = (time.monotonic() - connect_started) * 1000
+                    phase = '写入连接状态'
                     self._measurement_cache.clear()
                     self._write_rtu_status(1)
                     self._write_process_state(
@@ -1828,12 +1918,14 @@ class ChannelWorker:
                         process_error="",
                     )
                     next_heartbeat = time.monotonic() + WORKER_HEARTBEAT_INTERVAL
-                    self.logger.process("通道连接成功，开始实时采集")
-                    self.logger.normal("通道进入正常运行状态")
+                    self._log_communication(
+                        f'通道连接成功，开始实时采集 连接尝试={attempts} '
+                        f'连接耗时={connect_ms:.1f}ms 恢复前连续失败={failures}')
                     while not self._stop_requested():
                         # 通信线程也做一次定义检查；即使主调度扫描周期较长，
                         # 单线程调用方式同样能自动退出并由上层重载。
                         monotonic_now = time.monotonic()
+                        phase = '检查配置变化'
                         if monotonic_now >= self._next_definition_check:
                             current_signature = definition_version_token(
                                 self.store, self.spec.rtu_id, self._read_connection(),
@@ -1842,18 +1934,24 @@ class ChannelWorker:
                                 WORKER_DEFINITION_CHECK_INTERVAL, self.poll_interval,
                             )
                             if current_signature != self._last_signature:
-                                self.logger.process("检测到通道或四遥定义变化，退出并请求重载")
+                                stop_reason = '检测到通道或四遥定义变化，退出并请求重载'
+                                self._log_communication(stop_reason)
                                 return self.stats
+                        phase = '采集遥测/遥信'
                         values = self._master.collect_once()
+                        phase = '写入采集值及诊断'
                         self._record_master_diagnostics(thread_id)
                         yc, yx = self._sync_measurements(values)
+                        phase = '下发遥控/遥调'
                         sent_yk, sent_yt = self._sync_commands()
+                        failures = 0
                         self.stats.cycles += 1
                         self.stats.updated_yc += yc
                         self.stats.updated_yx += yx
                         self.stats.sent_yk += sent_yk
                         self.stats.sent_yt += sent_yt
                         if monotonic_now >= next_heartbeat:
+                            phase = '更新心跳'
                             self._write_process_state(
                                 process_status=PROCESS_RUNNING,
                                 process_pid=thread_id, process_heartbeat_time=_now_ms(),
@@ -1867,23 +1965,26 @@ class ChannelWorker:
                             self._next_cycle_log = monotonic_now + 30.0
                         cycles += 1
                         if max_cycles is not None and cycles >= max_cycles:
+                            stop_reason = '达到指定采集周期数'
                             return self.stats
                         self.stop_event.wait(self.poll_interval)
                 except Exception as exc:  # noqa: BLE001 - 线程应隔离并重试
                     self.stats.errors += 1
+                    failures += 1
                     try:
                         self._write_rtu_status(3)
                     except Exception as db_exc:  # noqa: BLE001
-                        self.logger.error(f"写入 RTU 错误状态失败: {db_exc}")
+                        self._log_communication(f"写入 RTU 错误状态失败: {db_exc}", level='error')
                     try:
                         self._write_process_state(
                             process_status=PROCESS_ERROR, process_pid=thread_id,
                             process_heartbeat_time=_now_ms(), process_error=str(exc),
                         )
                     except Exception as state_exc:  # noqa: BLE001
-                        self.logger.error(f"写入通信线程错误状态失败: {state_exc}")
-                    self.logger.error(f"通道运行异常: {exc}")
-                    self.logger.alarm(f"通道断开或采集失败，将在 {self.retry_interval:g}s 后重试")
+                        self._log_communication(f"写入通信线程错误状态失败: {state_exc}", level='error')
+                    self._log_communication(
+                        f'通道运行异常 阶段={phase} 连接尝试={attempts} 连续失败={failures} '
+                        f'异常={type(exc).__name__}: {exc} 重试间隔={self.retry_interval:g}s', level='error')
                     self.stop_event.wait(self.retry_interval)
                 finally:
                     self._close_master()
@@ -1891,7 +1992,7 @@ class ChannelWorker:
             try:
                 self._write_rtu_status(0)
             except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"写入 RTU 停止状态失败: {exc}")
+                self._log_communication(f"写入 RTU 停止状态失败: {exc}", level='error')
             try:
                 self._write_process_state(
                 process_status=PROCESS_STOPPED, process_pid=0,
@@ -1899,12 +2000,13 @@ class ChannelWorker:
                     process_exit_code=0,
                 )
             except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"写入通信线程停止状态失败: {exc}")
+                self._log_communication(f"写入通信线程停止状态失败: {exc}", level='error')
             self._close_master()
             self._close_command_connection()
-            self.logger.process(
+            self._log_communication(
                 f"通信线程停止 cycles={self.stats.cycles} yc={self.stats.updated_yc} "
-                f"yx={self.stats.updated_yx} yk={self.stats.sent_yk} yt={self.stats.sent_yt}"
+                f"yx={self.stats.updated_yx} yk={self.stats.sent_yk} yt={self.stats.sent_yt} "
+                f"累计异常={self.stats.errors} 停止原因={stop_reason}"
             )
         return self.stats
 
@@ -2077,7 +2179,8 @@ def _worker_thread_entry(store: ScadaStore, spec_data: dict[str, Any], log_dir: 
     except Exception as exc:  # noqa: BLE001 - 主调度线程负责拉起并记录异常
         ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
                     packet_directory=packet_log_directory(log_dir)).error(
-            f"通信线程异常退出: {exc}"
+            f"通信线程异常退出: {type(exc).__name__}: {exc}；{channel_identity(spec)} "
+            f"主进程PID={os.getpid()} 线程ID={_current_thread_id()}"
         )
         # Thread exceptions must not escape into the main scheduler.  The
         # supervisor observes thread.is_alive() and will mark/restart it on
@@ -2092,6 +2195,7 @@ class _ManagedWorker:
     stop_event: threading.Event
     channel_lock: ServerInstanceLock
     started_at: float = field(default_factory=time.time)
+    log_context: str = ''
 
 
 class ScdfeSupervisor:
@@ -2200,7 +2304,10 @@ class ScdfeSupervisor:
                 pass
             raise
         self._writer_process = process
-        self.logger.process("启动批量数据库写入进程")
+        self.logger.process(
+            f'启动批量数据库写入进程 进程PID={process.pid} '
+            f'批量间隔={self.writer_batch_interval:g}s 批量上限={self.writer_max_batch} '
+            f'数据库={self.db_path}')
         deadline = time.monotonic() + 15.0
         while not ready.wait(0.05):
             if not process.is_alive():
@@ -2396,7 +2503,9 @@ class ScdfeSupervisor:
         managed = self._workers.get(key)
         if managed is None:
             return True
-        self.logger.process(f"停止通信线程: {reason}")
+        context = ((managed.log_context or channel_identity(managed.spec))
+                   + f' 主进程PID={os.getpid()} 线程ID={_thread_id(managed.thread)}')
+        self.logger.process(f"停止通信线程 停止原因={reason}；{context}")
         try:
             self._update_process_state(
                 key.rtu_id, process_status=PROCESS_STOPPING,
@@ -2404,13 +2513,14 @@ class ScdfeSupervisor:
                 process_error=reason,
             )
         except Exception as exc:  # noqa: BLE001
-            self.logger.error(f"写入通信线程停止状态失败: {exc}")
+            self.logger.error(f"写入通信线程停止状态失败: {exc}；{context}")
         managed.stop_event.set()
         managed.thread.join(timeout=max(WORKER_STOP_TIMEOUT, self.retry_interval))
         if managed.thread.is_alive():
             self.logger.error(
                 "通信线程停止超时；"
-                "保留线程记录，避免重复启动同一通道",
+                f"等待上限={max(WORKER_STOP_TIMEOUT, self.retry_interval):g}s，"
+                f"保留线程记录，避免重复启动同一通道；停止原因={reason}；{context}",
             )
             try:
                 self._update_process_state(
@@ -2419,12 +2529,12 @@ class ScdfeSupervisor:
                     process_exit_code=-1, process_error=f"通信线程停止超时: {reason}",
                 )
             except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"写入通信线程超时状态失败: {exc}")
+                self.logger.error(f"写入通信线程超时状态失败: {exc}；{context}")
             return False
 
         drained = self._drain_writer(timeout=max(1.0, self.retry_interval * 2))
         if not drained and self._writer_process is not None and self._writer_process.is_alive():
-            self.logger.error(f"写库队列尚未排空，继续保留 RTU {key.rtu_id} 通道锁")
+            self.logger.error(f"写库队列尚未排空，继续保留通道锁；{context}")
             return False
         self._workers.pop(key, None)
         final_status = PROCESS_ERROR if unexpected else PROCESS_STOPPED
@@ -2436,9 +2546,11 @@ class ScdfeSupervisor:
                 process_error=(reason if unexpected else ""),
             )
         except Exception as exc:  # noqa: BLE001
-            self.logger.error(f"写入通信线程最终状态失败: {exc}")
+            self.logger.error(f"写入通信线程最终状态失败: {exc}；{context}")
         finally:
             managed.channel_lock.release()
+        self.logger.process(f'通信线程已停止 停止原因={reason} '
+                            f'退出性质={"异常" if unexpected else "正常"}；{context}')
         return True
 
     def _start_worker(self, spec: ChannelSpec, *, recovering: bool = False,
@@ -2457,6 +2569,8 @@ class ScdfeSupervisor:
                 if self.stop_event.is_set():
                     channel_lock.release()
                     return False
+        context = channel_context(self.store, spec)
+        owner_context = context + f' 主进程PID={os.getpid()}'
         try:
             # 启动阶段先清空线程 ID，待新线程启动后写入其 native ID。
             updates: dict[str, Any] = {
@@ -2467,7 +2581,7 @@ class ScdfeSupervisor:
             }
             self._update_process_state(spec.rtu_id, **updates)
         except Exception as exc:  # noqa: BLE001
-            self.logger.error(f"写入通信线程启动状态失败: {exc}")
+            self.logger.error(f"写入通信线程启动状态失败: {exc}；{owner_context}")
         event = threading.Event()
         try:
             thread = self.thread_factory(
@@ -2490,18 +2604,21 @@ class ScdfeSupervisor:
                     process_exit_code=-1, process_error=str(exc),
                 )
             except Exception as state_exc:  # noqa: BLE001
-                self.logger.error(f"写入通信线程启动错误状态失败: {state_exc}")
-            self.logger.error(f"启动通信线程失败: {exc}")
+                self.logger.error(f"写入通信线程启动错误状态失败: {state_exc}；{owner_context}")
+            self.logger.error(f"启动通信线程失败: {type(exc).__name__}: {exc}；{owner_context}")
             channel_lock.release()
             return False
-        self._workers[spec.key] = _ManagedWorker(spec, thread, event, channel_lock)
+        self._workers[spec.key] = _ManagedWorker(spec, thread, event, channel_lock, log_context=context)
         thread_id = _thread_id(thread)
         if thread.is_alive():
             try:
                 self._update_process_state(spec.rtu_id, process_pid=thread_id)
             except Exception as exc:  # noqa: BLE001
-                self.logger.error(f"写入通信线程 ID 失败: {exc}")
-        self.logger.process("启动通信线程")
+                self.logger.error(f"写入通信线程 ID 失败: {exc}；{owner_context}")
+        self.logger.process(
+            f'启动通信线程 启动原因={"异常恢复" if recovering else "配置启用或重载"} '
+            f'采集间隔={self.poll_interval:g}s 重试间隔={self.retry_interval:g}s；'
+            f'{owner_context} 线程ID={thread_id}')
         return True
 
     def reconcile(self) -> dict[str, int]:

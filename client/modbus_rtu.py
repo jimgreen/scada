@@ -4,6 +4,7 @@
 COM3、9600、8E1 等参数显式配置；不枚举或自动占用硬件串口。
 """
 import math
+from core.communication_log import trace_modbus_operation
 
 from .modbus_tcp import _ModbusOperations, _ModbusMasterOperations, ModbusError, field, integer
 
@@ -28,7 +29,7 @@ class _ModbusRtuTransport(_ModbusOperations):
                 or not math.isfinite(timeout) or timeout <= 0):
             raise ValueError('timeout 必须是 > 0 的有限数')
         self.port = port
-        self._packet_endpoint = f"serial={port}"
+        self._packet_endpoint = f"serial={port} baudrate={baudrate} bytesize={bytesize} parity={parity} stopbits={stopbits}"
         self.native = ModbusSerialClient(port, framer=FramerType.RTU, baudrate=baudrate,
                                          bytesize=bytesize, parity=parity, stopbits=stopbits,
                                          timeout=timeout, retries=0, trace_packet=self._trace_packet)
@@ -41,12 +42,14 @@ class _ModbusRtuTransport(_ModbusOperations):
         with self._lock:
             if not self.native.connect():
                 raise ModbusError(f'无法打开 RTU 串口 {self.port}')
+            self._business('Modbus串口已打开', 链路=self._packet_endpoint, 站号=self.unit_id)
         return self
 
     def close(self):
         with self._lock:
             self.native.close()
 
+    @trace_modbus_operation
     def _invoke(self, name, address, argument, unit_id):
         from pymodbus.exceptions import ModbusException
         names = {'write_single_coil': 'write_coil', 'write_single_register': 'write_register',
@@ -56,7 +59,9 @@ class _ModbusRtuTransport(_ModbusOperations):
                 raise ModbusError('未连接，请先 connect() 或使用 with')
             attempts = self.retry_count + 1 if name.startswith('read_') else 1
             last_error = None
-            for _ in range(attempts):
+            for attempt in range(attempts):
+                self._business('Modbus通信尝试', 操作=name, 站号=unit_id, 地址0基=address,
+                               尝试=attempt+1, 最大尝试=attempts)
                 try:
                     method = getattr(self.native, names.get(name, name))
                     if name.startswith('read_'):
@@ -65,11 +70,15 @@ class _ModbusRtuTransport(_ModbusOperations):
                         result = method(address, argument, device_id=unit_id)
                 except (ModbusException, OSError) as exc:
                     last_error = ModbusError(f'{name} 失败: {exc}')
+                    self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
+                                   尝试=attempt+1, 错误=str(last_error))
                     continue
                 if result is None or result.isError():
                     last_error = ModbusError(
                         f'{name} 失败: {result}',
                         exception_code=getattr(result, 'exception_code', None))
+                    self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
+                                   尝试=attempt+1, 错误=str(last_error), 异常码=last_error.exception_code)
                     continue
                 if name in ('read_coils', 'read_discrete_inputs'):
                     return list(result.bits[:argument])
