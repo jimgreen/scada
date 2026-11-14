@@ -1,0 +1,51 @@
+{
+  "git_head": "932e37636ca6087c313900049ca6eb4a8c80f4b2",
+  "tracked_status": [
+    " M core/protocol_capabilities.py",
+    " M db/scada.sqlite3",
+    " D docs/database_simplification.md",
+    " D docs/efile_manager.html",
+    " M docs/protocol_interface_updates.html",
+    " D docs/scdfe_usage_guide.html",
+    " D docs/web_protocol_crud_guide.html",
+    " D docs/window_interaction_summary.md",
+    " M scdfe_c/__init__.py",
+    " M scdfe_t/README.md",
+    " M scdfe_t/trans.py",
+    " M scdfe_t/web/service.py",
+    " M server/modbus_trans_server.py",
+    " M tests/test_protocol_capability_api.py"
+  ],
+  "tcp_timestamp": "2026-11-13T18:34:37.873920+08:00",
+  "scale8_timestamp": "2026-11-13T18:37:38.176125+08:00",
+  "junit": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "312",
+    "time": "31.892",
+    "timestamp": "2026-11-13T23:38:34.673830+13:00",
+    "hostname": "ems"
+  },
+  "cases": 85,
+  "subtests": 227,
+  "sha256": {
+    "core/command_store.py": "ebd29e26243a71fc359a9de873bc3c9ec156b5a94d788f3258e1845026171bcc",
+    "core/protocol_capabilities.py": "5f18f000295a74edf24c410d8eaa20d7a452c4dd5acb08eed67c696f76e9fb97",
+    "client/modbus_tcp.py": "044579c2403c3ea14bdc7f558a54d75d0e3fc062ffd3cf70ab84a1de4ee8ccff",
+    "client/modbus_rtu.py": "94f9f336046ffc4577a54a9f3488055425b1db4544609f86cd101fc28c14b536",
+    "scdfe_c/__init__.py": "21a7cb99bb4091afce0b45c5cff15b7f2c50d0cf93b9a9bb60f8b6a3f20adf67",
+    "scdfe_t/trans.py": "66b33f58e8fc645d9cca3cdd2067030f25f1e57abec46fbf239d6ff8cfc7e911",
+    "scdfe_t/web/service.py": "0a0b511f5cbfc55227f2d07c2c53f99cd48a03025a093d04ac4056d3255adb99",
+    "scdfe_s/web/protocol_service.py": "487680fdf31558fe38c40ac201fa3db7156fcd0c9767e61ecfac66fdfd71f413",
+    "server/modbus_mapped_server.py": "c61b6f6346000d97746c836e528b588dc7ed903d09a1fd0ba051c8990370fb93",
+    "server/modbus_trans_server.py": "97c7911dc669063b84504971375249abeb4b547928bf2881aaa7df2aa3192321",
+    "server/modbus_server.py": "9b8a5c969298e9fcc960c8976ee40aba2f43ee6521f1ee334a5ce4e42d9ae7ec",
+    "tools/verify_modbus_pipeline.py": "36d70d1ee75e949daa89140c262e919ea107210f7643aa639143bc256f4d10ca",
+    "tests/test_database_command_exchange.py": "f144aa0e2a0b8ed869b359ce668f9c98634303b6b0732b5271f89555b67a466f",
+    "reports/modbus_common_acceptance_20261113/recheck_01/results.json": "c644e6a3de4185f1ec58b5aed9522029568562a54452c9a133d2c735e2d4b2bb",
+    "reports/modbus_common_acceptance_20261113/recheck_01/scale8/results.json": "b2962ee1e8e8d8dd289433cc1514ed1aea041d63dc5098adbc02dc31300347e3",
+    "reports/modbus_common_acceptance_20261113/recheck_01/regression.xml": "aa4873973a0feadc397bf3917c76efa9c7f9f27390aa07322fed942c90073d36"
+  }
+}

@@ -256,7 +256,7 @@ class TransStore:
         # the DB, generic table API and operator form have just one type.
         result = {**row, "source_kind": row["kind"]}
         if row['kind'] in {'yk', 'yt'}:
-            result['command_confirmation_scope'] = 'writer_commit'
+            result['command_confirmation_scope'] = 'database_commit'
             result['device_execution_confirmed'] = None
         return result
 

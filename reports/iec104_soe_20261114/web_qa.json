@@ -1,0 +1,26 @@
+[
+  {
+    "component": "c",
+    "rows": 16,
+    "keyset_no_duplicates": true,
+    "filter_reset_during_request": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "component": "s",
+    "rows": 16,
+    "keyset_no_duplicates": true,
+    "filter_reset_during_request": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "component": "t",
+    "rows": 16,
+    "keyset_no_duplicates": true,
+    "filter_reset_during_request": true,
+    "overflow": false,
+    "errors": []
+  }
+]

@@ -74,6 +74,7 @@ class IEC104Service:
         self._server: IEC104Server | None = None
         self._database_samples = {}
         self._database_pending = set()
+        self._soe_forwarder = None
         self._database_sync_stop = threading.Event()
         self._database_sync_thread: threading.Thread | None = None
         self._config_error = None
@@ -267,6 +268,12 @@ class IEC104Service:
                 self._file_log.bind_channel(rtu_channel_id(self.store, effective_rtu))
                 self._file_log.start_session()
                 server = self._build_server()
+                if getattr(server, 'soe_point_keys', set()) and self.store.application_id:
+                    from core.iec104_soe import SoeForwarder
+                    server.require_soe_support()
+                    self._soe_forwarder = SoeForwarder(
+                        self.store, f's:rtu:{server.rtu_id}', 'S',
+                        lambda row: self._route_soe(server, row), rtu_id=int(server.rtu_id))
                 server.start()
             except Exception as exc:
                 self._last_error = str(exc)
@@ -307,6 +314,9 @@ class IEC104Service:
                     raise IEC104ServiceError(str(exc)) from exc
                 self._record("INFO", "IEC104 服务已停止")
             self._server = None
+            if self._soe_forwarder is not None:
+                self._soe_forwarder.close()
+                self._soe_forwarder = None
             sync_thread = self._database_sync_thread
             self._database_sync_thread = None
             self._stopped_at = _now_ms()
@@ -388,7 +398,13 @@ class IEC104Service:
                 # Retain pending keys until every type group is accepted, even
                 # when a retry sees the same value already in native memory.
                 self._database_pending.update((k, n) for k, n, _, _ in changed)
-                server.update_monitoring(changed, transmit=transmit)
+                soe_keys = server.soe_point_keys if self._soe_forwarder else set()
+                current_only = [item for item in changed if item[:2] in soe_keys]
+                ordinary = [item for item in changed if item[:2] not in soe_keys]
+                if current_only:
+                    server.update_monitoring(current_only, transmit=False)
+                if ordinary:
+                    server.update_monitoring(ordinary, transmit=transmit)
                 self._database_pending.difference_update((k, n) for k, n, _, _ in changed)
             for key, sample, _ in candidates:
                 # Store source values, not float32 wire-rounding artifacts.
@@ -403,6 +419,16 @@ class IEC104Service:
                     rtu_id, len(changed), transmit,
                 )
             return len(changed)
+
+    @staticmethod
+    def _route_soe(server, row):
+        key = ('yx', row['pnt_no'])
+        if key not in server.soe_point_keys:
+            return []
+        point = server._points[key]
+        if point.type.value != row['type_id']:
+            raise ValueError(f'SOE 历史事件类型与当前点类型不同: {key}')
+        return [dict(row, common_address=server.common_address, io_address=point.io_address)]
 
     def _database_sync_loop(self) -> None:
         connection = None
@@ -423,7 +449,13 @@ class IEC104Service:
                     if previous_data_version is None or current_data_version != previous_data_version:
                         self._sync_database_values(connection)
                     previous_data_version = current_data_version
+                    with self._lock:
+                        if self._soe_forwarder is not None and self._server is not None:
+                            self._soe_forwarder.tick(self._server)
+                            if self._soe_forwarder.error:
+                                self._last_error = self._soe_forwarder.error
                 except Exception as exc:  # keep the transport alive if a poll fails
+                    self._last_error = str(exc)
                     LOG.warning("IEC104 数据库值同步失败: %s", exc)
         except Exception as exc:
             LOG.warning("IEC104 数据库同步线程启动失败: %s", exc)
@@ -506,7 +538,8 @@ class IEC104Service:
                 raise IEC104ServiceError(str(exc)) from exc
             try:
                 if kind in {"yc", "yx"}:
-                    sent = bool(server.active_connection_count)
+                    sent = bool(server.active_connection_count) and not (
+                        self._soe_forwarder and (kind,int(point_no)) in server.soe_point_keys)
                     actual = server.update(kind, int(point_no), value, transmit=sent)
                 else:
                     actual = server.set_value(kind, int(point_no), value)
@@ -704,6 +737,8 @@ class IEC104Service:
                 "started_at": self._started_at,
                 "stopped_at": self._stopped_at,
                 "last_error": self._last_error,
+                "soe_cursor": self._soe_forwarder.last_event_id if self._soe_forwarder else None,
+                "soe_pending": self._soe_forwarder.pending if self._soe_forwarder else None,
                 "connections": connections,
                 "rx_count": self._rx_count,
                 "tx_count": self._tx_count,

@@ -1,0 +1,630 @@
+{
+  "timestamp": "2026-11-13T18:25:44.055571+08:00",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "libraries": {
+    "pymodbus": "3.16.1",
+    "pyModbusTCP": "0.3.1",
+    "pyserial": "3.5"
+  },
+  "pipelines": [
+    {
+      "upstream": "Modbus TCP",
+      "channels": 1,
+      "yc_per_rtu": 64,
+      "yx_per_rtu": 64,
+      "c_poll_ms": 50,
+      "t_scan_ms": 50,
+      "s_scan_ms": 50,
+      "writer_batch_ms": 100,
+      "writer_batch_limit": 500,
+      "response_timeout_ms": 500,
+      "c_commit_latency": {
+        "samples": 12,
+        "median_ms": 162.466,
+        "p95_ms": 216.713,
+        "max_ms": 216.713
+      },
+      "end_to_end_latency": {
+        "samples": 12,
+        "median_ms": 191.741,
+        "p95_ms": 251.611,
+        "max_ms": 251.611
+      },
+      "c_commit_samples_ms": [
+        185.31120000079682,
+        196.81370000034804,
+        200.45679999930144,
+        216.713300000265,
+        146.09349999955157,
+        153.82470000076864,
+        148.18620000005467,
+        148.85510000021895,
+        156.06280000065453,
+        164.16170000047714,
+        160.77020000011544,
+        165.7513000009203
+      ],
+      "end_to_end_samples_ms": [
+        231.98360000060347,
+        243.6245000008057,
+        248.59689999902912,
+        251.61079999998037,
+        178.50589999943622,
+        192.05329999931564,
+        180.40810000093188,
+        182.34800000027462,
+        189.04070000098727,
+        191.42859999919892,
+        177.12910000045667,
+        215.2103000007628
+      ],
+      "workload_seconds": 2.503,
+      "four_bank_poll": {
+        "samples": 30,
+        "median_ms": 0.848,
+        "p95_ms": 1.928,
+        "max_ms": 2.025
+      },
+      "command_latency": {
+        "samples": 4,
+        "median_ms": 23.054,
+        "p95_ms": 62.791,
+        "max_ms": 62.791
+      },
+      "command_receipt_latency": {
+        "samples": 4,
+        "median_ms": 130.245,
+        "p95_ms": 168.288,
+        "max_ms": 168.288
+      },
+      "checks": [
+        "01/02/03/04 four banks and RTU isolation",
+        "reference addresses 10001/30001/40001 -> wire zero",
+        "autonomous S DB -> C writer -> T refresh",
+        "05/06/15/16 T->shared DB->C->S commands and readback",
+        "illegal address=02, protected measurement=02, partial float write=03",
+        "unchanged continued polls and complete float32 values",
+        "S TCP stop/restart -> C reconnect -> T latest values"
+      ],
+      "errors_before_injected_disconnect": 0,
+      "restart_recovery_ms": 288.754,
+      "workers": [
+        {
+          "cycles": 55,
+          "updated_yc": 896,
+          "updated_yx": 896,
+          "sent_yk": 3,
+          "sent_yt": 2,
+          "errors": 1,
+          "alarms": 0
+        }
+      ],
+      "wire": {
+        "C-1": {
+          "TX_FC01": 86,
+          "RX_FC01": 85,
+          "TX_FC02": 85,
+          "RX_FC02": 85,
+          "TX_FC03": 85,
+          "RX_FC03": 85,
+          "TX_FC04": 85,
+          "RX_FC04": 85,
+          "TX_FC05": 2,
+          "RX_FC05": 2,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 1,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1
+        },
+        "T-1": {
+          "TX_FC01": 83,
+          "RX_FC01": 83,
+          "TX_FC02": 82,
+          "RX_FC02": 82,
+          "TX_FC03": 84,
+          "RX_FC03": 84,
+          "TX_FC04": 83,
+          "RX_FC04": 82,
+          "TX_FC05": 2,
+          "RX_FC05": 1,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 2,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1,
+          "RX_FC132": 1,
+          "RX_FC133": 1,
+          "RX_FC134": 1
+        }
+      },
+      "passed": true
+    },
+    {
+      "upstream": "Modbus TCP",
+      "channels": 4,
+      "yc_per_rtu": 64,
+      "yx_per_rtu": 64,
+      "c_poll_ms": 50,
+      "t_scan_ms": 50,
+      "s_scan_ms": 50,
+      "writer_batch_ms": 100,
+      "writer_batch_limit": 500,
+      "response_timeout_ms": 500,
+      "c_commit_latency": {
+        "samples": 12,
+        "median_ms": 83.941,
+        "p95_ms": 139.412,
+        "max_ms": 139.412
+      },
+      "end_to_end_latency": {
+        "samples": 12,
+        "median_ms": 154.393,
+        "p95_ms": 178.017,
+        "max_ms": 178.017
+      },
+      "c_commit_samples_ms": [
+        118.87629999910132,
+        128.03189999976894,
+        139.41160000103991,
+        89.76849999999104,
+        89.00080000057642,
+        78.88110000021697,
+        45.22220000035304,
+        51.00320000019565,
+        46.65410000052361,
+        45.12319999957981,
+        91.31989999877987,
+        74.82779999918421
+      ],
+      "end_to_end_samples_ms": [
+        167.26360000029672,
+        172.43600000074366,
+        178.01739999958954,
+        166.42199999841978,
+        157.21339999981865,
+        151.57170000020415,
+        113.42320000039763,
+        114.4893000000593,
+        120.44539999988046,
+        99.01779999927385,
+        165.91220000009343,
+        146.54739999969024
+      ],
+      "workload_seconds": 1.859,
+      "four_bank_poll": {
+        "samples": 30,
+        "median_ms": 0.86,
+        "p95_ms": 1.509,
+        "max_ms": 1.628
+      },
+      "command_latency": {
+        "samples": 16,
+        "median_ms": 29.733,
+        "p95_ms": 85.207,
+        "max_ms": 85.207
+      },
+      "command_receipt_latency": {
+        "samples": 16,
+        "median_ms": 141.665,
+        "p95_ms": 196.725,
+        "max_ms": 196.725
+      },
+      "checks": [
+        "01/02/03/04 four banks and RTU isolation",
+        "reference addresses 10001/30001/40001 -> wire zero",
+        "autonomous S DB -> C writer -> T refresh",
+        "05/06/15/16 T->shared DB->C->S commands and readback",
+        "illegal address=02, protected measurement=02, partial float write=03",
+        "unchanged continued polls and complete float32 values",
+        "S TCP stop/restart -> C reconnect -> T latest values"
+      ],
+      "errors_before_injected_disconnect": 0,
+      "restart_recovery_ms": 308.607,
+      "workers": [
+        {
+          "cycles": 77,
+          "updated_yc": 896,
+          "updated_yx": 896,
+          "sent_yk": 3,
+          "sent_yt": 2,
+          "errors": 1,
+          "alarms": 0
+        },
+        {
+          "cycles": 78,
+          "updated_yc": 832,
+          "updated_yx": 832,
+          "sent_yk": 3,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 77,
+          "updated_yc": 832,
+          "updated_yx": 832,
+          "sent_yk": 3,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 76,
+          "updated_yc": 832,
+          "updated_yx": 832,
+          "sent_yk": 3,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        }
+      ],
+      "wire": {
+        "C-1": {
+          "TX_FC01": 108,
+          "RX_FC01": 107,
+          "TX_FC02": 107,
+          "RX_FC02": 107,
+          "TX_FC03": 107,
+          "RX_FC03": 107,
+          "TX_FC04": 107,
+          "RX_FC04": 107,
+          "TX_FC05": 2,
+          "RX_FC05": 2,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 1,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1
+        },
+        "C-2": {
+          "TX_FC01": 78,
+          "RX_FC01": 78,
+          "TX_FC02": 78,
+          "RX_FC02": 78,
+          "TX_FC03": 78,
+          "RX_FC03": 78,
+          "TX_FC04": 78,
+          "RX_FC04": 78,
+          "TX_FC05": 2,
+          "RX_FC05": 2,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 1,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1
+        },
+        "C-3": {
+          "TX_FC01": 77,
+          "RX_FC01": 77,
+          "TX_FC02": 77,
+          "RX_FC02": 77,
+          "TX_FC03": 77,
+          "RX_FC03": 77,
+          "TX_FC04": 77,
+          "RX_FC04": 77,
+          "TX_FC05": 2,
+          "RX_FC05": 2,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 1,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1
+        },
+        "C-4": {
+          "TX_FC01": 76,
+          "RX_FC01": 76,
+          "TX_FC02": 76,
+          "RX_FC02": 76,
+          "TX_FC03": 76,
+          "RX_FC03": 76,
+          "TX_FC04": 76,
+          "RX_FC04": 76,
+          "TX_FC05": 2,
+          "RX_FC05": 2,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 1,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1
+        },
+        "T-1": {
+          "TX_FC01": 108,
+          "RX_FC01": 108,
+          "TX_FC02": 107,
+          "RX_FC02": 107,
+          "TX_FC03": 109,
+          "RX_FC03": 109,
+          "TX_FC04": 108,
+          "RX_FC04": 107,
+          "TX_FC05": 2,
+          "RX_FC05": 1,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 2,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1,
+          "RX_FC132": 1,
+          "RX_FC133": 1,
+          "RX_FC134": 1
+        },
+        "T-2": {
+          "TX_FC01": 34,
+          "RX_FC01": 34,
+          "TX_FC02": 33,
+          "RX_FC02": 33,
+          "TX_FC03": 35,
+          "RX_FC03": 35,
+          "TX_FC04": 34,
+          "RX_FC04": 33,
+          "TX_FC05": 2,
+          "RX_FC05": 1,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 2,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1,
+          "RX_FC132": 1,
+          "RX_FC133": 1,
+          "RX_FC134": 1
+        },
+        "T-3": {
+          "TX_FC01": 27,
+          "RX_FC01": 27,
+          "TX_FC02": 26,
+          "RX_FC02": 26,
+          "TX_FC03": 28,
+          "RX_FC03": 28,
+          "TX_FC04": 27,
+          "RX_FC04": 26,
+          "TX_FC05": 2,
+          "RX_FC05": 1,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 2,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1,
+          "RX_FC132": 1,
+          "RX_FC133": 1,
+          "RX_FC134": 1
+        },
+        "T-4": {
+          "TX_FC01": 19,
+          "RX_FC01": 19,
+          "TX_FC02": 18,
+          "RX_FC02": 18,
+          "TX_FC03": 20,
+          "RX_FC03": 20,
+          "TX_FC04": 19,
+          "RX_FC04": 18,
+          "TX_FC05": 2,
+          "RX_FC05": 1,
+          "TX_FC15": 1,
+          "RX_FC15": 1,
+          "TX_FC06": 2,
+          "RX_FC06": 1,
+          "TX_FC16": 1,
+          "RX_FC16": 1,
+          "RX_FC132": 1,
+          "RX_FC133": 1,
+          "RX_FC134": 1
+        }
+      },
+      "passed": true
+    }
+  ],
+  "rtu": {
+    "upstream": "RTU frames over socket://",
+    "channels": 1,
+    "yc_per_rtu": 8,
+    "yx_per_rtu": 8,
+    "c_poll_ms": 50,
+    "t_scan_ms": 50,
+    "s_scan_ms": 50,
+    "writer_batch_ms": 100,
+    "writer_batch_limit": 500,
+    "response_timeout_ms": 500,
+    "c_commit_latency": {
+      "samples": 6,
+      "median_ms": 380.914,
+      "p95_ms": 417.731,
+      "max_ms": 417.731
+    },
+    "end_to_end_latency": {
+      "samples": 6,
+      "median_ms": 420.934,
+      "p95_ms": 466.208,
+      "max_ms": 466.208
+    },
+    "c_commit_samples_ms": [
+      358.5047000015038,
+      391.34720000038214,
+      386.814499999673,
+      375.0127000002976,
+      417.7309000006062,
+      365.9594000000652
+    ],
+    "end_to_end_samples_ms": [
+      402.06730000136304,
+      439.8013999998511,
+      451.64809999914723,
+      392.19779999984894,
+      466.20849999999336,
+      383.85720000042056
+    ],
+    "workload_seconds": 2.539,
+    "four_bank_poll": {
+      "samples": 30,
+      "median_ms": 157.08,
+      "p95_ms": 321.477,
+      "max_ms": 329.392
+    },
+    "command_latency": {
+      "samples": 4,
+      "median_ms": 119.353,
+      "p95_ms": 153.593,
+      "max_ms": 153.593
+    },
+    "command_receipt_latency": {
+      "samples": 4,
+      "median_ms": 256.44,
+      "p95_ms": 292.805,
+      "max_ms": 292.805
+    },
+    "checks": [
+      "01/02/03/04 four banks and RTU isolation",
+      "reference addresses 10001/30001/40001 -> wire zero",
+      "autonomous S DB -> C writer -> T refresh",
+      "05/06/15/16 T->shared DB->C->S commands and readback",
+      "illegal address=02, protected measurement=02, partial float write=03",
+      "unchanged continued polls and complete float32 values"
+    ],
+    "errors_before_injected_disconnect": 0,
+    "workers": [
+      {
+        "cycles": 25,
+        "updated_yc": 64,
+        "updated_yx": 64,
+        "sent_yk": 3,
+        "sent_yt": 2,
+        "errors": 0,
+        "alarms": 0
+      }
+    ],
+    "wire": {
+      "C-1": {
+        "TX_FC01": 55,
+        "RX_FC01": 55,
+        "TX_FC02": 55,
+        "RX_FC02": 55,
+        "TX_FC03": 55,
+        "RX_FC03": 55,
+        "TX_FC04": 55,
+        "RX_FC04": 55,
+        "TX_FC05": 2,
+        "RX_FC05": 2,
+        "TX_FC15": 1,
+        "RX_FC15": 1,
+        "TX_FC06": 1,
+        "RX_FC06": 1,
+        "TX_FC16": 1,
+        "RX_FC16": 1
+      },
+      "T-1": {
+        "TX_FC01": 39,
+        "RX_FC01": 39,
+        "TX_FC02": 38,
+        "RX_FC02": 38,
+        "TX_FC03": 40,
+        "RX_FC03": 40,
+        "TX_FC04": 39,
+        "RX_FC04": 38,
+        "TX_FC05": 2,
+        "RX_FC05": 1,
+        "TX_FC15": 1,
+        "RX_FC15": 1,
+        "TX_FC06": 2,
+        "RX_FC06": 1,
+        "TX_FC16": 1,
+        "RX_FC16": 1,
+        "RX_FC132": 1,
+        "RX_FC133": 1,
+        "RX_FC134": 1
+      }
+    },
+    "passed": true
+  },
+  "comparison": {
+    "single": {
+      "samples_ms": [
+        115.92299999938405,
+        81.86230000137584,
+        72.56489999963378,
+        78.83629999923869,
+        73.51460000063526,
+        85.02689999841095,
+        88.42050000021118,
+        106.61900000013702
+      ],
+      "requests": [
+        500,
+        500,
+        500,
+        500,
+        500,
+        500,
+        500,
+        500
+      ],
+      "adu_bytes": [
+        11500,
+        11500,
+        11500,
+        11500,
+        11500,
+        11500,
+        11500,
+        11500
+      ],
+      "latency": {
+        "samples": 8,
+        "median_ms": 83.445,
+        "p95_ms": 115.923,
+        "max_ms": 115.923
+      }
+    },
+    "block": {
+      "samples_ms": [
+        1.0521000003791414,
+        1.040500001181499,
+        0.6954000000405358,
+        0.7105999993655132,
+        0.6783000007999362,
+        1.4002999996591825,
+        1.001900000119349,
+        1.552899999296642
+      ],
+      "requests": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "adu_bytes": [
+        1084,
+        1084,
+        1084,
+        1084,
+        1084,
+        1084,
+        1084,
+        1084
+      ],
+      "latency": {
+        "samples": 8,
+        "median_ms": 1.021,
+        "p95_ms": 1.553,
+        "max_ms": 1.553
+      }
+    },
+    "wire_validation": {
+      "TX_FC03": 4032,
+      "RX_FC03": 4032
+    },
+    "registers": 500
+  },
+  "passed": true
+}

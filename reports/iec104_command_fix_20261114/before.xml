@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="10" skipped="0" tests="11" time="5.958" timestamp="2026-11-14T00:13:03.570910+13:00" hostname="ems"><testcase classname="tests.test_iec104_command_contracts.CommandWireTests" name="test_pending_cancel_confirms_9_and_never_executes" time="2.728"><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure><failure message="AssertionError: 7 != 9">self = &lt;test_iec104_command_contracts.CommandWireTests testMethod=test_pending_cancel_confirms_9_and_never_executes&gt;
+
+    def test_pending_cancel_confirms_9_and_never_executes(self):
+        _,peer,events=self.fixture()
+        for no,case in enumerate(CASES,1):
+            with self.subTest(type=case[1]):
+                _,answer,_=self.command(peer,no,case,6,select=True)
+                self.assertEqual(answer[8]&amp;127,7)
+                before=len(events)
+                _,answer,frames=self.command(peer,no,case,8)
+&gt;               self.assertEqual(answer[8]&amp;127,9)
+E               AssertionError: 7 != 9
+
+tests\test_iec104_command_contracts.py:59: AssertionError</failure></testcase></testsuite></testsuites>

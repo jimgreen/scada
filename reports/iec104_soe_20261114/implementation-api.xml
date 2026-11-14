@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="4" time="3.024" timestamp="2026-11-14T15:53:13.605666+13:00" hostname="ems"><testcase classname="tests.test_iec104_soe_api.SoeApiTests" name="test_all_components_support_bounded_keyset_queries" time="2.367"><failure message="AttributeError: 'TransHTTPServer' object has no attribute 'service'">tests\test_iec104_soe_api.py:21: in test_all_components_support_bounded_keyset_queries
+    store=server.service.store if component=='t' else server.store
+          ^^^^^^^^^^^^^^
+E   AttributeError: 'TransHTTPServer' object has no attribute 'service'</failure></testcase></testsuite></testsuites>

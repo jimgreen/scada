@@ -11,7 +11,7 @@ import threading
 import signal
 from unittest.mock import patch
 
-from client.iec104 import IEC104Master
+from client.iec104 import IEC104Master, IEC104Error
 from server.iec104_server import IEC104Server
 from scdfe_c.web.service import ScadaStore
 from scdfe_s.web.iec104_service import IEC104Service
@@ -89,7 +89,8 @@ class IEC104InterfaceContracts(unittest.TestCase):
             peer.configure([dict(kind='yk',pnt_no=1,type_id=45,command_mode='SELECT_AND_EXECUTE')])
             peer.connect(timeout=3); peer.send_yk_point(1,True)
             self.assertEqual(len(writer.calls),1)
-            peer.cancel_yk_point(1,True)
+            with self.assertRaises(IEC104Error):
+                peer.cancel_yk_point(1,True)
             self.assertEqual(len(writer.calls),1)
 
     def test_cp56_command_type_conversion(self):
@@ -124,6 +125,10 @@ class IEC104InterfaceContracts(unittest.TestCase):
                 getattr(peer, f'cancel_{kind}_point')(no, value, recorded_at=now)
                 self.assertEqual(events[-1].cause, c104.Cot.DEACTIVATION)
             self.assertEqual(len(events), 10)
+            # Native raw observers are dispatched asynchronously; the command
+            # confirmation can reach the caller before the final log callback.
+            self.assertTrue(eventually(lambda: len([
+                frame for frame in frames if len(frame)>6 and frame[2]&1 == 0]) == 10))
             types = [frame[6] for frame in frames if len(frame)>6 and frame[2]&1 == 0]
             self.assertEqual(types, [58,58,59,59,61,61,62,62,63,63])
             for frame in frames:

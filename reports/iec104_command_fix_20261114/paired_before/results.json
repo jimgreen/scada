@@ -1,0 +1,412 @@
+{
+  "timestamp": "2026-11-13T19:43:34.655207+08:00",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "c104": "2.2.1+scada.2",
+  "pipelines": [
+    {
+      "channels": 8,
+      "yc_per_rtu": 128,
+      "yx_per_rtu": 128,
+      "c_poll_ms": 50,
+      "s_scan_ms": 50,
+      "s_tick_ms": 100,
+      "t_scan_ms": 50,
+      "t_tick_ms": 50,
+      "t_periodic_ms": 60000,
+      "writer_batch_ms": 100,
+      "k": 12,
+      "w": 8,
+      "topology": "S service threads -> C ChannelWorker threads -> C writer process -> SQLite -> T runtime threads -> downstream IEC104 clients",
+      "t_gi": {
+        "samples": 40,
+        "median_ms": 138.503,
+        "p95_ms": 158.946,
+        "max_ms": 188.083
+      },
+      "s_gi": {
+        "samples": 40,
+        "median_ms": 138.021,
+        "p95_ms": 157.455,
+        "max_ms": 163.609
+      },
+      "checks": [
+        "C startup GI commit",
+        "S/T GI ACTCON -> exact object count -> ACTTERM",
+        "CA/IOA mapping and RTU isolation",
+        "5 GI repeats per S/T channel",
+        "quality-only IV/BL/restoration with unchanged values",
+        "no spontaneous duplicates during 400ms quiet window",
+        "YK/YT direct and select-execute through shared DB; cancel causes no second execution",
+        "periodic report COT=1 on existing T connection",
+        "S stop/restart -> C automatic reconnect + GI -> T latest values",
+        "downstream reconnect + GI retrieves latest values/qualities"
+      ],
+      "c_commit_latency": {
+        "samples": 20,
+        "median_ms": 988.302,
+        "p95_ms": 5378.069,
+        "max_ms": 6137.002
+      },
+      "end_to_end_latency": {
+        "samples": 20,
+        "median_ms": 1514.604,
+        "p95_ms": 5403.433,
+        "max_ms": 6155.91
+      },
+      "c_commit_samples_ms": [
+        5378.06940000155,
+        6137.002499999653,
+        1296.2747999990825,
+        533.8585999998031,
+        913.9997999991465,
+        1023.7577999978384,
+        866.7064000001119,
+        1090.840600001684,
+        941.0707999995793,
+        999.5094000005338,
+        934.7607999989123,
+        1230.0417999977071,
+        1141.9931999989785,
+        1823.8636999994924,
+        965.6069000011485,
+        1586.0814999978174,
+        903.0075000009674,
+        967.3631999976351,
+        977.0941000024322,
+        886.3244999993185
+      ],
+      "end_to_end_samples_ms": [
+        5403.4334999996645,
+        6155.910099998437,
+        1550.9530999988783,
+        1046.0748999976204,
+        1144.5372000016505,
+        1558.1730000012612,
+        1328.7973000005877,
+        1457.3224999985541,
+        1564.6682000005967,
+        1264.6836999992956,
+        1477.1077999976114,
+        1869.4034000000102,
+        1818.2631999989098,
+        1899.874999999156,
+        1465.0580000015907,
+        1667.8290999989258,
+        1478.2557000035013,
+        1117.8282999971998,
+        2143.039000002318,
+        1136.4340000000084
+      ],
+      "bursts": [
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 46,
+          "bytes": 6834
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 42,
+          "bytes": 6774
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 44,
+          "bytes": 6804
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 40,
+          "bytes": 6744
+        },
+        {
+          "objects": 2048,
+          "frames": 41,
+          "bytes": 6759
+        }
+      ],
+      "workload_seconds": 46.009,
+      "command_latency": {
+        "samples": 32,
+        "median_ms": 49.264,
+        "p95_ms": 104.064,
+        "max_ms": 120.807
+      },
+      "command_receipt_latency": {
+        "samples": 32,
+        "median_ms": 193.297,
+        "p95_ms": 380.539,
+        "max_ms": 945.454
+      },
+      "errors_before_injected_disconnect": 0,
+      "upstream_restart_recovery_ms": 964.515,
+      "workers": [
+        {
+          "cycles": 1323,
+          "updated_yc": 4480,
+          "updated_yx": 4480,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 1,
+          "alarms": 0
+        },
+        {
+          "cycles": 1328,
+          "updated_yc": 4352,
+          "updated_yx": 4352,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1326,
+          "updated_yc": 4352,
+          "updated_yx": 4352,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1334,
+          "updated_yc": 4352,
+          "updated_yx": 4352,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1305,
+          "updated_yc": 4224,
+          "updated_yx": 4224,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1267,
+          "updated_yc": 4224,
+          "updated_yx": 4224,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1291,
+          "updated_yc": 4224,
+          "updated_yx": 4224,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 1265,
+          "updated_yc": 4224,
+          "updated_yx": 4224,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        }
+      ],
+      "frames": {
+        "C-1": {
+          "I": 149,
+          "S": 16,
+          "U": 6
+        },
+        "C-2": {
+          "I": 139,
+          "S": 16,
+          "U": 4
+        },
+        "C-3": {
+          "I": 139,
+          "S": 15,
+          "U": 4
+        },
+        "C-4": {
+          "I": 139,
+          "S": 15,
+          "U": 4
+        },
+        "C-5": {
+          "I": 139,
+          "S": 15,
+          "U": 4
+        },
+        "C-6": {
+          "I": 139,
+          "S": 15,
+          "U": 4
+        },
+        "C-7": {
+          "I": 139,
+          "S": 16,
+          "U": 4
+        },
+        "C-8": {
+          "I": 139,
+          "S": 16,
+          "U": 4
+        },
+        "T-1": {
+          "I": 189,
+          "S": 17,
+          "U": 2
+        },
+        "T-2": {
+          "I": 184,
+          "S": 16,
+          "U": 2
+        },
+        "T-3": {
+          "I": 186,
+          "S": 15,
+          "U": 2
+        },
+        "T-4": {
+          "I": 183,
+          "S": 15,
+          "U": 2
+        },
+        "T-5": {
+          "I": 188,
+          "S": 16,
+          "U": 2
+        },
+        "T-6": {
+          "I": 183,
+          "S": 15,
+          "U": 2
+        },
+        "T-7": {
+          "I": 192,
+          "S": 17,
+          "U": 2
+        },
+        "T-8": {
+          "I": 184,
+          "S": 16,
+          "U": 2
+        },
+        "T-reconnect": {
+          "I": 8,
+          "S": 0,
+          "U": 2
+        }
+      },
+      "passed": true
+    }
+  ],
+  "collector_baseline_sha256": "176db6083b77b775a16225cf3bd4d76821e215990c7823cf53e7d4d4b7b2798a",
+  "snapshot_boundary": {
+    "wire_updates": 21,
+    "collected_samples": 1,
+    "final_value": true,
+    "wire_states": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1
+    ],
+    "conclusion": "collect_once returns latest point snapshot; intermediate transitions require a separate event/SOE pipeline"
+  },
+  "passed": true
+}

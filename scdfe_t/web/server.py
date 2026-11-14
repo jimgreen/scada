@@ -307,6 +307,10 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         try:
             self._prepare_request()
             parts, query = self._parts()
+            from core.web_soe import handle_soe
+            if handle_soe(self,parts,query,'GET' if self.command=='HEAD' else self.command,
+                          self.service.store,'t') is not False:
+                return
             if parts == ["favicon.ico"] and self.command in {"GET", "HEAD"}:
                 return self._send(204, "image/x-icon", b"")
             if parts and parts[0] == "api":

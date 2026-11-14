@@ -1,0 +1,20 @@
+{
+  "scope": "temporary S independent DB; C/T shared DB; real TCP; w=1 t2=1; S 50ms tick; T controlled 5ms pump; no hardware or long soak",
+  "pipelines": [
+    {
+      "channels": 1,
+      "events_per_channel": 16384,
+      "expected": 16384,
+      "c_persisted": 16384,
+      "t_received": [
+        16384
+      ],
+      "exact": true,
+      "trigger_transaction_ms": 292.568,
+      "end_to_end_ack_ms": 12772.975,
+      "events_per_second": 1282.71,
+      "commit_to_downstream_median_ms": 6209.626,
+      "commit_to_downstream_p95_ms": 12213.777
+    }
+  ]
+}

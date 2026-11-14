@@ -1,0 +1,26 @@
+{
+  "git_head": "932e37636ca6087c313900049ca6eb4a8c80f4b2",
+  "source_state": "HEAD plus uncommitted working tree",
+  "functional_tests": 110,
+  "subtests": 56,
+  "wire_checks_passed": 10,
+  "wire_checks_failed": 6,
+  "full_wire_acceptance_passed": false,
+  "sha256": {
+    "client/iec104.py": "176db6083b77b775a16225cf3bd4d76821e215990c7823cf53e7d4d4b7b2798a",
+    "server/iec104_server.py": "dea6c1d9320acba9d06d6a1484ff853e2bb13afe1bd557cdd56cd4a74ac3375f",
+    "scdfe_c/__init__.py": "21a7cb99bb4091afce0b45c5cff15b7f2c50d0cf93b9a9bb60f8b6a3f20adf67",
+    "scdfe_s/web/iec104_service.py": "3a68c2e0c9ab8148dbaf2994ada5e3a379a5bccf5af0f889ba1041bded4fcf94",
+    "scdfe_t/trans.py": "66b33f58e8fc645d9cca3cdd2067030f25f1e57abec46fbf239d6ff8cfc7e911",
+    "core/command_store.py": "ebd29e26243a71fc359a9de873bc3c9ec156b5a94d788f3258e1845026171bcc",
+    "vendor/c104/c104-2.2.1+scada.1.tar.gz": "b3bf8b8627e8cb2dd21a38da754dce12dd6317d93020e95e866cb182c247df6d",
+    "tools/verify_iec104_pipeline.py": "1699a0a66a72c87f619146f4f914ea003031ce995c2ef66d107862fba44e9003",
+    "tools/verify_iec104_wire_contracts.py": "f1f568fc8931a4aa75b962ef2e853b781dc741f2705ae9ba88857dcefb10c01c",
+    "tests/test_iec104_receive_snapshots.py": "c51354486fef0ea92d26314e15d382e72096a72d0292d3fa1ac33b9ba3104585",
+    "reports/iec104_common_acceptance_20261113/recheck_01/final/results.json": "7d98b5315eb9e039a4b1cc9d0ff94f9ee24f68f01ec451f9e7b7d2076ac08db6",
+    "reports/iec104_common_acceptance_20261113/recheck_01/scale8/results.json": "9ae1529ac77be5bce10ea9612782e93fc78fe2a6dced2fad6d14ca193b6faf0d",
+    "reports/iec104_common_acceptance_20261113/recheck_01/final/wire_contracts.json": "c77ce23f5f08ed35cc7f09edb2e323a81cd87f82add22629e286733a0b07decf",
+    "reports/iec104_common_acceptance_20261113/recheck_01/final/regression.xml": "19088bdb2cdb1d81d0208f1c6c50ff452e11c00d42c65e6fd15f3da614ed1713",
+    "reports/iec104_common_acceptance_20261113/recheck_01/diagnostic_4ch/failure-4ch-burst-32/state.json": "9cda1c661b4b46c0a9ebc524359e9d9c8fdc9dfb562c2e6d51f0dfc5be43d379"
+  }
+}

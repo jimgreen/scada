@@ -158,6 +158,9 @@ class IEC104Master(PacketTrace):
             raise IEC104Error(f'创建公共地址 {self.common_address} 失败')
         self._points = {}
         self._values = {}
+        self._received_values = {}
+        self._soe_receiver = None
+        self._soe_error = None
         self._lock = threading.RLock()
         self._started = False
         self._point_types = {}
@@ -284,9 +287,17 @@ class IEC104Master(PacketTrace):
                 row.update(mapped)
             elif mapped is not None:
                 row['data_type'] = mapped
-            row.setdefault('data_type', defaults[row['kind']])
+            # A mapped ASDU type (including CP56 single/double points) must
+            # survive channel defaults; explicit point_map data_type wins.
+            row.setdefault('data_type', field(row, 'type_id', defaults[row['kind']]))
         master = cls.from_channel(dict(rtu), definitions[0], **kwargs)
         master.configure(points)
+        from core.iec104_soe import SoeReceiver
+        master._soe_receiver = SoeReceiver(store, int(rtu_id), channel_id, {
+            (int(point.io_address),int(point.type.value)): no
+            for (kind,no),point in master._points.items()
+            if kind == 'yx' and point.type.value in (1,3,30,31)
+        })
         return master
 
     @property
@@ -323,6 +334,8 @@ class IEC104Master(PacketTrace):
             'protocol_errors': self.protocol_errors,
             'connection_states': self.connection_states,
             'unexpected_messages': self.unexpected_messages,
+            'soe_received': self._soe_receiver.count if self._soe_receiver else 0,
+            'soe_error': self._soe_error,
         }
 
     def set_packet_handler(self, handler):
@@ -387,6 +400,8 @@ class IEC104Master(PacketTrace):
         if self._started:
             self._client.stop()
             self._started = False
+        if self._soe_receiver is not None:
+            self._soe_receiver.close()
 
     def test_command(self, *, with_time=True, wait_for_response=True):
         """Send the ASDU application test command (104/107), not U TESTFR."""
@@ -475,7 +490,7 @@ class IEC104Master(PacketTrace):
 
     def add_point(self, kind, point_no, *, data_type=None, time_tag='NONE', report_ms=0,
                   io_address=None):
-        """注册远端点；收到报文时 c104 自动更新 Point.info/value。"""
+        """注册远端点；在接收线程内复制监视值，供业务线程安全读取。"""
         ioa = self.point_address(kind, point_no) if io_address is None else int(io_address)
         if not 1 <= ioa <= 0xFFFFFF:
             raise ValueError('信息体地址必须在 1..0xffffff')
@@ -489,9 +504,13 @@ class IEC104Master(PacketTrace):
                 point = self._station.add_point(io_address=ioa, type=typ, report_ms=report_ms)
             if point is None:
                 raise IEC104Error(f'添加点 {kind}/{point_no} ({ioa}) 失败')
-            self._points[(kind, point_no)] = point
-            self._point_types[(kind, point_no)] = typ
             key = (kind, point_no)
+            if self._points.get(key) is not point:
+                self._received_values.pop(key, None)
+            self._points[key] = point
+            self._point_types[(kind, point_no)] = typ
+            if kind in ('yc', 'yx'):
+                point.on_receive(self._make_receive_callback(kind, point_no))
             if key not in self._point_entry_index:
                 self._point_entries.append((kind, point_no, point))
                 self._point_entry_index[key] = point
@@ -657,9 +676,43 @@ class IEC104Master(PacketTrace):
                              received_at if received_at is not None else datetime.now(timezone.utc))
         return result
 
+    def _make_receive_callback(self, kind, point_no):
+        def receive(point: c104.Point, previous_info: c104.Information,
+                    message: c104.IncomingMessage) -> c104.ResponseState:
+            if self._soe_receiver is not None and kind == 'yx':
+                try:
+                    self._soe_receiver.receive(message)
+                except Exception as exc:
+                    # Never silently downgrade a journal failure to a healthy
+                    # snapshot. The worker observes this and tears down/retries.
+                    self._soe_error = f'SOE 事件落库失败: {exc}'
+                    return c104.ResponseState.FAILURE
+            # c104 2.2.1 replaces DataPoint::info without synchronizing getInfo.
+            # Read it on this point's receiver thread, before the next ASDU
+            # object is handled, and retain only detached Python values.
+            sample = self._value_from_point(kind, point_no, point)
+            with self._lock:
+                if self._points.get((kind, point_no)) is point:
+                    self._received_values[(kind, point_no)] = sample
+            return c104.ResponseState.SUCCESS
+        return receive
+
+    def _read_value(self, kind, point_no, point, received_at=None):
+        if kind in ('yc', 'yx'):
+            with self._lock:
+                sample = self._received_values.get((kind, point_no))
+            if sample is not None:
+                return sample if received_at is None else sample._replace(received_at=received_at)
+            if self._started:
+                # Before the first received sample, native defaults are not
+                # valid measurements; never race its first pointer replacement.
+                return IEC104Value(self.rtu_id, point_no, kind, None, 128, None,
+                                   received_at or datetime.now(timezone.utc))
+        return self._value_from_point(kind, point_no, point, received_at)
+
     def value(self, kind, point_no):
         point = self._point(kind, point_no)
-        result = self._value_from_point(kind, point_no, point)
+        result = self._read_value(kind, point_no, point)
         with self._lock:
             self._values[(kind, point_no)] = result
         return result
@@ -674,18 +727,27 @@ class IEC104Master(PacketTrace):
         return self._poll_entries(entries)
 
     def _poll_entries(self, entries):
-        # One receive timestamp describes this coherent snapshot.  Calling
-        # datetime.now(timezone.utc) once per point was a measurable cost for
-        # large IEC104 point tables and did not add useful precision because
-        # c104 already stores the point's source timestamp in ``recorded_at``.
-        received_at = datetime.now(timezone.utc)
-        values = [self._value_from_point(kind, number, point, received_at)
-                  for kind, number, point in entries]
+        # Capture all immutable monitoring references under one lock. Reusing
+        # them preserves actual reception times and avoids per-point tuple
+        # copies/locks on every unchanged poll. Only offline/unreceived points
+        # and command points need the fallback path.
+        with self._lock:
+            values = [self._received_values.get((kind, number))
+                      if kind in ('yc', 'yx') else None
+                      for kind, number, _ in entries]
+        missing = [index for index, sample in enumerate(values) if sample is None]
+        if missing:
+            received_at = datetime.now(timezone.utc)
+            for index in missing:
+                kind, number, point = entries[index]
+                values[index] = self._read_value(kind, number, point, received_at)
         with self._lock:
             self._values.update({(value.kind, value.point_no): value for value in values})
         return values
 
     def collect_once(self, points=None):
+        if self._soe_error:
+            raise IEC104Error(self._soe_error)
         if not self.connected:
             raise IEC104Error('未连接，请先 connect()')
         return (self._poll_entries(self._configured_entries)

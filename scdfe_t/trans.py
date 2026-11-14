@@ -1,9 +1,9 @@
 """Runtime engine for scdfe_t four-remote transmission channels.
 
 Each channel is run by one process.  A channel publishes selected YC/YX rows
-through IEC104 or Modbus-TCP and accepts YK/YT writes.  Writes are submitted to
-the scdfe_c writer IPC endpoint, so the transmission process never competes for
-the SQLite write lock.
+through IEC104 or Modbus-TCP and accepts YK/YT writes. Commands are committed
+directly to the shared database; acquisition independently consumes them.
+No scdfe_c process or IPC endpoint is required to accept commands.
 """
 from __future__ import annotations
 
@@ -155,6 +155,8 @@ class TransRuntime:
                                   runtime_packet_compat=self.require_enabled,
                                   packet_switch=packet_log_switch(self.db_path, 't').for_channel(self.channel_id))
         self.server = None
+        self._soe_forwarder = None
+        self._soe_keys = set()
         self.points: dict[tuple[str, int], TransPoint] = {}
         self._scan_plan = ()
         self.values: dict[tuple[str, int], Any] = {}
@@ -221,6 +223,8 @@ class TransRuntime:
             "reconnect_count": self._reconnect_count,
             "server_running": bool(server and getattr(server, "running", False)),
             "open_connections": int(getattr(server, "open_connection_count", 0) or 0),
+            "soe_cursor": self._soe_forwarder.last_event_id if self._soe_forwarder else None,
+            "soe_pending": self._soe_forwarder.pending if self._soe_forwarder else None,
         }
         if server is not None:
             for name in ("unit_id", "host", "port"):
@@ -483,11 +487,8 @@ class TransRuntime:
 
     def _writer_client(self):
         if self.writer is None:
-            try:
-                from scdfe_c.writer_ipc import WriterClient
-            except ImportError as exc:
-                raise TransRuntimeError("scdfe_c 写库 IPC 不可用") from exc
-            self.writer = WriterClient(self.db_path)
+            from core.command_store import DatabaseCommandWriter
+            self.writer = DatabaseCommandWriter(self.store)
         return self.writer
 
     def command(self, p: TransPoint, engineering_value):
@@ -496,21 +497,34 @@ class TransRuntime:
         Modbus owns its register scale/offset conversion. IEC104 callbacks
         already contain engineering values and normalized single/double states.
         """
+        return self.commands([(p, engineering_value)])
+
+    def commands(self, commands):
+        """Commit all points in one protocol write before acknowledging it."""
         received_at = now_ms()
         # Native mappings always carry pnt_no.  Keep the command path
         # compatible with lightweight protocol/test point objects that expose
         # the source point number instead.
-        point_no = int(getattr(p, "pnt_no", getattr(p, "source_pnt_no", 0)) or 0)
+        prepared = []
         try:
-            value = float(engineering_value)
-            if not math.isfinite(value):
-                raise ValueError("命令值必须是有限数字")
-            if p.kind == "yk":
-                if value not in (0, 1):
-                    raise ValueError("遥控值只能为 0 或 1")
-                value = int(value)
-            self._writer_client().submit_command(p.source_rtu_id, p.kind,
-                                                 p.source_pnt_no, value, timeout=5)
+            for p, engineering_value in commands:
+                point_no = int(getattr(p, 'pnt_no', getattr(p, 'source_pnt_no', 0)) or 0)
+                value = float(engineering_value)
+                if not math.isfinite(value):
+                    raise ValueError('命令值必须是有限数字')
+                if p.kind == 'yk':
+                    if value not in (0, 1):
+                        raise ValueError('遥控值只能为 0 或 1')
+                    value = int(value)
+                prepared.append((p, point_no, value))
+            writer = self._writer_client()
+            payload = [(p.source_rtu_id, p.kind, p.source_pnt_no, value)
+                       for p, _, value in prepared]
+            if hasattr(writer, 'submit_commands'):
+                writer.submit_commands(payload, timeout=5)
+            else:  # Compatibility for injected single-command test adapters.
+                for item in payload:
+                    writer.submit_command(*item, timeout=5)
         except Exception as exc:
             self._runtime_error(exc)
             try:
@@ -524,13 +538,14 @@ class TransRuntime:
             self.logger.normal("收到命令并提交写库")
         except OSError:
             logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
-        self._command_count += 1
-        self.values[(p.kind, point_no)] = value
-        self.qualities[(p.kind, point_no)] = 0
-        self._queue_point_runtime(
-            (p.kind, point_no), value=value, status=0,
-            refresh_time=received_at, command_receive_time=received_at,
-        )
+        self._command_count += len(prepared)
+        for p, point_no, value in prepared:
+            self.values[(p.kind, point_no)] = value
+            self.qualities[(p.kind, point_no)] = 0
+            self._queue_point_runtime(
+                (p.kind, point_no), value=value, status=0,
+                refresh_time=received_at, command_receive_time=received_at,
+            )
         self._flush_point_runtime()
         return True
 
@@ -550,6 +565,10 @@ class TransRuntime:
         return self.command(point, event.value)
 
     def build_server(self, spec, points):
+        if self._soe_forwarder is not None:
+            self._soe_forwarder.close()
+            self._soe_forwarder = None
+        self._soe_keys = set()
         self._flush_point_runtime()
         self.values.clear()
         self.qualities.clear()
@@ -588,6 +607,7 @@ class TransRuntime:
                     self.values[key], self.qualities[key] = value, quality
                 self._record_sample(key, value, quality, source_time)
             server.set_monitor_report_interval(spec.report_interval_ms)
+            self._configure_soe(server)
             # Keep the constructed server as the active target as well.  This
             # makes the method useful for callers that build a server for
             # diagnostics before invoking ``rebuild``.
@@ -599,10 +619,18 @@ class TransRuntime:
         def on_command(kind, no, value):
             point = point_index.get((str(kind).lower(), int(no)))
             return False if point is None else self.command(point, value)
+        def on_commands(commands):
+            prepared = []
+            for kind, no, value in commands:
+                point = point_index.get((str(kind).lower(), int(no)))
+                if point is None:
+                    return False
+                prepared.append((point, value))
+            return self.commands(prepared)
         server = ModbusTcpTransServer(
             host=spec.bind_host, port=spec.bind_port, unit_id=spec.unit_id,
             points=[p.__dict__ for p in points], point_values=initial,
-            command_handler=on_command,
+            command_handler=on_command, command_batch_handler=on_commands,
             log=lambda level, message: self.logger.emit("normal", message, level=level))
         server.set_packet_handler(self.logger.packet)
         # The constructor already encoded the initial samples into the datastore.
@@ -636,6 +664,54 @@ class TransRuntime:
         self._reconnect_count += 1
         self.logger.process(f"转发通道启动，规约={spec.protocol}")
 
+    def _configure_soe(self, server):
+        from core.iec104_soe import SoeForwarder
+        routes = {}
+        # Configuration work only: the refresh path never joins full point
+        # definitions or scans event history from the beginning.
+        with self.store.connection() as con:
+            for key in server.soe_point_keys:
+                point = self.points[key]
+                row = con.execute('''SELECT m.type_id,m.time_tag FROM fes_rtu_define r
+                    JOIN fes_channel_iec104_point_define m ON m.channel_id=r.channel_id
+                    WHERE r.rtu_id=? AND r.channel_type='iec104' AND m.kind='yx' AND m.pnt_no=?''',
+                    (point.source_rtu_id,point.source_pnt_no)).fetchone()
+                if row is None: continue
+                typ = int(row['type_id'] or 0)
+                if row['time_tag'] == 'CP56Time2a' and typ in (1,3): typ = {1:30,3:31}[typ]
+                if typ not in (30,31): continue
+                if server._points[key].type.value != typ:
+                    raise ValueError(f'SOE 转发需保持源点单双点类型: {key}')
+                self._soe_keys.add(key)
+                routes.setdefault((point.source_rtu_id,point.source_pnt_no),[]).append(key)
+        if not routes: return
+        server.require_soe_support()
+        def route(row):
+            if row['type_id'] not in (30,31): return []
+            result = []
+            for key in routes.get((row['rtu_id'],row['pnt_no']),()):
+                target = server._points[key]
+                if target.type.value != row['type_id']:
+                    raise ValueError(f'SOE 历史类型与当前转发定义不一致: {key}')
+                result.append(dict(row,common_address=server.common_address,io_address=target.io_address,
+                                   target_pnt_no=key[1]))
+            return result
+        def acknowledged(events, stamp):
+            for event in events:
+                self._queue_point_runtime(('yx',event['target_pnt_no']),forward_time=stamp)
+            self._tx_count += len(events)
+            self._last_tx_time = stamp
+            self._flush_point_runtime()
+        source_rtus = {key[0] for key in routes}
+        self._soe_forwarder = SoeForwarder(self.store,f't:channel:{self.channel_id}','C',route,
+            rtu_id=next(iter(source_rtus)) if len(source_rtus)==1 else None, on_ack=acknowledged)
+
+    def _pump_soe(self):
+        if self._soe_forwarder is not None:
+            self._soe_forwarder.tick(self.server)
+            if self._soe_forwarder.error:
+                self._runtime_error(self._soe_forwarder.error)
+
     def _refresh_iec104(self, current):
         changes = []
         for key, point in self.points.items():
@@ -648,8 +724,14 @@ class TransRuntime:
                 changes.append((*key, value, quality))
         if changes:
             try:
-                errors = self.server.update_monitoring(changes, isolate_errors=True,
-                            transmit=self.server.active_connection_count > 0)
+                ordinary = [item for item in changes if item[:2] not in self._soe_keys]
+                current_only = [item for item in changes if item[:2] in self._soe_keys]
+                errors = {}
+                if current_only:
+                    errors.update(self.server.update_monitoring(current_only, isolate_errors=True,transmit=False))
+                if ordinary:
+                    errors.update(self.server.update_monitoring(ordinary, isolate_errors=True,
+                                  transmit=self.server.active_connection_count > 0))
             except Exception as exc:
                 errors = {(kind, no): exc for kind, no, _, _ in changes}
             stamp = now_ms()
@@ -660,10 +742,12 @@ class TransRuntime:
                     self.logger.error(f'转发点 {kind}/{no} 更新失败: {errors[key]}')
                     continue
                 self.values[key], self.qualities[key] = value, quality
-                self._queue_point_runtime(key, forward_time=stamp)
-                self._tx_count += 1
-                self._last_tx_time = stamp
+                if key not in self._soe_keys:
+                    self._queue_point_runtime(key, forward_time=stamp)
+                    self._tx_count += 1
+                    self._last_tx_time = stamp
         self._flush_point_runtime()
+        self._pump_soe()
 
     def refresh(self):
         current = self._read_sources(self._scan_plan, True, True)
@@ -830,6 +914,7 @@ class TransRuntime:
                     cycles += 1
                     self._cycles = cycles
                 self._heartbeat()
+                self._pump_soe()
                 if max_cycles is not None and cycles >= max_cycles:
                     break
                 # Definition polling and cooperative stop/heartbeat continue
@@ -837,6 +922,8 @@ class TransRuntime:
                 # time rather than waiting out the former period or rescanning
                 # on every configuration poll.
                 wake = min(next_control, self._next_definition_check, last_scan + spec.scan_interval)
+                if self._soe_forwarder is not None:
+                    wake = min(wake,time.monotonic()+0.05)
                 self.stop_event.wait(max(0., wake - time.monotonic()))
             return cycles
         except Exception as exc:
@@ -847,6 +934,8 @@ class TransRuntime:
             self.logger.error(f"转发通道异常退出: {exc}")
             raise
         finally:
+            if self._soe_forwarder is not None:
+                self._soe_forwarder.close()
             if self.server is not None:
                 try:
                     (self.server.stop() if hasattr(self.server, "stop") else self.server.close())

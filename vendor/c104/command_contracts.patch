@@ -1,0 +1,257 @@
+--- a/src/enums.cpp
++++ b/src/enums.cpp
+@@ -474,6 +474,8 @@
+     return "COMMAND_AWAIT_CON_TERM";
+   case CommandProcessState::COMMAND_AWAIT_REQUEST:
+     return "COMMAND_AWAIT_REQUEST";
++  case CommandProcessState::COMMAND_AWAIT_DEACT_CON:
++    return "COMMAND_AWAIT_DEACT_CON";
+   default:
+     return "UNKNOWN";
+   }
+--- a/src/enums.h
++++ b/src/enums.h
+@@ -567,7 +567,8 @@
+   COMMAND_AWAIT_CON,
+   COMMAND_AWAIT_TERM,
+   COMMAND_AWAIT_CON_TERM,
+-  COMMAND_AWAIT_REQUEST
++  COMMAND_AWAIT_REQUEST,
++  COMMAND_AWAIT_DEACT_CON
+ };
+ std::string CommandProcessState_toString(const CommandProcessState &state);
+ 
+--- a/src/remote/Connection.cpp
++++ b/src/remote/Connection.cpp
+@@ -534,6 +534,12 @@
+         expectedResponseMap[cmdId] = COMMAND_FAILURE;
+       } else {
+         switch (expectedResponseMap[cmdId]) {
++        case COMMAND_AWAIT_DEACT_CON:
++          expectedResponseMap[cmdId] =
++              (message->getCauseOfTransmission() == CS101_COT_DEACTIVATION_CON)
++                  ? COMMAND_SUCCESS
++                  : COMMAND_FAILURE;
++          break;
+         case COMMAND_AWAIT_CON:
+           expectedResponseMap[cmdId] =
+               (message->getCauseOfTransmission() == CS101_COT_ACTIVATION_CON)
+@@ -941,6 +947,12 @@
+     throw std::invalid_argument("Invalid point type");
+   }
+ 
++  if (cause == CS101_COT_DEACTIVATION) {
++    // Cancel exactly once; never select again or await execution termination.
++    auto message = Message::PointCommand::create(point, false);
++    message->setCauseOfTransmission(cause);
++    return command(std::move(message), true, COMMAND_AWAIT_DEACT_CON);
++  }
+   bool selectAndExecute = point->getCommandMode() == SELECT_AND_EXECUTE_COMMAND;
+   // send select command
+   if (selectAndExecute) {
+--- a/src/Server.cpp
++++ b/src/Server.cpp
+@@ -41,6 +41,39 @@
+ using namespace Remote;
+ using namespace std::chrono_literals;
+ 
++namespace {
++// Bounded queues must fit common multi-thousand-point GI/spontaneous bursts.
++// The upstream 100-ASDU limit can overwrite queued objects within one Batch.
++constexpr int SCADA_MESSAGE_QUEUE_CAPACITY = 1024;
++// Compare IOA, value and qualifier, excluding S/E and the CP56 timestamp.
++// A selection authorizes one command value from one connection/originator.
++bool matchesSelectedCommand(CS101_ASDU selected, CS101_ASDU command) {
++  const auto type = CS101_ASDU_getTypeID(command);
++  if (CS101_ASDU_getTypeID(selected) != type ||
++      CS101_ASDU_getOA(selected) != CS101_ASDU_getOA(command))
++    return false;
++  int size = 0;
++  switch (type) {
++  case C_SC_NA_1: case C_DC_NA_1: case C_RC_NA_1:
++  case C_SC_TA_1: case C_DC_TA_1: case C_RC_TA_1: size = 4; break;
++  case C_SE_NA_1: case C_SE_NB_1:
++  case C_SE_TA_1: case C_SE_TB_1: size = 6; break;
++  case C_SE_NC_1: case C_SE_TC_1: size = 8; break;
++  default: return false;
++  }
++  if (CS101_ASDU_getPayloadSize(selected) < size ||
++      CS101_ASDU_getPayloadSize(command) < size)
++    return false;
++  auto a = CS101_ASDU_getPayload(selected);
++  auto b = CS101_ASDU_getPayload(command);
++  for (int i = 0; i < size; ++i) {
++    const unsigned mask = i == size - 1 ? 0x7f : 0xff;
++    if ((a[i] & mask) != (b[i] & mask)) return false;
++  }
++  return true;
++}
++}
++
+ template <typename T>
+ bool areKeysSequential(const std::map<uint_fast16_t, T> &inputMap) {
+   if (inputMap.empty()) {
+@@ -82,9 +115,11 @@
+   // create a new slave/server instance with default connection parameters and
+   // default message queue size
+   if (security) {
+-    slave = CS104_Slave_createSecure(100, 100, security->get());
++    slave = CS104_Slave_createSecure(SCADA_MESSAGE_QUEUE_CAPACITY,
++                                    SCADA_MESSAGE_QUEUE_CAPACITY, security->get());
+   } else {
+-    slave = CS104_Slave_create(100, 100);
++    slave = CS104_Slave_create(SCADA_MESSAGE_QUEUE_CAPACITY,
++                              SCADA_MESSAGE_QUEUE_CAPACITY);
+   }
+ 
+   // bind to ip addresses or all if bind_ip="0.0.0.0"
+@@ -488,7 +523,11 @@
+                                        [this, connection](const Selection &s) {
+                                          // do not call unselect here, because
+                                          // it is called on connection loss
+-                                         return s.connection == connection;
++                                          if (s.connection == connection) {
++                                            CS101_ASDU_destroy(s.asdu);
++                                            return true;
++                                          }
++                                          return false;
+                                        }),
+                         selectionVector.end());
+ }
+@@ -553,23 +592,18 @@
+       return false;
+     }
+     it->created = now;
++    CS101_ASDU_destroy(it->asdu);
++    it->asdu = CS101_ASDU_clone(message->getAsdu(), nullptr);
++    it->oa = oa;
++    it->connection = connection;
+   }
+ 
+   return true;
+ }
+ 
+ void Server::unselect(const Selection &selection) {
+-  std::weak_ptr<Server> weakSelf =
+-      shared_from_this(); // Weak reference to `this`
+-
+-  scheduleTask([weakSelf, selection]() {
+-    auto self = weakSelf.lock();
+-    if (self) {
+-      // Prevent running if `this` was destroyed
+-      self->sendActivationTermination(selection.connection, selection.asdu);
+-    }
+-    CS101_ASDU_destroy(selection.asdu);
+-  });
++  // Expiry, cancellation and connection loss are not successful executions.
++  CS101_ASDU_destroy(selection.asdu);
+ }
+ 
+ CommandResponseState
+@@ -580,6 +614,10 @@
+   const uint16_t ca = message->getCommonAddress();
+   const uint32_t ioa = message->getIOA();
+ 
++  std::chrono::steady_clock::time_point selectedAt;
++  const bool deactivation =
++      message->getCauseOfTransmission() == CS101_COT_DEACTIVATION;
++
+   if (SELECT_AND_EXECUTE_COMMAND == point->getCommandMode()) {
+     auto now = std::chrono::steady_clock::now();
+ 
+@@ -590,7 +628,8 @@
+ 
+     // selection NOT found
+     selected = (it != selectionVector.end() && (it->connection == connection) &&
+-                (now - it->created) < selectTimeout_ms);
++                (now - it->created) < selectTimeout_ms &&
++                matchesSelectedCommand(it->asdu, message->getAsdu()));
+     if (!selected) {
+       std::cerr << "[c104.Server] Cannot execute command on point in "
+                    "SELECT_AND_EXECUTE "
+@@ -598,22 +637,22 @@
+                 << std::endl;
+       return RESPONSE_STATE_FAILURE;
+     }
++    selectedAt = it->created;
+   }
+ 
+   auto res = point->onReceive(std::move(message));
+ 
+-  if (selected) {
+-    std::weak_ptr<Server> weakSelf =
+-        shared_from_this(); // Weak reference to Server
+-    scheduleTask(
+-        [weakSelf, ca, ioa]() {
+-          auto self = weakSelf.lock();
+-          if (!self)
+-            return; // Prevent running if `this` was destroyed
+-
+-          self->cleanupSelection(ca, ioa);
+-        },
+-        1);
++  if (selected && (!deactivation || res == RESPONSE_STATE_SUCCESS)) {
++    std::lock_guard<Module::GilAwareMutex> const lock(selection_mutex);
++    auto it = std::find_if(selectionVector.begin(), selectionVector.end(),
++        [ca, ioa, connection, selectedAt](const Selection &s) {
++          return s.ca == ca && s.ioa == ioa && s.connection == connection &&
++                 s.created == selectedAt;
++        });
++    if (it != selectionVector.end()) {
++      unselect(*it);
++      selectionVector.erase(it);
++    }
+   }
+ 
+   return res;
+@@ -1103,7 +1142,9 @@
+ 
+   // manipulate copy instead of original asdu
+   CS101_ASDU cp = CS101_ASDU_clone(asdu, nullptr);
+-  CS101_ASDU_setCOT(cp, CS101_COT_ACTIVATION_CON);
++  CS101_ASDU_setCOT(cp, CS101_ASDU_getCOT(asdu) == CS101_COT_DEACTIVATION
++                          ? CS101_COT_DEACTIVATION_CON
++                          : CS101_COT_ACTIVATION_CON);
+   CS101_ASDU_setNegative(cp, negative);
+ 
+   if (isGlobalCommonAddress(CS101_ASDU_getCA(asdu))) {
+@@ -1571,6 +1612,7 @@
+   if (auto message = instance->getValidMessage(connection, asdu)) {
+ 
+     CommandResponseState responseState = RESPONSE_STATE_FAILURE;
++    bool executedSelection = false;
+     UnexpectedMessageCause cause = NO_ERROR_CAUSE;
+ 
+     // new clockSyncHandler
+@@ -1593,7 +1635,9 @@
+           if (auto point = station->getPoint(message->getIOA())) {
+             if (point->getType() == message->getType()) {
+ 
+-              if (message->isSelectCommand()) {
++              if (message->getCauseOfTransmission() == CS101_COT_DEACTIVATION) {
++                responseState = instance->execute(connection, message, point);
++              } else if (message->isSelectCommand()) {
+                 if (SELECT_AND_EXECUTE_COMMAND == point->getCommandMode()) {
+                   responseState = instance->select(connection, message)
+                                       ? RESPONSE_STATE_SUCCESS
+@@ -1606,6 +1650,9 @@
+                 }
+               } else {
+                 responseState = instance->execute(connection, message, point);
++                executedSelection = responseState == RESPONSE_STATE_SUCCESS &&
++                    point->getCommandMode() == SELECT_AND_EXECUTE_COMMAND &&
++                    message->getCauseOfTransmission() == CS101_COT_ACTIVATION;
+ 
+                 if (responseState == RESPONSE_STATE_SUCCESS &&
+                     point->getRelatedInformationObjectAutoReturn()) {
+@@ -1669,6 +1716,10 @@
+          message->getCauseOfTransmission() == CS101_COT_DEACTIVATION)) {
+       instance->sendActivationConfirmation(
+           connection, asdu, (responseState == RESPONSE_STATE_FAILURE));
++      if (executedSelection) {
++        // Echo the actual execute ASDU (S/E=0), after its positive ACTCON.
++        instance->sendActivationTermination(connection, asdu);
++      }
+     }
+ 
+     // report error cause

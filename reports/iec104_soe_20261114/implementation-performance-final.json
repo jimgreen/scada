@@ -1,0 +1,83 @@
+{
+  "scope": "temporary S independent DB; C/T shared DB; real TCP; w=1 t2=1; S 50ms tick; T controlled 5ms pump; no hardware or long soak",
+  "pipelines": [
+    {
+      "channels": 1,
+      "events_per_channel": 512,
+      "expected": 512,
+      "c_persisted": 512,
+      "t_received": [
+        512
+      ],
+      "exact": true,
+      "trigger_transaction_ms": 58.798,
+      "end_to_end_ack_ms": 509.393,
+      "events_per_second": 1005.12,
+      "commit_to_downstream_median_ms": 247.96,
+      "commit_to_downstream_p95_ms": 439.518
+    },
+    {
+      "channels": 4,
+      "events_per_channel": 512,
+      "expected": 2048,
+      "c_persisted": 2048,
+      "t_received": [
+        512,
+        512,
+        512,
+        512
+      ],
+      "exact": true,
+      "trigger_transaction_ms": 103.049,
+      "end_to_end_ack_ms": 1849.055,
+      "events_per_second": 1107.59,
+      "commit_to_downstream_median_ms": 1378.469,
+      "commit_to_downstream_p95_ms": 1727.386
+    },
+    {
+      "channels": 8,
+      "events_per_channel": 512,
+      "expected": 4096,
+      "c_persisted": 4096,
+      "t_received": [
+        512,
+        512,
+        512,
+        512,
+        512,
+        512,
+        512,
+        512
+      ],
+      "exact": true,
+      "trigger_transaction_ms": 247.374,
+      "end_to_end_ack_ms": 4823.208,
+      "events_per_second": 849.23,
+      "commit_to_downstream_median_ms": 3280.11,
+      "commit_to_downstream_p95_ms": 4608.814
+    }
+  ],
+  "database_write": {
+    "one_event_per_asdu": {
+      "events": 512,
+      "transactions": 512,
+      "median_ms": 2362.952,
+      "runs_ms": [
+        3066.722,
+        1516.069,
+        2362.952
+      ]
+    },
+    "packed_asdu": {
+      "events": 512,
+      "transactions": 24,
+      "median_ms": 82.961,
+      "runs_ms": [
+        82.961,
+        90.18,
+        82.362
+      ]
+    },
+    "speedup": 28.48
+  }
+}

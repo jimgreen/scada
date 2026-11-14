@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-11-13T11:33:46.432206+00:00",
+  "c104": "2.2.1+scada.2",
+  "native_sha256": "7f4a0fc372fd99b2d300cc4b36c3c2046339188eac3d8dc8cffa1436c1e66d02",
+  "before_sha256": "176db6083b77b775a16225cf3bd4d76821e215990c7823cf53e7d4d4b7b2798a",
+  "after_sha256": "f55c7b3e206b45988f693d9747524e55c922b0f0330db18a97154b6aea701301",
+  "cases": [
+    {
+      "points": 128,
+      "calls_per_sample": 10,
+      "before": {
+        "samples": 60,
+        "median_ms": 0.248795,
+        "p95_ms": 0.26901,
+        "max_ms": 0.28168
+      },
+      "after": {
+        "samples": 60,
+        "median_ms": 0.04723,
+        "p95_ms": 0.05126,
+        "max_ms": 0.05794
+      },
+      "received_objects_per_client": [
+        256,
+        256
+      ],
+      "reduction_percent": 81.02
+    },
+    {
+      "points": 2048,
+      "calls_per_sample": 10,
+      "before": {
+        "samples": 60,
+        "median_ms": 4.464505,
+        "p95_ms": 7.17054,
+        "max_ms": 7.34972
+      },
+      "after": {
+        "samples": 60,
+        "median_ms": 0.80405,
+        "p95_ms": 0.86874,
+        "max_ms": 0.91119
+      },
+      "received_objects_per_client": [
+        4096,
+        4096
+      ],
+      "reduction_percent": 81.99
+    },
+    {
+      "points": 8192,
+      "calls_per_sample": 10,
+      "before": {
+        "samples": 60,
+        "median_ms": 24.991805,
+        "p95_ms": 30.83932,
+        "max_ms": 32.19262
+      },
+      "after": {
+        "samples": 60,
+        "median_ms": 3.663705,
+        "p95_ms": 4.22028,
+        "max_ms": 4.74433
+      },
+      "received_objects_per_client": [
+        16384,
+        16384
+      ],
+      "reduction_percent": 85.34
+    }
+  ],
+  "passed": true,
+  "package_init_sha256": "cf91f391893749f2c2b6f064f7ebff45c3de9b9eb3dcc7431a9e118b61f866ba",
+  "native_wheel_sha256": "e4938c830657d42d13e2104ddf1389cb9d00221973745fbdef8e22550166348e",
+  "metadata_note": "Corrected native_sha256 to hash _c104.pyd, verified byte-identical to the tested wheel; original __init__.py hash retained separately. Timings unchanged."
+}

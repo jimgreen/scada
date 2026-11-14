@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="0.760" timestamp="2026-11-13T23:52:54.992667+13:00" hostname="ems"><testcase classname="tests.test_iec104_receive_snapshots.ReceiveSnapshotTests" name="test_live_value_and_poll_only_read_detached_receive_snapshot" time="0.001"><failure message="AttributeError: 'IEC104Master' object has no attribute '_make_receive_callback'">self = &lt;test_iec104_receive_snapshots.ReceiveSnapshotTests testMethod=test_live_value_and_poll_only_read_detached_receive_snapshot&gt;
+
+    def test_live_value_and_poll_only_read_detached_receive_snapshot(self):
+        peer = IEC104Master('127.0.0.1', rtu_id=3, init='NONE')
+        self.addCleanup(peer.close)
+        point = peer.add_point('yc', 1)
+        point.info = c104.ShortInfo(actual=4324, quality=c104.Quality.Blocked)
+&gt;       receive = peer._make_receive_callback('yc', 1)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'IEC104Master' object has no attribute '_make_receive_callback'
+
+tests\test_iec104_receive_snapshots.py:18: AttributeError</failure></testcase><testcase classname="tests.test_iec104_receive_snapshots.ReceiveSnapshotTests" name="test_started_point_without_received_data_is_invalid_not_native_default" time="0.001"><failure message="AssertionError: 0.0 is not None">self = &lt;test_iec104_receive_snapshots.ReceiveSnapshotTests testMethod=test_started_point_without_received_data_is_invalid_not_native_default&gt;
+
+    def test_started_point_without_received_data_is_invalid_not_native_default(self):
+        peer = IEC104Master('127.0.0.1', init='NONE')
+        self.addCleanup(peer.close)
+        peer.add_point('yc', 1)
+        with patch.object(peer, '_started', True):
+            sample = peer.value('yc', 1)
+&gt;       self.assertIsNone(sample.value)
+E       AssertionError: 0.0 is not None
+
+tests\test_iec104_receive_snapshots.py:44: AssertionError</failure></testcase></testsuite></testsuites>

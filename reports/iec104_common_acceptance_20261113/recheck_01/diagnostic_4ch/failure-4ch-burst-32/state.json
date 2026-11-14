@@ -1,0 +1,57 @@
+{
+  "mismatch": [
+    {
+      "rtu": 4,
+      "kind": "yc",
+      "no": 4,
+      "database": [
+        4347.0,
+        0
+      ],
+      "expected": [
+        4324,
+        0
+      ],
+      "client": "IEC104Value(rtu_id=4, point_no=4, kind='yc', value=4347.0, quality=0, recorded_at=None, received_at=datetime.datetime(2026, 11, 13, 10, 49, 41, 801327, tzinfo=datetime.timezone.utc))"
+    }
+  ],
+  "workers": [
+    {
+      "cycles": 310,
+      "updated_yc": 2176,
+      "updated_yx": 2176,
+      "sent_yk": 0,
+      "sent_yt": 0,
+      "errors": 0,
+      "alarms": 0
+    },
+    {
+      "cycles": 309,
+      "updated_yc": 2176,
+      "updated_yx": 2176,
+      "sent_yk": 0,
+      "sent_yt": 0,
+      "errors": 0,
+      "alarms": 0
+    },
+    {
+      "cycles": 307,
+      "updated_yc": 2176,
+      "updated_yx": 2176,
+      "sent_yk": 0,
+      "sent_yt": 0,
+      "errors": 0,
+      "alarms": 0
+    },
+    {
+      "cycles": 306,
+      "updated_yc": 2177,
+      "updated_yx": 2176,
+      "sent_yk": 0,
+      "sent_yt": 0,
+      "errors": 0,
+      "alarms": 0
+    }
+  ],
+  "background_errors": []
+}

@@ -299,6 +299,25 @@ class IEC104Server(PacketTrace):
     def __exit__(self, *exc):
         self.stop()
 
+    @property
+    def soe_point_keys(self):
+        return {key for key, point in self._points.items()
+                if key[0] == 'yx' and point.type.value in (30,31)}
+
+    def require_soe_support(self):
+        if not hasattr(self._server, 'submit_soe'):
+            raise IEC104ServerError('可靠 SOE 发送需要 c104 2.2.1+scada.3，请安装 requirements.txt 中的本地补丁包')
+
+    def submit_soe(self, events):
+        from core.iec104_soe import encode_events
+        self.require_soe_support()
+        asdus = encode_events(events, max_length=self.protocol.max_asdu_length)
+        return bool(self._server.submit_soe(asdus))
+
+    def poll_soe(self):
+        self.require_soe_support()
+        return int(self._server.poll_soe())
+
     def start(self):
         if not self.running:
             try:

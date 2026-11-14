@@ -807,84 +807,10 @@ def _batch_message_size(message: Any) -> int:
 
 def _writer_submit_command(store: ScadaStore, connection: sqlite3.Connection,
                            payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Apply a remote YK/YT command in the writer's SQLite transaction.
-
-    Transmission channels do not own a communication worker and therefore do
-    not have an HTTP ``If-Match`` token.  The writer still validates the point,
-    lock state, range and protocol-independent value constraints, then commits
-    the command atomically.  The returned row is used as the IPC ACK payload.
-    """
-    rtu_id, point_no = payload.get("rtu_id"), payload.get("point_no")
-    if (isinstance(rtu_id, bool) or not isinstance(rtu_id, int) or
-            isinstance(point_no, bool) or not isinstance(point_no, int)):
-        raise ValueError("提交命令的 rtu_id/point_no 必须是整数")
-    kind = payload.get("kind")
-    if kind not in {"yk", "yt"}:
-        raise ValueError("只支持遥控和遥调命令")
-    # Point numbers are one-based throughout the schema and Web API.  Keep
-    # the writer IPC boundary consistent with the TCP command endpoint so a
-    # local process cannot bypass the same invalid point check.
-    if rtu_id <= 0 or point_no <= 0:
-        raise ValueError("rtu_id/point_no 超出范围")
-    table = "fes_yk_define" if kind == "yk" else "fes_yt_define"
-    value = payload.get("value")
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        row = connection.execute(
-            f"SELECT * FROM {quote_identifier(table)} WHERE rtu_id=? AND pnt_no=?",
-            (rtu_id, point_no),
-        ).fetchone()
-        if row is None:
-            raise KeyError("遥控/遥调测点不存在")
-        rtu = connection.execute(
-            "SELECT channel_type FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)
-        ).fetchone()
-        if rtu is None:
-            raise KeyError("RTU 不存在")
-        if rtu["channel_type"] not in {
-            "iec104", "modbus-tcp", "modbus-rtu", "can", "bacnet", "opc",
-        }:
-            raise ValueError("该规约尚未配置按点遥控/遥调下发接口")
-        if row["man_disable"] or row["auto_disable"]:
-            raise ValueError("测点已闭锁，禁止下发")
-        if int(row["cmd_time"] or 0) > int(row["cmd_handle_time"] or 0):
-            raise ValueError("该测点还有待处理指令")
-        if kind == "yk":
-            if isinstance(value, bool):
-                value = int(value)
-            elif type(value) is int and value in {0, 1}:
-                pass
-            elif type(value) is float and math.isfinite(value) and value in {0.0, 1.0}:
-                value = int(value)
-            else:
-                raise ValueError("遥控值只能为 0 或 1")
-        else:
-            try:
-                value = float(value)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError("遥调值必须为数字") from exc
-            if not math.isfinite(value):
-                raise ValueError("遥调值必须为有限数字")
-            low, high = row["eng_min"], row["eng_max"]
-            if low is not None and value < low or high is not None and value > high:
-                raise ValueError("遥调值超出工程上下限")
-        now = int(time.time() * 1000)
-        command_time = max(now, int(row["cmd_time"] or 0) + 1, int(row["cmd_handle_time"] or 0) + 1)
-        connection.execute(
-            f"UPDATE {quote_identifier(table)} SET value=?, cmd_time=?, status=0, _version=_version+1 "
-            "WHERE rtu_id=? AND pnt_no=?",
-            (value, command_time, rtu_id, point_no),
-        )
-        updated = connection.execute(
-            f"SELECT * FROM {quote_identifier(table)} WHERE rtu_id=? AND pnt_no=?",
-            (rtu_id, point_no),
-        ).fetchone()
-        connection.commit()
-        return dict(updated)
-    except Exception:
-        if connection.in_transaction:
-            connection.rollback()
-        raise
+    """Legacy IPC compatibility; share the database command contract with T."""
+    from core.command_store import submit_commands
+    return submit_commands(connection, [(payload.get("rtu_id"), payload.get("kind"),
+                                         payload.get("point_no"), payload.get("value"))])[0]
 
 
 def _batch_writer_entry(

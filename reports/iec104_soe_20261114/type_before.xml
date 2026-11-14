@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="9" time="3.678" timestamp="2026-11-14T01:03:14.305970+13:00" hostname="ems"><testcase classname="tests.test_iec104_soe.SOEContracts" name="test_database_point_type_takes_precedence_over_channel_default" time="2.128"><failure message="AssertionError: 1 != 30">self = &lt;test_iec104_soe.SOEContracts testMethod=test_database_point_type_takes_precedence_over_channel_default&gt;
+
+    def test_database_point_type_takes_precedence_over_channel_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ScadaStore(Path(directory)/'scada.sqlite3')
+            try:
+                fill_one(store,2404)
+                for typ in (30,31,32,1,3,5):
+                    with self.subTest(type=typ):
+                        with store.connection() as con:
+                            con.execute('UPDATE fes_channel_iec104_point_define SET type_id=?',(typ,));con.commit()
+                        peer=IEC104Master.from_store(store,1,init='NONE')
+&gt;                       try:self.assertEqual(peer._points['yx',1].type.value,typ)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       AssertionError: 1 != 30
+
+tests\test_iec104_soe.py:39: AssertionError</failure><failure message="AssertionError: 1 != 31">self = &lt;test_iec104_soe.SOEContracts testMethod=test_database_point_type_takes_precedence_over_channel_default&gt;
+
+    def test_database_point_type_takes_precedence_over_channel_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ScadaStore(Path(directory)/'scada.sqlite3')
+            try:
+                fill_one(store,2404)
+                for typ in (30,31,32,1,3,5):
+                    with self.subTest(type=typ):
+                        with store.connection() as con:
+                            con.execute('UPDATE fes_channel_iec104_point_define SET type_id=?',(typ,));con.commit()
+                        peer=IEC104Master.from_store(store,1,init='NONE')
+&gt;                       try:self.assertEqual(peer._points['yx',1].type.value,typ)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       AssertionError: 1 != 31
+
+tests\test_iec104_soe.py:39: AssertionError</failure><failure message="AssertionError: 1 != 32">self = &lt;test_iec104_soe.SOEContracts testMethod=test_database_point_type_takes_precedence_over_channel_default&gt;
+
+    def test_database_point_type_takes_precedence_over_channel_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ScadaStore(Path(directory)/'scada.sqlite3')
+            try:
+                fill_one(store,2404)
+                for typ in (30,31,32,1,3,5):
+                    with self.subTest(type=typ):
+                        with store.connection() as con:
+                            con.execute('UPDATE fes_channel_iec104_point_define SET type_id=?',(typ,));con.commit()
+                        peer=IEC104Master.from_store(store,1,init='NONE')
+&gt;                       try:self.assertEqual(peer._points['yx',1].type.value,typ)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       AssertionError: 1 != 32
+
+tests\test_iec104_soe.py:39: AssertionError</failure><failure message="AssertionError: 1 != 3">self = &lt;test_iec104_soe.SOEContracts testMethod=test_database_point_type_takes_precedence_over_channel_default&gt;
+
+    def test_database_point_type_takes_precedence_over_channel_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ScadaStore(Path(directory)/'scada.sqlite3')
+            try:
+                fill_one(store,2404)
+                for typ in (30,31,32,1,3,5):
+                    with self.subTest(type=typ):
+                        with store.connection() as con:
+                            con.execute('UPDATE fes_channel_iec104_point_define SET type_id=?',(typ,));con.commit()
+                        peer=IEC104Master.from_store(store,1,init='NONE')
+&gt;                       try:self.assertEqual(peer._points['yx',1].type.value,typ)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       AssertionError: 1 != 3
+
+tests\test_iec104_soe.py:39: AssertionError</failure><failure message="AssertionError: 1 != 5">self = &lt;test_iec104_soe.SOEContracts testMethod=test_database_point_type_takes_precedence_over_channel_default&gt;
+
+    def test_database_point_type_takes_precedence_over_channel_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=ScadaStore(Path(directory)/'scada.sqlite3')
+            try:
+                fill_one(store,2404)
+                for typ in (30,31,32,1,3,5):
+                    with self.subTest(type=typ):
+                        with store.connection() as con:
+                            con.execute('UPDATE fes_channel_iec104_point_define SET type_id=?',(typ,));con.commit()
+                        peer=IEC104Master.from_store(store,1,init='NONE')
+&gt;                       try:self.assertEqual(peer._points['yx',1].type.value,typ)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       AssertionError: 1 != 5
+
+tests\test_iec104_soe.py:39: AssertionError</failure></testcase><testcase classname="tests.test_iec104_soe.SOEContracts" name="test_independent_decoder_preserves_flags_quality_ca_ioa_and_milliseconds" time="0.003" /><testcase classname="tests.test_iec104_soe.SOEContracts" name="test_sequential_objects_and_gi_are_distinct_from_spontaneous" time="0.003" /></testsuite></testsuites>

@@ -10,7 +10,7 @@
 - `dbdef/json/fes_scdfe_t_define.json`：转发通道定义；
 - `dbdef/json/fes_scdfe_t_point_define.json`：通道内四遥映射定义；运行时由转发进程维护 `value`、`status`、`refresh_time`、`forward_time` 和 `command_receive_time`，用于 Web 实时查看转发状态。
 
-项目使用同一个 SQLite 数据库。运行前先用 `scdfe_c` 的数据库初始化流程创建/升级表，然后启动 Web 管理服务：
+C/T 共享 `scada.sqlite3` 业务数据库，S 保留独立的 `scdfe_s.sqlite3` 模拟库。三个程序独立收发规约报文，C/T 的数据和命令只通过数据库交换：T 直接提交命令事务，C 自主读取待处理指令并完成设备侧下发。T 不需要连接 C 的写库 IPC，也不要求 C 先启动。运行前先用数据库初始化流程创建/升级表，然后启动 Web 管理服务：
 
 ```powershell
 Set-Location D:\codex\scada
@@ -147,7 +147,9 @@ packets/2026/11/04/08/scdfe_t-channel-1-20261104-08.log
 2. 建立一个 IEC104 或 Modbus TCP 转发通道，分别添加 YC/YX 上送映射和 YK/YT 下行映射。
 3. 通过 Web 启动通道，在进程监控中确认 PID、心跳和日志均更新。
 4. 使用对应协议测试客户端读取 YC/YX，核对值和质量码与 `fes_yc_define` / `fes_yx_define` 一致。
-5. 使用客户端下发 YK/YT，确认 `fes_yk_define` / `fes_yt_define` 的 `value`、`cmd_time` 发生变化，随后由 `scdfe_c` 写库进程和通信线程完成设备侧下发。
+5. 使用客户端下发 YK/YT，确认 `fes_yk_define` / `fes_yt_define` 的 `value`、`cmd_time` 发生变化，随后由 C 独立采集循环完成设备侧下发并更新 `cmd_handle_time`。协议确认只表示命令已经提交数据库；C 停止时命令保持待处理，C 启动后再读取执行。同点未完成的命令不能被覆盖。
+
+Modbus 15/16 多点写入在一个数据库事务内校验并提交。任一点闭锁、已有待处理命令或越限时，整批回滚并返回异常码 04，防止返回失败时前面的点已部分入队。连续操作同一点需等待 C 的执行回执，不能把 T 的写响应当成设备执行完成。
 6. 同时启动第二个转发通道，使用不同监听端口和点映射，确认两个进程的日志、心跳和数据互不串扰。
 
 硬件串口、真实远方主站和实际现场设备不在本地回环验证范围内；现场联调前应按远方系统的 IEC104 类型标识/IOA 或 Modbus 寄存器字节序复核映射。

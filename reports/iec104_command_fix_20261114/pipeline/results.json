@@ -1,0 +1,1228 @@
+{
+  "timestamp": "2026-11-13T19:34:47.631033+08:00",
+  "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+  "c104": "2.2.1+scada.2",
+  "pipelines": [
+    {
+      "channels": 1,
+      "yc_per_rtu": 64,
+      "yx_per_rtu": 64,
+      "c_poll_ms": 50,
+      "s_scan_ms": 50,
+      "s_tick_ms": 100,
+      "t_scan_ms": 50,
+      "t_tick_ms": 50,
+      "t_periodic_ms": 60000,
+      "writer_batch_ms": 100,
+      "k": 12,
+      "w": 8,
+      "topology": "S service threads -> C ChannelWorker threads -> C writer process -> SQLite -> T runtime threads -> downstream IEC104 clients",
+      "t_gi": {
+        "samples": 5,
+        "median_ms": 4.242,
+        "p95_ms": 5.309,
+        "max_ms": 5.309
+      },
+      "s_gi": {
+        "samples": 5,
+        "median_ms": 4.704,
+        "p95_ms": 5.506,
+        "max_ms": 5.506
+      },
+      "checks": [
+        "C startup GI commit",
+        "S/T GI ACTCON -> exact object count -> ACTTERM",
+        "CA/IOA mapping and RTU isolation",
+        "5 GI repeats per S/T channel",
+        "quality-only IV/BL/restoration with unchanged values",
+        "no spontaneous duplicates during 400ms quiet window",
+        "YK/YT direct and select-execute through shared DB; cancel causes no second execution",
+        "periodic report COT=1 on existing T connection",
+        "S stop/restart -> C automatic reconnect + GI -> T latest values",
+        "downstream reconnect + GI retrieves latest values/qualities"
+      ],
+      "c_commit_latency": {
+        "samples": 60,
+        "median_ms": 283.722,
+        "p95_ms": 317.035,
+        "max_ms": 348.687
+      },
+      "end_to_end_latency": {
+        "samples": 60,
+        "median_ms": 419.483,
+        "p95_ms": 443.702,
+        "max_ms": 530.614
+      },
+      "c_commit_samples_ms": [
+        216.46319999854313,
+        274.6360999990429,
+        266.9239999995625,
+        254.68349999937345,
+        302.11960000087856,
+        310.13610000081826,
+        306.5258000024187,
+        295.6592999980785,
+        296.7038999995566,
+        302.65719999806606,
+        304.1317999995954,
+        287.6594999979716,
+        296.71849999795086,
+        278.1806000020879,
+        284.19819999908214,
+        285.8061999977508,
+        279.73369999745046,
+        281.67580000081216,
+        259.51160000113305,
+        266.11399999819696,
+        268.4101999984705,
+        295.2795999990485,
+        317.170400001487,
+        253.35189999896102,
+        317.03469999774825,
+        324.974300001486,
+        204.4653000011749,
+        196.2491999984195,
+        297.3765999995521,
+        299.63320000024396,
+        304.3665000004694,
+        300.40870000084396,
+        305.0213000024087,
+        306.57589999827906,
+        279.9648000000161,
+        302.06149999867193,
+        175.11679999734042,
+        270.2304999984335,
+        223.71670000211452,
+        263.3053999998083,
+        206.55970000007073,
+        189.95859999995446,
+        283.2464000020991,
+        282.96449999834294,
+        288.30680000100983,
+        288.7180999969132,
+        244.47630000213394,
+        232.2982999976375,
+        207.97689999744762,
+        261.4237999987381,
+        348.6870999986422,
+        297.55069999737316,
+        289.47279999920283,
+        300.90819999895757,
+        290.6790000015462,
+        231.6322999977274,
+        236.0183999990113,
+        212.962300000072,
+        220.04459999880055,
+        315.1742000009108
+      ],
+      "end_to_end_samples_ms": [
+        371.86990000191145,
+        435.9519999998156,
+        314.1537999981665,
+        322.06030000088504,
+        428.85930000193184,
+        434.95809999876656,
+        433.69170000005397,
+        428.053200001159,
+        422.8322000017215,
+        428.6695000009786,
+        443.70189999972354,
+        421.6636999990442,
+        443.5091999985161,
+        415.7992000000377,
+        416.36790000120527,
+        429.4865999981994,
+        414.27809999731835,
+        440.6000999988464,
+        419.44620000140276,
+        424.6934999973746,
+        320.39459999941755,
+        403.37089999957243,
+        530.6143000016164,
+        417.95579999961774,
+        411.56579999733367,
+        419.51960000005784,
+        319.221199999447,
+        320.0902999997197,
+        425.4177000002528,
+        431.2016000003496,
+        424.02840000067954,
+        424.5329000004858,
+        431.30290000044624,
+        446.9692999991821,
+        425.0242999987677,
+        409.53759999683825,
+        321.4626999979373,
+        428.6121000004641,
+        374.9959000015224,
+        413.6079999989306,
+        313.39759999900707,
+        326.1361000004399,
+        424.32109999936074,
+        418.5520999999426,
+        433.4960999985924,
+        401.113499996427,
+        321.6415999995661,
+        324.9294999986887,
+        320.83249999777763,
+        336.13039999909233,
+        530.1679999975022,
+        420.2746999981173,
+        429.48840000099153,
+        419.532199997775,
+        418.0372000009811,
+        304.49640000006184,
+        317.1370999989449,
+        416.22930000085034,
+        323.54810000106227,
+        426.005699999223
+      ],
+      "bursts": [
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        },
+        {
+          "objects": 128,
+          "frames": 3,
+          "bytes": 429
+        }
+      ],
+      "workload_seconds": 24.734,
+      "command_latency": {
+        "samples": 4,
+        "median_ms": 50.163,
+        "p95_ms": 56.789,
+        "max_ms": 56.789
+      },
+      "command_receipt_latency": {
+        "samples": 4,
+        "median_ms": 157.713,
+        "p95_ms": 168.167,
+        "max_ms": 168.167
+      },
+      "errors_before_injected_disconnect": 0,
+      "upstream_restart_recovery_ms": 448.395,
+      "workers": [
+        {
+          "cycles": 460,
+          "updated_yc": 4160,
+          "updated_yx": 4160,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 1,
+          "alarms": 0
+        }
+      ],
+      "frames": {
+        "C-1": {
+          "I": 219,
+          "S": 24,
+          "U": 4
+        },
+        "T-1": {
+          "I": 247,
+          "S": 24,
+          "U": 2
+        },
+        "T-reconnect": {
+          "I": 6,
+          "S": 0,
+          "U": 2
+        }
+      },
+      "passed": true
+    },
+    {
+      "channels": 4,
+      "yc_per_rtu": 64,
+      "yx_per_rtu": 64,
+      "c_poll_ms": 50,
+      "s_scan_ms": 50,
+      "s_tick_ms": 100,
+      "t_scan_ms": 50,
+      "t_tick_ms": 50,
+      "t_periodic_ms": 60000,
+      "writer_batch_ms": 100,
+      "k": 12,
+      "w": 8,
+      "topology": "S service threads -> C ChannelWorker threads -> C writer process -> SQLite -> T runtime threads -> downstream IEC104 clients",
+      "t_gi": {
+        "samples": 20,
+        "median_ms": 23.226,
+        "p95_ms": 46.499,
+        "max_ms": 47.979
+      },
+      "s_gi": {
+        "samples": 20,
+        "median_ms": 19.579,
+        "p95_ms": 40.47,
+        "max_ms": 45.354
+      },
+      "checks": [
+        "C startup GI commit",
+        "S/T GI ACTCON -> exact object count -> ACTTERM",
+        "CA/IOA mapping and RTU isolation",
+        "5 GI repeats per S/T channel",
+        "quality-only IV/BL/restoration with unchanged values",
+        "no spontaneous duplicates during 400ms quiet window",
+        "YK/YT direct and select-execute through shared DB; cancel causes no second execution",
+        "periodic report COT=1 on existing T connection",
+        "S stop/restart -> C automatic reconnect + GI -> T latest values",
+        "downstream reconnect + GI retrieves latest values/qualities"
+      ],
+      "c_commit_latency": {
+        "samples": 60,
+        "median_ms": 224.983,
+        "p95_ms": 353.136,
+        "max_ms": 524.862
+      },
+      "end_to_end_latency": {
+        "samples": 60,
+        "median_ms": 383.657,
+        "p95_ms": 475.159,
+        "max_ms": 673.39
+      },
+      "c_commit_samples_ms": [
+        190.405199999077,
+        190.44700000085868,
+        191.1249000004318,
+        210.01579999938258,
+        223.71600000042235,
+        238.65099999966333,
+        270.62350000051083,
+        236.8056000013894,
+        207.99459999761893,
+        276.6016000023228,
+        196.11300000178744,
+        363.58860000109416,
+        234.70630000156234,
+        323.79420000143,
+        215.45119999791496,
+        175.47239999839803,
+        225.93220000271685,
+        224.033700000291,
+        204.56849999754922,
+        235.35939999783295,
+        216.88020000146935,
+        271.5336000001116,
+        265.8568999977433,
+        250.811199999589,
+        199.9528000014834,
+        239.76779999793507,
+        232.34060000322643,
+        190.43299999975716,
+        247.44009999994887,
+        215.4549999977462,
+        193.5018999975,
+        206.1269000005268,
+        121.14929999734159,
+        242.56460000106017,
+        119.55319999833591,
+        203.77450000160025,
+        251.97599999955855,
+        254.13269999990007,
+        208.47239999784506,
+        251.46070000118925,
+        234.2821999991429,
+        180.8208000002196,
+        187.46699999974226,
+        353.13569999925676,
+        210.9463999986474,
+        223.4498000034364,
+        198.5554000020784,
+        230.58710000259452,
+        153.21469999980764,
+        230.02119999728166,
+        524.862000002031,
+        192.64409999959753,
+        350.973000000522,
+        302.19750000105705,
+        254.44989999959944,
+        241.19820000123582,
+        165.56809999747202,
+        272.2561000009591,
+        377.9503999976441,
+        218.13340000153403
+      ],
+      "end_to_end_samples_ms": [
+        366.2274999987858,
+        340.6401000029291,
+        306.10840000008466,
+        402.3496999980125,
+        323.180899998988,
+        381.2374000008276,
+        445.2367999983835,
+        388.56220000161557,
+        351.6405999980634,
+        447.7530000003753,
+        335.5775000018184,
+        453.6012999997183,
+        375.39140000080806,
+        454.161199999362,
+        340.46440000020084,
+        312.1538999985205,
+        409.94440000213217,
+        418.53510000146343,
+        334.5515999972122,
+        364.03559999962454,
+        376.0887999997067,
+        421.2483000010252,
+        441.02559999737423,
+        417.0601000005263,
+        410.7241999990947,
+        430.03459999818006,
+        421.8402000005881,
+        361.33719999997993,
+        384.77729999794974,
+        402.69400000033784,
+        309.63689999771304,
+        368.5608999985561,
+        234.26499999914085,
+        419.7401000019454,
+        293.73219999979483,
+        386.33499999923515,
+        408.9406000020972,
+        392.56969999769353,
+        367.6419999974314,
+        358.36420000123326,
+        411.23180000067805,
+        356.8838000028336,
+        382.5362999996287,
+        475.15889999704086,
+        366.19100000098115,
+        414.19520000272314,
+        394.6966000003158,
+        370.7475000010163,
+        278.7823999969987,
+        358.727099999669,
+        673.3899000028032,
+        371.2140999996336,
+        556.9136999984039,
+        476.86630000316654,
+        381.5845999997691,
+        438.9043000010133,
+        310.030699998606,
+        412.9026000009617,
+        467.20839999761665,
+        374.0926999998919
+      ],
+      "bursts": [
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 13,
+          "bytes": 1731
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 13,
+          "bytes": 1731
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 13,
+          "bytes": 1731
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        },
+        {
+          "objects": 512,
+          "frames": 13,
+          "bytes": 1731
+        },
+        {
+          "objects": 512,
+          "frames": 12,
+          "bytes": 1716
+        }
+      ],
+      "workload_seconds": 24.795,
+      "command_latency": {
+        "samples": 16,
+        "median_ms": 54.057,
+        "p95_ms": 98.58,
+        "max_ms": 98.58
+      },
+      "command_receipt_latency": {
+        "samples": 16,
+        "median_ms": 171.76,
+        "p95_ms": 237.774,
+        "max_ms": 237.774
+      },
+      "errors_before_injected_disconnect": 0,
+      "upstream_restart_recovery_ms": 767.09,
+      "workers": [
+        {
+          "cycles": 602,
+          "updated_yc": 4288,
+          "updated_yx": 4288,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 1,
+          "alarms": 0
+        },
+        {
+          "cycles": 598,
+          "updated_yc": 4160,
+          "updated_yx": 4160,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 589,
+          "updated_yc": 4160,
+          "updated_yx": 4160,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        },
+        {
+          "cycles": 583,
+          "updated_yc": 4160,
+          "updated_yx": 4160,
+          "sent_yk": 2,
+          "sent_yt": 2,
+          "errors": 0,
+          "alarms": 0
+        }
+      ],
+      "frames": {
+        "C-1": {
+          "I": 219,
+          "S": 24,
+          "U": 6
+        },
+        "C-2": {
+          "I": 211,
+          "S": 23,
+          "U": 2
+        },
+        "C-3": {
+          "I": 211,
+          "S": 23,
+          "U": 2
+        },
+        "C-4": {
+          "I": 211,
+          "S": 23,
+          "U": 2
+        },
+        "T-1": {
+          "I": 249,
+          "S": 24,
+          "U": 2
+        },
+        "T-2": {
+          "I": 244,
+          "S": 24,
+          "U": 2
+        },
+        "T-3": {
+          "I": 245,
+          "S": 24,
+          "U": 2
+        },
+        "T-4": {
+          "I": 245,
+          "S": 24,
+          "U": 2
+        },
+        "T-reconnect": {
+          "I": 6,
+          "S": 0,
+          "U": 2
+        }
+      },
+      "passed": true
+    }
+  ],
+  "comparison": {
+    "single": {
+      "wire": [
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        },
+        {
+          "frames": 512,
+          "bytes": 10240
+        }
+      ],
+      "latency": {
+        "samples": 8,
+        "median_ms": 176.475,
+        "p95_ms": 195.206,
+        "max_ms": 195.206
+      }
+    },
+    "batch": {
+      "wire": [
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        },
+        {
+          "frames": 11,
+          "bytes": 2725
+        }
+      ],
+      "latency": {
+        "samples": 8,
+        "median_ms": 123.843,
+        "p95_ms": 133.486,
+        "max_ms": 133.486
+      }
+    },
+    "points": 512,
+    "frame_validation": {
+      "I": 4184,
+      "S": 523,
+      "U": 2
+    }
+  },
+  "snapshot_boundary": {
+    "wire_updates": 21,
+    "collected_samples": 1,
+    "final_value": true,
+    "wire_states": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1
+    ],
+    "conclusion": "collect_once returns latest point snapshot; intermediate transitions require a separate event/SOE pipeline"
+  },
+  "passed": true
+}

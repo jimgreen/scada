@@ -31,7 +31,9 @@ def owned_triggers(catalog):
 
 
 def plan(con, catalog):
-    tables = {r[1]:r[4] for r in con.execute('PRAGMA main.table_list') if r[2]=='table' and not r[1].startswith('sqlite_')}
+    from core.iec104_soe import TABLES as SOE_TABLES
+    tables = {r[1]:r[4] for r in con.execute('PRAGMA main.table_list')
+              if r[2]=='table' and not r[1].startswith('sqlite_') and r[1] not in SOE_TABLES}
     legacy = set(OLD).issubset(tables) and NEW not in tables
     if not legacy and not (NEW in tables and not set(OLD).intersection(tables)):
         raise ValueError('内部版本表缺失或新旧表并存，不执行迁移')

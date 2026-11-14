@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="3.873" timestamp="2026-11-14T00:17:15.115631+13:00" hostname="ems"><testcase classname="tests.test_iec104_receive_snapshots.ReceiveSnapshotTests" name="test_live_value_and_poll_only_read_detached_receive_snapshot" time="0.005"><failure message="AssertionError: IEC104Value(rtu_id=3, point_no=1, kind='yc', value=4324.0, quality=16, recorded_at=None, received_at=datetime.datetime(2026, 11, 13, 11, 17, 18, 350592, tzinfo=datetime.timezone.utc)) is not IEC104Value(rtu_id=3, point_no=1, kind='yc', value=4324.0, quality=16, recorded_at=None, received_at=datetime.datetime(2026, 11, 13, 11, 17, 18, 350592, tzinfo=datetime.timezone.utc))">self = &lt;test_iec104_receive_snapshots.ReceiveSnapshotTests testMethod=test_live_value_and_poll_only_read_detached_receive_snapshot&gt;
+
+    def test_live_value_and_poll_only_read_detached_receive_snapshot(self):
+        peer = IEC104Master('127.0.0.1', rtu_id=3, init='NONE')
+        self.addCleanup(peer.close)
+        point = peer.add_point('yc', 1)
+        point.info = c104.ShortInfo(actual=4324, quality=c104.Quality.Blocked)
+        receive = peer._make_receive_callback('yc', 1)
+        receive(point, point.info, None)
+    
+        class UnsafeNativePoint:
+            @property
+            def info(self):
+                raise AssertionError('polling touched concurrently replaced native info')
+    
+        peer._points[('yc', 1)] = UnsafeNativePoint()
+        peer._configured_entries = [('yc', 1, peer._points[('yc', 1)])]
+        with patch.object(peer, '_started', True), patch.object(
+                IEC104Master, 'connected', new_callable=PropertyMock, return_value=True):
+            first = peer.value('yc', 1)
+            self.assertEqual((first.value, first.quality), (4324, 16))
+&gt;           self.assertIs(peer.collect_once()[0], first)
+E           AssertionError: IEC104Value(rtu_id=3, point_no=1, kind='yc', value=4324.0, quality=16, recorded_at=None, received_at=datetime.datetime(2026, 11, 13, 11, 17, 18, 350592, tzinfo=datetime.timezone.utc)) is not IEC104Value(rtu_id=3, point_no=1, kind='yc', value=4324.0, quality=16, recorded_at=None, received_at=datetime.datetime(2026, 11, 13, 11, 17, 18, 350592, tzinfo=datetime.timezone.utc))
+
+tests\test_iec104_receive_snapshots.py:32: AssertionError</failure></testcase></testsuite></testsuites>

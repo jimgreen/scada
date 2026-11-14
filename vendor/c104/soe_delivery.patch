@@ -1,0 +1,188 @@
+--- a/src/Server.h
++++ b/src/Server.h
+@@ -391,6 +391,11 @@
+   bool send(std::shared_ptr<Remote::Message::OutgoingMessage> message,
+             IMasterConnection connection = nullptr);
+ 
++  // One bounded SOE batch, raw CP56 bytes, non-overwriting high-priority queue.
++  bool submitSoe(const std::vector<std::string> &asdus);
++  // 0=pending, 1=all original recipients acknowledged, -1=retry required.
++  int pollSoe();
++
+   /**
+    * @brief Sends a batch of messages to connected clients
+    *
+@@ -664,6 +669,10 @@
+ 
+   /// @brief map of all connections to store connection state
+   std::map<IMasterConnection, bool> connectionMap{};
++  std::map<IMasterConnection, uint64_t> connectionEpochs{};
++  uint64_t connectionEpoch{0};
++  std::map<IMasterConnection, uint64_t> soeRecipients{};
++  bool soeFailed{false};
+ 
+   /// @brief MUTEX Lock to access selectionVEcotr
+   mutable Module::GilAwareMutex selection_mutex{"Server::selection_mutex"};
+--- a/src/Server.cpp
++++ b/src/Server.cpp
+@@ -393,7 +393,12 @@
+ 
+   CS104_Slave_stop(slave);
+ 
+-  connectionMap.clear();
++  {
++    std::lock_guard<Module::GilAwareMutex> const lock(connection_mutex);
++    connectionMap.clear();
++    connectionEpochs.clear();
++    soeRecipients.clear();
++  }
+   activeConnections.store(0);
+   openConnections.store(0);
+ 
+@@ -889,6 +894,7 @@
+         instance->connection_mutex);
+ 
+     if (event == CS104_CON_EVENT_CONNECTION_OPENED) {
++      instance->connectionEpochs[connection] = ++instance->connectionEpoch;
+       // set as invalid receiver
+       auto it = instance->connectionMap.find(connection);
+       if (it == instance->connectionMap.end()) {
+@@ -899,6 +905,7 @@
+       }
+ 
+     } else if (event == CS104_CON_EVENT_CONNECTION_CLOSED) {
++      instance->connectionEpochs.erase(connection);
+       // set as invalid receiver
+       auto it = instance->connectionMap.find(connection);
+       if (it != instance->connectionMap.end()) {
+@@ -918,6 +925,7 @@
+         self->dropConnectionSelections(connection);
+       });
+     } else if (event == CS104_CON_EVENT_ACTIVATED) {
++      instance->connectionEpochs[connection] = ++instance->connectionEpoch;
+       // set as valid receiver
+       auto it = instance->connectionMap.find(connection);
+       if (it == instance->connectionMap.end()) {
+@@ -931,6 +939,7 @@
+       }
+ 
+     } else if (event == CS104_CON_EVENT_DEACTIVATED) {
++      instance->connectionEpochs[connection] = ++instance->connectionEpoch;
+       // set as invalid receiver
+       auto it = instance->connectionMap.find(connection);
+       if (it == instance->connectionMap.end()) {
+@@ -971,6 +980,59 @@
+   }
+ 
+   throw std::invalid_argument("Invalid point type");
++}
++
++bool Server::submitSoe(const std::vector<std::string> &asdus) {
++  if (asdus.empty() || asdus.size() > 512)
++    throw std::invalid_argument("SOE batch must contain 1..512 ASDUs");
++  for (const auto &data : asdus) {
++    if (data.size() < 17 || data.size() > 249)
++      throw std::invalid_argument("Invalid SOE ASDU length");
++    auto p = reinterpret_cast<const uint8_t *>(data.data());
++    size_t n = p[1] & 127;
++    if ((p[0] != 30 && p[0] != 31) || !n || (p[2] & 127) != 3 ||
++        data.size() != 6 + ((p[1] & 128) ? 3 : n * 3) + n * 8)
++      throw std::invalid_argument("SOE requires well-formed spontaneous CP56 SP/DP");
++  }
++  Module::ScopedGilRelease const scoped("Server.submit_soe");
++  std::lock_guard<Module::GilAwareMutex> const lock(connection_mutex);
++  if (!enabled || !soeRecipients.empty()) return false;
++  for (const auto &entry : connectionMap)
++    if (entry.second) soeRecipients[entry.first] = connectionEpochs.at(entry.first);
++  if (soeRecipients.empty()) return false;
++  soeFailed = false;
++  for (const auto &data : asdus) {
++    auto asdu = CS101_ASDU_createFromBuffer(appLayerParameters,
++        reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size());
++    if (!asdu) { soeFailed = true; break; }
++    for (const auto &entry : soeRecipients) {
++      if (!IMasterConnection_sendASDU(entry.first, asdu)) soeFailed = true;
++    }
++    CS101_ASDU_destroy(asdu);
++    if (soeFailed) break;
++  }
++  // Even a partially submitted batch must be drained/polled before retrying.
++  return true;
++}
++
++int Server::pollSoe() {
++  Module::ScopedGilRelease const scoped("Server.poll_soe");
++  std::lock_guard<Module::GilAwareMutex> const lock(connection_mutex);
++  if (soeRecipients.empty()) return -1;
++  bool idle = true;
++  for (const auto &entry : soeRecipients) {
++    auto current = connectionEpochs.find(entry.first);
++    auto state = connectionMap.find(entry.first);
++    if (!enabled || current == connectionEpochs.end() || current->second != entry.second ||
++        state == connectionMap.end() || !state->second) {
++      soeRecipients.clear();
++      return -1;
++    }
++    if (!CS104_Connection_isTransmitIdle(entry.first)) idle = false;
++  }
++  if (!idle) return 0;
++  soeRecipients.clear();
++  return soeFailed ? -1 : 1;
+ }
+ 
+ bool Server::send(std::shared_ptr<Remote::Message::OutgoingMessage> message,
+--- a/src/python.cpp
++++ b/src/python.cpp
+@@ -1950,6 +1950,13 @@
+ )def",
+            "common_address"_a)
+       .def(
++          "submit_soe", [](Server &server, const std::vector<py::bytes> &items) {
++            std::vector<std::string> asdus;
++            for (const auto &item : items) asdus.push_back(item.cast<std::string>());
++            return server.submitSoe(asdus);
++          }, "asdus"_a)
++      .def("poll_soe", &Server::pollSoe)
++      .def(
+           "transmit_batch",
+           [](Server &server, std::shared_ptr<Remote::Message::Batch> batch) {
+             return server.sendBatch(std::move(batch));
+--- a/depends/lib60870/lib60870-C/src/inc/api/cs104_slave.h
++++ b/depends/lib60870/lib60870-C/src/inc/api/cs104_slave.h
+@@ -48,6 +48,9 @@
+  */
+ 
+ typedef struct sCS104_Slave* CS104_Slave;
++
++/* SCADA: caller must keep the connection alive while inspecting its queues. */
++bool CS104_Connection_isTransmitIdle(IMasterConnection connection);
+ 
+ typedef enum {
+     CS104_MODE_SINGLE_REDUNDANCY_GROUP,
+--- a/depends/lib60870/lib60870-C/src/iec60870/cs104/cs104_slave.c
++++ b/depends/lib60870/lib60870-C/src/iec60870/cs104/cs104_slave.c
+@@ -3262,6 +3262,24 @@
+         return false;
+ }
+ 
++bool
++CS104_Connection_isTransmitIdle(IMasterConnection connection)
++{
++    MasterConnection con = (MasterConnection) connection->object;
++    bool idle;
++#if (CONFIG_USE_SEMAPHORES == 1)
++    Semaphore_wait(con->sentASDUsLock);
++#endif
++    /* Same lock order as sendNextHighPriorityASDU: no queue-to-k-buffer gap. */
++    HighPriorityASDUQueue_lock(con->highPrioQueue);
++    idle = con->oldestSentASDU == -1 && con->highPrioQueue->entryCounter == 0;
++    HighPriorityASDUQueue_unlock(con->highPrioQueue);
++#if (CONFIG_USE_SEMAPHORES == 1)
++    Semaphore_post(con->sentASDUsLock);
++#endif
++    return idle;
++}
++
+ static bool
+ _IMasterConnection_sendASDU(IMasterConnection self, CS101_ASDU asdu)
+ {

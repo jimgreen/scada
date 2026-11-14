@@ -1,0 +1,17 @@
+{
+  "source_reproducible": true,
+  "files": {
+    "vendor\\c104\\c104-2.2.1+scada.2.tar.gz": {
+      "bytes": 1956401,
+      "sha256": "d55cae72b7b3332e2ab658b7cd4163cce847aa5f7d73fb64d3a3d717d1f63bd8"
+    },
+    "vendor\\c104\\c104-2.2.1+scada.2-cp311-cp311-win_amd64.whl": {
+      "bytes": 770403,
+      "sha256": "e4938c830657d42d13e2104ddf1389cb9d00221973745fbdef8e22550166348e"
+    },
+    "vendor\\c104\\command_contracts.patch": {
+      "bytes": 10031,
+      "sha256": "b4b23b31c6533496ee420d8c0fb2ca478ea6cd02a1aa1f5c159df7319b0fa103"
+    }
+  }
+}

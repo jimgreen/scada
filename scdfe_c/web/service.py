@@ -387,7 +387,8 @@ class ScadaStore:
                     if actual_tables.intersection({'_scada_command_version', '_scada_definition_version'}):
                         raise RuntimeError('数据库表结构不符合要求，需要显式迁移：python -m tools.simplify_schema --db <数据库> --apply')
                     connection.execute(RTU_VERSION_DDL)
-                    unexpected_tables = actual_tables - expected_tables - {'_scada_schema', '_scada_rtu_version'}
+                    from core.iec104_soe import TABLES as SOE_TABLES, ensure_schema as ensure_soe_schema
+                    unexpected_tables = actual_tables - expected_tables - {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -442,6 +443,7 @@ class ScadaStore:
                     self._ensure_definition_version_triggers(connection, self.catalog)
                     self._ensure_command_version_triggers(connection)
                     self._ensure_point_refresh_triggers(connection)
+                    ensure_soe_schema(connection, simulator=self.application_id == int.from_bytes(b'SDFS', 'big'))
                     connection.execute(
                         'INSERT OR IGNORE INTO _scada_rtu_version(rtu_id) SELECT rtu_id FROM fes_rtu_define'
                     )

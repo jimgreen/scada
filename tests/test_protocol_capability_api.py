@@ -24,10 +24,18 @@ class CapabilityApiContracts(unittest.TestCase):
                     self.assertEqual(body['component'],component)
                     iec = body['protocols']['iec104']
                     self.assertFalse(iec['cp24']); self.assertFalse(iec['explicit_u_testfr'])
+                    self.assertTrue(iec['soe_event_log'])
+                    self.assertFalse(iec['soe_lossless_forwarding'])
+                    self.assertEqual(iec['monitoring_semantics'],'latest_point_snapshot_and_event_journal')
+                    self.assertEqual(iec['soe_forward_types'],[30,31])
+                    self.assertEqual(iec['soe_delivery'],'at_least_once_apci_ack')
                     self.assertEqual(iec['max_asdu_length_scope'],'diagnostic_threshold')
                     if component == 'scdfe_t':
                         self.assertEqual(set(body['protocols']),{'iec104','modbus-tcp'})
-                        self.assertEqual(iec['confirmation_scope'],'writer_commit')
+                        self.assertEqual(iec['confirmation_scope'],'database_commit')
+                        self.assertEqual(body['protocols']['modbus-tcp']['confirmation_scope'],'database_commit')
+                        self.assertTrue(body['protocols']['modbus-tcp']['atomic_request_database_write'])
+                        self.assertFalse(body['protocols']['modbus-tcp']['requires_c_process'])
                     else:
                         self.assertFalse(body['protocols']['can']['uds_stack'])
                     if component == 'scdfe_s':

@@ -14,6 +14,7 @@ S_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes", "▤", "进程监控", "按通信通道展示进程、PID、心跳和运行状态"),
         ("communication.html", "/communication", "◉", "通信监控", "连接、测点数量与通道状态"),
+        ("soe.html", "/soe", "◷", "SOE 事件", "逐次变位、源时标与转发进度"),
         ("logs.html", "/logs", "≡", "日志报文", "按通信通道浏览运行日志和收发报文"),
     ]),
     ("数据与定义", [
@@ -28,6 +29,7 @@ T_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes.html", "▤", "进程监控", "转发进程的启停、心跳和运行状态"),
         ("communication.html", "/communication.html", "◉", "通信监控", "转发通道的监听地址与通信状态"),
+        ("soe.html", "/soe", "◷", "SOE 事件", "源事件历史与转发确认进度"),
         ("logs.html", "/logs.html", "≡", "日志报文", "按年月日小时浏览运行日志和收发报文文件"),
     ]),
     ("数据与定义", [

@@ -2,10 +2,10 @@
 pyModbusTCP==0.3.1
 pymodbus[serial]==3.16.1
 pyserial==3.5
-# Positive confirmations can arrive before 2.2.1 begins waiting. Use the
-# small upstream backport; pip selects the matching wheel or its source.
+# Includes the confirmation-wait backport and strict activation/deactivation
+# and select/execute contracts; pip selects the matching wheel or source.
 --find-links ./vendor/c104
-c104==2.2.1+scada.1
+c104==2.2.1+scada.3
 python-can==4.6.1
 bacpypes3==0.0.110
 asyncua==2.1.0

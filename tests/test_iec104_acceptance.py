@@ -11,7 +11,7 @@ import unittest
 
 import c104
 
-from client.iec104 import IEC104Master
+from client.iec104 import IEC104Master, IEC104Error
 from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu
 from scdfe_c.web.service import ApiError, ScadaStore
 from scdfe_s.web.iec104_service import IEC104Service
@@ -138,8 +138,11 @@ class IEC104AcceptanceTests(unittest.TestCase):
         try:
             self.assertIs(client.send_yk_point(1, True, select_execute=True).value, True)
             self.assertEqual(events[-1].cause, c104.Cot.ACTIVATION)
-            self.assertIs(client.cancel_yk_point(1, True).value, True)
-            self.assertEqual(events[-1].cause, c104.Cot.DEACTIVATION)
+            # Execution consumed the selection: cancellation must be rejected,
+            # without manufacturing another selection or executing again.
+            with self.assertRaises(IEC104Error):
+                client.cancel_yk_point(1, True)
+            self.assertEqual(events[-1].cause, c104.Cot.ACTIVATION)
             server.update("yx", 1, True)
             deadline = time.monotonic() + 2
             while client.value("yx", 1).value is not True and time.monotonic() < deadline:

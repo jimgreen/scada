@@ -1,0 +1,312 @@
+{
+  "timestamp": "2026-11-14T03:06:04.640082+00:00",
+  "checks": [
+    {
+      "name": "STARTDT_ACT_CON",
+      "passed": true
+    },
+    {
+      "name": "TESTFR_ACT_CON",
+      "passed": true
+    },
+    {
+      "name": "STOPDT_ACT_CON",
+      "passed": true
+    },
+    {
+      "name": "STOPDT_no_monitoring",
+      "passed": true
+    },
+    {
+      "name": "STARTDT_resume_GI_latest_value",
+      "passed": true
+    },
+    {
+      "name": "native_t3_TESTFR",
+      "passed": true
+    },
+    {
+      "name": "yk_direct_ACTCON",
+      "passed": true
+    },
+    {
+      "name": "yk_cancel_DEACTCON_9",
+      "passed": true,
+      "observed_cots": [
+        9
+      ]
+    },
+    {
+      "name": "yk_select_ACTCON",
+      "passed": true
+    },
+    {
+      "name": "yk_execute_ACTTERM_select_clear",
+      "passed": true,
+      "frames": [
+        "680e0e000a002d010a00010002600001"
+      ]
+    },
+    {
+      "name": "yt_direct_ACTCON",
+      "passed": true
+    },
+    {
+      "name": "yt_cancel_DEACTCON_9",
+      "passed": true,
+      "observed_cots": [
+        9
+      ]
+    },
+    {
+      "name": "yt_select_ACTCON",
+      "passed": true
+    },
+    {
+      "name": "yt_execute_ACTTERM_select_clear",
+      "passed": true,
+      "frames": [
+        "68121800120032010a0001000262000000484100"
+      ]
+    },
+    {
+      "name": "C_yk_accepts_standard_DEACTCON_9",
+      "passed": true,
+      "error": null
+    },
+    {
+      "name": "C_yt_accepts_standard_DEACTCON_9",
+      "passed": true,
+      "error": null
+    }
+  ],
+  "frames": {
+    "server_adapter": [
+      {
+        "direction": "TX",
+        "hex": "680407000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "68040b000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680443000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "680483000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680413000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "680423000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680407000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "68040b000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e0000000064010600010000000014"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e0000020064010700010000000014"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000200"
+      },
+      {
+        "direction": "RX",
+        "hex": "6812020002000d81140001000140000000a04100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000400"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e0400020064010a00010000000014"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000600"
+      },
+      {
+        "direction": "RX",
+        "hex": "680443000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680483000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e020006002d010600010001600001"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e060004002d010700010001600001"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000800"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e040008002d010800010001600001"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e080006002d010900010001600001"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000a00"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e06000a002d010600010002600081"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e0a0008002d010700010002600081"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000c00"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e08000c002d010600010002600001"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e0c000a002d010700010002600001"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000e00"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e0e000a002d010a00010002600001"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001000"
+      },
+      {
+        "direction": "TX",
+        "hex": "68120a0010003201060001000162000000484100"
+      },
+      {
+        "direction": "RX",
+        "hex": "681210000c003201070001000162000000484100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001200"
+      },
+      {
+        "direction": "TX",
+        "hex": "68120c0012003201080001000162000000484100"
+      },
+      {
+        "direction": "RX",
+        "hex": "681212000e003201090001000162000000484100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001400"
+      },
+      {
+        "direction": "TX",
+        "hex": "68120e0014003201060001000262000000484180"
+      },
+      {
+        "direction": "RX",
+        "hex": "6812140010003201070001000262000000484180"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001600"
+      },
+      {
+        "direction": "TX",
+        "hex": "6812100016003201060001000262000000484100"
+      },
+      {
+        "direction": "RX",
+        "hex": "6812160012003201070001000262000000484100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001800"
+      },
+      {
+        "direction": "RX",
+        "hex": "68121800120032010a0001000262000000484100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401001a00"
+      }
+    ],
+    "C_yk": [
+      {
+        "direction": "RX",
+        "hex": "680407000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "68040b000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "680e000000002d010800010001600001"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000200"
+      },
+      {
+        "direction": "TX",
+        "hex": "680e000002002d010900010001600001"
+      }
+    ],
+    "C_yt": [
+      {
+        "direction": "RX",
+        "hex": "680407000000"
+      },
+      {
+        "direction": "TX",
+        "hex": "68040b000000"
+      },
+      {
+        "direction": "RX",
+        "hex": "6812000000003201080001000162000000484100"
+      },
+      {
+        "direction": "TX",
+        "hex": "680401000200"
+      },
+      {
+        "direction": "TX",
+        "hex": "6812000002003201090001000162000000484100"
+      }
+    ]
+  },
+  "passed": true
+}

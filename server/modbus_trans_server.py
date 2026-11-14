@@ -66,12 +66,14 @@ class ModbusTcpTransServer(ModbusTcpServer):
                  points: Sequence[Mapping[str, Any]] = (),
                  point_values: Mapping[tuple[str, int], Any] | None = None,
                  command_handler: Callable[[str, int, Any], bool] | None = None,
+                 command_batch_handler=None,
                  log=lambda level, message: None, tcp=True, serial=None, **kwargs):
         self.unit_id = int(unit_id)
         if not 0 <= self.unit_id <= 247:
             raise ValueError("unit_id 必须在 0..247")
         self._lock = threading.RLock()
         self._command_handler = command_handler
+        self._command_batch_handler = command_batch_handler
         self._log = log
         self._mappings: dict[tuple[str, int], dict[str, Any]] = {}
         self._by_address: dict[tuple[str, int], dict[str, Any]] = {}
@@ -250,8 +252,17 @@ class ModbusTcpTransServer(ModbusTcpServer):
             else:
                 value = self._decode(row, values)
             decoded.append((row, value))
+        if self._command_batch_handler is not None:
+            try:
+                accepted = self._command_batch_handler([
+                    (row['kind'], row['pnt_no'], value) for row, value in decoded])
+            except Exception as exc:
+                self._log('ERROR', f'Modbus 批量命令提交失败: {exc}')
+                return ExcCodes.DEVICE_FAILURE
+            if not accepted:
+                return ExcCodes.DEVICE_FAILURE
         for row, value in decoded:
-            if self._command_handler is not None:
+            if self._command_batch_handler is None and self._command_handler is not None:
                 try:
                     accepted = self._command_handler(row["kind"], row["pnt_no"], value)
                 except Exception as exc:  # callbacks must not kill pymodbus loop

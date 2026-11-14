@@ -16,6 +16,15 @@ def protocol_capabilities(component):
     protocols = {
         'iec104': {
             'general_interrogation': True, 'spontaneous': True, 'periodic': True,
+            'monitoring_semantics': 'latest_point_snapshot_and_event_journal',
+            'soe_event_log': True, 'soe_lossless_forwarding': False,
+            'soe_acknowledged_forwarding': component in {'scdfe_s','scdfe_t'},
+            'soe_forward_types': [30,31],
+            'soe_event_causes': [3],
+            'soe_delivery': 'at_least_once_apci_ack',
+            'soe_native_requirement': '2.2.1+scada.3',
+            'soe_cp56_time_convention': 'UTC_calendar_raw_bytes_preserved',
+            'soe_max_asdu_length_enforced': True,
             'direct_execute': True, 'select_and_execute': True,
             'separate_select': False, 'cancel_yk': True, 'cancel_yt': True,
             'cancel_scope': 'local_selection_only' if component == 'scdfe_t' else 'protocol_deactivation',
@@ -24,12 +33,12 @@ def protocol_capabilities(component):
             'application_test_command': component == 'scdfe_c',
             'max_asdu_length_scope': 'diagnostic_threshold',
             'native_max_asdu_length': 249,
-            'confirmation_scope': 'writer_commit' if component == 'scdfe_t' else
+            'confirmation_scope': 'database_commit' if component == 'scdfe_t' else
                                   'simulator_database' if component == 'scdfe_s' else 'remote_acceptance',
         },
         'modbus-tcp': {'function_codes': [1,2,3,4,5,6,15,16],
                        'address_bases': [0,1,10001,30001,40001],
-                       'confirmation_scope': 'writer_commit' if component == 'scdfe_t' else 'remote_response'},
+                       'confirmation_scope': 'database_commit' if component == 'scdfe_t' else 'remote_response'},
     }
     if component == 'scdfe_s':
         protocols['modbus-tcp'].update(
@@ -37,6 +46,9 @@ def protocol_capabilities(component):
             shared_register_slices='disjoint_masks_only', inverted_bits=True,
             register_yk=True, atomic_request_database_write=True,
             confirmation_scope='simulator_database')
+    if component == 'scdfe_t':
+        protocols['modbus-tcp'].update(atomic_request_database_write=True,
+                                      requires_c_process=False)
     if component != 'scdfe_t':
         protocols['modbus-rtu'] = deepcopy(protocols['modbus-tcp'])
         protocols['can'] = {
