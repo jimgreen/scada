@@ -28,21 +28,26 @@ LOG_LEVEL_LABELS = {
     "PACKET": "报文",
 }
 LOG_LEVEL_CODES = {label: code for code, label in LOG_LEVEL_LABELS.items()}
-LOG_WRITER_PID = re.compile(r"写库\s*pid\s*=\s*\d+\b", re.IGNORECASE)
-LOG_IDENTITY = re.compile(r"\b(?:pid|rtu|channel|chanel|tid)\s*=\s*\d+\b", re.IGNORECASE)
+_LOG_BREAKS = ('\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029')
+_LOG_BREAK_ESCAPES = str.maketrans({char: repr(char)[1:-1] for char in _LOG_BREAKS})
 
 
-def sanitize_log_message(message):
-    """Strip legacy bare identity tokens and keep each message on one line.
+def log_message_text(message):
+    """Preserve log text; only escape characters that split a record.
 
-    Lifecycle records use explicit labels such as RTU编号/通道编号/线程ID so
-    their diagnostic context survives; packet metadata retains its old format.
+    No regex, identity removal, whitespace compression or trimming. The same
+    text is used by live previews and files. Ordinary single-line messages
+    return unchanged; multiline diagnostics retain visible escape sequences.
     """
-    value = LOG_WRITER_PID.sub("", str(message))
-    value = LOG_IDENTITY.sub("", value)
-    # A protocol error or peer-supplied detail is one record. Preserve the
-    # words of multiline messages without allowing a forged second header.
-    return re.sub(r"[ \t]{2,}", " ", " ".join(value.splitlines())).strip()
+    value = str(message)
+    if len(value.splitlines()) > 1 or value.endswith(_LOG_BREAKS):
+        return value.translate(_LOG_BREAK_ESCAPES)
+    return value
+
+
+# Compatibility for integrations using the old helper name. It no longer
+# normalizes the payload or removes diagnostic identities.
+sanitize_log_message = log_message_text
 
 
 def validate_control(values):

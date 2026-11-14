@@ -9,18 +9,14 @@ import scdfe_c as runtime
 
 
 class LogEfficiencyTests(unittest.TestCase):
-    def test_packet_metadata_is_sanitized_without_changing_hex_bytes(self):
+    def test_packet_metadata_and_hex_bytes_are_preserved(self):
         with tempfile.TemporaryDirectory() as root:
             logger = runtime.ScdfeLogger(root, process_name='scdfe_c-rtu-1')
             payload = bytes(range(256))*8
             logger.packet('RX', payload, 'IEC104 pid=12 RTU=3 写库pid=45  HEX=metadata\t\tvalue')
             lines = next(Path(root).rglob('*.log')).read_text(encoding='utf-8').splitlines()
             for line in lines:
-                self.assertNotIn('pid=12', line)
-                self.assertNotIn('RTU=3', line)
-                self.assertNotIn('pid=45', line)
-                self.assertNotIn('  ', line)
-                self.assertIn('HEX=metadata value', line)
+                self.assertIn('pid=12 RTU=3 写库pid=45  HEX=metadata\t\tvalue', line)
             self.assertEqual(b''.join(bytes.fromhex(line.rsplit(' HEX=',1)[1]) for line in lines), payload)
 
     def test_session_flushes_each_record_and_closes_on_exit(self):

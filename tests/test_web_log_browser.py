@@ -104,6 +104,13 @@ class WebLogBrowserTests(unittest.TestCase):
                 "filename": self.names[module], "record": "runtime"})
             self.assertEqual(len(runtime["items"]), 1)
             self.assertIn("检查报文", runtime["items"][0]["text"])
+            quoted = "23:04:00 [日志] @ctx.1 业务事件 详情=报文 RX 通道=9 无响应"
+            with (self.logs / self.names[module]).open("a", encoding="utf-8") as stream:
+                stream.write(quoted + "\n")
+            status, runtime = self.request(module, "/api/log-files/search", {
+                "filename": self.names[module], "record": "runtime", "q": "业务事件"})
+            self.assertEqual(status, 200)
+            self.assertEqual([row["text"] for row in runtime["items"]], [quoted])
 
     def test_file_boundary_and_query_validation(self):
         for module, other in (("s", "t"), ("t", "s")):

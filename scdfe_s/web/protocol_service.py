@@ -22,6 +22,7 @@ from typing import Any
 from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
+from core.scdfe_control import log_message_text
 from scdfe_s.web.configuration import apply_config, write_config
 from scdfe_s.web.lifecycle import traced_lifecycle
 
@@ -192,7 +193,8 @@ class ProtocolService:
             return bool(getattr(engine, "connected", True))
 
     def _record(self, level, message, *, alert=False, details=None, channel_id=None):
-        item = {"time": _iso_now(), "level": level, "message": str(message)}
+        message = log_message_text(message)
+        item = {"time": _iso_now(), "level": level, "message": message}
         if details is not None:
             item["details"] = details
         sampled_at = now_ms()

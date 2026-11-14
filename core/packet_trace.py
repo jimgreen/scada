@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from itertools import count
+from core.scdfe_control import log_message_text
 
 LOG = logging.getLogger(__name__)
 _packet_ids = count(1)
@@ -11,7 +12,7 @@ _packet_ids = count(1)
 def packet_lines(direction, data, detail=""):
     """Keep every byte; split large TCP chunks into bounded readable lines."""
     payload = bytes(data)
-    detail = str(detail).replace("\r", " ").replace("\n", " ")
+    detail = log_message_text(detail)
     if "IEC104 APDU" in detail:
         try:
             from core.iec104_protocol import describe_apdu
@@ -36,12 +37,18 @@ def service_packet_recorder(record, rtu_id, channel_id):
     if file_log is not None:
         logger = file_log._logger_for(channel_id)
         def write_many(lines):
-            # Also populate the bounded communication-test preview. Release
-            # its lock before file I/O; _record acquires these in that order.
+            # Same lock order as _record: preview lock, then file lock. Publish
+            # only successfully stored text, in the same order as the file.
             stamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
             with owner._log_lock:
+                logger.business_lines(lines)
                 owner._logs.extend({'time': stamp, 'level': 'INFO', 'message': line} for line in lines)
-            logger.business_lines(lines)
+        def write_context(lines, *, context):
+            stamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
+            with owner._log_lock:
+                displayed = logger.business_context_lines(lines, context=context, capture=True)
+                owner._logs.extend({'time': stamp, 'level': 'INFO', 'message': line} for line in displayed)
+        write_many.with_context = write_context
     else:
         def write_many(lines):
             for line in lines:

@@ -23,6 +23,7 @@ from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError
 from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.service_log import ServiceFileLog
+from core.scdfe_control import log_message_text
 from scdfe_s.web.configuration import apply_config, write_config
 from scdfe_s.web.lifecycle import traced_lifecycle
 
@@ -161,7 +162,8 @@ class IEC104Service:
         }
 
     def _record(self, level: str, message: str, *, alert: bool = False, details: Any = None, channel_id=None) -> None:
-        item = {"time": _iso_now(), "level": level, "message": str(message)}
+        message = log_message_text(message)
+        item = {"time": _iso_now(), "level": level, "message": message}
         if details is not None:
             item["details"] = details
         sampled_at = now_ms()

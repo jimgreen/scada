@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain
 import hashlib
 import json
 import logging
@@ -42,7 +43,7 @@ from core.scdfe_control import (
     ServerInstanceLock,
     LOG_PATTERN as LOG_FILE_RE,
     LOG_LEVEL_LABELS,
-    sanitize_log_message,
+    log_message_text,
     ensure_control_row,
     log_directory,
 )
@@ -275,6 +276,12 @@ class ScdfeLogger:
         self._streams = {"runtime": None, "packet": None}
         self._stream_identities = {"runtime": None, "packet": None}
         self._sessions = 0
+        # Compact references are unique across logger/process restarts. Context
+        # definitions live in each hourly file, never in a sidecar database.
+        self._context_seed = os.urandom(6).hex()
+        self._context_serial = 0
+        self._business_contexts = {}
+        self._context_file = None
 
     @property
     def _stream(self):
@@ -306,7 +313,7 @@ class ScdfeLogger:
     def emit(self, category: str, message: str, *, level: str = "INFO") -> None:
         self._emit_lines(category, (message,), level=level)
 
-    def _emit_lines(self, category, messages, *, level="INFO", raw_hex=False):
+    def _emit_lines(self, category, messages, *, level="INFO", context=None, capture=False):
         if category not in LOG_CATEGORIES:
             raise ValueError(f"未知日志类别: {category}")
         label = LOG_LEVEL_LABELS.get(level)
@@ -353,19 +360,50 @@ class ScdfeLogger:
                         self._streams[kind] = path.open("a", encoding="utf-8", newline="")
                     stat = os.fstat(self._streams[kind].fileno())
                     self._stream_identities[kind] = (stat.st_dev, stat.st_ino)
-                for message in messages:
-                    if raw_hex:
-                        # packet_lines generates the suffix solely from bytes.hex;
-                        # identity/whitespace cleanup only needs the metadata.
-                        prefix, _, hex_data = message.rpartition(' HEX=')
-                        message = sanitize_log_message(prefix) + ' HEX=' + hex_data
-                    else:
-                        message = sanitize_log_message(message)
-                    line = f"{stamp} [{label}] {message}\n"
-                    self._streams[kind].write(line)
-                    if self.console:
-                        print(line, end="", flush=True)
+                context_id = None
+                definitions = []
+                if context is not None:
+                    context_file = (path, self._stream_identities[kind])
+                    if context_file != self._context_file:
+                        self._business_contexts.clear()
+                        self._context_file = context_file
+                    key = tuple((name, log_message_text(value)) for name, value in context.items())
+                    context_id = self._business_contexts.get(key)
+                    if context_id is None:
+                        self._context_serial += 1
+                        context_id = f'{self._context_seed}.{self._context_serial:x}'
+                        definitions.append('日志上下文 @' + context_id + ' ' +
+                                           ' '.join(f'{name}={value}' for name, value in key))
+                pending, displayed = [], [] if capture else None
+                try:
+                    original = ((f'@{context_id} ' + log_message_text(message)) for message in messages) if context_id else messages
+                    for message in chain(definitions, original):
+                        message = log_message_text(message)
+                        if displayed is not None:
+                            displayed.append(message)
+                        line = f"{stamp} [{label}] {message}\n"
+                        pending.append(line)
+                        if self.console:
+                            print(line, end="", flush=True)
+                        # Bound memory even for an unbounded iterable caller.
+                        if len(pending) >= 128:
+                            block = ''.join(pending)
+                            pending.clear()
+                            self._streams[kind].write(block)
+                finally:
+                    # Retain already formatted records if the source iterator
+                    # fails. The outer handler closes/flushes before rethrowing.
+                    if pending:
+                        self._streams[kind].write(''.join(pending))
                 self._streams[kind].flush()
+                if context_id is not None and definitions:
+                    # Publish the cache only after the definition was flushed.
+                    # A failed sink retries with a new definition, never an
+                    # orphan reference. Bound uncommon thread/config churn.
+                    if len(self._business_contexts) >= 128:
+                        self._business_contexts.pop(next(iter(self._business_contexts)))
+                    self._business_contexts[key] = context_id
+                return displayed
             except Exception:
                 self._close_stream()
                 raise
@@ -380,12 +418,16 @@ class ScdfeLogger:
         """Flush a frame/change batch once while retaining every point record."""
         self._emit_lines('normal', lines)
 
+    def business_context_lines(self, lines, *, context, capture=False):
+        """Define shared identities once per file and return exact preview text."""
+        return self._emit_lines('normal', lines, context=context, capture=capture)
+
     def packet(self, direction, data, detail="") -> None:
         if self.packet_switch is not None and not self.packet_switch.enabled():
             return
         from core.packet_trace import packet_lines
         lines = tuple(packet_lines(direction, data, detail))
-        self._emit_lines("normal", lines, level="PACKET", raw_hex=True)
+        self._emit_lines("normal", lines, level="PACKET")
         if self.runtime_packet_compat:
             # Managed C/T processes historically exposed packet lines under
             # their runtime log filename. Keep that read path available while

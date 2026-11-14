@@ -112,7 +112,13 @@ class PacketRecordingTests(unittest.TestCase):
                     self.assertIn('second-saved', contents())
                     api('/channels/107', 'PUT', {'enabled': False})
                     saved = contents(); emit(0, 'first-hidden')
-                    self.assertEqual(contents(), saved)
+                    current = contents()
+                    self.assertNotIn('first-hidden', current)
+                    # The HTTP handler may finish its operation audit after
+                    # the response arrives. Disabling packets must not freeze
+                    # ordinary logs or audit records; compare packet records.
+                    self.assertEqual(sorted(line for line in current.splitlines() if '[报文]' in line),
+                                     sorted(line for line in saved.splitlines() if '[报文]' in line))
                     api('/channels/999', 'PUT', {'enabled': True}, 404)
                     api('/channels/107', 'PUT', {'enabled': 'false'}, 400)
                     api('/channels/107', 'PUT', {'enabled': True, 'extra': 1}, 400)

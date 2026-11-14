@@ -17,7 +17,9 @@ MAX_RESULT_BYTES = 1024 * 1024
 MAX_LINE_BYTES = 128 * 1024
 CHUNK_SIZE = 64 * 1024
 HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[(" + "|".join(LOG_LEVEL_CODES) + r")\](?:\s|$)")
-PACKET = re.compile(r"报文\s+(RX|TX)\b")
+HEADER_PREFIX_SIZE = 12 + max(map(len, LOG_LEVEL_CODES))
+PACKET = re.compile(r"\s*报文\s+(RX|TX)\b")
+MAX_TIMESTAMP_CACHE = 8192
 PACKET_CHANNEL = re.compile(r"\s+通道=(0|[1-9][0-9]*)(?=\s)")
 LOG_PATTERNS = {
     "c": LOG_PATTERN,
@@ -286,6 +288,12 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     result_bytes = 0
     next_cursor = None
     needle = keyword.casefold()
+    # Han characters and ASCII digits cannot be introduced or changed by
+    # Unicode case folding. Use their UTF-8 bytes as a lossless prefilter;
+    # other text (including combining marks created by casefold) keeps the
+    # full Unicode comparison below.
+    literal_needle = (needle.encode('utf-8') if needle and all(
+        '\u4e00' <= char <= '\u9fff' or '0' <= char <= '9' for char in needle) else None)
     # These exact byte sequences are necessary (but not sufficient) for a
     # match. Keep Unicode casefold and header parsing for every candidate.
     if channel is not None and family != "s":
@@ -296,6 +304,11 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
         required = next(f'[{label}]'.encode() for label, code in LOG_LEVEL_CODES.items() if code == level)
     else:
         required = '报文'.encode() if record == 'packet' else None
+    # One request may visit many RTUs in the same second. Share conversions
+    # across files of the same date, but never across requests/timezone changes.
+    # Keep the native local-time conversion (including DST), not midnight+seconds.
+    file_dates, day_clocks, timestamp_entries = {}, {}, 0
+    header_prefix, header, header_level = None, None, ''
     for index, (path, relative_name, file_hour) in enumerate(files):
         process = pattern.fullmatch(Path(relative_name).name).group("process")
         file_channel = (process.removeprefix("scdfe_s-channel-")
@@ -315,14 +328,14 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                     offset = cursor["offset"]
                     discard = cursor.get("discard", False)
                 scanned_files += 1
-                try:
-                    file_date = datetime.strptime(file_hour, "%Y%m%d-%H")
-                except (ValueError, OverflowError, OSError):
-                    file_date = None
-                # The log clock has second precision. Cache only within this
-                # file/query so repeated seconds share the same conversion,
-                # without stale timezone data or unbounded cross-file state.
-                timestamps = {}
+                if file_hour not in file_dates:
+                    try:
+                        file_dates[file_hour] = datetime.strptime(file_hour, "%Y%m%d-%H")
+                    except (ValueError, OverflowError, OSError):
+                        file_dates[file_hour] = None
+                file_date = file_dates[file_hour]
+                file_day = file_hour[:8]
+                timestamps = day_clocks.setdefault(file_day, {})
                 boundary = offset
                 # Small live previews usually need only the tail of the file.
                 # Sparse filters grow to normal scan blocks after the first reads.
@@ -330,11 +343,18 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                         stream, offset, budget, discard, initial_chunk=4096 if limit <= 32 else None):
                     if raw is None:
                         skipped += 1
-                    line = raw.decode("utf-8", "replace") if raw and (required is None or required in raw) else None
-                    if line is not None and (not needle or needle in line.casefold()):
-                        header = HEADER.match(line)
-                        header_level = LOG_LEVEL_CODES[header[2]] if header else ""
-                        packet = (PACKET.search(line, header.end()) if (record or direction or channel is not None)
+                    line = (raw.decode("utf-8", "replace") if raw
+                            and (required is None or required in raw)
+                            and (literal_needle is None or literal_needle in raw) else None)
+                    if line is not None and (not needle or literal_needle is not None or needle in line.casefold()):
+                        prefix = line[:HEADER_PREFIX_SIZE]
+                        if prefix != header_prefix:
+                            header_prefix = prefix
+                            header = HEADER.match(prefix)
+                            header_level = LOG_LEVEL_CODES[header[2]] if header else ""
+                        # Only a packet envelope at the start of the body is
+                        # packet data. A business/error detail may quote RX/TX.
+                        packet = (PACKET.match(line, header.end()) if (record or direction or channel is not None)
                                   and header_level in {"INFO", "PACKET"} else None)
                         # Historical packets used [日志]; keep their record and
                         # direction filters while new records have their own type.
@@ -358,7 +378,13 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                                         stamp = _log_timestamp(clock, file_date)
                                     except ValueError:
                                         pass
+                                    if timestamp_entries >= MAX_TIMESTAMP_CACHE:
+                                        day_clocks.clear()
+                                        timestamps = {}
+                                        day_clocks[file_day] = timestamps
+                                        timestamp_entries = 0
                                     timestamps[clock] = stamp
+                                    timestamp_entries += 1
                             if ((start is None or (stamp is not None and stamp >= start))
                                     and (end is None or (stamp is not None and stamp <= end))):
                                 items.append({"filename": relative_name, "text": line,

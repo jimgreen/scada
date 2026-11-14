@@ -310,16 +310,19 @@
     if (cursors[batch]) params.set("cursor", cursors[batch]);
     return params;
   }
-  function highlight(text, keyword) {
-    if (!keyword) return esc(text);
+  function highlighter(keyword) {
+    if (!keyword) return esc;
     // Escape both text and keyword; logs are always displayed as text.
     const pattern = new RegExp(keyword.replace(/[.*+?^{}()|[\]\\$]/g, "\\$&"), "gi");
-    let start = 0, html = "";
-    for (const match of text.matchAll(pattern)) {
-      html += esc(text.slice(start, match.index)) + "<mark>" + esc(match[0]) + "</mark>";
-      start = match.index + match[0].length;
-    }
-    return html + esc(text.slice(start));
+    // Compile once per result batch; highlighting never rewrites row.text.
+    return (text) => {
+      let start = 0, html = "";
+      for (const match of text.matchAll(pattern)) {
+        html += esc(text.slice(start, match.index)) + "<mark>" + esc(match[0]) + "</mark>";
+        start = match.index + match[0].length;
+      }
+      return html + esc(text.slice(start));
+    };
   }
   async function search(preserveScroll = false) {
     clearTimeout(debounce);
@@ -349,10 +352,11 @@
       rows = result.items.slice().reverse();
       nextCursor = result.next_cursor;
       const all = $("scope").value === "all";
+      const highlight = highlighter(result.keyword);
       $("content").innerHTML = rows.length ? rows.map((row, i) =>
         '<div class="lb-line ' + esc(row.level) + '"><span class="lb-line-no">' + (i + 1)
         + '</span><span class="lb-line-text">' + (all ? '<span class="lb-source">' + esc(row.filename) + "</span>" : "")
-        + highlight(row.text, result.keyword) + "</span></div>").join("")
+        + highlight(row.text) + "</span></div>").join("")
         : '<div class="lb-empty">' + (nextCursor ? "本批扫描范围内没有匹配记录，可继续查看较早一批" : "没有符合筛选条件的记录") + "</div>";
       $("content").scrollTop = preserveScroll && !$("follow").checked ? scroll : $("content").scrollHeight;
       $("result").textContent = "第 " + (batch + 1) + " 批 · " + rows.length + " 条 · 扫描 "

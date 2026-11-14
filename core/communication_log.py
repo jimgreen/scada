@@ -4,7 +4,7 @@ No database reads, no sampling of changed points, no alteration of protocol
 callbacks. One frame/batch is written together; unchanged polling is silent.
 """
 from datetime import datetime
-from itertools import count
+from itertools import chain, count
 from functools import wraps
 import logging
 import os
@@ -13,9 +13,11 @@ import threading
 import time
 
 from core.iec104_protocol import parse_apdu
+from core.scdfe_control import log_message_text
 
 LOG = logging.getLogger(__name__)
 _batches = count(1)
+_CONTEXT_FIELDS = frozenset({'组件', 'RTU编号', '通道编号', '规约'})
 _COT = {1: '周期', 2: '背景扫描', 3: '突发/变位', 5: '请求', 6: '激活',
         7: '激活确认', 8: '撤销', 9: '撤销确认', 10: '激活终止', 20: '站总召返回',
         44: '未知类型', 45: '未知传送原因', 46: '未知公共地址', 47: '未知信息体地址'}
@@ -124,26 +126,55 @@ class CommunicationLog:
         self.point_map = {}
         self._next_error = 0
 
+    @property
+    def write_many(self):
+        return self._write_many
+
+    @write_many.setter
+    def write_many(self, sink):
+        self._write_many = sink
+        self.write_context = (getattr(sink, '__dict__', {}).get('with_context') or
+                              getattr(getattr(sink, '__self__', None), 'business_context_lines', None))
+
     @staticmethod
     def _text(value):
-        return ' '.join(str(value).splitlines())[:1500]
+        return str(value)[:1500]
 
     def rows(self, action, rows, **common):
         """Write every row, flushing in bounded groups without dropping points."""
         try:
+            rows = iter(rows)
+            try:
+                first = next(rows)
+            except StopIteration:
+                return
             stamp = datetime.now().astimezone().isoformat(timespec='milliseconds')
             batch = next(_batches)
-            prefix = (f'业务事件 {action} 事件时刻={stamp} 批次={os.getpid()}:{batch} '
-                      f'线程={threading.current_thread().name} ')
-            prefix += ' '.join(f'{k}={self._text(v)}' for k, v in {**self.context, **common}.items())
+            fields = {**self.context, **common}
+            context = None
+            if self.write_context is not None:
+                context = {'进程编号': os.getpid(), '线程': threading.current_thread().name}
+                context.update((key, fields.pop(key)) for key in tuple(fields) if key in _CONTEXT_FIELDS)
+                prefix = f'业务事件 {action} 事件时刻={stamp} 批次={batch}'
+                def write(lines):
+                    self.write_context(lines, context=context)
+            else:
+                # Observers without a file/context facility still receive
+                # self-contained records (e.g. third-party callback probes).
+                prefix = (f'业务事件 {action} 事件时刻={stamp} 批次={os.getpid()}:{batch}'
+                          f' 线程={threading.current_thread().name}')
+                write = self.write_many
+            if fields:
+                prefix += ' ' + ' '.join(f'{k}={self._text(v)}' for k, v in fields.items())
             lines = []
-            for row in rows:
-                lines.append(prefix + ' ' + ' '.join(f'{k}={self._text(v)}' for k, v in row.items()))
+            for row in chain((first,), rows):
+                detail = ' '.join(f'{k}={self._text(v)}' for k, v in row.items())
+                lines.append(log_message_text(prefix + (' ' + detail if detail else '')))
                 if len(lines) >= 128:
-                    self.write_many(lines)
+                    write(lines)
                     lines = []
             if lines:
-                self.write_many(lines)
+                write(lines)
         except Exception:
             if time.monotonic() >= self._next_error:
                 self._next_error = time.monotonic() + 60
