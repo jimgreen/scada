@@ -505,6 +505,12 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        from core.web_diagnostics import handle_diagnostics
+        from core.web_commands import handle_commands
+        if handle_commands(self,parts,query,method,self.store,'c') is not False:
+            return
+        if handle_diagnostics(self,parts,query,method,self.store,'c') is not False:
+            return
         from core.web_soe import handle_soe
         if handle_soe(self,parts,query,method,self.store,'c') is not False:
             return

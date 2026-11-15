@@ -309,6 +309,16 @@ class IEC104Server(PacketTrace):
         self.require_soe_support()
         return int(self._server.poll_soe())
 
+    def soe_peers(self):
+        from core.iec104_soe import encode_events
+        class Peer:
+            def __init__(peer,raw):
+                peer.raw=raw;peer.key=raw.key;peer.address=raw.address
+            def submit_soe(peer,events):
+                return peer.raw.submit_soe(encode_events(events,max_length=self.protocol.max_asdu_length))
+            def poll_soe(peer):return peer.raw.poll_soe()
+        return [Peer(raw) for raw in self._server.soe_peers()]
+
     def start(self):
         if not self.running:
             try:

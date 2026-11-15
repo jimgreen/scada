@@ -42,6 +42,7 @@ class ModbusAsyncServer(PacketTrace):
         self.ready = threading.Event()
         self.error = None
         self.connections = 0
+        self._request_dispatch = None
         self.point_store = PointStore(points)
 
     def _on_datastore(self, operation):
@@ -129,6 +130,9 @@ class ModbusAsyncServer(PacketTrace):
         self.loop = asyncio.get_running_loop()
         from pymodbus import FramerType
         from pymodbus.server import ModbusSerialServer, ModbusTcpServer
+        from .modbus_requests import OwnedRequestHandler, RequestDispatch
+
+        self._request_dispatch = RequestDispatch(self)
 
         kwargs = {
             "context": self.context,
@@ -140,6 +144,7 @@ class ModbusAsyncServer(PacketTrace):
         if self.tcp:
             kwargs["address"] = (self.host, self.port)
             self.server = ModbusTcpServer(**kwargs)
+            self.server.callback_new_connection = lambda: OwnedRequestHandler(self.server, self._request_dispatch)
             history = self._start_connection_history()
             if history:
                 from core.connection_trace import observe_protocol
@@ -148,10 +153,24 @@ class ModbusAsyncServer(PacketTrace):
         else:
             kwargs.update({"port": self.serial, **self.serial_options})
             self.server = ModbusSerialServer(**kwargs)
+            self.server.callback_new_connection = lambda: OwnedRequestHandler(self.server, self._request_dispatch)
         await self.server.serve_forever(background=True)
         self.ready.set()
         self.log("INFO", "Modbus 从站已监听")
-        await self.server.serving
+        try:
+            await self.server.serving
+        finally:
+            await self._request_dispatch.drain()
+
+    async def _commit_command(self, operation):
+        if self._request_dispatch is None:
+            # Unit tests may invoke actions before a listener exists.
+            return operation()
+        return await self._request_dispatch.commit(operation)
+
+    @property
+    def request_diagnostics(self):
+        return self._request_dispatch.snapshot() if self._request_dispatch else {}
 
     def _trace_connect(self, connected):
         self.connections = max(0, self.connections + (1 if connected else -1))
@@ -159,12 +178,19 @@ class ModbusAsyncServer(PacketTrace):
                        链路=self._packet_endpoint, 连接数=self.connections)
 
     def close(self):
-        if self.server is not None and self.loop is not None:
-            asyncio.run_coroutine_threadsafe(self.server.shutdown(), self.loop).result(5)
+        if self.thread is not None and not self.thread.is_alive():
+            return
+        if self.server is not None and self.loop is not None and self.loop.is_running():
+            async def shutdown():
+                self._request_dispatch.accepting = False
+                await self.server.shutdown()
+            asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(5)
         elif self.server is not None:
             self.server.close()
         if self.thread is not None:
-            self.thread.join(5)
+            self.thread.join(10)
+            if self.thread.is_alive():
+                raise TimeoutError('Modbus 服务仍在等待已开始的指令提交，尚未停止')
 
 
 class ModbusTcpServer(ModbusAsyncServer):

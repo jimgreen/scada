@@ -108,8 +108,8 @@ class MonitoringBatchTests(unittest.TestCase):
     def test_sync_retries_failed_send_even_after_native_values_changed(self):
         con=sqlite3.connect(':memory:'); self.addCleanup(con.close)
         for kind in ('yc','yx'):
-            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT)')
-        con.execute('INSERT INTO fes_yc_define VALUES(1,1,7,128)')
+            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT,refresh_time INT)')
+        con.execute('INSERT INTO fes_yc_define VALUES(1,1,7,128,0)')
         native={('yc',1):(0,0)}
         def publish(updates,transmit):
             for kind,no,value,quality in updates: native[(kind,no)]=(value,quality)
@@ -117,7 +117,8 @@ class MonitoringBatchTests(unittest.TestCase):
         server=SimpleNamespace(rtu_id=1,running=True,active_connection_count=1,
             prepare_value=lambda k,n,v:v,monitoring_snapshot=lambda keys:{k:native[k] for k in keys},
             update_monitoring=Mock(side_effect=publish))
-        service=SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={},_database_pending=set())
+        service=SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={},_database_pending=set(),
+                                _soe_forwarder=None,_packet_sink=Mock())
         sync=lambda:IEC104Service._sync_database_values(service,con)
         with self.assertRaises(OSError): sync()
         self.assertEqual(service._database_samples,{})

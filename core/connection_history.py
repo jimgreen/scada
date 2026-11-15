@@ -315,13 +315,22 @@ def read_history(db_path, component, ident=None, *, events=False, query=None):
             where, values = 'session_id=? AND id<? AND id>?', [ident,before,after]
             if kind:
                 where += ' AND kind=?'; values.append(kind)
-            rows = con.execute('SELECT * FROM connection_event WHERE '+where+' ORDER BY id DESC LIMIT ?',values+[limit+1]).fetchall()
+            # Forward polling must start at the oldest unseen record; fetching
+            # the newest page skips a burst larger than the page size.
+            forward = 'after' in query and 'before' not in query
+            order = 'ASC' if forward else 'DESC'
+            rows = con.execute('SELECT * FROM connection_event WHERE '+where+
+                               f' ORDER BY id {order} LIMIT ?',values+[limit+1]).fetchall()
             result = []
             for row in rows[:limit]:
                 obj = dict(row)
                 obj['hex'] = bytes(obj.pop('data') or b'').hex(' ')
                 result.append(obj)
-            return {'items':result,'has_more':len(rows)>limit,'next_before':result[-1]['id'] if result else None}
+            if forward:
+                result.reverse()  # All pages remain newest-first for display.
+            return {'items':result,'has_more':len(rows)>limit,
+                    'next_before':result[-1]['id'] if result else None,
+                    'next_after':result[0]['id'] if result else after}
         where, values = '1=1', []
         if channel:
             where += ' AND channel_id=?'; values.append(channel)

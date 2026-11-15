@@ -115,6 +115,34 @@ class Station:
         return False
 
 
+class SoePeer:
+    """One live socket's bounded SOE flight, independent of other recipients."""
+    def __init__(self,server,link):
+        self.server,self.link,self.goal=server,link,None
+        self.key=link.ident
+        self.address=str(link.peer)
+
+    def submit_soe(self,asdus):
+        if self.goal is not None:return False
+        link=self.link
+        if link.closed or not link.active:return False
+        self.server._validate_soe(asdus)
+        generation=link.generation
+        serial=link.enqueue(asdus)
+        if serial is None:return False
+        self.goal=(generation,serial)
+        return True
+
+    def poll_soe(self):
+        if self.goal is None:return 0
+        generation,serial=self.goal
+        if self.link.closed or self.link.generation!=generation:
+            self.goal=None;return -1
+        if self.link.acked_serial>=serial:
+            self.goal=None;return 1
+        return 0
+
+
 class Server:
     def __init__(self, ip='0.0.0.0', port=2404, *, tick_rate_ms=100,
                  select_timeout_ms=10000, max_connections=0):
@@ -128,6 +156,7 @@ class Server:
         self._trace_enabled=False;self._trace=deque();self._trace_dropped=0
         self._next_connection=0;self._next_periodic=0
         self._soe=None
+        self._soe_peers={}
         self.last_error=None
 
     def add_station(self, common_address):
@@ -215,13 +244,9 @@ class Server:
         return self._broadcast(pack_points(batch.points,batch.cause,self.protocol_parameters.max_asdu_length))
 
     def submit_soe(self, asdus):
-        from core.iec104_soe import decode_events
         asdus=tuple(bytes(a) for a in asdus)
         if not asdus: return False
-        for asdu in asdus:
-            if len(asdu)>self.protocol_parameters.max_asdu_length or len(asdu)<17 or asdu[0] not in (30,31) or asdu[2]&127!=3:
-                raise ValueError('SOE ASDU 无效')
-            if not decode_events(asdu): raise ValueError('SOE ASDU 无事件')
+        self._validate_soe(asdus)
         with self._lock:
             if self._soe is not None: return False
             links=[x for x in self._reactor.links if x.active and not x.closed]
@@ -232,10 +257,23 @@ class Server:
             for link in links:
                 serial=link.enqueue(asdus)
                 if serial is None:
-                    self._soe=[(link,-1,0)];return True  # Poll failure; never advance the durable cursor.
+                    self._soe=[(link,-1,0)];return True
                 goals.append((link,link.generation,serial))
             self._soe=goals
             return True
+
+    def _validate_soe(self,asdus):
+        from core.iec104_soe import decode_events
+        for asdu in asdus:
+            if len(asdu)>self.protocol_parameters.max_asdu_length or len(asdu)<17 or asdu[0] not in (30,31) or asdu[2]&127!=3:
+                raise ValueError('SOE ASDU 无效')
+            if not decode_events(asdu): raise ValueError('SOE ASDU 无事件')
+
+    def soe_peers(self):
+        with self._lock:
+            active={x.ident:x for x in self._reactor.links if x.active and not x.closed}
+            self._soe_peers={key:self._soe_peers.get(key) or SoePeer(self,link) for key,link in active.items()}
+            return list(self._soe_peers.values())
 
     def poll_soe(self):
         with self._lock:
@@ -481,8 +519,12 @@ class Connection:
         def request(select):
             return header(point.type,1,cause,point.station.common_address,self.originator_address)+point.io_address.to_bytes(3,'little')+encode_information(point.type,info,select=select)
         with self._command_lock:
+            progress = getattr(self,'command_progress',None)
             if int(cause)==6 and point.command_mode==CommandMode.SELECT_AND_EXECUTE:
+                if progress: progress('select_sent')
                 if not self._request(request(True),7): return False
+                if progress: progress('select_confirmed')
+            if progress: progress('execute_sent')
             return self._request(request(False),9 if int(cause)==8 else 7)
 
     def interrogation(self, common_address, cause=Cot.ACTIVATION, qualifier=Qoi.STATION, wait_for_response=True):

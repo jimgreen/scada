@@ -1,0 +1,2086 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCDFE 第十轮优化与验证 · 2026-11-15</title><style>
+body{max-width:1100px;margin:32px auto;padding:0 24px;color:#183547;background:#f4f7f9;font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}section{padding:24px;background:white;border:1px solid #d9e3e8;border-radius:10px;margin:20px 0}h1,h2{color:#007a86}table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid #d9e3e8}th{background:#edf5f7}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}code{color:#005f73}.note{border-left:4px solid #c6922b;padding-left:16px}
+</style><h1>SCDFE 第十轮优化与验证</h1><p>2026-11-15 · 纯 Python 规约实现 · S 独立数据库，C/T 共用业务库</p>
+<section><h2>本轮完成内容</h2><p>T 将 YC/YX 全量扫描改为按映射源点读取变化，独立维护游标和缓存；发布失败保留待重试目标。删除、空值、重新插入、仅刷新时间变化、映射重建与多读取者均有测试。SOE 保持独立逐条记录，不使用最新值合并索引。</p>
+<p>C/S/T 新增“运行诊断”页面与 <code>GET /api/diagnostics</code>：保存并展示分段耗时、最近 256 样本分位数和快照时刻。C 写库统计为全局统计；S/T 为服务或通道统计。手动配置检查提示监听冲突、本地模拟和串口回环；启动监听失败给出具体地址和原因。不会自动改端口或主动连接设备。</p>
+<p>页面 5 秒自动刷新耗时，隐藏时暂停，避免并发重复请求，未变化内容保留 DOM，失败保留上一批结果。已更新单文件使用手册。</p></section>
+<section><h2>T 刷新与源库写入</h2><table><thead><tr><th>场景</th><th>之前 ms</th><th>之后 ms</th><th>耗时变化</th></tr></thead><tbody><tr><td>T 无变化刷新</td><td>45.630</td><td>4.898</td><td>-89.27%</td></tr><tr><td>T 单点变化刷新</td><td>59.050</td><td>30.532</td><td>-48.30%</td></tr><tr><td>T 8000 点同时变化刷新</td><td>617.665</td><td>714.512</td><td>+15.68%</td></tr><tr><td>源库 8000 点变化事务</td><td>36.431</td><td>60.059</td><td>+64.86%</td></tr></tbody></table>
+<p>16 RTU × 1000 点（各 500 YC、500 YX），1 个 T 通道映射全部点。每场景 40 次，表中为中位数；实际执行 T 生产刷新、IEC104 本地缓存更新与运行状态写库，没有 TCP 下游。每轮核对首末点值。使用本轮前工作区完整快照作为对照，包含上一轮未提交的修改；不是用 Git HEAD 冒充前一轮状态。</p>
+<p class="note">首轮及复测原始记录均保留；表中采用没有并行回归测试的第二轮配对结果。全量变化刷新耗时增加约 15.7%，源库事务耗时增加约 64.9%；增量索引维护存在写入代价。不能将低变化率下的读取收益解释为所有负载都提速。历史点键（包括删除标记）占用仍会随频繁更换点号增长。</p></section>
+<section><h2>真实 IEC104 链路</h2><table><thead><tr><th>场景</th><th>之前 ms</th><th>之后 ms</th><th>耗时变化</th></tr></thead><tbody><tr><td>IEC104 1 通道端到端中位数</td><td>246.989</td><td>237.304</td><td>-3.92%</td></tr><tr><td>IEC104 1 通道端到端 P95</td><td>264.836</td><td>261.094</td><td>-1.41%</td></tr><tr><td>IEC104 4 通道端到端中位数</td><td>344.821</td><td>262.352</td><td>-23.92%</td></tr><tr><td>IEC104 4 通道端到端 P95</td><td>460.224</td><td>425.422</td><td>-7.56%</td></tr></tbody></table>
+<p>临时 S/C 数据库、本机 TCP、实际 C 写库子进程，1/4 通道各 64 YC + 64 YX，前后各 12 批变化；相同验收程序、相同参数。覆盖总召确认/数据/结束、地址隔离、变位与质量变化、周期上送、遥控遥调直接执行/选择执行/撤销、重连恢复及帧序号。</p>
+<p>每批记录 S 提交返回、C 报文接收、C 落库观察、T 下游接收的单调时钟偏移；数据库观察周期 5 ms，多通道阶段存在重叠。生产诊断各阶段分位数不能相加为端到端分位数；提交发送不等于远方确认。12 个样本的 P95/P99接近最大值，仅作本次对照。</p></section>
+<section><h2>Modbus 与 SOE 正确性</h2><p>Modbus TCP 1/4 通道各 8 轮变化验收通过，并通过生产串口适配器的 RTU 字节传输测试（socket://，不等同真实串口硬件）。SOE 独立测试经过 S 数据库→TCP→C 事件库→T 数据库游标→TCP；逐条核对状态、质量、CP56 字节和顺序。</p>
+<table><thead><tr><th>SOE 通道数</th><th>生成事件</th><th>C 入库</th><th>T 下游接收</th><th>提交至确认 ms</th></tr></thead><tbody><tr><td>1</td><td>128</td><td>128</td><td>128</td><td>116.033</td></tr><tr><td>4</td><td>512</td><td>512</td><td>512</td><td>244.482</td></tr></tbody></table>
+<p>SOE 数字为当前版验收实测，非优化前后比较；T 使用受控 5 ms 泵送。两组 Python 回归分别 86 项/29 子项、85 项/6 子项通过（含重复复测），浏览器交互 13 项通过。没有进行现场硬件、Linux 实机或长时间浸泡测试。</p></section>
+<section><h2>交付与复现</h2><p>入口：C <code>http://127.0.0.1:8877/diagnostics</code>，S <code>http://127.0.0.1:8878/diagnostics</code>，T <code>http://127.0.0.1:8879/diagnostics</code>。T 未启动时没有耗时样本，但可查看配置检查。</p>
+<p>脚本：<code>tools/benchmark_efficiency_round10.py</code>、<code>tools/verify_iec104_pipeline.py</code>、<code>tools/verify_modbus_pipeline.py</code>、<code>tools/benchmark_iec104_soe.py</code>、<code>tests/frontend_efficiency_round10.cjs</code>。原始结果与部署记录：<code>output/efficiency_round10_20261115/</code>。修改仍在本地工作区；本轮未提交或推送。</p>
+<details><summary>完整原始测量数据</summary><pre>{
+  &quot;t_before&quot;: {
+    &quot;root&quot;: &quot;D:\\codex\\scada\\output\\efficiency_round10_20261115\\baseline&quot;,
+    &quot;rtus&quot;: 16,
+    &quot;points_per_rtu&quot;: 1000,
+    &quot;rounds&quot;: 40,
+    &quot;scope&quot;: &quot;T production refresh, local IEC104 cache, runtime DB; no TCP client&quot;,
+    &quot;idle&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 45.6301,
+        &quot;p95_ms&quot;: 53.5289,
+        &quot;p99_ms&quot;: 55.5208
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 0.0011,
+        &quot;p95_ms&quot;: 0.0017,
+        &quot;p99_ms&quot;: 0.0019
+      }
+    },
+    &quot;sparse&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 59.0497,
+        &quot;p95_ms&quot;: 70.3056,
+        &quot;p99_ms&quot;: 83.1643
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 4.7554,
+        &quot;p95_ms&quot;: 7.4004,
+        &quot;p99_ms&quot;: 10.5013
+      }
+    },
+    &quot;dense&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 617.6654,
+        &quot;p95_ms&quot;: 955.1319,
+        &quot;p99_ms&quot;: 982.2878
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 36.4307,
+        &quot;p95_ms&quot;: 52.2531,
+        &quot;p99_ms&quot;: 86.1623
+      }
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;t_after&quot;: {
+    &quot;root&quot;: &quot;D:\\codex\\scada&quot;,
+    &quot;rtus&quot;: 16,
+    &quot;points_per_rtu&quot;: 1000,
+    &quot;rounds&quot;: 40,
+    &quot;scope&quot;: &quot;T production refresh, local IEC104 cache, runtime DB; no TCP client&quot;,
+    &quot;idle&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 4.8979,
+        &quot;p95_ms&quot;: 7.3155,
+        &quot;p99_ms&quot;: 16.1285
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 0.0011,
+        &quot;p95_ms&quot;: 0.0018,
+        &quot;p99_ms&quot;: 0.0019
+      }
+    },
+    &quot;sparse&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 30.5316,
+        &quot;p95_ms&quot;: 41.7096,
+        &quot;p99_ms&quot;: 57.3841
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 5.6151,
+        &quot;p95_ms&quot;: 8.5062,
+        &quot;p99_ms&quot;: 14.162
+      }
+    },
+    &quot;dense&quot;: {
+      &quot;refresh&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 714.5122,
+        &quot;p95_ms&quot;: 1097.1859,
+        &quot;p99_ms&quot;: 1177.2406
+      },
+      &quot;source_write&quot;: {
+        &quot;samples&quot;: 40,
+        &quot;median_ms&quot;: 60.0585,
+        &quot;p95_ms&quot;: 85.6345,
+        &quot;p99_ms&quot;: 105.5842
+      }
+    },
+    &quot;source_rows_read&quot;: 336040,
+    &quot;passed&quot;: true
+  },
+  &quot;iec_before&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T12:59:59.155232+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;engine&quot;: &quot;python-stdlib&quot;,
+    &quot;pipelines&quot;: [
+      {
+        &quot;channels&quot;: 1,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 2.292,
+          &quot;p95_ms&quot;: 3.072,
+          &quot;p99_ms&quot;: 3.072,
+          &quot;max_ms&quot;: 3.072
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 2.659,
+          &quot;p95_ms&quot;: 4.836,
+          &quot;p99_ms&quot;: 4.836,
+          &quot;max_ms&quot;: 4.836
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 185.452,
+          &quot;p95_ms&quot;: 204.049,
+          &quot;p99_ms&quot;: 204.049,
+          &quot;max_ms&quot;: 204.049
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 246.989,
+          &quot;p95_ms&quot;: 264.836,
+          &quot;p99_ms&quot;: 264.836,
+          &quot;max_ms&quot;: 264.836
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          169.97380000066187,
+          179.34670000067854,
+          176.60609999984445,
+          178.47299999993993,
+          204.04860000053304,
+          196.6381000002002,
+          176.64550000154122,
+          202.29709999875922,
+          187.47020000046177,
+          194.55079999897862,
+          199.5777000011003,
+          183.43300000015006
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          236.3127999997232,
+          250.13050000052317,
+          243.52030000045488,
+          213.2022000005236,
+          253.78200000159268,
+          264.8355999990599,
+          214.38810000108788,
+          252.02029999854858,
+          242.49830000007933,
+          243.84839999947872,
+          261.4171000004717,
+          250.40919999992184
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          }
+        ],
+        &quot;workload_seconds&quot;: 2.98,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 13433.1700152,
+            &quot;c_first_rx_ms&quot;: 14.368000000104075,
+            &quot;c_last_rx_ms&quot;: 22.09000000038941,
+            &quot;c_commit_observed_ms&quot;: 169.97380000066187,
+            &quot;t_last_rx_ms&quot;: 234.83040000064648,
+            &quot;destination_observed_ms&quot;: 236.3127999997232
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 13433.4098235,
+            &quot;c_first_rx_ms&quot;: 24.16540000012901,
+            &quot;c_last_rx_ms&quot;: 29.482800000550924,
+            &quot;c_commit_observed_ms&quot;: 179.34670000067854,
+            &quot;t_last_rx_ms&quot;: 246.5790999995079,
+            &quot;destination_observed_ms&quot;: 250.13050000052317
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 13433.6624787,
+            &quot;c_first_rx_ms&quot;: 21.76789999975881,
+            &quot;c_last_rx_ms&quot;: 29.67530000023544,
+            &quot;c_commit_observed_ms&quot;: 176.60609999984445,
+            &quot;t_last_rx_ms&quot;: 240.0653999993665,
+            &quot;destination_observed_ms&quot;: 243.52030000045488
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 13433.9085535,
+            &quot;c_first_rx_ms&quot;: 22.425299999667914,
+            &quot;c_last_rx_ms&quot;: 35.27150000081747,
+            &quot;c_commit_observed_ms&quot;: 178.47299999993993,
+            &quot;t_last_rx_ms&quot;: 211.03899999980058,
+            &quot;destination_observed_ms&quot;: 213.2022000005236
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 13434.130333,
+            &quot;c_first_rx_ms&quot;: 50.718200000119396,
+            &quot;c_last_rx_ms&quot;: 56.54260000119393,
+            &quot;c_commit_observed_ms&quot;: 204.04860000053304,
+            &quot;t_last_rx_ms&quot;: 250.24340000163647,
+            &quot;destination_observed_ms&quot;: 253.78200000159268
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 13434.3865924,
+            &quot;c_first_rx_ms&quot;: 40.40960000020277,
+            &quot;c_last_rx_ms&quot;: 46.48009999982605,
+            &quot;c_commit_observed_ms&quot;: 196.6381000002002,
+            &quot;t_last_rx_ms&quot;: 262.72339999923133,
+            &quot;destination_observed_ms&quot;: 264.8355999990599
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 13434.6538983,
+            &quot;c_first_rx_ms&quot;: 23.561600000903127,
+            &quot;c_last_rx_ms&quot;: 31.246600001395564,
+            &quot;c_commit_observed_ms&quot;: 176.64550000154122,
+            &quot;t_last_rx_ms&quot;: 210.88030000100844,
+            &quot;destination_observed_ms&quot;: 214.38810000108788
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 13434.8772024,
+            &quot;c_first_rx_ms&quot;: 48.760899999251706,
+            &quot;c_last_rx_ms&quot;: 72.77729999987059,
+            &quot;c_commit_observed_ms&quot;: 202.29709999875922,
+            &quot;t_last_rx_ms&quot;: 250.12599999899976,
+            &quot;destination_observed_ms&quot;: 252.02029999854858
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 13435.1378821,
+            &quot;c_first_rx_ms&quot;: 34.73400000075344,
+            &quot;c_last_rx_ms&quot;: 41.21780000059516,
+            &quot;c_commit_observed_ms&quot;: 187.47020000046177,
+            &quot;t_last_rx_ms&quot;: 238.53009999947972,
+            &quot;destination_observed_ms&quot;: 242.49830000007933
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 13435.3828663,
+            &quot;c_first_rx_ms&quot;: 38.64590000011958,
+            &quot;c_last_rx_ms&quot;: 46.11459999978251,
+            &quot;c_commit_observed_ms&quot;: 194.55079999897862,
+            &quot;t_last_rx_ms&quot;: 243.5046999999031,
+            &quot;destination_observed_ms&quot;: 243.84839999947872
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 13435.6305571,
+            &quot;c_first_rx_ms&quot;: 66.21830000040063,
+            &quot;c_last_rx_ms&quot;: 72.36400000147114,
+            &quot;c_commit_observed_ms&quot;: 199.5777000011003,
+            &quot;t_last_rx_ms&quot;: 261.13550000081887,
+            &quot;destination_observed_ms&quot;: 261.4171000004717
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 13435.8952384,
+            &quot;c_first_rx_ms&quot;: 41.222099998776685,
+            &quot;c_last_rx_ms&quot;: 55.81749999873864,
+            &quot;c_commit_observed_ms&quot;: 183.43300000015006,
+            &quot;t_last_rx_ms&quot;: 246.48320000051172,
+            &quot;destination_observed_ms&quot;: 250.40919999992184
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 51.957,
+          &quot;p95_ms&quot;: 54.712,
+          &quot;p99_ms&quot;: 54.712,
+          &quot;max_ms&quot;: 54.712
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 159.693,
+          &quot;p95_ms&quot;: 170.747,
+          &quot;p99_ms&quot;: 170.747,
+          &quot;max_ms&quot;: 170.747
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 658.057,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 94,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      },
+      {
+        &quot;channels&quot;: 4,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 6.009,
+          &quot;p95_ms&quot;: 9.006,
+          &quot;p99_ms&quot;: 9.345,
+          &quot;max_ms&quot;: 9.345
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 6.19,
+          &quot;p95_ms&quot;: 8.178,
+          &quot;p99_ms&quot;: 9.096,
+          &quot;max_ms&quot;: 9.096
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 301.955,
+          &quot;p95_ms&quot;: 340.421,
+          &quot;p99_ms&quot;: 340.421,
+          &quot;max_ms&quot;: 340.421
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 344.821,
+          &quot;p95_ms&quot;: 460.224,
+          &quot;p99_ms&quot;: 460.224,
+          &quot;max_ms&quot;: 460.224
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          311.6635000005772,
+          284.6501999993052,
+          323.0633000002854,
+          263.16310000038357,
+          328.00940000015544,
+          294.4614999996702,
+          340.42109999973036,
+          136.23639999968873,
+          337.77849999933096,
+          272.2125000000233,
+          309.44760000056704,
+          251.5094999998837
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          460.22369999991497,
+          306.7018999990978,
+          350.4644000004191,
+          334.80860000054236,
+          367.13290000079724,
+          350.84550000101444,
+          402.4640999996336,
+          226.622000000134,
+          373.32900000001246,
+          320.8670999993046,
+          310.4550999996718,
+          339.17769999970915
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          }
+        ],
+        &quot;workload_seconds&quot;: 4.393,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 13442.726869,
+            &quot;c_first_rx_ms&quot;: 11.979999999311985,
+            &quot;c_last_rx_ms&quot;: 131.65739999931247,
+            &quot;c_commit_observed_ms&quot;: 311.6635000005772,
+            &quot;t_last_rx_ms&quot;: 456.71869999932824,
+            &quot;destination_observed_ms&quot;: 460.22369999991497
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 13443.2148644,
+            &quot;c_first_rx_ms&quot;: 16.263099998468533,
+            &quot;c_last_rx_ms&quot;: 151.73309999954654,
+            &quot;c_commit_observed_ms&quot;: 284.6501999993052,
+            &quot;t_last_rx_ms&quot;: 304.9742999992304,
+            &quot;destination_observed_ms&quot;: 306.7018999990978
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 13443.546724,
+            &quot;c_first_rx_ms&quot;: 34.78530000029423,
+            &quot;c_last_rx_ms&quot;: 159.81149999970512,
+            &quot;c_commit_observed_ms&quot;: 323.0633000002854,
+            &quot;t_last_rx_ms&quot;: 346.72760000103153,
+            &quot;destination_observed_ms&quot;: 350.4644000004191
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 13443.9176455,
+            &quot;c_first_rx_ms&quot;: 20.276200000807876,
+            &quot;c_last_rx_ms&quot;: 140.7725000008213,
+            &quot;c_commit_observed_ms&quot;: 263.16310000038357,
+            &quot;t_last_rx_ms&quot;: 328.7999000003765,
+            &quot;destination_observed_ms&quot;: 334.80860000054236
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 13444.2826372,
+            &quot;c_first_rx_ms&quot;: 8.111499999358784,
+            &quot;c_last_rx_ms&quot;: 144.9776000008569,
+            &quot;c_commit_observed_ms&quot;: 328.00940000015544,
+            &quot;t_last_rx_ms&quot;: 365.77720000059344,
+            &quot;destination_observed_ms&quot;: 367.13290000079724
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 13444.6730725,
+            &quot;c_first_rx_ms&quot;: 34.263100000316626,
+            &quot;c_last_rx_ms&quot;: 139.54460000059044,
+            &quot;c_commit_observed_ms&quot;: 294.4614999996702,
+            &quot;t_last_rx_ms&quot;: 346.3250999993761,
+            &quot;destination_observed_ms&quot;: 350.84550000101444
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 13445.0427653,
+            &quot;c_first_rx_ms&quot;: 58.36989999988873,
+            &quot;c_last_rx_ms&quot;: 204.61269999941578,
+            &quot;c_commit_observed_ms&quot;: 340.42109999973036,
+            &quot;t_last_rx_ms&quot;: 400.45219999956316,
+            &quot;destination_observed_ms&quot;: 402.4640999996336
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 13445.4623326,
+            &quot;c_first_rx_ms&quot;: 17.72729999902367,
+            &quot;c_last_rx_ms&quot;: 100.91859999920416,
+            &quot;c_commit_observed_ms&quot;: 136.23639999968873,
+            &quot;t_last_rx_ms&quot;: 220.03310000036436,
+            &quot;destination_observed_ms&quot;: 226.622000000134
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 13445.7100709,
+            &quot;c_first_rx_ms&quot;: 16.196599999602768,
+            &quot;c_last_rx_ms&quot;: 138.14709999860497,
+            &quot;c_commit_observed_ms&quot;: 337.77849999933096,
+            &quot;t_last_rx_ms&quot;: 369.224199999735,
+            &quot;destination_observed_ms&quot;: 373.32900000001246
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 13446.1001154,
+            &quot;c_first_rx_ms&quot;: 13.137099998857593,
+            &quot;c_last_rx_ms&quot;: 112.06099999981234,
+            &quot;c_commit_observed_ms&quot;: 272.2125000000233,
+            &quot;t_last_rx_ms&quot;: 318.62419999924896,
+            &quot;destination_observed_ms&quot;: 320.8670999993046
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 13446.435264,
+            &quot;c_first_rx_ms&quot;: 13.4040000011737,
+            &quot;c_last_rx_ms&quot;: 131.02280000020983,
+            &quot;c_commit_observed_ms&quot;: 309.44760000056704,
+            &quot;t_last_rx_ms&quot;: 308.8105999995605,
+            &quot;destination_observed_ms&quot;: 310.4550999996718
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 13446.7611769,
+            &quot;c_first_rx_ms&quot;: 52.499299999908544,
+            &quot;c_last_rx_ms&quot;: 172.9813000001741,
+            &quot;c_commit_observed_ms&quot;: 251.5094999998837,
+            &quot;t_last_rx_ms&quot;: 333.2831999996415,
+            &quot;destination_observed_ms&quot;: 339.17769999970915
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 51.573,
+          &quot;p95_ms&quot;: 76.164,
+          &quot;p99_ms&quot;: 76.164,
+          &quot;max_ms&quot;: 76.164
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 156.774,
+          &quot;p95_ms&quot;: 189.428,
+          &quot;p99_ms&quot;: 189.428,
+          &quot;max_ms&quot;: 189.428
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 382.201,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 192,
+            &quot;updated_yc&quot;: 1152,
+            &quot;updated_yx&quot;: 1152,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 194,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 192,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 191,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;C-2&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-3&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-4&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-2&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-3&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-4&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      }
+    ],
+    &quot;snapshot_boundary&quot;: {
+      &quot;wire_updates&quot;: 21,
+      &quot;collected_samples&quot;: 1,
+      &quot;final_value&quot;: true,
+      &quot;wire_states&quot;: [
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1
+      ],
+      &quot;conclusion&quot;: &quot;collect_once returns latest point snapshot; intermediate transitions require a separate event/SOE pipeline&quot;
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;iec_after&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T13:00:37.188622+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;engine&quot;: &quot;python-stdlib&quot;,
+    &quot;pipelines&quot;: [
+      {
+        &quot;channels&quot;: 1,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 3.177,
+          &quot;p95_ms&quot;: 4.152,
+          &quot;p99_ms&quot;: 4.152,
+          &quot;max_ms&quot;: 4.152
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 3.145,
+          &quot;p95_ms&quot;: 5.818,
+          &quot;p99_ms&quot;: 5.818,
+          &quot;max_ms&quot;: 5.818
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 177.893,
+          &quot;p95_ms&quot;: 208.441,
+          &quot;p99_ms&quot;: 208.441,
+          &quot;max_ms&quot;: 208.441
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 237.304,
+          &quot;p95_ms&quot;: 261.094,
+          &quot;p99_ms&quot;: 261.094,
+          &quot;max_ms&quot;: 261.094
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          165.10480000033567,
+          177.49860000003537,
+          162.579600000754,
+          151.4750999995158,
+          148.6559999993915,
+          147.33819999855768,
+          208.44149999902584,
+          200.49360000120942,
+          186.1512000014045,
+          178.28699999881792,
+          179.50040000141598,
+          179.5495000005758
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          230.21090000111144,
+          199.74369999908959,
+          197.30210000125226,
+          186.28030000036233,
+          182.2753999986162,
+          186.71229999927164,
+          248.2237999993231,
+          255.77270000030694,
+          256.9662000005337,
+          244.66469999970286,
+          244.3970000003901,
+          261.09399999950256
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          }
+        ],
+        &quot;workload_seconds&quot;: 2.74,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 13471.2477914,
+            &quot;c_first_rx_ms&quot;: 38.43010000127833,
+            &quot;c_last_rx_ms&quot;: 48.03710000123829,
+            &quot;c_commit_observed_ms&quot;: 165.10480000033567,
+            &quot;t_last_rx_ms&quot;: 228.91450000133773,
+            &quot;destination_observed_ms&quot;: 230.21090000111144
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 13471.4807564,
+            &quot;c_first_rx_ms&quot;: 57.37760000010894,
+            &quot;c_last_rx_ms&quot;: 63.84009999965201,
+            &quot;c_commit_observed_ms&quot;: 177.49860000003537,
+            &quot;t_last_rx_ms&quot;: 197.00389999889012,
+            &quot;destination_observed_ms&quot;: 199.74369999908959
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 13471.6829855,
+            &quot;c_first_rx_ms&quot;: 38.65670000050159,
+            &quot;c_last_rx_ms&quot;: 44.56879999997909,
+            &quot;c_commit_observed_ms&quot;: 162.579600000754,
+            &quot;t_last_rx_ms&quot;: 195.12209999993502,
+            &quot;destination_observed_ms&quot;: 197.30210000125226
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 13471.8828202,
+            &quot;c_first_rx_ms&quot;: 26.971199999024975,
+            &quot;c_last_rx_ms&quot;: 32.82589999980701,
+            &quot;c_commit_observed_ms&quot;: 151.4750999995158,
+            &quot;t_last_rx_ms&quot;: 183.49539999871922,
+            &quot;destination_observed_ms&quot;: 186.28030000036233
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 13472.0732,
+            &quot;c_first_rx_ms&quot;: 20.90949999910663,
+            &quot;c_last_rx_ms&quot;: 34.38329999880807,
+            &quot;c_commit_observed_ms&quot;: 148.6559999993915,
+            &quot;t_last_rx_ms&quot;: 178.89990000003309,
+            &quot;destination_observed_ms&quot;: 182.2753999986162
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 13472.2594112,
+            &quot;c_first_rx_ms&quot;: 22.47189999980037,
+            &quot;c_last_rx_ms&quot;: 28.60039999904984,
+            &quot;c_commit_observed_ms&quot;: 147.33819999855768,
+            &quot;t_last_rx_ms&quot;: 181.58299999959127,
+            &quot;destination_observed_ms&quot;: 186.71229999927164
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 13472.4485557,
+            &quot;c_first_rx_ms&quot;: 45.07709999961662,
+            &quot;c_last_rx_ms&quot;: 52.003199998580385,
+            &quot;c_commit_observed_ms&quot;: 208.44149999902584,
+            &quot;t_last_rx_ms&quot;: 244.30429999847547,
+            &quot;destination_observed_ms&quot;: 248.2237999993231
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 13472.7057536,
+            &quot;c_first_rx_ms&quot;: 46.01340000044729,
+            &quot;c_last_rx_ms&quot;: 51.90210000000661,
+            &quot;c_commit_observed_ms&quot;: 200.49360000120942,
+            &quot;t_last_rx_ms&quot;: 251.7496000000392,
+            &quot;destination_observed_ms&quot;: 255.77270000030694
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 13472.9668646,
+            &quot;c_first_rx_ms&quot;: 35.25000000081491,
+            &quot;c_last_rx_ms&quot;: 41.68740000022808,
+            &quot;c_commit_observed_ms&quot;: 186.1512000014045,
+            &quot;t_last_rx_ms&quot;: 251.78340000093158,
+            &quot;destination_observed_ms&quot;: 256.9662000005337
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 13473.2263139,
+            &quot;c_first_rx_ms&quot;: 21.92990000003192,
+            &quot;c_last_rx_ms&quot;: 33.4908999993786,
+            &quot;c_commit_observed_ms&quot;: 178.28699999881792,
+            &quot;t_last_rx_ms&quot;: 242.89409999983036,
+            &quot;destination_observed_ms&quot;: 244.66469999970286
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 13473.4740529,
+            &quot;c_first_rx_ms&quot;: 23.29700000154844,
+            &quot;c_last_rx_ms&quot;: 29.861900000469177,
+            &quot;c_commit_observed_ms&quot;: 179.50040000141598,
+            &quot;t_last_rx_ms&quot;: 240.6981000003725,
+            &quot;destination_observed_ms&quot;: 244.3970000003901
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 13473.7211451,
+            &quot;c_first_rx_ms&quot;: 22.719599999618367,
+            &quot;c_last_rx_ms&quot;: 30.474099999992177,
+            &quot;c_commit_observed_ms&quot;: 179.5495000005758,
+            &quot;t_last_rx_ms&quot;: 259.99620000038703,
+            &quot;destination_observed_ms&quot;: 261.09399999950256
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 43.832,
+          &quot;p95_ms&quot;: 57.461,
+          &quot;p99_ms&quot;: 57.461,
+          &quot;max_ms&quot;: 57.461
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 144.092,
+          &quot;p95_ms&quot;: 172.565,
+          &quot;p99_ms&quot;: 172.565,
+          &quot;max_ms&quot;: 172.565
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 658.818,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 89,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      },
+      {
+        &quot;channels&quot;: 4,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 3.627,
+          &quot;p95_ms&quot;: 4.682,
+          &quot;p99_ms&quot;: 5.952,
+          &quot;max_ms&quot;: 5.952
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 4.828,
+          &quot;p95_ms&quot;: 6.338,
+          &quot;p99_ms&quot;: 6.389,
+          &quot;max_ms&quot;: 6.389
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 174.012,
+          &quot;p95_ms&quot;: 375.132,
+          &quot;p99_ms&quot;: 375.132,
+          &quot;max_ms&quot;: 375.132
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 262.352,
+          &quot;p95_ms&quot;: 425.422,
+          &quot;p99_ms&quot;: 425.422,
+          &quot;max_ms&quot;: 425.422
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          153.9615000001504,
+          156.89170000041486,
+          240.7585000000836,
+          185.63309999990452,
+          161.30930000144872,
+          106.01230000065698,
+          162.39180000047782,
+          375.13230000149633,
+          140.3571999999258,
+          330.6183999993664,
+          271.46349999929953,
+          321.38900000063586
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          239.25469999994675,
+          285.449900000458,
+          305.2834999998595,
+          203.19569999992382,
+          223.27780000159692,
+          155.27950000068813,
+          218.17250000094646,
+          425.4220000002533,
+          226.64799999984098,
+          345.11469999961264,
+          324.37360000039916,
+          369.1259000006539
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          }
+        ],
+        &quot;workload_seconds&quot;: 3.527,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 13480.2351918,
+            &quot;c_first_rx_ms&quot;: 29.405799999949522,
+            &quot;c_last_rx_ms&quot;: 103.85589999896183,
+            &quot;c_commit_observed_ms&quot;: 153.9615000001504,
+            &quot;t_last_rx_ms&quot;: 237.6989999993384,
+            &quot;destination_observed_ms&quot;: 239.25469999994675
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 13480.4901969,
+            &quot;c_first_rx_ms&quot;: 26.328399999329122,
+            &quot;c_last_rx_ms&quot;: 114.2282000000705,
+            &quot;c_commit_observed_ms&quot;: 156.89170000041486,
+            &quot;t_last_rx_ms&quot;: 280.7264999992185,
+            &quot;destination_observed_ms&quot;: 285.449900000458
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 13480.7967046,
+            &quot;c_first_rx_ms&quot;: 7.102000001395936,
+            &quot;c_last_rx_ms&quot;: 88.1297000014456,
+            &quot;c_commit_observed_ms&quot;: 240.7585000000836,
+            &quot;t_last_rx_ms&quot;: 301.06979999982286,
+            &quot;destination_observed_ms&quot;: 305.2834999998595
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 13481.11971,
+            &quot;c_first_rx_ms&quot;: 24.83129999927769,
+            &quot;c_last_rx_ms&quot;: 103.34049999983108,
+            &quot;c_commit_observed_ms&quot;: 185.63309999990452,
+            &quot;t_last_rx_ms&quot;: 197.6405999994313,
+            &quot;destination_observed_ms&quot;: 203.19569999992382
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 13481.3431522,
+            &quot;c_first_rx_ms&quot;: 35.1570000002539,
+            &quot;c_last_rx_ms&quot;: 125.98290000096313,
+            &quot;c_commit_observed_ms&quot;: 161.30930000144872,
+            &quot;t_last_rx_ms&quot;: 222.02810000089812,
+            &quot;destination_observed_ms&quot;: 223.27780000159692
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 13481.5826655,
+            &quot;c_first_rx_ms&quot;: 8.308299999043811,
+            &quot;c_last_rx_ms&quot;: 74.0951000007044,
+            &quot;c_commit_observed_ms&quot;: 106.01230000065698,
+            &quot;t_last_rx_ms&quot;: 153.2798999996885,
+            &quot;destination_observed_ms&quot;: 155.27950000068813
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 13481.7539915,
+            &quot;c_first_rx_ms&quot;: 8.75620000078925,
+            &quot;c_last_rx_ms&quot;: 118.93190000046161,
+            &quot;c_commit_observed_ms&quot;: 162.39180000047782,
+            &quot;t_last_rx_ms&quot;: 213.34229999956733,
+            &quot;destination_observed_ms&quot;: 218.17250000094646
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 13481.9897288,
+            &quot;c_first_rx_ms&quot;: 18.81839999987278,
+            &quot;c_last_rx_ms&quot;: 209.00980000078562,
+            &quot;c_commit_observed_ms&quot;: 375.13230000149633,
+            &quot;t_last_rx_ms&quot;: 419.9447000009968,
+            &quot;destination_observed_ms&quot;: 425.4220000002533
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 13482.4275576,
+            &quot;c_first_rx_ms&quot;: 24.8554999998305,
+            &quot;c_last_rx_ms&quot;: 89.17339999970864,
+            &quot;c_commit_observed_ms&quot;: 140.3571999999258,
+            &quot;t_last_rx_ms&quot;: 222.0080000006419,
+            &quot;destination_observed_ms&quot;: 226.64799999984098
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 13482.6717031,
+            &quot;c_first_rx_ms&quot;: 52.070799998546136,
+            &quot;c_last_rx_ms&quot;: 173.26189999948838,
+            &quot;c_commit_observed_ms&quot;: 330.6183999993664,
+            &quot;t_last_rx_ms&quot;: 343.8486999984889,
+            &quot;destination_observed_ms&quot;: 345.11469999961264
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 13483.0345638,
+            &quot;c_first_rx_ms&quot;: 23.728899999696296,
+            &quot;c_last_rx_ms&quot;: 113.00870000013674,
+            &quot;c_commit_observed_ms&quot;: 271.46349999929953,
+            &quot;t_last_rx_ms&quot;: 322.15499999983876,
+            &quot;destination_observed_ms&quot;: 324.37360000039916
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 13483.376204,
+            &quot;c_first_rx_ms&quot;: 61.27270000069984,
+            &quot;c_last_rx_ms&quot;: 163.2317999992665,
+            &quot;c_commit_observed_ms&quot;: 321.38900000063586,
+            &quot;t_last_rx_ms&quot;: 364.5885999994789,
+            &quot;destination_observed_ms&quot;: 369.1259000006539
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 50.105,
+          &quot;p95_ms&quot;: 69.864,
+          &quot;p99_ms&quot;: 69.864,
+          &quot;max_ms&quot;: 69.864
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 158.428,
+          &quot;p95_ms&quot;: 185.875,
+          &quot;p99_ms&quot;: 185.875,
+          &quot;max_ms&quot;: 185.875
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 303.43,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 176,
+            &quot;updated_yc&quot;: 1152,
+            &quot;updated_yx&quot;: 1152,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 174,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 175,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 174,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;C-2&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-3&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-4&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-2&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-3&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-4&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      }
+    ],
+    &quot;snapshot_boundary&quot;: {
+      &quot;wire_updates&quot;: 21,
+      &quot;collected_samples&quot;: 1,
+      &quot;final_value&quot;: true,
+      &quot;wire_states&quot;: [
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1
+      ],
+      &quot;conclusion&quot;: &quot;collect_once returns latest point snapshot; intermediate transitions require a separate event/SOE pipeline&quot;
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;modbus&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T13:01:17.662000+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;libraries&quot;: {
+      &quot;pymodbus&quot;: &quot;3.16.1&quot;,
+      &quot;pyModbusTCP&quot;: &quot;0.3.1&quot;,
+      &quot;pyserial&quot;: &quot;3.5&quot;
+    },
+    &quot;pipelines&quot;: [
+      {
+        &quot;upstream&quot;: &quot;Modbus TCP&quot;,
+        &quot;channels&quot;: 1,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;writer_batch_limit&quot;: 500,
+        &quot;response_timeout_ms&quot;: 500,
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 206.469,
+          &quot;p95_ms&quot;: 221.054,
+          &quot;max_ms&quot;: 221.054
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 236.76,
+          &quot;p95_ms&quot;: 261.492,
+          &quot;max_ms&quot;: 261.492
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          206.3319999997475,
+          221.05390000069747,
+          206.60700000007637,
+          214.79609999914828,
+          215.73239999997895,
+          137.74449999982608,
+          131.28060000053665,
+          132.70790000024135
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          227.9376999995293,
+          256.8757999997615,
+          255.76750000072934,
+          245.58259999867005,
+          261.4923999990424,
+          184.95919999986654,
+          182.99320000005537,
+          184.14630000006582
+        ],
+        &quot;workload_seconds&quot;: 1.816,
+        &quot;four_bank_poll&quot;: {
+          &quot;samples&quot;: 30,
+          &quot;median_ms&quot;: 3.119,
+          &quot;p95_ms&quot;: 6.865,
+          &quot;max_ms&quot;: 10.47
+        },
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 18.474,
+          &quot;p95_ms&quot;: 46.373,
+          &quot;max_ms&quot;: 46.373
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 124.398,
+          &quot;p95_ms&quot;: 152.128,
+          &quot;max_ms&quot;: 152.128
+        },
+        &quot;checks&quot;: [
+          &quot;01/02/03/04 four banks and RTU isolation&quot;,
+          &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+          &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+          &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+          &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+          &quot;unchanged continued polls and complete float32 values&quot;,
+          &quot;S TCP stop/restart -&gt; C reconnect -&gt; T latest values&quot;
+        ],
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;restart_recovery_ms&quot;: 753.693,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 45,
+            &quot;updated_yc&quot;: 640,
+            &quot;updated_yx&quot;: 640,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 2,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;wire&quot;: {
+          &quot;C-1&quot;: {
+            &quot;TX_FC01&quot;: 76,
+            &quot;RX_FC01&quot;: 75,
+            &quot;TX_FC02&quot;: 75,
+            &quot;RX_FC02&quot;: 75,
+            &quot;TX_FC03&quot;: 75,
+            &quot;RX_FC03&quot;: 75,
+            &quot;TX_FC04&quot;: 75,
+            &quot;RX_FC04&quot;: 75,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;T-1&quot;: {
+            &quot;TX_FC01&quot;: 53,
+            &quot;RX_FC01&quot;: 53,
+            &quot;TX_FC02&quot;: 52,
+            &quot;RX_FC02&quot;: 52,
+            &quot;TX_FC03&quot;: 54,
+            &quot;RX_FC03&quot;: 54,
+            &quot;TX_FC04&quot;: 53,
+            &quot;RX_FC04&quot;: 52,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          }
+        },
+        &quot;passed&quot;: true
+      },
+      {
+        &quot;upstream&quot;: &quot;Modbus TCP&quot;,
+        &quot;channels&quot;: 4,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;writer_batch_limit&quot;: 500,
+        &quot;response_timeout_ms&quot;: 500,
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 118.026,
+          &quot;p95_ms&quot;: 151.615,
+          &quot;max_ms&quot;: 151.615
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 204.772,
+          &quot;p95_ms&quot;: 270.092,
+          &quot;max_ms&quot;: 270.092
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          124.0445000003092,
+          151.615299999321,
+          90.9499000008509,
+          119.20500000087486,
+          63.34659999993164,
+          116.847899998902,
+          140.6317000000854,
+          105.82670000076178
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          202.9424000011204,
+          270.0922999993054,
+          184.1586999998981,
+          216.56179999990854,
+          165.47050000008312,
+          206.4967999995133,
+          250.34140000025218,
+          203.04720000058296
+        ],
+        &quot;workload_seconds&quot;: 1.823,
+        &quot;four_bank_poll&quot;: {
+          &quot;samples&quot;: 30,
+          &quot;median_ms&quot;: 7.869,
+          &quot;p95_ms&quot;: 29.265,
+          &quot;max_ms&quot;: 32.728
+        },
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 47.832,
+          &quot;p95_ms&quot;: 67.138,
+          &quot;max_ms&quot;: 67.138
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 155.07,
+          &quot;p95_ms&quot;: 167.968,
+          &quot;max_ms&quot;: 167.968
+        },
+        &quot;checks&quot;: [
+          &quot;01/02/03/04 four banks and RTU isolation&quot;,
+          &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+          &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+          &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+          &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+          &quot;unchanged continued polls and complete float32 values&quot;,
+          &quot;S TCP stop/restart -&gt; C reconnect -&gt; T latest values&quot;
+        ],
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;restart_recovery_ms&quot;: 325.298,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 74,
+            &quot;updated_yc&quot;: 640,
+            &quot;updated_yx&quot;: 640,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 74,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 74,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 74,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;wire&quot;: {
+          &quot;C-1&quot;: {
+            &quot;TX_FC01&quot;: 105,
+            &quot;RX_FC01&quot;: 104,
+            &quot;TX_FC02&quot;: 104,
+            &quot;RX_FC02&quot;: 104,
+            &quot;TX_FC03&quot;: 104,
+            &quot;RX_FC03&quot;: 104,
+            &quot;TX_FC04&quot;: 104,
+            &quot;RX_FC04&quot;: 104,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-2&quot;: {
+            &quot;TX_FC01&quot;: 74,
+            &quot;RX_FC01&quot;: 74,
+            &quot;TX_FC02&quot;: 74,
+            &quot;RX_FC02&quot;: 74,
+            &quot;TX_FC03&quot;: 74,
+            &quot;RX_FC03&quot;: 74,
+            &quot;TX_FC04&quot;: 74,
+            &quot;RX_FC04&quot;: 74,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-3&quot;: {
+            &quot;TX_FC01&quot;: 74,
+            &quot;RX_FC01&quot;: 74,
+            &quot;TX_FC02&quot;: 74,
+            &quot;RX_FC02&quot;: 74,
+            &quot;TX_FC03&quot;: 74,
+            &quot;RX_FC03&quot;: 74,
+            &quot;TX_FC04&quot;: 74,
+            &quot;RX_FC04&quot;: 74,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-4&quot;: {
+            &quot;TX_FC01&quot;: 74,
+            &quot;RX_FC01&quot;: 74,
+            &quot;TX_FC02&quot;: 74,
+            &quot;RX_FC02&quot;: 74,
+            &quot;TX_FC03&quot;: 74,
+            &quot;RX_FC03&quot;: 74,
+            &quot;TX_FC04&quot;: 74,
+            &quot;RX_FC04&quot;: 74,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;T-1&quot;: {
+            &quot;TX_FC01&quot;: 62,
+            &quot;RX_FC01&quot;: 62,
+            &quot;TX_FC02&quot;: 61,
+            &quot;RX_FC02&quot;: 61,
+            &quot;TX_FC03&quot;: 63,
+            &quot;RX_FC03&quot;: 63,
+            &quot;TX_FC04&quot;: 62,
+            &quot;RX_FC04&quot;: 61,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-2&quot;: {
+            &quot;TX_FC01&quot;: 20,
+            &quot;RX_FC01&quot;: 20,
+            &quot;TX_FC02&quot;: 19,
+            &quot;RX_FC02&quot;: 19,
+            &quot;TX_FC03&quot;: 21,
+            &quot;RX_FC03&quot;: 21,
+            &quot;TX_FC04&quot;: 20,
+            &quot;RX_FC04&quot;: 19,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-3&quot;: {
+            &quot;TX_FC01&quot;: 16,
+            &quot;RX_FC01&quot;: 16,
+            &quot;TX_FC02&quot;: 15,
+            &quot;RX_FC02&quot;: 15,
+            &quot;TX_FC03&quot;: 17,
+            &quot;RX_FC03&quot;: 17,
+            &quot;TX_FC04&quot;: 16,
+            &quot;RX_FC04&quot;: 15,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-4&quot;: {
+            &quot;TX_FC01&quot;: 12,
+            &quot;RX_FC01&quot;: 12,
+            &quot;TX_FC02&quot;: 11,
+            &quot;RX_FC02&quot;: 11,
+            &quot;TX_FC03&quot;: 13,
+            &quot;RX_FC03&quot;: 13,
+            &quot;TX_FC04&quot;: 12,
+            &quot;RX_FC04&quot;: 11,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          }
+        },
+        &quot;passed&quot;: true
+      }
+    ],
+    &quot;rtu&quot;: {
+      &quot;upstream&quot;: &quot;RTU frames over socket://&quot;,
+      &quot;channels&quot;: 1,
+      &quot;yc_per_rtu&quot;: 8,
+      &quot;yx_per_rtu&quot;: 8,
+      &quot;c_poll_ms&quot;: 50,
+      &quot;t_scan_ms&quot;: 50,
+      &quot;s_scan_ms&quot;: 50,
+      &quot;writer_batch_ms&quot;: 100,
+      &quot;writer_batch_limit&quot;: 500,
+      &quot;response_timeout_ms&quot;: 500,
+      &quot;c_commit_latency&quot;: {
+        &quot;samples&quot;: 6,
+        &quot;median_ms&quot;: 379.901,
+        &quot;p95_ms&quot;: 407.42,
+        &quot;max_ms&quot;: 407.42
+      },
+      &quot;end_to_end_latency&quot;: {
+        &quot;samples&quot;: 6,
+        &quot;median_ms&quot;: 431.54,
+        &quot;p95_ms&quot;: 471.726,
+        &quot;max_ms&quot;: 471.726
+      },
+      &quot;c_commit_samples_ms&quot;: [
+        362.06380000112404,
+        407.4196000001393,
+        368.7621000008221,
+        395.83309999943594,
+        391.03979999890726,
+        367.058799998631
+      ],
+      &quot;end_to_end_samples_ms&quot;: [
+        371.8019000007189,
+        471.72580000005837,
+        406.86400000049616,
+        432.1087999996962,
+        433.72029999954975,
+        430.97109999871464
+      ],
+      &quot;workload_seconds&quot;: 2.55,
+      &quot;four_bank_poll&quot;: {
+        &quot;samples&quot;: 30,
+        &quot;median_ms&quot;: 302.372,
+        &quot;p95_ms&quot;: 308.622,
+        &quot;max_ms&quot;: 309.464
+      },
+      &quot;command_latency&quot;: {
+        &quot;samples&quot;: 4,
+        &quot;median_ms&quot;: 127.373,
+        &quot;p95_ms&quot;: 159.989,
+        &quot;max_ms&quot;: 159.989
+      },
+      &quot;command_receipt_latency&quot;: {
+        &quot;samples&quot;: 4,
+        &quot;median_ms&quot;: 246.825,
+        &quot;p95_ms&quot;: 292.963,
+        &quot;max_ms&quot;: 292.963
+      },
+      &quot;checks&quot;: [
+        &quot;01/02/03/04 four banks and RTU isolation&quot;,
+        &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+        &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+        &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+        &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+        &quot;unchanged continued polls and complete float32 values&quot;
+      ],
+      &quot;errors_before_injected_disconnect&quot;: 0,
+      &quot;workers&quot;: [
+        {
+          &quot;cycles&quot;: 35,
+          &quot;updated_yc&quot;: 64,
+          &quot;updated_yx&quot;: 64,
+          &quot;sent_yk&quot;: 3,
+          &quot;sent_yt&quot;: 2,
+          &quot;errors&quot;: 0,
+          &quot;alarms&quot;: 0
+        }
+      ],
+      &quot;wire&quot;: {
+        &quot;C-1&quot;: {
+          &quot;TX_FC01&quot;: 65,
+          &quot;RX_FC01&quot;: 65,
+          &quot;TX_FC02&quot;: 65,
+          &quot;RX_FC02&quot;: 65,
+          &quot;TX_FC03&quot;: 65,
+          &quot;RX_FC03&quot;: 65,
+          &quot;TX_FC04&quot;: 65,
+          &quot;RX_FC04&quot;: 65,
+          &quot;TX_FC05&quot;: 2,
+          &quot;RX_FC05&quot;: 2,
+          &quot;TX_FC15&quot;: 1,
+          &quot;RX_FC15&quot;: 1,
+          &quot;TX_FC06&quot;: 1,
+          &quot;RX_FC06&quot;: 1,
+          &quot;TX_FC16&quot;: 1,
+          &quot;RX_FC16&quot;: 1
+        },
+        &quot;T-1&quot;: {
+          &quot;TX_FC01&quot;: 37,
+          &quot;RX_FC01&quot;: 37,
+          &quot;TX_FC02&quot;: 36,
+          &quot;RX_FC02&quot;: 36,
+          &quot;TX_FC03&quot;: 38,
+          &quot;RX_FC03&quot;: 38,
+          &quot;TX_FC04&quot;: 37,
+          &quot;RX_FC04&quot;: 36,
+          &quot;TX_FC05&quot;: 2,
+          &quot;RX_FC05&quot;: 1,
+          &quot;TX_FC15&quot;: 1,
+          &quot;RX_FC15&quot;: 1,
+          &quot;TX_FC06&quot;: 2,
+          &quot;RX_FC06&quot;: 1,
+          &quot;TX_FC16&quot;: 1,
+          &quot;RX_FC16&quot;: 1,
+          &quot;RX_FC132&quot;: 1,
+          &quot;RX_FC133&quot;: 1,
+          &quot;RX_FC134&quot;: 1
+        }
+      },
+      &quot;passed&quot;: true
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;soe&quot;: {
+    &quot;scope&quot;: &quot;temporary S independent DB; C/T shared DB; real TCP; w=1 t2=1; S 50ms tick; T controlled 5ms pump; no hardware or long soak&quot;,
+    &quot;pipelines&quot;: [
+      {
+        &quot;channels&quot;: 1,
+        &quot;events_per_channel&quot;: 128,
+        &quot;expected&quot;: 128,
+        &quot;c_persisted&quot;: 128,
+        &quot;t_received&quot;: [
+          128
+        ],
+        &quot;exact&quot;: true,
+        &quot;trigger_transaction_ms&quot;: 5.594,
+        &quot;end_to_end_ack_ms&quot;: 116.033,
+        &quot;events_per_second&quot;: 1103.13,
+        &quot;commit_to_downstream_median_ms&quot;: 70.078,
+        &quot;commit_to_downstream_p95_ms&quot;: 94.413
+      },
+      {
+        &quot;channels&quot;: 4,
+        &quot;events_per_channel&quot;: 128,
+        &quot;expected&quot;: 512,
+        &quot;c_persisted&quot;: 512,
+        &quot;t_received&quot;: [
+          128,
+          128,
+          128,
+          128
+        ],
+        &quot;exact&quot;: true,
+        &quot;trigger_transaction_ms&quot;: 12.545,
+        &quot;end_to_end_ack_ms&quot;: 244.482,
+        &quot;events_per_second&quot;: 2094.22,
+        &quot;commit_to_downstream_median_ms&quot;: 172.567,
+        &quot;commit_to_downstream_p95_ms&quot;: 188.013
+      }
+    ]
+  }
+}</pre></details></section></html>

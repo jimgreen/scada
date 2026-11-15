@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id), params = new URLSearchParams(location.search);
   const ident = location.pathname.split('/')[2] || '';
   let offset=0, busy=false, epoch=0, items=[], before=null, historyMode=false;
+  let after=null, hasOlder=false, catchup=false, summaryMarkup='';
   let targets=[], targetsLoaded=false, refreshTargets=false, pendingReload=false;
   const esc = value => String(value??'—').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const stamp = n => n ? new Date(n*1000).toLocaleString('zh-CN',{hour12:false}) : '—';
@@ -70,30 +71,62 @@
     $('total').textContent=`${result.total} 个连接 · 第 ${Math.floor(offset/50)+1} 页 · ${result.retention}`;
     $('prev').disabled=offset===0; $('next').disabled=offset+50>=result.total;
   }
+  const eventMarkup = x => `<article class="conn-event" data-event-id="${x.id}"><div class="meta">#${x.id} · ${esc(stamp(x.time))} · ${esc(({packet:'报文',interaction:'交互',log:'日志'})[x.kind])} · ${esc(x.direction)}</div><pre>${esc(x.summary)}</pre>${x.hex?`<pre>HEX ${esc(x.hex)}</pre>`:''}</article>`;
+  function renderEvents(events, mode) {
+    const container=$('events'), known=new Set(items.map(x=>x.id));
+    const added=mode==='reset'?events.items:events.items.filter(x=>!known.has(x.id));
+    if(mode==='reset') {
+      items=added;container.innerHTML=added.map(eventMarkup).join('');
+    } else if(added.length) {
+      container.querySelector('.conn-empty')?.remove();
+      if(mode==='older') { items.push(...added);container.insertAdjacentHTML('beforeend',added.map(eventMarkup).join('')); }
+      else { items.unshift(...added);container.insertAdjacentHTML('afterbegin',added.map(eventMarkup).join('')); }
+    }
+    if(mode!=='new') { before=events.next_before;hasOlder=events.has_more; }
+    // A page may load new static assets just before its Web backend restarts.
+    // Keep the old full-refresh behavior until that backend exposes the cursor.
+    if(mode!=='older') after=events.next_after??null;
+    // Bound DOM size; retain the end being browsed, and keep its pagination cursor.
+    if(items.length>2000) {
+      const excess=items.length-2000;
+      if(mode==='older') {items.splice(0,excess);for(let n=0;n<excess;n++) container.firstElementChild.remove();}
+      else {items.splice(2000);for(let n=0;n<excess;n++) container.lastElementChild.remove();hasOlder=true;}
+    }
+    if(items.length) before=items[items.length-1].id;
+    else if(!container.childElementCount) container.innerHTML='<div class="conn-empty">此连接暂无该类记录</div>';
+    $('older').disabled=!hasOlder;
+    $('event-count').textContent=`显示 ${items.length} 条（页面最多 2000 条）${historyMode?' · 正在浏览历史':catchup?' · 正在补读新增记录':''}`;
+  }
   async function detail(older=false, version=epoch) {
     const q=new URLSearchParams({limit:100});
     if($('kind').value) q.set('kind',$('kind').value);
     if(older && before) q.set('before',before);
+    const incremental=!older && after!==null;
+    if(incremental) q.set('after',after);
     const [result,events]=await Promise.all([api('/api/connections/'+ident),api('/api/connections/'+ident+'/events?'+q)]);
     if(version!==epoch) return;
     const row=result.item;
     warnings(result);
     const fields={'连接编号':row.id,'通道 / RTU 名称':row.display_name,'关联编号':`通道 ${row.channel_id??'—'}${row.rtu_id!=null?` / RTU ${row.rtu_id}`:''}`,'服务 / 规约':`${row.service} / ${row.protocol}`,'客户端 IP：源端口':row.peer,'服务监听地址':row.local,'状态':state(row),'接入时间':stamp(row.opened),'断开时间':stamp(row.closed),'最近交互':stamp(row.updated),'收 / 发报文':`${row.rx_count} / ${row.tx_count}`,'收 / 发字节':`${row.rx_bytes} / ${row.tx_bytes} B`,'保留范围':result.retention};
-    $('summary').innerHTML=Object.entries(fields).map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
-    if(older) items.push(...events.items); else items=events.items;
-    // Browsing older pages freezes automatic replacement; the user controls returning to the tail.
-    if(items.length>2000) { items=items.slice(-2000); message('页面保留当前最近加载的 2000 条记录；可回到最新重新浏览。'); }
-    before=events.next_before;
-    $('older').disabled=!events.has_more;
-    $('event-count').textContent=`显示 ${items.length} 条${historyMode?' · 正在浏览历史':''}`;
-    $('events').innerHTML=items.map(x=>`<article class="conn-event"><div class="meta">#${x.id} · ${esc(stamp(x.time))} · ${esc(({packet:'报文',interaction:'交互',log:'日志'})[x.kind])} · ${esc(x.direction)}</div><pre>${esc(x.summary)}</pre>${x.hex?`<pre>HEX ${esc(x.hex)}</pre>`:''}</article>`).join('')||'<div class="conn-empty">此连接暂无该类记录</div>';
+    const markup=Object.entries(fields).map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
+    if(markup!==summaryMarkup) { $('summary').innerHTML=markup;summaryMarkup=markup; }
+    catchup=incremental&&events.has_more;
+    renderEvents(events,older?'older':incremental?'new':'reset');
+    // Drain bursts in bounded pages, preserving the last accepted cursor even
+    // if a later request fails. Next poll resumes without skipping records.
+    for(let page=1;incremental&&catchup&&page<5;page++) {
+      q.set('after',after);
+      const more=await api('/api/connections/'+ident+'/events?'+q);
+      if(version!==epoch) return;
+      catchup=more.has_more;renderEvents(more,'new');
+    }
   }
   async function load(older=false) {
     if(busy) return;
     busy=true; $('refresh').disabled=true;
     const version=epoch;
-    try { message(''); if(ident) await detail(older); else { await loadTargets(); await list(version); } if(version===epoch) message('更新于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false})); }
-    catch(e) { message(e.message,true); }
+    try { message(''); if(ident) await detail(older,version); else { await loadTargets(); await list(version); } if(version===epoch) message('更新于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false})); }
+    catch(e) { if(version===epoch) message(e.message,true); }
     finally { busy=false; $('refresh').disabled=false; if(pendingReload){pendingReload=false;load();} }
   }
   $('state').value=['open','closed'].includes(params.get('state'))?params.get('state'):'';
@@ -114,9 +147,13 @@
   $('clear').onclick=()=>{$('target').value='';$('state').value='';filterChanged();};
   $('prev').onclick=()=>{if(!busy){offset=Math.max(0,offset-50);load();}};
   $('next').onclick=()=>{if(!busy){offset+=50;load();}};
-  $('refresh').onclick=()=>{historyMode=false;refreshTargets=true;load();};
-  $('latest').onclick=()=>{if(!busy){historyMode=false;load();}};
-  $('kind').onchange=()=>{epoch++;historyMode=false;const wait=setInterval(()=>{if(!busy){clearInterval(wait);load();}},50);};
+  function latest() {
+    epoch++;historyMode=false;after=null;catchup=false;
+    if(busy) pendingReload=true;else load();
+  }
+  $('refresh').onclick=()=>{refreshTargets=true;if(ident&&historyMode) latest();else load();};
+  $('latest').onclick=latest;
+  $('kind').onchange=latest;
   $('older').onclick=()=>{if(!busy){historyMode=true;load(true);}};
   $('export').onclick=()=>{
     const text=items.map(x=>`${stamp(x.time)} [${x.kind}] ${x.direction} ${x.summary}${x.hex?'\nHEX '+x.hex:''}`).join('\n');

@@ -795,6 +795,7 @@ def _flush_batch(
 ) -> bool | None:
     if not messages:
         return True
+    started_ns = time.perf_counter_ns()
     owned_connection = connection is None
     active_connection = connection
     acknowledge = True
@@ -822,22 +823,60 @@ def _flush_batch(
                     executions.append((sql,list(params)))
         if active_connection is None:
             active_connection = store.open_connection()
+        timing = getattr(store, '_writer_latency', None)
+        lock_wait_ms=backoff_ms=0.0
         for attempt in range(BATCH_WRITER_LOCK_RETRIES):
+            lock_started_ns = time.perf_counter_ns()
+            locked = False
             try:
                 active_connection.execute("BEGIN IMMEDIATE")
+                locked = True
+                applied_ns = time.perf_counter_ns()
+                lock_wait_ms+=(applied_ns-lock_started_ns)/1e6
+                if timing is not None:
+                    timing.observe('c_db_lock_wait_ms',(applied_ns-lock_started_ns)/1e6)
                 matched = 0
                 for sql, params in executions:
                     matched += active_connection.executemany(sql, params).rowcount
+                commit_started_ns = time.perf_counter_ns()
                 active_connection.commit()
+                committed_ns = time.perf_counter_ns()
+                if timing is not None:
+                    timing.observe('c_db_apply_ms',(commit_started_ns-applied_ns)/1e6)
+                    timing.observe('c_db_commit_ms',(committed_ns-commit_started_ns)/1e6)
+                    timing.observe('c_write_ms', (committed_ns-started_ns)/1e6)
+                    for message in messages:
+                        queued_ns = message.get('_queued_at_ns')
+                        if queued_ns is not None:
+                            timing.observe('c_queue_ms', (started_ns-queued_ns)/1e6)
+                            timing.observe('c_queue_commit_ms', (committed_ns-queued_ns)/1e6)
                 expected = sum(len(params) for _, params in executions)
                 _log_batch_receipts(logger, messages, '写库事务已提交', 事务请求行数=expected,
                                     事务更新行数=matched, 未匹配行数=expected-matched)
+                receipt_ms=(time.perf_counter_ns()-committed_ns)/1e6
+                if timing is not None:timing.observe('c_receipt_log_ms',receipt_ms)
+                slow=getattr(store,'_writer_slow',None)
+                if slow is not None:
+                    oldest=min((m['_queued_at_ns'] for m in messages if type(m.get('_queued_at_ns')) is int
+                                and 0<m['_queued_at_ns']<=started_ns),default=started_ns)
+                    slow.observe(messages=len(messages),updates=expected,
+                        rtus=sorted({m['source_rtu'] for m in messages if type(m.get('source_rtu')) is int}),
+                        queue_wait_ms=(started_ns-oldest)/1e6,lock_wait_ms=lock_wait_ms,backoff_ms=backoff_ms,
+                        apply_ms=(commit_started_ns-applied_ns)/1e6,commit_ms=(committed_ns-commit_started_ns)/1e6,
+                        transaction_ms=(committed_ns-started_ns)/1e6,queue_commit_ms=(committed_ns-oldest)/1e6,
+                        receipt_log_ms=receipt_ms,attempts=attempt+1)
                 return True
             except sqlite3.OperationalError as exc:
+                if not locked:lock_wait_ms+=(time.perf_counter_ns()-lock_started_ns)/1e6
+                if timing is not None and not locked:
+                    timing.observe('c_db_lock_wait_ms',(time.perf_counter_ns()-lock_started_ns)/1e6)
                 if active_connection.in_transaction:
                     active_connection.rollback()
                 if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                     raise
+                contention = getattr(store,'_writer_contention',None)
+                if contention is not None:
+                    contention['lock_conflicts'] += 1
                 if attempt == BATCH_WRITER_LOCK_RETRIES - 1:
                     _log_batch_receipts(logger, messages, '写库锁冲突，批次保留重试', 错误=str(exc))
                     logger.alarm(
@@ -845,7 +884,11 @@ def _flush_batch(
                     )
                     acknowledge = False
                     return None
-                time.sleep(BATCH_WRITER_LOCK_BACKOFF * (attempt + 1))
+                backoff = BATCH_WRITER_LOCK_BACKOFF * (attempt + 1)
+                backoff_ms+=backoff*1000
+                if contention is not None:
+                    contention['retry_backoff_ms'] += backoff*1000
+                time.sleep(backoff)
             except Exception:
                 if active_connection.in_transaction:
                     active_connection.rollback()
@@ -864,6 +907,26 @@ def _flush_batch(
                 queue.task_done()
         if owned_connection and active_connection is not None:
             active_connection.close()
+
+
+def _message_pending_since(message: Any, now: float) -> float:
+    """Include producer queue time in the oldest pending batch's deadline."""
+    stamp=message.get('_queued_at_ns') if isinstance(message,Mapping) else None
+    if type(stamp) is int and stamp>0:
+        return now-max(0,time.perf_counter_ns()-stamp)/1e9
+    return now
+
+
+def _prefetch_batch(queue, pending, updates, max_batch):
+    """Coalesce an already queued burst without crossing a drain/stop barrier."""
+    for _ in range(64):
+        if updates>=max_batch:break
+        try:message=queue.get_nowait()
+        except Empty:break
+        if message==BATCH_WRITER_STOP or (isinstance(message,tuple) and len(message)==2 and message[0]==BATCH_WRITER_DRAIN):
+            return updates,message
+        pending.append(message);updates+=_batch_message_size(message)
+    return updates,None
 
 
 def _batch_message_size(message: Any) -> int:
@@ -899,6 +962,8 @@ def _batch_writer_entry(
                          packet_directory=packet_log_directory(log_dir))
     pending: list[Mapping[str, Any]] = []
     pending_updates = 0
+    pending_since: float | None = None
+    deferred_message = None
     connection: sqlite3.Connection | None = None
     lease = None
     ipc_server: WriterIpcServer | None = None
@@ -906,12 +971,33 @@ def _batch_writer_entry(
     failure = ""
     completed_batches = completed_messages = completed_updates = 0
     next_summary = 0.0
+    writer_status = None
+
+    def publish_timing(running: bool) -> None:
+        if writer_status is None or connection is None or lease is None:
+            return
+        try:
+            wal_path = Path(str(store.db_path)+'-wal')
+            try:wal_bytes = wal_path.stat().st_size
+            except FileNotFoundError:wal_bytes = 0
+            writer_status.upsert(1, {'channel_name':'批量写库进程（全局）',
+                'running':int(running), 'state':'running' if running else 'stopped',
+                'process_pid':os.getpid(), 'process_heartbeat_time':now_ms(),
+                'diagnostic_json':{'latency':store._writer_latency.snapshot(),
+                                   'pending_messages':len(pending),'pending_updates':pending_updates,
+                                   'slow_batches':store._writer_slow.snapshot(),
+                                   'database_wait':dict(store._writer_contention,wal_bytes=wal_bytes,
+                                        wal_autocheckpoint_pages=BATCH_WRITER_WAL_AUTOCHECKPOINT)}},
+                connection=connection)
+        except Exception as exc:
+            logger.error(f'写库耗时快照保存失败: {exc}')
 
     def flush_pending() -> bool | None:
-        nonlocal pending, pending_updates
+        nonlocal pending, pending_updates, pending_since
         nonlocal completed_batches, completed_messages, completed_updates
         batch, pending = pending, []
         updates, pending_updates = pending_updates, 0
+        started, pending_since = pending_since, None
         if not batch:
             return True
         flush_result = _flush_batch(store, logger, batch, queue, connection)
@@ -921,6 +1007,7 @@ def _batch_writer_entry(
             # queue order and JoinableQueue accounting remain exact.
             pending = batch + pending
             pending_updates = updates + pending_updates
+            pending_since = started
             return None
         if not flush_result:
             return False
@@ -938,6 +1025,12 @@ def _batch_writer_entry(
 
     try:
         store = ScadaStore(db_path, schema_dir)
+        from core.pipeline_metrics import LatencyStats,SlowBatchStats
+        store._writer_latency = LatencyStats()
+        store._writer_slow = SlowBatchStats()
+        store._writer_contention = dict(lock_conflicts=0,retry_backoff_ms=0)
+        writer_status = RuntimeStatusStore(store, 'scdfe_c_writer')
+        next_timing = 0.0
         connection = store.open_connection()
         # The writer is the only process that commits measurement batches.
         # Keep WAL checkpoints out of the hot commit cadence; the normal
@@ -961,9 +1054,23 @@ def _batch_writer_entry(
         while True:
             lease.heartbeat()
             now = time.monotonic()
+            if now >= next_timing:
+                publish_timing(True)
+                next_timing = now + 1.0
             if now >= next_summary:
                 logger.normal(f"写库进程运行摘要: {summary()}")
                 next_summary = now + PROCESS_LOG_INTERVAL
+            # The interval bounds the age of the oldest pending update, not
+            # just an idle queue timeout. Continuous small batches must also
+            # become visible to database-only consumers such as T.
+            if pending_since is not None and now - pending_since >= batch_interval:
+                if deferred_message is None:
+                    pending_updates,deferred_message=_prefetch_batch(queue,pending,pending_updates,max_batch)
+                flush_result = flush_pending()
+                if flush_result is None:
+                    continue
+                if not flush_result:
+                    raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
             # Handle all currently waiting IPC commands before blocking on the
             # acquisition queue.  Each request is acknowledged only after its
             # transaction commits, giving transmission channels reliable ACKs.
@@ -990,7 +1097,12 @@ def _batch_writer_entry(
                             ipc_server.complete(ipc_request)
                         ipc_request.done.set()
             try:
-                message = queue.get(timeout=batch_interval)
+                timeout = batch_interval if pending_since is None else max(
+                    0.0, batch_interval - (time.monotonic() - pending_since))
+                if deferred_message is not None:
+                    message,deferred_message=deferred_message,None
+                else:
+                    message = queue.get(timeout=timeout)
             except Empty:
                 flush_result = flush_pending()
                 if flush_result is None:
@@ -1030,6 +1142,8 @@ def _batch_writer_entry(
                 if not flush_ok:
                     raise RuntimeError("批量写数据库失败，写库进程退出等待监督器重建")
                 break
+            queued_since=_message_pending_since(message,time.monotonic())
+            pending_since=queued_since if not pending else min(pending_since,queued_since)
             pending.append(message)
             pending_updates += _batch_message_size(message)
             if pending_updates >= max_batch:
@@ -1062,6 +1176,11 @@ def _batch_writer_entry(
             # account for queue items so a stopping supervisor cannot deadlock.
             for _ in pending:
                 queue.task_done()
+        if deferred_message is not None:
+            # Fatal flush after prefetch must release queue bookkeeping, but
+            # never publish a successful drain generation for this barrier.
+            queue.task_done()
+        publish_timing(False)
         if connection is not None:
             try:
                 connection.close()
@@ -1329,12 +1448,17 @@ class ChannelWorker:
                                  packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
                                  if store is not None else None)
         self.stats = WorkerStats()
+        from core.pipeline_metrics import LatencyStats
+        self._latency = LatencyStats()
         self._log_context = channel_identity(spec)
         from core.communication_log import CommunicationLog
         self.business = CommunicationLog(self.logger.business_lines, 组件='C',
             RTU编号=spec.rtu_id, 通道编号=spec.channel_id, 规约=spec.channel_type)
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
+        from core.command_feedback import FeedbackTracker
+        self._feedback_tracker = FeedbackTracker(store, self.spec.rtu_id)
+        self._feedback_next_check = 0.0
         self._last_signature: int | None = None
         self._next_definition_check = 0.0
         self._next_cycle_log = 0.0
@@ -1414,6 +1538,7 @@ class ChannelWorker:
     def _queue_groups(self, groups: list[dict[str, Any]], *, business=None) -> None:
         self.writer_queue.put(
             {"op": "batch", "groups": groups, "_preserve_versions": True,
+             '_queued_at_ns': time.perf_counter_ns(),'source_rtu':self.spec.rtu_id,
              **({'business': business} if business else {})},
             timeout=max(1.0, self.retry_interval),
         )
@@ -1518,6 +1643,7 @@ class ChannelWorker:
             "error_count": int(self.stats.errors),
             "diagnostic_json": {
                 "cycles": self.stats.cycles,
+                "latency": self._latency.snapshot(),
                 "updated_yc": self.stats.updated_yc,
                 "updated_yx": self.stats.updated_yx,
                 "sent_yk": self.stats.sent_yk,
@@ -1580,6 +1706,19 @@ class ChannelWorker:
         return receipt
 
     def _sync_measurements(self, values: Any) -> tuple[int, int]:
+        started_ns = time.perf_counter_ns()
+        try:
+            return self._sync_measurement_values(values)
+        finally:
+            self._latency.observe('c_sample_submit_ms',(time.perf_counter_ns()-started_ns)/1e6)
+
+    def _sync_measurement_values(self, values: Any) -> tuple[int, int]:
+        feedback_rows = []
+        try:
+            self._feedback_tracker.refresh()
+        except Exception as exc:
+            self.logger.error(f'回采规则读取失败: {exc}')
+        has_feedback = bool(self._feedback_tracker.keys)
         if self._yc_scaling is None:
             self._load_yc_scaling()
         yc = yx = 0
@@ -1652,6 +1791,10 @@ class ChannelWorker:
                         raw_value = engineering_value = row["value"]
                 else:
                     raw_value = engineering_value = int(bool(value))
+                if has_feedback:
+                    feedback = self._feedback_tracker.sample(kind,point_no,engineering_value,quality_value,item)
+                    if feedback is not None:
+                        feedback_rows.append(feedback)
                 # Avoid allocating a three-item slice for every stable or
                 # changed point in the common polling path.
                 value_changed = (
@@ -1687,6 +1830,12 @@ class ChannelWorker:
             except Exception as exc:  # noqa: BLE001 - 单点异常不能中断整站采集
                 self.stats.errors += 1
                 self.logger.error(f"写回实时点失败: {exc}")
+        if feedback_rows:
+            try:
+                self._feedback_tracker.commit(feedback_rows)
+            except Exception as exc:
+                self.stats.errors += 1
+                self.logger.error(f'实际回采样本保存失败，下轮重试: {exc}')
         if queued and candidate_cache:
             receipt = self._queue_measurements(candidate_cache, changed_points, now)
             if receipt:
@@ -1776,6 +1925,13 @@ class ChannelWorker:
         return self._master.send_yt_point(point_no, float(row.get("value", 0.0)))
 
     def _sync_commands(self) -> tuple[int, int]:
+        if time.monotonic() >= self._feedback_next_check:
+            from core.command_feedback import evaluate_feedback
+            try:
+                evaluate_feedback(self.store,self.spec.rtu_id)
+            except Exception as exc:
+                self.logger.error(f'指令回采核对失败，下轮重试: {exc}')
+            self._feedback_next_check = time.monotonic() + .1
         rows = self._command_rows()
         if rows is None:
             return 0, 0
@@ -1799,12 +1955,34 @@ class ChannelWorker:
                     not first_sync and self._command_seen.get(key) == current):
                 continue
             self._command_seen[key] = current
+            from core.command_trace import claim, advance
+            try:
+                command_id = claim(self.store,self.spec.rtu_id,kind,int(row['pnt_no']),
+                                   int(row.get('cmd_time') or 0),row.get('value'))
+            except Exception:
+                self._command_seen.pop(key,None)
+                self._command_version = None
+                raise
+            if command_id is None:
+                continue  # Already dispatched or superseded; never replay uncertain I/O.
             command_key = (f'RTU编号={self.spec.rtu_id} 类型={kind} 点号={row["pnt_no"]} '
                            f'命令时标={int(row.get("cmd_time") or 0)}')
             self.business.event('指令开始下发', 四遥=kind.upper(), 点号=row['pnt_no'],
                                 值=row.get('value'), 命令时标=row.get('cmd_time'))
+            completed = False
+            observer = getattr(self._master,'set_command_progress',None)
             try:
+                if observer:
+                    observer(lambda stage: advance(self.store,command_id,stage))
+                else:
+                    advance(self.store,command_id,'execute_sent')
                 result = self._send_command(kind, row)
+                if result is False:
+                    raise RuntimeError('驱动明确拒绝指令')
+                completed = True
+                scope = ('iec104_activation_confirmation' if self.spec.channel_type=='iec104' else
+                         'modbus_response' if self.spec.channel_type in {'modbus-tcp','modbus-rtu'} else 'driver_return')
+                advance(self.store,command_id,'driver_completed' if scope=='driver_return' else 'protocol_confirmed',scope=scope)
                 self.business.event('指令驱动调用完成', 四遥=kind.upper(), 点号=row['pnt_no'],
                                     值=row.get('value'), 命令时标=row.get('cmd_time'), 驱动返回=result)
                 now = max(_now_ms(), int(row.get("cmd_time") or 0))
@@ -1822,12 +2000,19 @@ class ChannelWorker:
                                     命令=command_key, 状态=1, 处理时刻=now)
             except Exception as exc:  # noqa: BLE001 - 通道必须继续服务其他点
                 self.stats.errors += 1
+                if completed:
+                    self.business.event('指令驱动已完成但结果保存失败，禁止自动重发',命令=command_key,错误=str(exc))
+                    continue
+                advance(self.store,command_id,'failed',scope='unconfirmed',error=exc)
                 self._write_row(
                     "fes_yk_define" if kind == "yk" else "fes_yt_define",
                     self.spec.rtu_id, int(row["pnt_no"]),
                     {"status": 3, "cmd_handle_time": max(_now_ms(), int(row.get("cmd_time") or 0))},
                 )
                 self.business.event('指令下发或结果写入失败', 命令=command_key, 错误=str(exc), 状态=3)
+            finally:
+                if observer:
+                    observer(None)
         return sent_yk, sent_yt
 
     def _close_master(self) -> None:

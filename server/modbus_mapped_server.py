@@ -317,7 +317,13 @@ class ModbusMappedServer(ModbusTcpTransServer):
             self._business('Modbus写请求解码', rows=(dict(四遥=kind.upper(), 点号=no, 工程值=value)
                 for kind,no,value in decoded), RTU编号=self.rtu_id, 站号=self.unit_id,
                 功能码=function_code, 数据区=area, 起始地址0基=address, 数量=len(set_values))
-            self._commands(decoded)
+            self._write_generation += 1
+            self._write_inflight = True
+            try:
+                await self._commit_command(lambda: self._commands(decoded))
+            finally:
+                self._write_inflight = False
+                self._write_generation += 1
         except Exception as exc:
             self._business('Modbus写请求未提交数据库', RTU编号=self.rtu_id, 站号=self.unit_id,
                 功能码=function_code, 起始地址0基=address, 异常码=4, 错误=str(exc))
@@ -417,7 +423,7 @@ class ModbusMappedServer(ModbusTcpTransServer):
                         # A remote write can commit while this thread is reading
                         # SQLite. Never overwrite its newer wire value with that
                         # older scan; retry from the database on the next tick.
-                        if generation != self._write_generation:
+                        if generation != self._write_generation or getattr(self, '_write_inflight', False):
                             return False
                         self.publish_updates(batch)
                         self._database_samples.update({(kind,no):value for kind,no,value in changed})
@@ -446,4 +452,5 @@ class ModbusMappedServer(ModbusTcpTransServer):
     @property
     def diagnostics(self):
         return dict(value_mode='engineering_mapping', mapped_points=len(self._mappings),
-                    database_sync_interval_ms=50, command_confirmation_scope='simulator_database')
+                    database_sync_interval_ms=50, command_confirmation_scope='simulator_database',
+                    modbus_requests=self.request_diagnostics)

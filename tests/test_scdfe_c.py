@@ -25,6 +25,7 @@ from scdfe_c import (
 )
 from scdfe_c import _worker_thread_entry
 from scdfe_c.web.service import ScadaStore
+from core.scdfe_control import InstanceLock
 
 
 @dataclass
@@ -83,6 +84,12 @@ class ScdfeCTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.store = ScadaStore(self.root / "scada.sqlite3")
+        # Supervisor tests use private databases; never contend with live RTUs.
+        # Keep actual file locking, scoped to this fixture's temporary database.
+        lock_patch = patch.object(runtime, "_rtu_lock", side_effect=lambda rid:
+                                  InstanceLock(self.store.db_path, f"test-rtu-{rid}"))
+        lock_patch.start()
+        self.addCleanup(lock_patch.stop)
         self.store.create_row("fes_rtu_define", {
             "rtu_id": 7, "channel_id": 70, "channel_type": "modbus-tcp",
             "name": "测试站",

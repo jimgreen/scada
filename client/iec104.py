@@ -777,6 +777,11 @@ class IEC104Master(PacketTrace):
                                        select_execute=select_execute, qualifier=qualifier,
                                        recorded_at=recorded_at)
 
+    def set_command_progress(self, callback):
+        """Observer for the serialized selection/execute exchange."""
+        if self._connection is not None:
+            self._connection.command_progress = callback
+
     def send_yt_point(self, point_no, value, *, data_type=None, qualifier=None, recorded_at=None):
         return self._write_yt_command(point_no, value, data_type=data_type,
                                        qualifier=qualifier, recorded_at=recorded_at)

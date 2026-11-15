@@ -75,8 +75,8 @@ class DatabaseSampleTests(unittest.TestCase):
     def test_rounded_samples_quality_retry_and_removal(self):
         con = sqlite3.connect(':memory:'); self.addCleanup(con.close)
         for kind in ('yc','yx'):
-            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT)')
-        con.execute('INSERT INTO fes_yc_define VALUES(1,1,0.1,0)')
+            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT,refresh_time INT)')
+        con.execute('INSERT INTO fes_yc_define VALUES(1,1,0.1,0,0)')
         native = {('yc',1):(0,0)}
         seen = []
         def snapshot(keys):
@@ -88,7 +88,8 @@ class DatabaseSampleTests(unittest.TestCase):
         server = SimpleNamespace(rtu_id=1,running=True,active_connection_count=1,
                                  prepare_value=lambda kind,no,value:value,
                                  monitoring_snapshot=Mock(side_effect=snapshot),update_monitoring=Mock(side_effect=update))
-        service = SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={},_database_pending=set())
+        service = SimpleNamespace(_lock=threading.RLock(),_server=server,_database_samples={},_database_pending=set(),
+                                  _soe_forwarder=None,_packet_sink=Mock())
         sync = lambda: IEC104Service._sync_database_values(service,con)
         self.assertEqual(sync(),1)
         self.assertEqual(sync(),0)  # float32 rounding must not cause repeated spontaneous reports

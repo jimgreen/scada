@@ -15,6 +15,8 @@ ASSETS = {"workbench.css": "text/css; charset=utf-8",
 
 S_PAGES = [
     ("运行管理", [
+        ("command-traces.html", "/command-traces", "↗", "指令追踪", "入库、选择、执行与确认阶段"),
+        ("diagnostics.html", "/diagnostics", "◴", "运行诊断", "分段耗时与启动配置检查"),
         ("processes.html", "/processes", "▤", "进程监控", "按通信通道展示进程、PID、心跳和运行状态"),
         ("communication.html", "/communication", "◉", "通信监控", "连接、测点数量与通道状态"),
         ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),
@@ -31,6 +33,8 @@ S_PAGES = [
 ]
 T_PAGES = [
     ("运行管理", [
+        ("command-traces.html", "/command-traces", "↗", "指令追踪", "共享业务库中的命令派发与确认阶段"),
+        ("diagnostics.html", "/diagnostics", "◴", "运行诊断", "分段耗时与启动配置检查"),
         ("processes.html", "/processes.html", "▤", "进程监控", "转发进程的启停、心跳和运行状态"),
         ("communication.html", "/communication.html", "◉", "通信监控", "转发通道的监听地址与通信状态"),
         ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),

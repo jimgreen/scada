@@ -213,6 +213,9 @@ class TransmissionReviewTests(unittest.TestCase):
         self.connect()
         version = self.store.get_row("fes_scdfe_t_point_define", [1, 2, "yk"])["_version"]
         self.assertTrue(self.runtime.command(self.runtime.points["yk", 2], 1))
+        # Display snapshots flush on the independent scan/timer, after the
+        # command's source database acceptance has already been returned.
+        self.runtime.refresh()
         row = self.store.get_row("fes_scdfe_t_point_define", [1, 2, "yk"])
         self.assertEqual(row["value"], 1.0)
         self.assertEqual(row["status"], 0)

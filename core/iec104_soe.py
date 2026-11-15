@@ -213,7 +213,7 @@ class SoeReceiver:
 
 
 class SoeForwarder:
-    """One bounded in-flight batch per channel; cursor commits after APCI ACK.
+    """One bounded in-flight batch per live client; durable floor after APCI ACK.
 
     A failed/disconnected batch is retried. Crash after ACK before cursor commit
     can duplicate it. There is deliberately no timer that discards old events.
@@ -230,6 +230,9 @@ class SoeForwarder:
         self.on_ack = on_ack
         self.on_event = on_event
         self.pending_events = []
+        self._peers = {}
+        self._orphan_floor = None
+        self._persist = True
 
     def tick(self, sender):
         if self.connection is None:
@@ -237,6 +240,8 @@ class SoeForwarder:
             row = self.connection.execute('SELECT last_event_id FROM _scada_iec104_soe_cursor WHERE consumer=?',
                                           (self.consumer,)).fetchone()
             self.last_event_id = int(row[0]) if row else 0
+        if hasattr(sender,'soe_peers'):
+            return self._tick_peers(sender)
         if self.pending is not None:
             state = 1 if self.acked else sender.poll_soe()
             if state == 0: return 0
@@ -281,13 +286,49 @@ class SoeForwarder:
                 logging.getLogger(__name__).exception('SOE业务日志失败；投递状态保持不变')
 
     def _advance(self, target):
-        self.connection.execute('''INSERT INTO _scada_iec104_soe_cursor(consumer,last_event_id,ack_time_ms)
+        if self._persist:
+            self.connection.execute('''INSERT INTO _scada_iec104_soe_cursor(consumer,last_event_id,ack_time_ms)
             VALUES (?,?,?) ON CONFLICT(consumer) DO UPDATE SET
             last_event_id=MAX(last_event_id,excluded.last_event_id),ack_time_ms=excluded.ack_time_ms''',
             (self.consumer,target,time.time_ns()//1_000_000))
         self.last_event_id = target
 
+    def _tick_peers(self,sender):
+        peers={peer.key:peer for peer in sender.soe_peers()}
+        for key in self._peers.keys()-peers.keys():
+            departed=self._peers.pop(key)
+            floor=departed.last_event_id
+            self._orphan_floor=floor if self._orphan_floor is None else min(self._orphan_floor,floor)
+        new=False
+        for key in peers.keys()-self._peers.keys():
+            child=SoeForwarder(self.store,self.consumer,self.origin,self.route,rtu_id=self.rtu_id,
+                               batch_size=self.batch_size,on_ack=self.on_ack,
+                               on_event=lambda action,events,peer=peers[key]:
+                                   self._event(f'{action} 连接={peer.key} 对端={peer.address}',events))
+            child.connection=self.connection;child.last_event_id=self.last_event_id;child._persist=False
+            child.address=peers[key].address
+            self._peers[key]=child;new=True
+        # TCP has no stable logical client ID. A new session inherits the
+        # conservative durable floor, including a disconnected laggard's gap.
+        # Fast live sessions keep their own progress; duplicates after a restart
+        # are allowed, but unconfirmed history is never silently discarded.
+        if new:self._orphan_floor=None
+        count=0
+        for key,child in self._peers.items():count+=child.tick(peers[key])
+        floors=[child.last_event_id for child in self._peers.values()]
+        if self._orphan_floor is not None:floors.append(self._orphan_floor)
+        if floors and min(floors)>self.last_event_id:self._advance(min(floors))
+        self.pending=max((x.pending or 0 for x in self._peers.values()),default=0) or None
+        self.error=next((x.error for x in self._peers.values() if x.error),None)
+        return count
+
+    def peer_progress(self):
+        return dict(durable_cursor=self.last_event_id,disconnected_floor=self._orphan_floor,
+                    connections=[dict(connection_id=key,address=x.address,acknowledged=x.last_event_id,pending=x.pending,error=x.error)
+                                 for key,x in list(self._peers.items())])
+
     def close(self):
+        self._peers.clear();self._orphan_floor=None
         if self.connection is not None:
             self.connection.close(); self.connection = None
         self.pending, self.acked = None, False

@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -137,6 +138,12 @@ class TransRuntimeBatchTests(unittest.TestCase):
         runtime.channel_id = 1; runtime.logger = Mock(); runtime._runtime_error = Mock()
         runtime._point_runtime_pending = {('yc', n):dict(value=n, status=128) for n in (1, 2)}
         runtime._point_runtime_state = {}
+        runtime._point_runtime_lock = threading.Lock()
+        runtime._point_runtime_flush_lock = threading.Lock()
+        runtime._business_lock = threading.Lock(); runtime._business_events = []
+        runtime._point_runtime_since = 0
+        runtime._point_runtime_metrics = dict(batches=0,rows=0,failures=0,lock_conflicts=0)
+        runtime._latency = Mock()
         con.execute("CREATE TRIGGER reject_second BEFORE UPDATE ON fes_scdfe_t_point_define WHEN NEW.pnt_no=2 BEGIN SELECT RAISE(ABORT,'fixture'); END")
         self.assertFalse(runtime._flush_point_runtime())
         self.assertEqual(list(con.execute('SELECT value FROM fes_scdfe_t_point_define')), [(0,), (0,)])

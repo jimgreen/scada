@@ -24,6 +24,8 @@ def protocol_capabilities(component):
             'soe_forward_types': [30,31],
             'soe_event_causes': [3],
             'soe_delivery': 'at_least_once_apci_ack',
+            'soe_live_client_isolation': component in {'scdfe_s','scdfe_t'},
+            'soe_reconnect_policy': 'conservative_shared_floor_replay_duplicates_possible',
             'soe_native_requirement': None,
             'soe_cp56_time_convention': 'UTC_calendar_raw_bytes_preserved',
             'soe_max_asdu_length_enforced': True,

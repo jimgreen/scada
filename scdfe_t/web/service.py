@@ -469,6 +469,10 @@ class TransStore:
             pending = (row.get("process_status") == 1 and row.get("process_enable")
                        and 0 <= _now_ms() - int(row.get("process_start_time") or 0) < START_TIMEOUT * 1000)
             if not own_starting and not pending:
+                from core.startup_checks import check_listener
+                issue = check_listener(row['bind_host'], row['bind_port'])
+                if issue:
+                    raise ApiError(409, issue['message'], code=issue['code'])
                 started = _now_ms()
                 launch_time = started
                 self._update_runtime(cid, process_enable=1, process_status=1, process_pid=0,

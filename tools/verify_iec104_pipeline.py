@@ -57,6 +57,7 @@ def stats(values):
     ordered = sorted(values)
     return dict(samples=len(values), median_ms=round(statistics.median(values), 3),
                 p95_ms=round(ordered[math.ceil(len(values)*.95)-1], 3),
+                p99_ms=round(ordered[math.ceil(len(values)*.99)-1], 3),
                 max_ms=round(max(values), 3))
 
 
@@ -226,10 +227,12 @@ def pipeline(channels, points, rounds, output):
         assert peer_matches(expected), 'GI values and per-RTU isolation'
         result['checks'] = ['C startup GI commit','S/T GI ACTCON -> exact object count -> ACTTERM',
                             'CA/IOA mapping and RTU isolation','5 GI repeats per S/T channel']
-        latencies, c_latencies, bursts = [], [], []
+        latencies, c_latencies, bursts, milestones = [], [], [], []
         workload_start = time.perf_counter()
         for step in range(1,rounds+1):
             mark = [len(w.frames) for _,w in peers]
+            c_wires = [w for name,w in wires if name.startswith('C-')]
+            c_mark = [len(w.frames) for w in c_wires]
             updates=[]
             for r,k,n in expected:
                 value = r*1000+n+step*10 if k=='yc' else step%2
@@ -270,9 +273,22 @@ def pipeline(channels, points, rounds, output):
             frames = [b for (_,w),m in zip(peers,mark) for _,b in w.monitoring(m)]
             assert sum(b[7]&127 for b in frames)==len(expected), 'each changed point exactly once on T wire'
             bursts.append(dict(objects=len(expected),frames=len(frames),bytes=sum(map(len,frames))))
+            c_stamps = [stamp for w,m in zip(c_wires,c_mark) for stamp,_ in w.monitoring(m)]
+            t_stamps = [stamp for (_,w),m in zip(peers,mark) for stamp,_ in w.monitoring(m)]
+            assert c_stamps and t_stamps
+            milestones.append(dict(burst=step, source_commit_monotonic=begin,
+                c_first_rx_ms=(min(c_stamps)-begin)*1000,
+                c_last_rx_ms=(max(c_stamps)-begin)*1000,
+                c_commit_observed_ms=(c_end-begin)*1000,
+                t_last_rx_ms=(max(t_stamps)-begin)*1000,
+                destination_observed_ms=(end-begin)*1000))
         result.update(c_commit_latency=stats(c_latencies),end_to_end_latency=stats(latencies),
                       c_commit_samples_ms=c_latencies,end_to_end_samples_ms=latencies,
                       bursts=bursts,workload_seconds=round(time.perf_counter()-workload_start,3))
+        result['burst_milestones'] = milestones
+        result['milestone_note'] = ('Offsets correlate one complete burst from the S database commit return. '
+            'Database/destination observation uses 5ms polling and may follow wire callbacks; '
+            'parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.')
         for quality in (128,16,0):
             quality_marks=[len(w.frames) for _,w in peers]
             updates=[]
@@ -376,6 +392,9 @@ def pipeline(channels, points, rounds, output):
         result['checks'].append('downstream reconnect + GI retrieves latest values/qualities')
         assert not errors, errors
         result['workers']=[vars(w.stats).copy() for w in workers]
+        from core.runtime_status import runtime_status_rows
+        result['runtime_diagnostics']=[dict(service=x['service_name'],channel_id=x['channel_id'],
+            sampled_at=x['sampled_at'],diagnostic=x['diagnostic']) for x in runtime_status_rows(c)]
         result['frames']={name: wire.validate() for name,wire in wires}
         output.mkdir(parents=True,exist_ok=True)
         with (output/f'wire-{channels}ch.jsonl').open('w',encoding='utf-8') as stream:

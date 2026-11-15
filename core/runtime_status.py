@@ -9,6 +9,7 @@ status table into a database bottleneck.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import ExitStack
 from datetime import datetime
 import json
 import math
@@ -43,6 +44,14 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+# Traffic and heartbeat samples are periodic. Lifecycle, error and loss
+# transitions still publish immediately, even inside the sampling interval.
+_IMMEDIATE_FIELDS = tuple(field for field in _VALUE_FIELDS if field not in {
+    "rx_count", "tx_count", "last_rx_time", "last_tx_time", "last_error_time",
+    "process_heartbeat_time", "diagnostic_json", "sampled_at",
+})
+
+
 def state_for(process_status: Any, running: Any = False, error: Any = "") -> str:
     """Map existing numeric lifecycle fields to a stable API/database state."""
     try:
@@ -61,7 +70,15 @@ def state_for(process_status: Any, running: Any = False, error: Any = "") -> str
 
 
 def _json_safe(value: Any) -> Any:
-    if isinstance(value, Mapping):
+    # Diagnostics mostly contain strings and counters. Handle exact built-in
+    # scalars before the more expensive Mapping/sequence ABC checks. Keep the
+    # recursive path for mixed keys, bytes, datetimes and non-finite floats.
+    kind = type(value)
+    if value is None or kind is str or kind is int or kind is bool:
+        return value
+    if kind is float:
+        return value if math.isfinite(value) else None
+    if kind is dict or isinstance(value, Mapping):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
@@ -126,13 +143,31 @@ class RuntimeStatusStore:
         self.service_name = service_name.strip()
         self.write_interval_ms = max(0, int(write_interval_ms))
         self._lock = threading.Lock()
-        self._last_write: dict[int, tuple[int, tuple[Any, ...]]] = {}
+        self._last_write: dict[int, tuple[float, tuple[Any, ...]]] = {}
+        self._sequence = 0
+        self._last_applied: dict[int, int] = {}
 
     def upsert(self, channel_id: Any, values: Mapping[str, Any] | None = None,
                *, force: bool = False, connection=None) -> bool:
+        snapshot = self._prepare(channel_id, values, force=force)
+        if snapshot is None:
+            return False
+        return bool(_write_snapshots(self.store, [snapshot], connection=connection))
+
+    def _due(self, snapshot, clock):
+        # Called under _lock. An older capture delayed acquiring its database
+        # connection must not overwrite a later capture already applied.
+        _, channel_id, _, signature, sequence, force = snapshot
+        if sequence <= self._last_applied.get(channel_id, 0):
+            return False
+        previous = self._last_write.get(channel_id)
+        return (force or previous is None or previous[1] != signature
+                or (clock - previous[0]) * 1000 >= self.write_interval_ms)
+
+    def _prepare(self, channel_id, values=None, *, force=False):
         channel_id = _integer(channel_id)
         if channel_id <= 0:
-            return False
+            return None
         payload = {field: (values or {}).get(field) for field in _VALUE_FIELDS}
         payload["protocol"] = str(payload.get("protocol") or "")
         payload["channel_name"] = str(payload.get("channel_name") or "")
@@ -148,47 +183,17 @@ class RuntimeStatusStore:
             payload[field] = _integer(payload[field])
         payload["process_error"] = str(payload.get("process_error") or "")
         payload["last_error"] = str(payload.get("last_error") or "")
-        payload["diagnostic_json"] = diagnostic_json(payload.get("diagnostic_json"))
         sampled_at = _integer(payload.get("sampled_at")) or now_ms()
         payload["sampled_at"] = sampled_at
-        signature = tuple(payload[field] for field in _VALUE_FIELDS if field != "sampled_at")
+        signature = tuple(payload[field] for field in _IMMEDIATE_FIELDS)
         with self._lock:
-            previous = self._last_write.get(channel_id)
-            if (not force and previous is not None
-                    and sampled_at - previous[0] < self.write_interval_ms
-                    and previous[1] == signature):
-                return False
-            self._last_write[channel_id] = (sampled_at, signature)
-
-        values_to_bind = [self.service_name, channel_id, *(payload[field] for field in _VALUE_FIELDS)]
-        try:
-            if connection is None:
-                with self.store.connection() as current:
-                    current.execute("BEGIN IMMEDIATE")
-                    current.execute(_UPSERT_SQL, values_to_bind)
-                    current.commit()
-            else:
-                # A caller may group the snapshot with another state write.
-                # Only own the transaction when the supplied connection is
-                # currently idle; an outer transaction must be committed or
-                # rolled back by its owner.
-                current = connection
-                owns_transaction = not current.in_transaction
-                if owns_transaction:
-                    current.execute("BEGIN IMMEDIATE")
-                try:
-                    current.execute(_UPSERT_SQL, values_to_bind)
-                    if owns_transaction:
-                        current.commit()
-                except Exception:
-                    if owns_transaction and current.in_transaction:
-                        current.rollback()
-                    raise
-            return True
-        except Exception:
-            with self._lock:
-                self._last_write.pop(channel_id, None)
-            raise
+            self._sequence += 1
+            snapshot = (self, channel_id, payload, signature, self._sequence, force)
+            if not self._due(snapshot, time.monotonic()):
+                return None
+        # Encode only due diagnostics, before entering the write transaction.
+        payload["diagnostic_json"] = diagnostic_json(payload.get("diagnostic_json"))
+        return snapshot
 
     def invalidate(self, channel_id: Any) -> None:
         """Forget a write recorded in a transaction that was later rolled back."""
@@ -204,6 +209,66 @@ class RuntimeStatusStore:
         sql += ' ORDER BY "channel_id"'
         with self.store.connection() as connection:
             return [public_runtime_row(row) for row in connection.execute(sql, params)]
+
+
+def _write_snapshots(store, snapshots, *, connection=None):
+    if not snapshots:
+        return 0
+    if connection is None:
+        with store.connection() as current:
+            return _write_snapshots(store, snapshots, connection=current)
+    owns_transaction = not connection.in_transaction
+    if owns_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    try:
+        # Database transaction BEFORE publisher locks: an outer-transaction
+        # caller may already own SQLite's writer lock. Recheck after waiting,
+        # then commit/cache under the same locks to preserve publication order.
+        with ExitStack() as locks:
+            for publisher in sorted({row[0] for row in snapshots}, key=id):
+                locks.enter_context(publisher._lock)
+            selected = [row for row in snapshots if row[0]._due(row, time.monotonic())]
+            if selected:
+                # All snapshots in a monitor batch use the same UPSERT shape.
+                # executemany keeps one transaction and avoids one Python/SQLite
+                # call per channel while preserving each channel's row update.
+                connection.executemany(_UPSERT_SQL, [
+                    [publisher.service_name, channel_id,
+                     *(payload[field] for field in _VALUE_FIELDS)]
+                    for publisher, channel_id, payload, _, _, _ in selected
+                ])
+            if owns_transaction:
+                connection.commit()
+            clock = time.monotonic()
+            for publisher, channel_id, _, signature, sequence, _ in selected:
+                publisher._last_applied[channel_id] = sequence
+                if owns_transaction:
+                    publisher._last_write[channel_id] = (clock, signature)
+                else:
+                    # An outer owner may roll back later. Never throttle from
+                    # an unconfirmed transaction, even without invalidate().
+                    publisher._last_write.pop(channel_id, None)
+            return len(selected)
+    except BaseException:
+        if owns_transaction and connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def write_runtime_status_batch(store, pending):
+    """Atomically publish due snapshots; skipped polls take no write lock.
+
+    Callers retain their lifecycle locks from capture until this returns.
+    Traffic is sampled from the next call's latest state, not queued as events.
+    """
+    snapshots = []
+    for publisher, channel_id, values in pending:
+        if publisher.store is not store:
+            raise ValueError("运行状态批次必须使用同一数据库 store")
+        snapshot = publisher._prepare(channel_id, values)
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    return _write_snapshots(store, snapshots)
 
 
 def runtime_status_rows(store, *, service_name: str | None = None,

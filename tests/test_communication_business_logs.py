@@ -324,6 +324,7 @@ class ForwardBusinessTests(trans_fixtures.ScdfeTTestBase):
         self.assertTrue(any('转发源值变化' in x and '源RTU=1' in x and '源点号=1' in x and '新值=54.5' in x for x in lines))
         self.assertTrue(any('等待对端读取' in x and '54.5' in x for x in lines))
         self.assertTrue(runtime.commands([(runtime.points[('yk',3)],1)]), '\n'.join(lines[-5:]))
+        runtime.refresh()  # acceptance detail is flushed outside the command callback
         self.assertTrue(any('转发指令已入源库，等待C处理' in x and '转发点号=3' in x and '源点号=1' in x for x in lines))
 
 

@@ -23,6 +23,8 @@ from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError
 from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from core.network_endpoint import network_endpoint
+from core.monitor_changes import ensure_monitor_changes, read_monitor_changes
+from core.pipeline_metrics import LatencyStats
 from core.service_log import ServiceFileLog
 from core.scdfe_control import log_message_text
 from scdfe_s.web.configuration import apply_config, write_config
@@ -76,7 +78,10 @@ class IEC104Service:
         self._packet_sink = service_packet_recorder(self._record, None, None)
         self._server: IEC104Server | None = None
         self._database_samples = {}
+        self._latency = LatencyStats()
         self._database_pending = set()
+        self._database_cursor = None
+        self._database_journal_ready = False
         self._soe_forwarder = None
         self._database_sync_stop = threading.Event()
         self._database_sync_thread: threading.Thread | None = None
@@ -277,6 +282,10 @@ class IEC104Service:
                 self._file_log.bind_channel(rtu_channel_id(self.store, effective_rtu))
                 self._file_log.start_session()
                 server = self._build_server()
+                from core.startup_checks import check_listener
+                issue = check_listener(server.ip, server.port)
+                if issue:
+                    raise IEC104ServiceError(issue['message'])
                 if getattr(server, 'soe_point_keys', set()) and self.store.application_id:
                     from core.iec104_soe import SoeForwarder
                     server.require_soe_support()
@@ -293,6 +302,7 @@ class IEC104Service:
             self._server = server
             self._database_samples.clear()
             self._database_pending.clear()
+            self._database_cursor = None
             self._database_sync_stop.clear()
             self._database_sync_thread = threading.Thread(
                 target=self._database_sync_loop,
@@ -369,6 +379,15 @@ class IEC104Service:
         self._config = config
 
     def _sync_database_values(self, connection=None) -> int:
+        started_ns = time.perf_counter_ns()
+        try:
+            return IEC104Service._sync_database_values_impl(self, connection)
+        finally:
+            timing = getattr(self, '_latency', None)
+            if timing is not None:
+                timing.observe('s_sync_ms',(time.perf_counter_ns()-started_ns)/1e6)
+
+    def _sync_database_values_impl(self, connection=None) -> int:
         """Publish database YC/YX changes independently of Web requests.
 
         The S point editor is deliberately database-only.  This worker polls
@@ -378,7 +397,7 @@ class IEC104Service:
         """
         if connection is None:
             with self.store.connection() as owned_connection:
-                return self._sync_database_values(owned_connection)
+                return IEC104Service._sync_database_values_impl(self, owned_connection)
         with self._lock:
             server = self._server
             if server is None or not server.running:
@@ -388,35 +407,36 @@ class IEC104Service:
             changed = []
             candidates = []
             source_times = {}
-            present = set()
-            for table, kind in (("fes_yc_define", "yc"), ("fes_yx_define", "yx")):
-                rows = connection.execute(
-                    f"SELECT pnt_no, value, status, refresh_time FROM {table} WHERE rtu_id=? ORDER BY pnt_no",
-                    (rtu_id,),
-                )
-                for row in rows:
-                    point_no, value, quality = int(row[0]), row[1], int(row[2] or 0)
-                    key = (kind, point_no)
-                    present.add(key)
-                    sample = (value, quality)
-                    if key not in self._database_pending and self._database_samples.get(key) == sample:
-                        continue
-                    try:
-                        actual = server.prepare_value(kind, point_no, value)
-                    except Exception as exc:
-                        LOG.warning("IEC104 数据库值无法转换 %s/%s: %s", kind, point_no, exc)
-                        continue
-                    candidates.append((key, sample, actual))
-                    source_times[key] = row[3]
+            if not getattr(self, '_database_journal_ready', False):
+                ensure_monitor_changes(connection)
+                self._database_journal_ready = True
+            read_started = time.perf_counter_ns()
+            cursor, rows, deleted = read_monitor_changes(
+                connection, rtu_id, getattr(self, '_database_cursor', None))
+            timing = getattr(self, '_latency', None)
+            if timing is not None:
+                timing.observe('s_source_read_ms',(time.perf_counter_ns()-read_started)/1e6)
+            for kind, point_no, value, quality, stamp in rows:
+                key = (kind, int(point_no))
+                sample = (value, int(quality))
+                if key not in self._database_pending and self._database_samples.get(key) == sample:
+                    continue
+                try:
+                    actual = server.prepare_value(kind, point_no, value)
+                except Exception as exc:
+                    LOG.warning("IEC104 数据库值无法转换 %s/%s: %s", kind, point_no, exc)
+                    continue
+                candidates.append((key, sample, actual))
+                source_times[key] = stamp
             snapshot = server.monitoring_snapshot(key for key, _, _ in candidates) if candidates else {}
             for key, sample, actual in candidates:
                 value, quality = sample
                 if key in self._database_pending or snapshot.get(key) != (actual, quality):
                     changed.append((*key, value, quality))
             if changed:
-                # Updating native memory is not proof of successful delivery.
+                # Updating protocol memory is not proof of successful delivery.
                 # Retain pending keys until every type group is accepted, even
-                # when a retry sees the same value already in native memory.
+                # when a retry sees the same value already in protocol memory.
                 self._database_pending.update((k, n) for k, n, _, _ in changed)
                 soe_keys = server.soe_point_keys if self._soe_forwarder else set()
                 current_only = [item for item in changed if item[:2] in soe_keys]
@@ -443,11 +463,12 @@ class IEC104Service:
                 self._database_pending.difference_update((k, n) for k, n, _, _ in changed)
             for key, sample, _ in candidates:
                 # Store source values, not float32 wire-rounding artifacts.
-                # Failed native updates never advance the source snapshot.
+                # Failed protocol updates never advance the source snapshot.
                 self._database_samples[key] = sample
-            for key in self._database_samples.keys() - present:
-                del self._database_samples[key]
-            self._database_pending.intersection_update(present)
+            for key in deleted:
+                self._database_samples.pop(key, None)
+            self._database_pending.difference_update(deleted)
+            self._database_cursor = cursor
             if changed:
                 LOG.debug(
                     "IEC104 数据库值同步 RTU=%s points=%s transmit=%s",
@@ -705,6 +726,7 @@ class IEC104Service:
             error = str(item.get("last_error") or "")
             diagnostic = {
                 "label": "IEC104 服务端",
+                "latency": self._latency.snapshot(),
                 "endpoint": item.get("endpoint"),
                 "config": item.get("config", {}),
                 "protocol_config": item.get("protocol_config", {}),
@@ -778,6 +800,7 @@ class IEC104Service:
                 "last_error": self._last_error,
                 "soe_cursor": self._soe_forwarder.last_event_id if self._soe_forwarder else None,
                 "soe_pending": self._soe_forwarder.pending if self._soe_forwarder else None,
+                "soe_progress": self._soe_forwarder.peer_progress() if self._soe_forwarder else None,
                 "connections": connections,
                 "rx_count": self._rx_count,
                 "tx_count": self._tx_count,

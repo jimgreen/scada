@@ -22,6 +22,10 @@ class MonitorBatchTests(unittest.TestCase):
         for rid, protocol in [(1, 'iec104'), (2, 'modbus-tcp'), (3, 'can')]:
             self.store.create_row('fes_rtu_define', dict(rtu_id=rid, channel_id=rid+100, channel_type=protocol, name=f'RTU{rid}'))
         self.services = self.httpd.channel_services()
+        # This suite verifies every-publication atomicity and HTTP errors.
+        # Periodic sampling and live-vs-stored counters have separate coverage.
+        for service in self.services.values():
+            service._runtime_status.write_interval_ms = 0
         self.handler = object.__new__(ScadaHandler)
         self.handler.server = self.httpd
 

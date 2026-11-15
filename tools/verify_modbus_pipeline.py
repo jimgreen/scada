@@ -137,10 +137,19 @@ def pipeline(channels,points,rounds,output,*,rtu=False):
     result=dict(upstream='RTU frames over socket://' if rtu else 'Modbus TCP',channels=channels,
                 yc_per_rtu=points,yx_per_rtu=points,c_poll_ms=50,t_scan_ms=50,s_scan_ms=50,
                 writer_batch_ms=100,writer_batch_limit=500,response_timeout_ms=500)
-    wires=[]
+    wires=[];runtimes=[]
     with tempfile.TemporaryDirectory(prefix='modbus-pipeline-') as directory, ExitStack() as stack:
         root=Path(directory)
         label='rtu' if rtu else f'tcp-{channels}ch'
+        def save_command_diagnostics():
+            rows=[dict(channel_id=r.channel_id,command_write=r.writer.metrics.snapshot())
+                  for r in runtimes if getattr(r.writer,'metrics',None)]
+            (output/f'command-diagnostics-{label}.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf8')
+            with (output/f'wire-observed-{label}.jsonl').open('w',encoding='utf8') as file:
+                for name,wire in wires:
+                    for stamp,direction,data in wire.frames:
+                        file.write(json.dumps(dict(link=name,monotonic=stamp,direction=direction,hex=data.hex()))+'\n')
+        stack.callback(save_command_diagnostics)
         stack.callback(lambda: shutil.copytree(root/'logs',output/f'logs-{label}',dirs_exist_ok=True)
                        if (root/'logs').exists() else None)
         s=SimulatorStore(root/'scdfe_s.sqlite3',connection_pool_size=2)
@@ -204,6 +213,7 @@ def pipeline(channels,points,rounds,output,*,rtu=False):
         wait_for(c_matches,'C initial four-area read')
         for r in range(1,channels+1):
             event=threading.Event(); runtime=TransRuntime(c.db_path,channel_id=r,log_dir=root/'logs',stop_event=event)
+            runtimes.append(runtime)
             background(runtime.run,event)
             wait_for(lambda:runtime.server is not None and runtime.server.ready.is_set()
                      and runtime.server.connected,'T listener ready')

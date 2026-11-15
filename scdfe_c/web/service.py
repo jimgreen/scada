@@ -389,7 +389,10 @@ class ScadaStore:
                         raise RuntimeError('数据库表结构不符合要求，需要显式迁移：python -m tools.simplify_schema --db <数据库> --apply')
                     connection.execute(RTU_VERSION_DDL)
                     from core.iec104_soe import TABLES as SOE_TABLES, ensure_schema as ensure_soe_schema
-                    unexpected_tables = actual_tables - expected_tables - {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES
+                    from core.monitor_changes import TABLES as MONITOR_TABLES
+                    from core.command_trace import TABLES as COMMAND_TRACE_TABLES, ensure_schema as ensure_command_trace
+                    unexpected_tables = (actual_tables - expected_tables -
+                                         {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES - MONITOR_TABLES - COMMAND_TRACE_TABLES)
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -445,6 +448,7 @@ class ScadaStore:
                     self._ensure_command_version_triggers(connection)
                     self._ensure_point_refresh_triggers(connection)
                     ensure_soe_schema(connection, simulator=self.application_id == int.from_bytes(b'SDFS', 'big'))
+                    ensure_command_trace(connection, simulator=self.application_id == int.from_bytes(b'SDFS', 'big'))
                     connection.execute(
                         'INSERT OR IGNORE INTO _scada_rtu_version(rtu_id) SELECT rtu_id FROM fes_rtu_define'
                     )
@@ -645,15 +649,15 @@ class ScadaStore:
         """
         stamp = (
             "CASE WHEN CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) "
-            "> OLD.\"refresh_time\" "
+            "> COALESCE(OLD.\"refresh_time\",0) "
             "THEN CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) "
             "ELSE OLD.\"refresh_time\" + 1 END"
         )
         for table_name in ("fes_yc_define", "fes_yx_define"):
             table = quote_identifier(table_name)
             trigger_name = quote_identifier(f"_scada_point_refresh_{table_name}")
-            connection.execute(
-                f"CREATE TRIGGER IF NOT EXISTS {trigger_name} "
+            sql = (
+                f"CREATE TRIGGER {trigger_name} "
                 f"AFTER UPDATE OF \"value\", \"status\" ON {table} "
                 f"WHEN (OLD.\"value\" IS NOT NEW.\"value\" OR "
                 f"OLD.\"status\" IS NOT NEW.\"status\") "
@@ -661,6 +665,11 @@ class ScadaStore:
                 f"BEGIN UPDATE {table} SET \"refresh_time\"={stamp} "
                 f"WHERE \"rtu_id\"=NEW.\"rtu_id\" AND \"pnt_no\"=NEW.\"pnt_no\"; END"
             )
+            previous = connection.execute('SELECT sql FROM sqlite_master WHERE type=\'trigger\' AND name=?',
+                                          (f'_scada_point_refresh_{table_name}',)).fetchone()
+            if previous is None or previous[0] != sql:
+                connection.execute(f'DROP TRIGGER IF EXISTS {trigger_name}')
+                connection.execute(sql)
 
     def schema(self, table: str) -> dict[str, Any]:
         return self.catalog.get(table)
@@ -1468,7 +1477,8 @@ class ScadaStore:
         value = self._coerce(body['value'], columns['value'], required=True)
         if kind == 'yk' and value not in {0, 1}:
             raise ApiError(400, '遥控值只能为 0 或 1')
-        with self.connection() as connection:
+        from core.command_durability import durable_connection
+        with durable_connection(self) as connection:
             connection.execute('BEGIN IMMEDIATE')
             row = self._read(connection, table, key)
             self._check_version(row, if_match)

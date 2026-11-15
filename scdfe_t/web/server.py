@@ -311,6 +311,14 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         try:
             self._prepare_request()
             parts, query = self._parts()
+            from core.web_diagnostics import handle_diagnostics
+            from core.web_commands import handle_commands
+            if handle_commands(self,parts,query,'GET' if self.command=='HEAD' else self.command,
+                               self.server.trans_store.store,'t') is not False:
+                return
+            if handle_diagnostics(self,parts,query,'GET' if self.command=='HEAD' else self.command,
+                                  self.service.store,'t') is not False:
+                return
             from core.web_connections import handle_connections
             if handle_connections(self,parts,query,'GET' if self.command=='HEAD' else self.command,
                                   self.service.store,'t') is not False:

@@ -1,0 +1,112 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCDFE 第九轮优化与验证 · 2026-11-15</title><style>
+body{margin:0;background:#eef3f6;color:#183547;font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:1060px;margin:auto;padding:32px}section{background:white;border:1px solid #d9e6ea;border-radius:12px;padding:24px;margin:20px 0}
+h1{font-size:30px}h2{font-size:22px;color:#007b87}table{border-collapse:collapse;width:100%;font-size:15px}td,th{padding:12px;border-bottom:1px solid #dae5ec;text-align:left}th{background:#eef7f8}
+.scroll{overflow:auto}.note{padding:14px;background:#fff4da;border-left:4px solid #cc9231}code,pre{font-family:Consolas,monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6f9;padding:16px}li{margin:8px 0}@media(max-width:600px){main{padding:12px}section{padding:14px}h1{font-size:25px}}
+</style><main><h1>SCDFE 第九轮优化与验证</h1><p>2026-11-15 · 基线 6fc0a35 · 纯 Python IEC104 · Windows / Python 3.11.15 环境，具体解释器见验收原始记录。</p>
+<section><h2>已实现并应用</h2><ul>
+<li>C：用最老待写消息的年龄限制批量等待，防止连续小包把提交不断推迟；保留 FIFO 排空、停止、锁冲突回退及确认语义。</li>
+<li>S：首次同步全量读取，之后按 RTU/点号读取提交后的值或质量变化。辅助索引与原更新同事务，支持回滚、删除、重建及独立游标；只有发布成功才推进游标。</li>
+<li>S/T：连接详情按 after 游标追加，突发超过一页时连续补读；保留页面节点，最多 2000 条。浏览历史冻结自动刷新，筛选切换丢弃旧请求结果。</li>
+<li>使用说明 HTML 已同步；C/T 共享业务库、S 独立数据库，程序间数据交互方式保持原约定。</li></ul>
+<p>新增内部表 <code>_scada_monitor_change</code> 每个历史点键保留一个最新标记，包含删除标记。它不替代逐条 SOE 事件表；长期反复新增/删除点号会增加其键数。数据库严格校验和结构检查工具已识别该辅助表。</p></section>
+<section><h2>同负载性能对比</h2><p>数据库与写库基准分别运行新旧版本三轮，数据库每轮 40 次，表内取各轮中位数的中位数；使用临时数据库，不修改运行值。数据库同步基准不包含网络发送。首次提交基准为 40 条连续输入，每条间隔 20 ms，批量间隔 100 ms，上限 500。</p>
+<div class="scroll"><table><thead><tr><th>场景</th><th>之前 ms</th><th>之后 ms</th><th>中位耗时减少</th></tr></thead><tbody><tr><td>16 RTU × 1000 点，仅 1 点变化：同步读取</td><td>30.587</td><td>0.168</td><td>99.45%</td></tr><tr><td>单点更新数据库提交</td><td>0.091</td><td>0.080</td><td>12.69%</td></tr><tr><td>8000 个 YC 同时变化：同步读取</td><td>96.666</td><td>33.834</td><td>65.00%</td></tr><tr><td>8000 个 YC 同时变化：数据库提交</td><td>58.911</td><td>56.773</td><td>3.63%</td></tr><tr><td>40 条连续输入，间隔 20 ms：首次提交</td><td>817.681</td><td>114.263</td><td>86.03%</td></tr></tbody></table></div>
+<p class="note">稀疏读取与提交等待的收益明确；密集更新的写入样本波动明显，旧版三轮中位数 30.855～67.238 ms，新版 52.377～112.285 ms。索引维护增加写操作，不能根据表内 3.63% 的差值宣称密集写入吞吐提升。100 ms 是调度目标，不是锁等待、系统调度下的硬实时保证。</p>
+<p>连接详情已有 100 条、没有新增时：事件响应体 14653 → 65 B/次，减少 99.56%；10 次刷新移除事件节点 1000 → 0 个。使用真实仓库 HTML/JS 与受控 HTTP 数据，仅统计事件接口。</p>
+<h2>真实 IEC104 链路结果</h2><p>使用 S 服务、C 采集线程与独立写库进程、C/T 共享 SQLite、T 转发和下游客户端；每通道 32 YC + 32 YX，12 轮变化；S/C/T 扫描 50 ms、写库间隔 100 ms。以下为一次同参数前后对照。</p>
+<div class="scroll"><table><thead><tr><th>场景</th><th>之前端到端中位 ms</th><th>之后端到端中位 ms</th><th>正确性</th></tr></thead><tbody><tr><td>1 通道</td><td>267.575</td><td>272.561</td><td>通过</td></tr><tr><td>4 通道</td><td>664.569</td><td>729.834</td><td>通过</td></tr></tbody></table></div>
+<p class="note">端到端时延没有证明整体提速：本次 1 通道增加约 1.9%，4 通道增加约 9.8%。主机同时运行原有 C/S 服务，结果含调度、日志和 SQLite 提交，下一轮需要用分段耗时与独立负载定位。不能将微基准收益直接等同于现场通信提速。</p></section>
+<section><h2>正确性验证</h2><p>167 项测试与 286 项子测试通过；浏览器交互检查 15 项通过。Python 编译、JavaScript 语法和 Git 差异空白检查通过。</p><ul>
+<li>IEC104：总召确认/数据/结束、值和质量变化、CA/IOA 与 RTU 隔离、直接执行、选择执行、撤销、周期上送及断线重连；故障注入前各通道错误数为 0。</li>
+<li>SOE：CP56 时标与原始双点状态、逐事件持久化、同点连续变位、发送失败/断线游标恢复；最新值索引合并 3 次变化时，SOE 仍保留 3 条事件。</li>
+<li>Modbus：真实 TCP 1/4 通道和 RTU 帧经 socket 字节链路，覆盖 01/02/03/04/05/06/15/16、地址基准、异常响应、读回及独立数据库更新。RTU 字节链路不等于真实串口电气测试。</li>
+<li>CAN：既有编码、轮询、调度和虚拟总线回归通过；没有进行物理总线、温度、电磁干扰或硬件错误注入验收。</li>
+<li>Web：250 条突发分批补齐、超过 2000 条时滚动保留、历史分页、筛选竞态、异常重试、节点保留与内容转义。</li></ul></section>
+<section><h2>应用与现场配置检查</h2><p>一致性备份已经 quick_check 校验。C 主进程/写库/指令进程正常停止并以新 PID 恢复；三端 Web 健康接口返回 200；S 原活动 13 个服务恢复。T 原先未运行，本轮没有启动原本停止的通道。</p>
+<ul><li>RTU 3：127.0.0.1:1502 无监听，S Modbus TCP 服务未运行。</li><li>RTU 4：S 使用本地模拟模式，C 的 loop:// 不构成 C/S 配对串口通信。</li><li>RTU 6：S BACnet 处于本地模拟模式；C 指向 47808，当前只有 C 在 UDP 47809 监听。</li><li>RTU 7：127.0.0.1:4840 无监听，S OPC UA 服务未运行。</li><li>T：通道 1 和 3 都配置 0.0.0.0:2404，与当前 S 的 127.0.0.1:2404 也冲突。历史进程记录为退出码 0，现有检查不能反推具体停止操作来源。</li></ul>
+<p>这些配置保留原值；应按真实测试拓扑分配唯一监听端口、选择实际服务/串口模式，再启动需要的通道。修改端口时需要同步对应客户端目标地址。</p></section>
+<section><h2>复现和原始证据</h2><pre>python tools/benchmark_efficiency_round9.py --root &lt;基线目录或当前目录&gt; --output &lt;JSON路径&gt;
+node tools/benchmark_connections_refresh.cjs
+node tests/frontend_efficiency_round9.cjs
+python tools/verify_iec104_pipeline.py --channels 1 4 --points 32 --rounds 12 --skip-comparison --output &lt;目录&gt;
+python tools/verify_modbus_pipeline.py --channels 1 4 --points 16 --rounds 6 --skip-comparison --output &lt;目录&gt;</pre>
+<p><code>output/efficiency_round9_20261115/</code> 保存前后基准、真实链路结果、测试输出、备份、配置排查和重启记录；<code>output/playwright/efficiency-round9/</code> 保存浏览器检查。需要已安装 Playwright，可用 PLAYWRIGHT_MODULE 指定现有包路径。本 HTML 已嵌入必要结果，离线阅读不依赖这些目录。</p>
+<details><summary>三轮数据库原始摘要</summary><pre>{
+  &quot;sparse_read&quot;: {
+    &quot;before&quot;: 30.5867,
+    &quot;after&quot;: 0.168,
+    &quot;reduction_percent&quot;: 99.45,
+    &quot;before_runs&quot;: [
+      30.5867,
+      34.9893,
+      22.4149
+    ],
+    &quot;after_runs&quot;: [
+      0.168,
+      0.2662,
+      0.1641
+    ]
+  },
+  &quot;sparse_write&quot;: {
+    &quot;before&quot;: 0.0914,
+    &quot;after&quot;: 0.0798,
+    &quot;reduction_percent&quot;: 12.69,
+    &quot;before_runs&quot;: [
+      0.0914,
+      0.0952,
+      0.0797
+    ],
+    &quot;after_runs&quot;: [
+      0.0798,
+      0.1234,
+      0.0795
+    ]
+  },
+  &quot;dense_read&quot;: {
+    &quot;before&quot;: 96.6665,
+    &quot;after&quot;: 33.8345,
+    &quot;reduction_percent&quot;: 65.0,
+    &quot;before_runs&quot;: [
+      96.6665,
+      113.9005,
+      47.2591
+    ],
+    &quot;after_runs&quot;: [
+      32.9311,
+      73.6146,
+      33.8345
+    ]
+  },
+  &quot;dense_write&quot;: {
+    &quot;before&quot;: 58.9107,
+    &quot;after&quot;: 56.7728,
+    &quot;reduction_percent&quot;: 3.63,
+    &quot;before_runs&quot;: [
+      58.9107,
+      67.2376,
+      30.8546
+    ],
+    &quot;after_runs&quot;: [
+      52.3765,
+      112.2847,
+      56.7728
+    ]
+  },
+  &quot;continuous_writer&quot;: {
+    &quot;before&quot;: 817.681,
+    &quot;after&quot;: 114.263,
+    &quot;reduction_percent&quot;: 86.03,
+    &quot;before_runs&quot;: [
+      817.681,
+      819.973,
+      816.558
+    ],
+    &quot;after_runs&quot;: [
+      120.8,
+      102.855,
+      114.263
+    ]
+  }
+}</pre></details></section></main></html>

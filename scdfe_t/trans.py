@@ -28,6 +28,8 @@ from core.iec104_protocol import IEC104ProtocolConfig
 from core.log_paths import packet_log_directory
 from scdfe_c import ScdfeLogger
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
+from core.monitor_changes import MappedMonitorReader
+from core.pipeline_metrics import LatencyStats
 from client.modbus_tcp import normalize_modbus_address
 
 CHANNEL_TABLE = "fes_scdfe_t_define"
@@ -168,6 +170,12 @@ class TransRuntime:
         self._business_lock = threading.Lock()
         self._point_runtime_state: dict[tuple[str, int], dict[str, Any]] = {}
         self._point_runtime_pending: dict[tuple[str, int], dict[str, Any]] = {}
+        self._point_runtime_lock = threading.Lock()
+        self._point_runtime_flush_lock = threading.Lock()
+        self._point_runtime_since = 0.0
+        self._point_runtime_metrics = dict(batches=0, rows=0, failures=0, lock_conflicts=0,
+                                          log_unconfirmed=0, last_error='', last_success=0)
+        self._next_runtime_flush = 0.0
         self.signature = None
         self._definition_cache = None
         self.writer = None
@@ -185,6 +193,9 @@ class TransRuntime:
         self._runtime_protocol = ""
         self._runtime_channel_name = ""
         self._cycles = 0
+        self._latency = LatencyStats()
+        self._source_reader = None
+        self._source_dirty = set()
         self._rx_count = 0
         self._tx_count = 0
         self._error_count = 0
@@ -224,13 +235,24 @@ class TransRuntime:
             "source_reads": self._rx_count,
             "published_updates": self._tx_count,
             "command_count": self._command_count,
+            "command_write": self.writer.metrics.snapshot() if getattr(self.writer,'metrics',None) else None,
+            "point_runtime": self._point_runtime_diagnostic(),
+            "latency": self._latency.snapshot(),
+            "source_delta": ({'rows_read': self._source_reader.rows_read,
+                              'polls': self._source_reader.polls,
+                              'unchanged_polls': self._source_reader.cache_hits}
+                             if self._source_reader else {}),
             "reconnect_count": self._reconnect_count,
             "server_running": bool(server and getattr(server, "running", False)),
             "open_connections": int(getattr(server, "open_connection_count", 0) or 0),
             "soe_cursor": self._soe_forwarder.last_event_id if self._soe_forwarder else None,
             "soe_pending": self._soe_forwarder.pending if self._soe_forwarder else None,
+            "soe_progress": self._soe_forwarder.peer_progress() if self._soe_forwarder else None,
         }
         if server is not None:
+            request_diagnostics = getattr(server, 'request_diagnostics', None)
+            if request_diagnostics is not None:
+                diagnostic['modbus_requests'] = request_diagnostics
             for name in ("unit_id", "host", "port"):
                 value = getattr(server, name, None)
                 if value is not None:
@@ -440,50 +462,105 @@ class TransRuntime:
         updates = {name: value for name, value in updates.items() if name in allowed}
         if not updates:
             return
-        current = dict(self._point_runtime_state.get(key, {}))
-        current.update(self._point_runtime_pending.get(key, {}))
-        changed = {name: value for name, value in updates.items()
-                   if current.get(name) != value}
-        if changed:
-            self._point_runtime_pending.setdefault(key, {}).update(changed)
+        with self._point_runtime_lock:
+            current = dict(self._point_runtime_state.get(key, {}))
+            current.update(self._point_runtime_pending.get(key, {}))
+            changed = {name: value for name, value in updates.items()
+                       if current.get(name) != value}
+            if changed:
+                if not self._point_runtime_pending:
+                    self._point_runtime_since = time.monotonic()
+                self._point_runtime_pending.setdefault(key, {}).update(changed)
+
+    def _point_runtime_diagnostic(self):
+        with self._point_runtime_lock:
+            return dict(self._point_runtime_metrics, pending_points=len(self._point_runtime_pending),
+                        pending_age_ms=round((time.monotonic()-self._point_runtime_since)*1000,3)
+                        if self._point_runtime_pending and self._point_runtime_since else 0,
+                        retry_interval_ms=100)
 
     def _record_business(self, event):
         with self._business_lock:
             self._business_events.append(event)
 
-    def _flush_point_runtime(self):
+    def _flush_point_runtime(self, *, wait=False):
+        # Only one snapshot may be in SQL at a time. A second producer must
+        # neither block the protocol callback nor write an older snapshot last.
+        if not self._point_runtime_flush_lock.acquire(blocking=wait):
+            return False
+        try:
+            return self._write_point_runtime()
+        finally:
+            self._point_runtime_flush_lock.release()
+
+    def _write_point_runtime(self):
         with self._business_lock:
             events, self._business_events = self._business_events, []
-        for action, group in groupby(events, key=lambda item: item[0]):
-            self.business.rows(action, (item[1] for item in group))
-        if not self._point_runtime_pending:
+        try:
+            for action, group in groupby(events, key=lambda item: item[0]):
+                self.business.rows(action, (item[1] for item in group))
+        except Exception as exc:
+            # Some lines may already be stored. Do not replay an ambiguous log
+            # batch, or turn an accepted control into a protocol rejection.
+            with self._point_runtime_lock:
+                self._point_runtime_metrics['log_unconfirmed'] += len(events)
+                self._point_runtime_metrics['last_error'] = f'业务日志未确认: {exc}'
+            logging.getLogger(__name__).exception('转发业务日志写入未确认，显示状态继续保存')
+        with self._point_runtime_lock:
+            pending = {key: dict(values) for key, values in self._point_runtime_pending.items()}
+        if not pending:
             return True
-        pending = {key: dict(values) for key, values in self._point_runtime_pending.items()}
+        started = time.perf_counter()
         try:
             with self.store.connection() as con:
-                con.execute("BEGIN IMMEDIATE")
-                for names, adjacent in groupby(pending.items(), key=lambda item: tuple(item[1])):
-                    assignments = ", ".join(f'"{name}"=?' for name in names)
-                    con.executemany(
-                        f'UPDATE {POINT_TABLE} SET {assignments} '
-                        'WHERE channel_id=? AND pnt_no=? AND kind=?',
-                        ([*values.values(), self.channel_id, point_no, kind]
-                         for (kind, point_no), values in adjacent),
-                    )
-                con.commit()
+                previous = con.execute('PRAGMA busy_timeout').fetchone()[0]
+                con.execute('PRAGMA busy_timeout=0')
+                try:
+                    stamp=time.perf_counter(); con.execute("BEGIN IMMEDIATE")
+                    self._latency.observe('t_runtime_lock_ms',(time.perf_counter()-stamp)*1000)
+                    groups={}
+                    for (kind,point_no),values in pending.items():
+                        names=tuple(name for name in _POINT_RUNTIME_FIELDS if name in values)
+                        groups.setdefault(names,[]).append([*(values[name] for name in names),
+                                                            self.channel_id,point_no,kind])
+                    stamp=time.perf_counter()
+                    for names,rows in groups.items():
+                        assignments = ", ".join(f'"{name}"=?' for name in names)
+                        con.executemany(f'UPDATE {POINT_TABLE} SET {assignments} '
+                                        'WHERE channel_id=? AND pnt_no=? AND kind=?', rows)
+                    self._latency.observe('t_runtime_apply_ms',(time.perf_counter()-stamp)*1000)
+                    stamp=time.perf_counter(); con.commit()
+                    self._latency.observe('t_runtime_commit_ms',(time.perf_counter()-stamp)*1000)
+                finally:
+                    if con.in_transaction:con.rollback()
+                    con.execute(f'PRAGMA busy_timeout={previous}')
         except Exception as exc:
-            self._runtime_error(exc)
-            self.logger.error(f"写入转发点实时状态失败: {exc}")
+            with self._point_runtime_lock:
+                self._point_runtime_metrics['failures'] += 1
+                if getattr(exc,'sqlite_errorcode',0) & 255 in (5,6):
+                    self._point_runtime_metrics['lock_conflicts'] += 1
+                self._point_runtime_metrics['last_error'] = str(exc)
+            if time.monotonic() >= getattr(self,'_next_runtime_error_log',0):
+                self._next_runtime_error_log = time.monotonic()+5
+                try:self.logger.error(f"转发点显示状态未保存，将重试: {exc}")
+                except Exception:logging.getLogger(__name__).exception('记录显示状态写库失败时出错')
             return False
-        for key, values in pending.items():
-            self._point_runtime_state.setdefault(key, {}).update(values)
-            current = self._point_runtime_pending.get(key)
-            if current is not None:
-                for name, value in values.items():
-                    if current.get(name) == value:
-                        current.pop(name, None)
-                if not current:
-                    self._point_runtime_pending.pop(key, None)
+        finally:
+            self._latency.observe('t_runtime_flush_ms',(time.perf_counter()-started)*1000)
+        with self._point_runtime_lock:
+            for key, values in pending.items():
+                self._point_runtime_state.setdefault(key, {}).update(values)
+                current = self._point_runtime_pending.get(key)
+                if current is not None:
+                    for name, value in values.items():
+                        if current.get(name) == value:
+                            current.pop(name, None)
+                    if not current:
+                        self._point_runtime_pending.pop(key, None)
+            self._point_runtime_metrics['batches'] += 1
+            self._point_runtime_metrics['rows'] += len(pending)
+            self._point_runtime_metrics['last_success'] = now_ms()
+            if not self._point_runtime_pending:self._point_runtime_since=0.0
         return True
 
     def _record_sample(self, key, value, quality, source_time=0):
@@ -562,10 +639,8 @@ class TransRuntime:
             return False
         # The writer has committed. A logging failure must not turn its
         # confirmation into a protocol rejection and invite a duplicate command.
-        try:
-            self.logger.normal("收到命令并提交写库")
-        except OSError:
-            logging.getLogger(__name__).exception("已提交转发命令，但未写入日志")
+        # Detailed acceptance logs and HMI snapshots are flushed by the main
+        # loop, independently of the already durable source command.
         self._command_count += len(prepared)
         for index, (p, point_no, value) in enumerate(prepared):
             receipt = receipts[index] if isinstance(receipts, (list, tuple)) and index < len(receipts) else {}
@@ -579,7 +654,6 @@ class TransRuntime:
                 (p.kind, point_no), value=value, status=0,
                 refresh_time=received_at, command_receive_time=received_at,
             )
-        self._flush_point_runtime()
         return True
 
     def _iec104_command(self, point, event):
@@ -610,6 +684,8 @@ class TransRuntime:
         self._point_runtime_pending.clear()
         self.points = {(p.kind, p.pnt_no): p for p in points}
         self._scan_plan = self._source_plan(p for p in points if p.kind in {'yc', 'yx'})
+        self._source_reader = MappedMonitorReader(self.store, points)
+        self._source_dirty.clear()
         initial_samples = self.source_values(points, include_quality=True, include_timestamp=True)
         initial = {key: self._sample_parts(sample)[0] for key, sample in initial_samples.items()}
         if spec.protocol == "iec104":
@@ -740,7 +816,6 @@ class TransRuntime:
                 self._queue_point_runtime(('yx',event['target_pnt_no']),forward_time=stamp)
             self._tx_count += len(events)
             self._last_tx_time = stamp
-            self._flush_point_runtime()
         source_rtus = {key[0] for key in routes}
         self._soe_forwarder = SoeForwarder(self.store,f't:channel:{self.channel_id}','C',route,
             rtu_id=next(iter(source_rtus)) if len(source_rtus)==1 else None, on_ack=acknowledged,
@@ -752,9 +827,10 @@ class TransRuntime:
             if self._soe_forwarder.error:
                 self._runtime_error(self._soe_forwarder.error)
 
-    def _refresh_iec104(self, current):
+    def _refresh_iec104(self, current, keys=None):
         changes = []
-        for key, point in self.points.items():
+        for key in self.points if keys is None else sorted(keys):
+            point = self.points[key]
             if point.kind not in {'yc', 'yx'}:
                 continue
             value, quality, source_time = self._sample_parts(current[key]) if key in current else (
@@ -762,6 +838,8 @@ class TransRuntime:
             self._record_sample(key, value, quality, source_time)
             if self.values.get(key) != value or self.qualities.get(key) != quality:
                 changes.append((*key, value, quality))
+            else:
+                self._source_dirty.discard(key)
         if changes:
             try:
                 ordinary = [item for item in changes if item[:2] not in self._soe_keys]
@@ -782,6 +860,7 @@ class TransRuntime:
                     self.logger.error(f'转发点 {kind}/{no} 更新失败: {errors[key]}')
                     continue
                 self.values[key], self.qualities[key] = value, quality
+                self._source_dirty.discard(key)
                 self._record_business(('转发协议缓存已更新', {
                     '四遥': kind.upper(), '转发点号': no, '值': value, '质量': quality,
                     '发布方式': 'SOE另行投递' if key in self._soe_keys else
@@ -794,28 +873,51 @@ class TransRuntime:
         self._pump_soe()
 
     def refresh(self):
-        current = self._read_sources(self._scan_plan, True, True)
-        if current:
-            self._rx_count += len(current)
+        started = time.perf_counter_ns()
+        try:
+            return self._refresh_values()
+        finally:
+            self._latency.observe('t_refresh_ms',(time.perf_counter_ns()-started)/1e6)
+
+    def _refresh_values(self):
+        started = time.perf_counter_ns()
+        if self._source_reader is not None:
+            current, touched = self._source_reader.poll()
+            self._source_dirty.update(touched)
+            keys = set(self._source_dirty)
+        else:
+            current = self._read_sources(self._scan_plan, True, True)
+            touched = keys = set(self.points)
+        self._latency.observe('t_source_read_ms',(time.perf_counter_ns()-started)/1e6)
+        if touched:
+            self._rx_count += len(touched)
             self._last_rx_time = now_ms()
+        if not keys:
+            self._flush_point_runtime()
+            self._pump_soe()
+            return
         if getattr(type(self.server), 'update_monitoring', None) is not None:
-            return self._refresh_iec104(current)
+            return self._refresh_iec104(current, keys)
         if getattr(type(self.server), "update_many", None) is not None:
             changes = []
-            for key, sample in current.items():
+            for key in keys & current.keys():
+                sample = current[key]
                 value, quality, source_time = self._sample_parts(sample)
                 self._record_sample(key, value, quality, source_time)
                 if self.values.get(key) != value:
                     changes.append((*key, value))
                 else:
                     self.qualities[key] = quality  # Modbus does not transmit quality bits.
-            for key, point in self.points.items():
+                    self._source_dirty.discard(key)
+            for key in keys:
+                point = self.points[key]
                 if point.kind not in {"yc", "yx"} or key in current:
                     continue
                 value = self.values.get(key, 0)
                 quality = self.qualities.get(key, 0) | 128
                 self.qualities[key] = quality
                 self._record_sample(key, value, quality, 0)
+                self._source_dirty.discard(key)
             if changes:
                 try:
                     errors = self.server.update_many(changes)
@@ -832,6 +934,7 @@ class TransRuntime:
                     else:
                         sample = self._sample_parts(current[key])
                         self.values[key], self.qualities[key] = sample[0], sample[1]
+                        self._source_dirty.discard(key)
                         self._record_business(('Modbus寄存器已更新，等待对端读取', {
                             '四遥': kind.upper(), '转发点号': no, '值': sample[0],
                             '本地质量': sample[1], '源刷新时刻': sample[2]}))
@@ -965,13 +1068,17 @@ class TransRuntime:
                     self._cycles = cycles
                 self._heartbeat()
                 self._pump_soe()
+                if time.monotonic() >= self._next_runtime_flush:
+                    self._flush_point_runtime()
+                    self._next_runtime_flush = time.monotonic()+0.1
                 if max_cycles is not None and cycles >= max_cycles:
                     break
                 # Definition polling and cooperative stop/heartbeat continue
                 # between scans. A new shorter period uses the last real scan
                 # time rather than waiting out the former period or rescanning
                 # on every configuration poll.
-                wake = min(next_control, self._next_definition_check, last_scan + spec.scan_interval)
+                wake = min(next_control, self._next_definition_check, last_scan + spec.scan_interval,
+                           self._next_runtime_flush)
                 if self._soe_forwarder is not None:
                     wake = min(wake,time.monotonic()+0.05)
                 self.stop_event.wait(max(0., wake - time.monotonic()))
@@ -991,6 +1098,7 @@ class TransRuntime:
                     (self.server.stop() if hasattr(self.server, "stop") else self.server.close())
                 except Exception as exc:
                     self.logger.error(f"停止转发服务失败: {exc}")
+            self._flush_point_runtime(wait=True)
             if not self.failed:
                 self._update_state(process_status=0, process_pid=0, process_stop_time=int(time.time() * 1000),
                                    process_heartbeat_time=int(time.time() * 1000), process_exit_code=0)

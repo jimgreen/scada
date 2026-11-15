@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import sqlite3
 from pathlib import Path
 import threading
 import time
@@ -81,6 +82,37 @@ def _json_value(value):
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
+
+
+def monitor_transport_configs(services, connection):
+    """Read only selected stations, grouped by transport table in one snapshot.
+
+    The monitor owns the read transaction and the services' lifecycle locks.
+    Nothing is cached across requests: external database edits are visible on
+    the next poll, and explicit JSON overrides retain their existing priority.
+    """
+    groups = {}
+    for service in services:
+        table = getattr(service, 'PARAMETER_TABLE', None)
+        if not table:
+            continue
+        rtu_id = service._configured_rtu(connection)
+        groups.setdefault(table, []).append((service, rtu_id))
+    configs = {}
+    size = connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+    for table, members in groups.items():
+        ids = sorted({rtu_id for _, rtu_id in members if rtu_id is not None})
+        rows = {}
+        for start in range(0, len(ids), size):
+            chunk = ids[start:start + size]
+            for row in connection.execute(
+                f'SELECT r.rtu_id AS _owner_rtu_id, p.* FROM fes_rtu_define r '
+                f'LEFT JOIN {table} p ON p.channel_id=r.channel_id '
+                'WHERE r.rtu_id IN (' + ','.join('?' for _ in chunk) + ')', chunk):
+                rows[int(row['_owner_rtu_id'])] = dict(row)
+        for service, rtu_id in members:
+            configs[service] = service._merge_transport_config(rows.get(rtu_id, {}), rtu_id)
+    return configs
 
 
 class ProtocolServiceError(RuntimeError):
@@ -276,15 +308,17 @@ class ProtocolService:
         with self.store.connection() as con:
             con.execute("BEGIN")
             rtu_id = self._configured_rtu(con)
-            channel_id = None
-            if rtu_id is not None:
-                owner = con.execute(
-                    "SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?", (rtu_id,)
-                ).fetchone()
-                channel_id = owner[0] if owner else None
-            row = None if channel_id is None else con.execute(
-                f"SELECT * FROM {table} WHERE channel_id=? LIMIT 1", (channel_id,)).fetchone()
-        parameter = dict(row) if row else {}
+            row = None if rtu_id is None else con.execute(
+                f"SELECT r.channel_id AS _owner_channel_id, p.* "
+                f"FROM fes_rtu_define r LEFT JOIN {table} p "
+                "ON p.channel_id=r.channel_id WHERE r.rtu_id=? LIMIT 1",
+                (rtu_id,),
+            ).fetchone()
+        return self._merge_transport_config(dict(row) if row else {}, rtu_id,
+                                            include_rtu=include_rtu)
+
+    def _merge_transport_config(self, parameter, rtu_id, *, include_rtu=True):
+        """Apply the same explicit overrides to individual and batched reads."""
         config = dict(self._config)
         for name, value in parameter.items():
             if name in self.DEFAULT_CONFIG and name not in self._configured_fields and value is not None:
@@ -335,6 +369,14 @@ class ProtocolService:
                 channel = rtu_channel_id(self.store, self._bound_rtu_id)
                 self._file_log.bind_channel(channel)
                 self._file_log.start_session()
+                from core.startup_checks import check_listener
+                effective = self.config()
+                endpoint = network_endpoint(self.PROTOCOL, effective, server=True)
+                if (effective.get('mode') == 'server' and not effective.get('simulation')
+                        and endpoint and endpoint['transport'] == 'TCP'):
+                    issue = check_listener(endpoint['host'], endpoint['port'])
+                    if issue:
+                        raise ProtocolServiceError(issue['message'])
                 self._engine = self._build_engine()
                 recorder = service_packet_recorder(self._record, self._bound_rtu_id, channel)
                 self._business_log = recorder.business
@@ -400,7 +442,7 @@ class ProtocolService:
             "connections": item.get("connections", []),
             "open_connections": item.get("open_connections", 0),
             "point_count": item.get("point_count", 0),
-            "engine": self._engine_diagnostic(self._engine),
+            "engine": item.get("diagnostic", {}),
         }
         error = str(item.get("last_error") or "")
         values = {
@@ -469,11 +511,12 @@ class ProtocolService:
             with self._lock:
                 self._file_log.end_session()
 
-    def status(self, *, point_counts: Mapping[int, int] | None = None, runtime_batch=None, channel_info=None):
+    def status(self, *, point_counts: Mapping[int, int] | None = None, runtime_batch=None,
+               channel_info=None, resolved_config=None):
         with self._lock:
             engine = self._engine
             connection_count = int(getattr(engine, "connections", 0)) if engine else 0
-            config = self.config()
+            config = self.config() if resolved_config is None else resolved_config
             rtu_id = config.get("effective_rtu_id")
             item = {
                 "protocol": self.PROTOCOL,

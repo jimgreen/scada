@@ -30,6 +30,7 @@ from scdfe_s.web.protocol_service import (
     ModbusTcpServerService,
     ProtocolServiceError,
     OpcServerService,
+    monitor_transport_configs,
 )
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
@@ -37,7 +38,7 @@ from core import operation_audit as audit
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
-from core.runtime_status import now_ms, runtime_status_rows
+from core.runtime_status import now_ms, runtime_status_rows, write_runtime_status_batch
 from scdfe_s.web.lifecycle import controlled_call
 
 
@@ -271,6 +272,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _locked_monitor_statuses(self, services, point_counts, rtu_id):
         with self.store.connection() as con:
+            con.execute('BEGIN')
             sql = 'SELECT rtu_id, channel_id, name FROM fes_rtu_define'
             params = ()
             if rtu_id is not None:
@@ -278,20 +280,15 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 params = (rtu_id,)
             channel_info = {int(row[0]): (int(row[1] or row[0]), str(row[2] or ''))
                             for row in con.execute(sql, params)}
+            configs = monitor_transport_configs(services.values(), con)
         pending = []
         statuses = [(slug, service.status(point_counts=point_counts, runtime_batch=pending,
-                                         channel_info=channel_info)) for slug, service in services.items()]
+                                         channel_info=channel_info,
+                                         **({'resolved_config': configs[service]} if service in configs else {})))
+                    for slug, service in services.items()]
         if pending:
             try:
-                with self.store.connection() as con:
-                    con.execute('BEGIN IMMEDIATE')
-                    try:
-                        for publisher, channel_id, values in pending:
-                            publisher.upsert(channel_id, values, connection=con)
-                        con.commit()
-                    except BaseException:
-                        con.rollback()
-                        raise
+                write_runtime_status_batch(self.store, pending)
             except Exception as exc:
                 for publisher, channel_id, _ in pending:
                     publisher.invalidate(channel_id)
@@ -735,6 +732,12 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         # Handled routes return None after writing JSON; only False means
         # that dispatch should continue to the next route family.
         from core.web_connections import handle_connections
+        from core.web_diagnostics import handle_diagnostics
+        from core.web_commands import handle_commands
+        if handle_commands(self,parts,query,method,self.server.store,'s') is not False:
+            return
+        if handle_diagnostics(self,parts,query,method,self.server.store,'s') is not False:
+            return
         if handle_connections(self,parts,query,method,self.server.store,'s') is not False:
             return
         if self._monitor_control(parts, query, method) is not False:

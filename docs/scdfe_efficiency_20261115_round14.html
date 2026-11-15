@@ -1,0 +1,3210 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SCDFE 第十四轮优化与验证</title>
+<style>body{max-width:1120px;margin:32px auto;padding:0 22px;font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif;background:#f3f7fa;color:#203b4d}section{padding:24px;background:white;border:1px solid #dce5ec;border-radius:12px;margin:20px 0}h1,h2{color:#007e89}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #dce5ec;padding:10px}th{background:#edf5f6}.scroll{overflow:auto}.note{border-left:4px solid #b98425;padding-left:15px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}</style></head><body>
+<h1>SCDFE 第十四轮优化与验证</h1><p>2026-11-15 · 纯 Python · S 独立数据库；C/T 共享数据库；T 入口保持 IEC104 与 Modbus TCP。</p>
+<section><h2>本轮落地</h2><p>批量遥控、遥调改为按 RTU 与点类型分组读取，400 点一块限制 SQL 参数数，RTU 类型每批分块查询。全部点在同一写事务内完成校验，随后分类型执行更新，并再次读取完整回执以保留触发器更新字段和输入顺序。末点越限、闭锁、非法地址或待处理槽位冲突仍导致整批回滚；FULL 持久化不变。</p>
+<p>新增 T 指令入库分段诊断：连接获取、参数设置、写锁、读取校验、更新及回执、FULL 提交、参数恢复、总耗时。保存最近 256 个阶段样本的分位数，以及每服务最近 16 次超过 100 ms 或失败请求；关联前 8 个 RTU/点/命令时标，不记录命令值。沿用运行诊断 JSON 快照持久化，无需新建业务表。诊断异常不能把已提交命令变成失败。</p>
+<p>运行诊断页显示累计请求数、未提交数、失败阶段及慢请求关联。相同慢批次、指令表和配置检查内容不再重复替换 DOM；隐藏页暂停、请求防重叠和失败保留上次结果仍保留。人工结案接口收到错误类型的阶段字段时返回参数错误。</p></section>
+<section><h2>前后性能对比</h2><div class="scroll"><table><tr><th>轮次</th><th>每批点数</th><th>SELECT 数</th><th>中位耗时 ms</th><th>P95 ms</th></tr><tr><td>第一轮（旧→新）</td><td>1</td><td>3 → 3</td><td>2.802 → 3.202</td><td>6.242 → 3.912</td></tr><tr><td>第一轮（旧→新）</td><td>100</td><td>300 → 5</td><td>10.999 → 9.321</td><td>13.417 → 10.127</td></tr><tr><td>第一轮（旧→新）</td><td>1000</td><td>3000 → 41</td><td>82.268 → 70.128</td><td>98.072 → 155.707</td></tr><tr><td>第二轮（新→旧）</td><td>1</td><td>3 → 3</td><td>2.737 → 3.195</td><td>3.749 → 4.947</td></tr><tr><td>第二轮（新→旧）</td><td>100</td><td>300 → 5</td><td>9.354 → 11.833</td><td>12.443 → 13.445</td></tr><tr><td>第二轮（新→旧）</td><td>1000</td><td>3000 → 41</td><td>76.399 → 79.139</td><td>92.841 → 116.330</td></tr></table></div>
+<p>每场景预热 3 次后测量 12 次，临时 SQLite 文件、1/100/1000 点、最多 10 RTU，保留实际触发器与 FULL 提交。P95 在此小样本中为最大值；不是现场吞吐或长稳容量。背景运行服务及其他任务未停止，非独占机器。</p>
+<p class="note">可以确认的是批量查询工作量减少：100 点 300→5 次，1000 点 3000→41 次。耗时两轮有改善也有退化，单点没有减少查询，未确认整体稳定提速。完整数值全部保留，不只呈现有利的一轮。</p></section>
+<section><h2>超时归因：新增证据与边界</h2><p>首次 Modbus TCP 单通道运行在 FC15 收到响应前超过客户端 500 ms 超时；该次 T 指令入库诊断显示总耗时约 20.491 ms，写锁约 0.035 ms、校验 0.841 ms、更新 4.992 ms、提交 9.570 ms，且已提交。这排除了将该次超时整体解释为慢入库，但尚未确定响应链路的具体阻塞位置。它不能证明上一轮约 776 ms 入库的原因，两次事件必须分别看待。</p>
+<p>相同代码和 500 ms 门槛的第二次 TCP 1/4 通道及 RTU socket:// 完整验收通过；首次失败保留在原始数据中。报文验证工具现在无论成功失败都保存观测报文与命令分段快照，便于后续对齐。超时不等于设备未执行，不自动重发旧指令，也未通过增大超时隐藏问题。</p>
+<p>IEC104 回归中也捕获到一个不同的慢请求：T 通道 4 入库总计约 263.379 ms，其中 FULL 提交约 262.166 ms、写锁约 0.017 ms。此记录表明该次耗时集中在提交阶段，不能当成锁竞争；提交可能涉及文件同步或检查点，当前证据仍不足以进一步判定。正常指令持久化等级未降低。</p>
+<p>运行诊断中的“已提交”仅指数据库已经接受指令，不代表设备执行或客户端已收到响应。该诊断测量从 DatabaseCommandWriter 调用到释放连接，未覆盖协议解析、之前的请求排队、日志与网络发送。慢写库批次和慢指令请求为两种独立观察，不能直接相加。</p></section>
+<section><h2>正确性与交付</h2><p>141 passed, 91 subtests passed in 119.22s (0:01:59)；隔离 Chromium 页面检查 20 项通过。覆盖跨 RTU/类型批量请求、超过 400 点分块、输入顺序、完整回执、最后一项失败整批回滚、并发槽位保护、FULL 提交、诊断异常不改变提交结果、锁等待和失败分段、诊断保留上限及持久化 HTTP 读取。</p>
+<p>IEC104 1/4 通道常用功能回归；SOE 共 640 条事件，状态、质量、原始 CP56 和顺序一致。Modbus 成功复测覆盖 01/02/03/04、05/06/15/16、地址偏移、异常响应、回读与断线恢复；RTU 使用 socket:// 字节传输，不代表 RS485 物理验收。没有真实 CAN/串口、Linux 实机、硬件断电或 24/72 小时运行验收。</p>
+<p>源码前置快照、原始失败及复测、性能数据和备份恢复记录保存在 <code>output/efficiency_round14_20261115/</code>。使用说明同步更新，服务按加载前快照恢复；没有向运行站点发送验收控制，也没有提交或推送 Git。</p>
+<p>下一步优先项：对齐客户端发送、服务接收、入库完成和实际发送响应的同一次请求；验证协议服务在慢写事务下的多客户端隔离；继续进行多通道持续运行测试。当前证据不足以将偶发超时宣布修复。</p>
+<details><summary>全部原始结果（内嵌）</summary><pre>{
+  &quot;before&quot;: {
+    &quot;cases&quot;: [
+      {
+        &quot;points&quot;: 1,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 2.8020500012644334,
+        &quot;p95_ms&quot;: 6.241700000828132,
+        &quot;selects&quot;: 3.0
+      },
+      {
+        &quot;points&quot;: 100,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 10.99899999826448,
+        &quot;p95_ms&quot;: 13.416999998298706,
+        &quot;selects&quot;: 300.0
+      },
+      {
+        &quot;points&quot;: 1000,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 82.26819999981672,
+        &quot;p95_ms&quot;: 98.07240000009187,
+        &quot;selects&quot;: 3000.0
+      }
+    ],
+    &quot;passed&quot;: true
+  },
+  &quot;after&quot;: {
+    &quot;cases&quot;: [
+      {
+        &quot;points&quot;: 1,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 3.201949999493081,
+        &quot;p95_ms&quot;: 3.9116000007197727,
+        &quot;selects&quot;: 3.0
+      },
+      {
+        &quot;points&quot;: 100,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 9.32104999992589,
+        &quot;p95_ms&quot;: 10.127300000021933,
+        &quot;selects&quot;: 5.0
+      },
+      {
+        &quot;points&quot;: 1000,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 70.12820000090869,
+        &quot;p95_ms&quot;: 155.7074999982433,
+        &quot;selects&quot;: 41.0
+      }
+    ],
+    &quot;passed&quot;: true
+  },
+  &quot;before-repeat&quot;: {
+    &quot;cases&quot;: [
+      {
+        &quot;points&quot;: 1,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 2.7370000007067574,
+        &quot;p95_ms&quot;: 3.7486000001081266,
+        &quot;selects&quot;: 3.0
+      },
+      {
+        &quot;points&quot;: 100,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 9.353850000479724,
+        &quot;p95_ms&quot;: 12.442799998098053,
+        &quot;selects&quot;: 300.0
+      },
+      {
+        &quot;points&quot;: 1000,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 76.39899999958288,
+        &quot;p95_ms&quot;: 92.84050000132993,
+        &quot;selects&quot;: 3000.0
+      }
+    ],
+    &quot;passed&quot;: true
+  },
+  &quot;after-repeat&quot;: {
+    &quot;cases&quot;: [
+      {
+        &quot;points&quot;: 1,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 3.1952499975886894,
+        &quot;p95_ms&quot;: 4.946799999743234,
+        &quot;selects&quot;: 3.0
+      },
+      {
+        &quot;points&quot;: 100,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 11.832700000013574,
+        &quot;p95_ms&quot;: 13.4451000012632,
+        &quot;selects&quot;: 5.0
+      },
+      {
+        &quot;points&quot;: 1000,
+        &quot;samples&quot;: 12,
+        &quot;median_ms&quot;: 79.13904999986698,
+        &quot;p95_ms&quot;: 116.33040000015171,
+        &quot;selects&quot;: 41.0
+      }
+    ],
+    &quot;passed&quot;: true
+  },
+  &quot;soe&quot;: {
+    &quot;scope&quot;: &quot;temporary S independent DB; C/T shared DB; real TCP; w=1 t2=1; S 50ms tick; T controlled 5ms pump; no hardware or long soak&quot;,
+    &quot;pipelines&quot;: [
+      {
+        &quot;channels&quot;: 1,
+        &quot;events_per_channel&quot;: 128,
+        &quot;expected&quot;: 128,
+        &quot;c_persisted&quot;: 128,
+        &quot;t_received&quot;: [
+          128
+        ],
+        &quot;exact&quot;: true,
+        &quot;trigger_transaction_ms&quot;: 9.514,
+        &quot;end_to_end_ack_ms&quot;: 135.688,
+        &quot;events_per_second&quot;: 943.34,
+        &quot;commit_to_downstream_median_ms&quot;: 96.639,
+        &quot;commit_to_downstream_p95_ms&quot;: 97.529
+      },
+      {
+        &quot;channels&quot;: 4,
+        &quot;events_per_channel&quot;: 128,
+        &quot;expected&quot;: 512,
+        &quot;c_persisted&quot;: 512,
+        &quot;t_received&quot;: [
+          128,
+          128,
+          128,
+          128
+        ],
+        &quot;exact&quot;: true,
+        &quot;trigger_transaction_ms&quot;: 15.593,
+        &quot;end_to_end_ack_ms&quot;: 295.921,
+        &quot;events_per_second&quot;: 1730.19,
+        &quot;commit_to_downstream_median_ms&quot;: 178.765,
+        &quot;commit_to_downstream_p95_ms&quot;: 250.943
+      }
+    ]
+  },
+  &quot;modbus_first&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T15:58:00.199353+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;libraries&quot;: {
+      &quot;pymodbus&quot;: &quot;3.16.1&quot;,
+      &quot;pyModbusTCP&quot;: &quot;0.3.1&quot;,
+      &quot;pyserial&quot;: &quot;3.5&quot;
+    },
+    &quot;pipelines&quot;: [],
+    &quot;passed&quot;: false,
+    &quot;error&quot;: &quot;Traceback (most recent call last):\n  File \&quot;D:\\codex\\scada\\tools\\verify_modbus_pipeline.py\&quot;, line 345, in main\n    item=pipeline(count,args.points,args.rounds,args.output); result[&#x27;pipelines&#x27;].append(item)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \&quot;D:\\codex\\scada\\tools\\verify_modbus_pipeline.py\&quot;, line 257, in pipeline\n    begin=time.perf_counter(); assert operation()\n                                      ^^^^^^^^^^^\n  File \&quot;D:\\codex\\scada\\tools\\verify_modbus_pipeline.py\&quot;, line 253, in &lt;lambda&gt;\n    (lambda:peer.write_multiple_coils(512,[False,True]),[(&#x27;yk&#x27;,1,0),(&#x27;yk&#x27;,2,1)]),\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \&quot;D:\\codex\\scada\\client\\modbus_tcp.py\&quot;, line 234, in write_multiple_coils\n    return self._invoke(&#x27;write_multiple_coils&#x27;, address, values, self._unit(unit_id))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \&quot;D:\\codex\\scada\\core\\communication_log.py\&quot;, line 246, in observed\n    return invoke(self, name, address, argument, unit_id)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \&quot;D:\\codex\\scada\\client\\modbus_tcp.py\&quot;, line 426, in _invoke\n    raise last_error or ModbusError(f&#x27;{name} 失败&#x27;)\nclient.modbus_tcp.ModbusError: write_multiple_coils 失败: recv timeout occur; no exception\n&quot;
+  },
+  &quot;modbus_repeat&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T16:01:22.618126+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;libraries&quot;: {
+      &quot;pymodbus&quot;: &quot;3.16.1&quot;,
+      &quot;pyModbusTCP&quot;: &quot;0.3.1&quot;,
+      &quot;pyserial&quot;: &quot;3.5&quot;
+    },
+    &quot;pipelines&quot;: [
+      {
+        &quot;upstream&quot;: &quot;Modbus TCP&quot;,
+        &quot;channels&quot;: 1,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;writer_batch_limit&quot;: 500,
+        &quot;response_timeout_ms&quot;: 500,
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 172.112,
+          &quot;p95_ms&quot;: 237.852,
+          &quot;max_ms&quot;: 237.852
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 211.265,
+          &quot;p95_ms&quot;: 308.107,
+          &quot;max_ms&quot;: 308.107
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          198.05730000007316,
+          153.5628000019642,
+          220.5108999987715,
+          155.65720000086003,
+          143.86569999987842,
+          184.28850000054808,
+          159.93520000120043,
+          237.8521999999066
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          236.5159999972093,
+          207.01710000139428,
+          258.7528999974893,
+          194.27300000097603,
+          201.70340000186116,
+          215.51349999936065,
+          198.79910000236123,
+          308.1065000005765
+        ],
+        &quot;workload_seconds&quot;: 1.871,
+        &quot;four_bank_poll&quot;: {
+          &quot;samples&quot;: 30,
+          &quot;median_ms&quot;: 7.988,
+          &quot;p95_ms&quot;: 19.617,
+          &quot;max_ms&quot;: 19.72
+        },
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 48.754,
+          &quot;p95_ms&quot;: 56.805,
+          &quot;max_ms&quot;: 56.805
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 155.161,
+          &quot;p95_ms&quot;: 167.665,
+          &quot;max_ms&quot;: 167.665
+        },
+        &quot;checks&quot;: [
+          &quot;01/02/03/04 four banks and RTU isolation&quot;,
+          &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+          &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+          &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+          &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+          &quot;unchanged continued polls and complete float32 values&quot;,
+          &quot;S TCP stop/restart -&gt; C reconnect -&gt; T latest values&quot;
+        ],
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;restart_recovery_ms&quot;: 796.034,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 46,
+            &quot;updated_yc&quot;: 640,
+            &quot;updated_yx&quot;: 640,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 2,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;wire&quot;: {
+          &quot;C-1&quot;: {
+            &quot;TX_FC01&quot;: 77,
+            &quot;RX_FC01&quot;: 76,
+            &quot;TX_FC02&quot;: 76,
+            &quot;RX_FC02&quot;: 76,
+            &quot;TX_FC03&quot;: 76,
+            &quot;RX_FC03&quot;: 76,
+            &quot;TX_FC04&quot;: 76,
+            &quot;RX_FC04&quot;: 76,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;T-1&quot;: {
+            &quot;TX_FC01&quot;: 41,
+            &quot;RX_FC01&quot;: 41,
+            &quot;TX_FC02&quot;: 40,
+            &quot;RX_FC02&quot;: 40,
+            &quot;TX_FC03&quot;: 42,
+            &quot;RX_FC03&quot;: 42,
+            &quot;TX_FC04&quot;: 41,
+            &quot;RX_FC04&quot;: 40,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          }
+        },
+        &quot;passed&quot;: true
+      },
+      {
+        &quot;upstream&quot;: &quot;Modbus TCP&quot;,
+        &quot;channels&quot;: 4,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;writer_batch_limit&quot;: 500,
+        &quot;response_timeout_ms&quot;: 500,
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 129.204,
+          &quot;p95_ms&quot;: 273.303,
+          &quot;max_ms&quot;: 273.303
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 8,
+          &quot;median_ms&quot;: 233.13,
+          &quot;p95_ms&quot;: 458.936,
+          &quot;max_ms&quot;: 458.936
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          18.099400000210153,
+          139.77589999922202,
+          131.379399997968,
+          127.02770000032615,
+          87.40040000338922,
+          80.87229999728152,
+          273.30309999888414,
+          153.6850999982562
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          32.231199998932425,
+          242.63520000022254,
+          239.04099999708706,
+          248.51330000092275,
+          208.42310000080033,
+          189.23699999868404,
+          458.9360999998462,
+          227.2194999968633
+        ],
+        &quot;workload_seconds&quot;: 2.246,
+        &quot;four_bank_poll&quot;: {
+          &quot;samples&quot;: 30,
+          &quot;median_ms&quot;: 5.669,
+          &quot;p95_ms&quot;: 22.718,
+          &quot;max_ms&quot;: 28.876
+        },
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 74.515,
+          &quot;p95_ms&quot;: 137.116,
+          &quot;max_ms&quot;: 137.116
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 178.93,
+          &quot;p95_ms&quot;: 261.168,
+          &quot;max_ms&quot;: 261.168
+        },
+        &quot;checks&quot;: [
+          &quot;01/02/03/04 four banks and RTU isolation&quot;,
+          &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+          &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+          &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+          &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+          &quot;unchanged continued polls and complete float32 values&quot;,
+          &quot;S TCP stop/restart -&gt; C reconnect -&gt; T latest values&quot;
+        ],
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;restart_recovery_ms&quot;: 402.402,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 81,
+            &quot;updated_yc&quot;: 640,
+            &quot;updated_yx&quot;: 640,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 78,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 80,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 76,
+            &quot;updated_yc&quot;: 576,
+            &quot;updated_yx&quot;: 576,
+            &quot;sent_yk&quot;: 3,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;wire&quot;: {
+          &quot;C-1&quot;: {
+            &quot;TX_FC01&quot;: 112,
+            &quot;RX_FC01&quot;: 111,
+            &quot;TX_FC02&quot;: 111,
+            &quot;RX_FC02&quot;: 111,
+            &quot;TX_FC03&quot;: 111,
+            &quot;RX_FC03&quot;: 111,
+            &quot;TX_FC04&quot;: 111,
+            &quot;RX_FC04&quot;: 111,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-2&quot;: {
+            &quot;TX_FC01&quot;: 78,
+            &quot;RX_FC01&quot;: 78,
+            &quot;TX_FC02&quot;: 78,
+            &quot;RX_FC02&quot;: 78,
+            &quot;TX_FC03&quot;: 78,
+            &quot;RX_FC03&quot;: 78,
+            &quot;TX_FC04&quot;: 78,
+            &quot;RX_FC04&quot;: 78,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-3&quot;: {
+            &quot;TX_FC01&quot;: 80,
+            &quot;RX_FC01&quot;: 80,
+            &quot;TX_FC02&quot;: 80,
+            &quot;RX_FC02&quot;: 80,
+            &quot;TX_FC03&quot;: 80,
+            &quot;RX_FC03&quot;: 80,
+            &quot;TX_FC04&quot;: 80,
+            &quot;RX_FC04&quot;: 80,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;C-4&quot;: {
+            &quot;TX_FC01&quot;: 76,
+            &quot;RX_FC01&quot;: 76,
+            &quot;TX_FC02&quot;: 76,
+            &quot;RX_FC02&quot;: 76,
+            &quot;TX_FC03&quot;: 76,
+            &quot;RX_FC03&quot;: 76,
+            &quot;TX_FC04&quot;: 76,
+            &quot;RX_FC04&quot;: 76,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 2,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 1,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1
+          },
+          &quot;T-1&quot;: {
+            &quot;TX_FC01&quot;: 56,
+            &quot;RX_FC01&quot;: 56,
+            &quot;TX_FC02&quot;: 55,
+            &quot;RX_FC02&quot;: 55,
+            &quot;TX_FC03&quot;: 57,
+            &quot;RX_FC03&quot;: 57,
+            &quot;TX_FC04&quot;: 56,
+            &quot;RX_FC04&quot;: 55,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-2&quot;: {
+            &quot;TX_FC01&quot;: 24,
+            &quot;RX_FC01&quot;: 24,
+            &quot;TX_FC02&quot;: 23,
+            &quot;RX_FC02&quot;: 23,
+            &quot;TX_FC03&quot;: 25,
+            &quot;RX_FC03&quot;: 25,
+            &quot;TX_FC04&quot;: 24,
+            &quot;RX_FC04&quot;: 23,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-3&quot;: {
+            &quot;TX_FC01&quot;: 11,
+            &quot;RX_FC01&quot;: 11,
+            &quot;TX_FC02&quot;: 10,
+            &quot;RX_FC02&quot;: 10,
+            &quot;TX_FC03&quot;: 12,
+            &quot;RX_FC03&quot;: 12,
+            &quot;TX_FC04&quot;: 11,
+            &quot;RX_FC04&quot;: 10,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          },
+          &quot;T-4&quot;: {
+            &quot;TX_FC01&quot;: 11,
+            &quot;RX_FC01&quot;: 11,
+            &quot;TX_FC02&quot;: 10,
+            &quot;RX_FC02&quot;: 10,
+            &quot;TX_FC03&quot;: 12,
+            &quot;RX_FC03&quot;: 12,
+            &quot;TX_FC04&quot;: 11,
+            &quot;RX_FC04&quot;: 10,
+            &quot;TX_FC05&quot;: 2,
+            &quot;RX_FC05&quot;: 1,
+            &quot;TX_FC15&quot;: 1,
+            &quot;RX_FC15&quot;: 1,
+            &quot;TX_FC06&quot;: 2,
+            &quot;RX_FC06&quot;: 1,
+            &quot;TX_FC16&quot;: 1,
+            &quot;RX_FC16&quot;: 1,
+            &quot;RX_FC132&quot;: 1,
+            &quot;RX_FC133&quot;: 1,
+            &quot;RX_FC134&quot;: 1
+          }
+        },
+        &quot;passed&quot;: true
+      }
+    ],
+    &quot;rtu&quot;: {
+      &quot;upstream&quot;: &quot;RTU frames over socket://&quot;,
+      &quot;channels&quot;: 1,
+      &quot;yc_per_rtu&quot;: 8,
+      &quot;yx_per_rtu&quot;: 8,
+      &quot;c_poll_ms&quot;: 50,
+      &quot;t_scan_ms&quot;: 50,
+      &quot;s_scan_ms&quot;: 50,
+      &quot;writer_batch_ms&quot;: 100,
+      &quot;writer_batch_limit&quot;: 500,
+      &quot;response_timeout_ms&quot;: 500,
+      &quot;c_commit_latency&quot;: {
+        &quot;samples&quot;: 6,
+        &quot;median_ms&quot;: 395.504,
+        &quot;p95_ms&quot;: 441.818,
+        &quot;max_ms&quot;: 441.818
+      },
+      &quot;end_to_end_latency&quot;: {
+        &quot;samples&quot;: 6,
+        &quot;median_ms&quot;: 453.43,
+        &quot;p95_ms&quot;: 489.24,
+        &quot;max_ms&quot;: 489.24
+      },
+      &quot;c_commit_samples_ms&quot;: [
+        344.4247999977961,
+        441.81839999873773,
+        439.07600000238745,
+        391.30780000050436,
+        394.2621999995026,
+        396.74490000106744
+      ],
+      &quot;end_to_end_samples_ms&quot;: [
+        376.65849999757484,
+        466.1461999967287,
+        489.2400999997335,
+        457.5774000004458,
+        444.453699998121,
+        449.28259999869624
+      ],
+      &quot;workload_seconds&quot;: 2.694,
+      &quot;four_bank_poll&quot;: {
+        &quot;samples&quot;: 30,
+        &quot;median_ms&quot;: 329.27,
+        &quot;p95_ms&quot;: 386.968,
+        &quot;max_ms&quot;: 488.352
+      },
+      &quot;command_latency&quot;: {
+        &quot;samples&quot;: 4,
+        &quot;median_ms&quot;: 290.741,
+        &quot;p95_ms&quot;: 406.392,
+        &quot;max_ms&quot;: 406.392
+      },
+      &quot;command_receipt_latency&quot;: {
+        &quot;samples&quot;: 4,
+        &quot;median_ms&quot;: 431.437,
+        &quot;p95_ms&quot;: 569.101,
+        &quot;max_ms&quot;: 569.101
+      },
+      &quot;checks&quot;: [
+        &quot;01/02/03/04 four banks and RTU isolation&quot;,
+        &quot;reference addresses 10001/30001/40001 -&gt; wire zero&quot;,
+        &quot;autonomous S DB -&gt; C writer -&gt; T refresh&quot;,
+        &quot;05/06/15/16 T-&gt;shared DB-&gt;C-&gt;S commands and readback&quot;,
+        &quot;illegal address=02, protected measurement=02, partial float write=03&quot;,
+        &quot;unchanged continued polls and complete float32 values&quot;
+      ],
+      &quot;errors_before_injected_disconnect&quot;: 0,
+      &quot;workers&quot;: [
+        {
+          &quot;cycles&quot;: 44,
+          &quot;updated_yc&quot;: 72,
+          &quot;updated_yx&quot;: 72,
+          &quot;sent_yk&quot;: 3,
+          &quot;sent_yt&quot;: 2,
+          &quot;errors&quot;: 0,
+          &quot;alarms&quot;: 0
+        }
+      ],
+      &quot;wire&quot;: {
+        &quot;C-1&quot;: {
+          &quot;TX_FC01&quot;: 74,
+          &quot;RX_FC01&quot;: 74,
+          &quot;TX_FC02&quot;: 74,
+          &quot;RX_FC02&quot;: 74,
+          &quot;TX_FC03&quot;: 74,
+          &quot;RX_FC03&quot;: 74,
+          &quot;TX_FC04&quot;: 74,
+          &quot;RX_FC04&quot;: 74,
+          &quot;TX_FC05&quot;: 2,
+          &quot;RX_FC05&quot;: 2,
+          &quot;TX_FC15&quot;: 1,
+          &quot;RX_FC15&quot;: 1,
+          &quot;TX_FC06&quot;: 1,
+          &quot;RX_FC06&quot;: 1,
+          &quot;TX_FC16&quot;: 1,
+          &quot;RX_FC16&quot;: 1
+        },
+        &quot;T-1&quot;: {
+          &quot;TX_FC01&quot;: 24,
+          &quot;RX_FC01&quot;: 24,
+          &quot;TX_FC02&quot;: 23,
+          &quot;RX_FC02&quot;: 23,
+          &quot;TX_FC03&quot;: 25,
+          &quot;RX_FC03&quot;: 25,
+          &quot;TX_FC04&quot;: 24,
+          &quot;RX_FC04&quot;: 23,
+          &quot;TX_FC05&quot;: 2,
+          &quot;RX_FC05&quot;: 1,
+          &quot;TX_FC15&quot;: 1,
+          &quot;RX_FC15&quot;: 1,
+          &quot;TX_FC06&quot;: 2,
+          &quot;RX_FC06&quot;: 1,
+          &quot;TX_FC16&quot;: 1,
+          &quot;RX_FC16&quot;: 1,
+          &quot;RX_FC132&quot;: 1,
+          &quot;RX_FC133&quot;: 1,
+          &quot;RX_FC134&quot;: 1
+        }
+      },
+      &quot;passed&quot;: true
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;iec104&quot;: {
+    &quot;timestamp&quot;: &quot;2026-11-15T16:05:59.814996+08:00&quot;,
+    &quot;python&quot;: &quot;3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]&quot;,
+    &quot;engine&quot;: &quot;python-stdlib&quot;,
+    &quot;pipelines&quot;: [
+      {
+        &quot;channels&quot;: 1,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 13.676,
+          &quot;p95_ms&quot;: 17.881,
+          &quot;p99_ms&quot;: 17.881,
+          &quot;max_ms&quot;: 17.881
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 5,
+          &quot;median_ms&quot;: 20.726,
+          &quot;p95_ms&quot;: 27.49,
+          &quot;p99_ms&quot;: 27.49,
+          &quot;max_ms&quot;: 27.49
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 217.636,
+          &quot;p95_ms&quot;: 283.169,
+          &quot;p99_ms&quot;: 283.169,
+          &quot;max_ms&quot;: 283.169
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 281.78,
+          &quot;p95_ms&quot;: 359.023,
+          &quot;p99_ms&quot;: 359.023,
+          &quot;max_ms&quot;: 359.023
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          160.46239999923273,
+          283.16869999980554,
+          274.30870000171126,
+          220.9225000005972,
+          227.11319999871193,
+          201.7902999978105,
+          214.34940000108327,
+          178.9091999999073,
+          224.3826000012632,
+          245.66460000278312,
+          203.00199999837787,
+          158.5802000008698
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          308.14339999778895,
+          359.02349999742,
+          340.80440000252565,
+          301.34670000188635,
+          264.76069999989704,
+          283.2842999996501,
+          264.08770000125514,
+          265.94140000088373,
+          280.275500001153,
+          348.88470000078087,
+          264.3456000005244,
+          216.0548000028939
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          },
+          {
+            &quot;objects&quot;: 128,
+            &quot;frames&quot;: 5,
+            &quot;bytes&quot;: 828
+          }
+        ],
+        &quot;workload_seconds&quot;: 3.778,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 24594.7890847,
+            &quot;c_first_rx_ms&quot;: 38.59599999850616,
+            &quot;c_last_rx_ms&quot;: 101.9083999999566,
+            &quot;c_commit_observed_ms&quot;: 160.46239999923273,
+            &quot;t_last_rx_ms&quot;: 274.33709999968414,
+            &quot;destination_observed_ms&quot;: 308.14339999778895
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 24595.1356392,
+            &quot;c_first_rx_ms&quot;: 72.00899999952526,
+            &quot;c_last_rx_ms&quot;: 135.4369000000588,
+            &quot;c_commit_observed_ms&quot;: 283.16869999980554,
+            &quot;t_last_rx_ms&quot;: 352.52889999901527,
+            &quot;destination_observed_ms&quot;: 359.02349999742
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 24595.5190094,
+            &quot;c_first_rx_ms&quot;: 91.98000000105822,
+            &quot;c_last_rx_ms&quot;: 125.15809999968042,
+            &quot;c_commit_observed_ms&quot;: 274.30870000171126,
+            &quot;t_last_rx_ms&quot;: 333.20020000246586,
+            &quot;destination_observed_ms&quot;: 340.80440000252565
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 24595.895598,
+            &quot;c_first_rx_ms&quot;: 62.13170000046375,
+            &quot;c_last_rx_ms&quot;: 91.75590000086231,
+            &quot;c_commit_observed_ms&quot;: 220.9225000005972,
+            &quot;t_last_rx_ms&quot;: 299.0411999999196,
+            &quot;destination_observed_ms&quot;: 301.34670000188635
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 24596.2248283,
+            &quot;c_first_rx_ms&quot;: 59.728699998231605,
+            &quot;c_last_rx_ms&quot;: 105.26580000077956,
+            &quot;c_commit_observed_ms&quot;: 227.11319999871193,
+            &quot;t_last_rx_ms&quot;: 260.6467000005068,
+            &quot;destination_observed_ms&quot;: 264.76069999989704
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 24596.4997407,
+            &quot;c_first_rx_ms&quot;: 37.309600000298815,
+            &quot;c_last_rx_ms&quot;: 62.29159999929834,
+            &quot;c_commit_observed_ms&quot;: 201.7902999978105,
+            &quot;t_last_rx_ms&quot;: 281.1870000005001,
+            &quot;destination_observed_ms&quot;: 283.2842999996501
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 24596.7941855,
+            &quot;c_first_rx_ms&quot;: 68.85329999931855,
+            &quot;c_last_rx_ms&quot;: 90.5361000004632,
+            &quot;c_commit_observed_ms&quot;: 214.34940000108327,
+            &quot;t_last_rx_ms&quot;: 258.9464000011503,
+            &quot;destination_observed_ms&quot;: 264.08770000125514
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 24597.071748,
+            &quot;c_first_rx_ms&quot;: 52.48790000041481,
+            &quot;c_last_rx_ms&quot;: 81.88810000137892,
+            &quot;c_commit_observed_ms&quot;: 178.9091999999073,
+            &quot;t_last_rx_ms&quot;: 263.0218000012974,
+            &quot;destination_observed_ms&quot;: 265.94140000088373
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 24597.3550507,
+            &quot;c_first_rx_ms&quot;: 30.75879999960307,
+            &quot;c_last_rx_ms&quot;: 75.97339999847463,
+            &quot;c_commit_observed_ms&quot;: 224.3826000012632,
+            &quot;t_last_rx_ms&quot;: 274.051899999904,
+            &quot;destination_observed_ms&quot;: 280.275500001153
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 24597.6568341,
+            &quot;c_first_rx_ms&quot;: 57.6948000016273,
+            &quot;c_last_rx_ms&quot;: 88.0765000001702,
+            &quot;c_commit_observed_ms&quot;: 245.66460000278312,
+            &quot;t_last_rx_ms&quot;: 346.046300001035,
+            &quot;destination_observed_ms&quot;: 348.88470000078087
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 24598.0262541,
+            &quot;c_first_rx_ms&quot;: 64.24049999986892,
+            &quot;c_last_rx_ms&quot;: 91.24229999724776,
+            &quot;c_commit_observed_ms&quot;: 203.00199999837787,
+            &quot;t_last_rx_ms&quot;: 261.5303999991738,
+            &quot;destination_observed_ms&quot;: 264.3456000005244
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 24598.3146278,
+            &quot;c_first_rx_ms&quot;: 25.758300002053147,
+            &quot;c_last_rx_ms&quot;: 59.014400001615286,
+            &quot;c_commit_observed_ms&quot;: 158.5802000008698,
+            &quot;t_last_rx_ms&quot;: 213.6422000003222,
+            &quot;destination_observed_ms&quot;: 216.0548000028939
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 100.706,
+          &quot;p95_ms&quot;: 497.024,
+          &quot;p99_ms&quot;: 497.024,
+          &quot;max_ms&quot;: 497.024
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 4,
+          &quot;median_ms&quot;: 218.158,
+          &quot;p95_ms&quot;: 609.839,
+          &quot;p99_ms&quot;: 609.839,
+          &quot;max_ms&quot;: 609.839
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 198.429,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 124,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;runtime_diagnostics&quot;: [
+          {
+            &quot;service&quot;: &quot;scdfe_c&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729971852,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 121,
+              &quot;latency&quot;: {
+                &quot;c_sample_submit_ms&quot;: {
+                  &quot;count&quot;: 121,
+                  &quot;window_count&quot;: 121,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.295,
+                  &quot;p50_ms&quot;: 0.854,
+                  &quot;p95_ms&quot;: 6.836,
+                  &quot;p99_ms&quot;: 13.584,
+                  &quot;max_ms&quot;: 13.6433
+                }
+              },
+              &quot;updated_yc&quot;: 1024,
+              &quot;updated_yx&quot;: 1024,
+              &quot;sent_yk&quot;: 2,
+              &quot;sent_yt&quot;: 2,
+              &quot;errors&quot;: 1,
+              &quot;channel_type&quot;: &quot;iec104&quot;
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_c_writer&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729971724,
+            &quot;diagnostic&quot;: {
+              &quot;latency&quot;: {
+                &quot;c_db_lock_wait_ms&quot;: {
+                  &quot;count&quot;: 22,
+                  &quot;window_count&quot;: 22,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.094,
+                  &quot;p50_ms&quot;: 0.094,
+                  &quot;p95_ms&quot;: 0.172,
+                  &quot;p99_ms&quot;: 280.393,
+                  &quot;max_ms&quot;: 280.3926
+                },
+                &quot;c_db_apply_ms&quot;: {
+                  &quot;count&quot;: 22,
+                  &quot;window_count&quot;: 22,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.089,
+                  &quot;p50_ms&quot;: 3.579,
+                  &quot;p95_ms&quot;: 6.976,
+                  &quot;p99_ms&quot;: 9.531,
+                  &quot;max_ms&quot;: 9.5313
+                },
+                &quot;c_db_commit_ms&quot;: {
+                  &quot;count&quot;: 22,
+                  &quot;window_count&quot;: 22,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.075,
+                  &quot;p50_ms&quot;: 0.217,
+                  &quot;p95_ms&quot;: 0.4,
+                  &quot;p99_ms&quot;: 2.919,
+                  &quot;max_ms&quot;: 2.9191
+                },
+                &quot;c_write_ms&quot;: {
+                  &quot;count&quot;: 22,
+                  &quot;window_count&quot;: 22,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.412,
+                  &quot;p50_ms&quot;: 4.795,
+                  &quot;p95_ms&quot;: 10.231,
+                  &quot;p99_ms&quot;: 284.582,
+                  &quot;max_ms&quot;: 284.5818
+                },
+                &quot;c_receipt_log_ms&quot;: {
+                  &quot;count&quot;: 22,
+                  &quot;window_count&quot;: 22,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 3.388,
+                  &quot;p50_ms&quot;: 4.154,
+                  &quot;p95_ms&quot;: 23.801,
+                  &quot;p99_ms&quot;: 53.577,
+                  &quot;max_ms&quot;: 53.5768
+                },
+                &quot;c_queue_ms&quot;: {
+                  &quot;count&quot;: 26,
+                  &quot;window_count&quot;: 26,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 114.721,
+                  &quot;p50_ms&quot;: 105.023,
+                  &quot;p95_ms&quot;: 117.531,
+                  &quot;p99_ms&quot;: 118.571,
+                  &quot;max_ms&quot;: 118.5707
+                },
+                &quot;c_queue_commit_ms&quot;: {
+                  &quot;count&quot;: 26,
+                  &quot;window_count&quot;: 26,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 115.132,
+                  &quot;p50_ms&quot;: 108.708,
+                  &quot;p95_ms&quot;: 125.413,
+                  &quot;p99_ms&quot;: 323.925,
+                  &quot;max_ms&quot;: 323.9255
+                }
+              },
+              &quot;pending_messages&quot;: 1,
+              &quot;pending_updates&quot;: 1,
+              &quot;slow_batches&quot;: {
+                &quot;threshold_ms&quot;: 100,
+                &quot;count&quot;: 20,
+                &quot;items&quot;: [
+                  {
+                    &quot;sequence&quot;: 5,
+                    &quot;sampled_at&quot;: 1794729965765,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 107.034,
+                    &quot;lock_wait_ms&quot;: 0.097,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 5.306,
+                    &quot;commit_ms&quot;: 0.264,
+                    &quot;transaction_ms&quot;: 5.844,
+                    &quot;queue_commit_ms&quot;: 112.879,
+                    &quot;receipt_log_ms&quot;: 3.456,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 6,
+                    &quot;sampled_at&quot;: 1794729966104,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 105.258,
+                    &quot;lock_wait_ms&quot;: 0.1,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.978,
+                    &quot;commit_ms&quot;: 0.239,
+                    &quot;transaction_ms&quot;: 5.47,
+                    &quot;queue_commit_ms&quot;: 110.728,
+                    &quot;receipt_log_ms&quot;: 4.319,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 7,
+                    &quot;sampled_at&quot;: 1794729966350,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 107.233,
+                    &quot;lock_wait_ms&quot;: 0.09,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.497,
+                    &quot;commit_ms&quot;: 0.188,
+                    &quot;transaction_ms&quot;: 4.918,
+                    &quot;queue_commit_ms&quot;: 112.151,
+                    &quot;receipt_log_ms&quot;: 4.304,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 8,
+                    &quot;sampled_at&quot;: 1794729966658,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 106.298,
+                    &quot;lock_wait_ms&quot;: 0.067,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.324,
+                    &quot;commit_ms&quot;: 0.252,
+                    &quot;transaction_ms&quot;: 4.795,
+                    &quot;queue_commit_ms&quot;: 111.093,
+                    &quot;receipt_log_ms&quot;: 3.558,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 9,
+                    &quot;sampled_at&quot;: 1794729966902,
+                    &quot;messages&quot;: 2,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 105.023,
+                    &quot;lock_wait_ms&quot;: 0.077,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 3.336,
+                    &quot;commit_ms&quot;: 0.135,
+                    &quot;transaction_ms&quot;: 3.686,
+                    &quot;queue_commit_ms&quot;: 108.708,
+                    &quot;receipt_log_ms&quot;: 2.336,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 10,
+                    &quot;sampled_at&quot;: 1794729967231,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 106.969,
+                    &quot;lock_wait_ms&quot;: 0.172,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.066,
+                    &quot;commit_ms&quot;: 2.919,
+                    &quot;transaction_ms&quot;: 7.371,
+                    &quot;queue_commit_ms&quot;: 114.341,
+                    &quot;receipt_log_ms&quot;: 3.782,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 11,
+                    &quot;sampled_at&quot;: 1794729967558,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 101.826,
+                    &quot;lock_wait_ms&quot;: 0.154,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.758,
+                    &quot;commit_ms&quot;: 0.265,
+                    &quot;transaction_ms&quot;: 5.372,
+                    &quot;queue_commit_ms&quot;: 107.198,
+                    &quot;receipt_log_ms&quot;: 9.738,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 12,
+                    &quot;sampled_at&quot;: 1794729967877,
+                    &quot;messages&quot;: 2,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 118.571,
+                    &quot;lock_wait_ms&quot;: 0.096,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 6.102,
+                    &quot;commit_ms&quot;: 0.256,
+                    &quot;transaction_ms&quot;: 6.843,
+                    &quot;queue_commit_ms&quot;: 125.413,
+                    &quot;receipt_log_ms&quot;: 3.899,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 13,
+                    &quot;sampled_at&quot;: 1794729968120,
+                    &quot;messages&quot;: 2,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 100.478,
+                    &quot;lock_wait_ms&quot;: 0.086,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.383,
+                    &quot;commit_ms&quot;: 0.264,
+                    &quot;transaction_ms&quot;: 5.0,
+                    &quot;queue_commit_ms&quot;: 105.478,
+                    &quot;receipt_log_ms&quot;: 3.669,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 14,
+                    &quot;sampled_at&quot;: 1794729968447,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 107.431,
+                    &quot;lock_wait_ms&quot;: 0.096,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 6.976,
+                    &quot;commit_ms&quot;: 0.265,
+                    &quot;transaction_ms&quot;: 7.698,
+                    &quot;queue_commit_ms&quot;: 115.129,
+                    &quot;receipt_log_ms&quot;: 4.154,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 15,
+                    &quot;sampled_at&quot;: 1794729968755,
+                    &quot;messages&quot;: 2,
+                    &quot;updates&quot;: 128,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 117.531,
+                    &quot;lock_wait_ms&quot;: 0.066,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.404,
+                    &quot;commit_ms&quot;: 0.276,
+                    &quot;transaction_ms&quot;: 5.033,
+                    &quot;queue_commit_ms&quot;: 122.564,
+                    &quot;receipt_log_ms&quot;: 53.577,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 16,
+                    &quot;sampled_at&quot;: 1794729969232,
+                    &quot;messages&quot;: 2,
+                    &quot;updates&quot;: 65,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 39.344,
+                    &quot;lock_wait_ms&quot;: 280.393,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 3.126,
+                    &quot;commit_ms&quot;: 0.4,
+                    &quot;transaction_ms&quot;: 284.582,
+                    &quot;queue_commit_ms&quot;: 323.925,
+                    &quot;receipt_log_ms&quot;: 17.731,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 17,
+                    &quot;sampled_at&quot;: 1794729969341,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 64,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 103.871,
+                    &quot;lock_wait_ms&quot;: 0.1,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 2.28,
+                    &quot;commit_ms&quot;: 0.217,
+                    &quot;transaction_ms&quot;: 2.703,
+                    &quot;queue_commit_ms&quot;: 106.574,
+                    &quot;receipt_log_ms&quot;: 6.811,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 18,
+                    &quot;sampled_at&quot;: 1794729970411,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 110.192,
+                    &quot;lock_wait_ms&quot;: 0.073,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.143,
+                    &quot;commit_ms&quot;: 0.064,
+                    &quot;transaction_ms&quot;: 0.373,
+                    &quot;queue_commit_ms&quot;: 110.564,
+                    &quot;receipt_log_ms&quot;: 2.123,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 19,
+                    &quot;sampled_at&quot;: 1794729971117,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 107.441,
+                    &quot;lock_wait_ms&quot;: 0.053,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.141,
+                    &quot;commit_ms&quot;: 0.049,
+                    &quot;transaction_ms&quot;: 0.338,
+                    &quot;queue_commit_ms&quot;: 107.779,
+                    &quot;receipt_log_ms&quot;: 4.403,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 20,
+                    &quot;sampled_at&quot;: 1794729971473,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 114.721,
+                    &quot;lock_wait_ms&quot;: 0.094,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.089,
+                    &quot;commit_ms&quot;: 0.075,
+                    &quot;transaction_ms&quot;: 0.412,
+                    &quot;queue_commit_ms&quot;: 115.132,
+                    &quot;receipt_log_ms&quot;: 3.388,
+                    &quot;attempts&quot;: 1
+                  }
+                ]
+              },
+              &quot;database_wait&quot;: {
+                &quot;lock_conflicts&quot;: 0,
+                &quot;retry_backoff_ms&quot;: 0,
+                &quot;wal_bytes&quot;: 4136512,
+                &quot;wal_autocheckpoint_pages&quot;: 10000
+              }
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_t&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729971245,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 98,
+              &quot;source_reads&quot;: 2048,
+              &quot;published_updates&quot;: 1920,
+              &quot;command_count&quot;: 3,
+              &quot;command_write&quot;: {
+                &quot;count&quot;: 3,
+                &quot;failed&quot;: 0,
+                &quot;threshold_ms&quot;: 100,
+                &quot;latency&quot;: {
+                  &quot;connection_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.015,
+                    &quot;p50_ms&quot;: 0.016,
+                    &quot;p95_ms&quot;: 0.027,
+                    &quot;p99_ms&quot;: 0.027,
+                    &quot;max_ms&quot;: 0.027499998395796865
+                  },
+                  &quot;setup_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.068,
+                    &quot;p50_ms&quot;: 0.084,
+                    &quot;p95_ms&quot;: 0.14,
+                    &quot;p99_ms&quot;: 0.14,
+                    &quot;max_ms&quot;: 0.14039999950909987
+                  },
+                  &quot;lock_wait_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.023,
+                    &quot;p50_ms&quot;: 0.038,
+                    &quot;p95_ms&quot;: 0.062,
+                    &quot;p99_ms&quot;: 0.062,
+                    &quot;max_ms&quot;: 0.06170000051497482
+                  },
+                  &quot;validation_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.281,
+                    &quot;p50_ms&quot;: 0.281,
+                    &quot;p95_ms&quot;: 0.573,
+                    &quot;p99_ms&quot;: 0.573,
+                    &quot;max_ms&quot;: 0.572900000406662
+                  },
+                  &quot;apply_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.194,
+                    &quot;p50_ms&quot;: 0.463,
+                    &quot;p95_ms&quot;: 0.918,
+                    &quot;p99_ms&quot;: 0.918,
+                    &quot;max_ms&quot;: 0.9178000000247266
+                  },
+                  &quot;commit_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 63.854,
+                    &quot;p50_ms&quot;: 63.854,
+                    &quot;p95_ms&quot;: 370.669,
+                    &quot;p99_ms&quot;: 370.669,
+                    &quot;max_ms&quot;: 370.66889999914565
+                  },
+                  &quot;cleanup_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.055,
+                    &quot;p50_ms&quot;: 0.062,
+                    &quot;p95_ms&quot;: 0.15,
+                    &quot;p99_ms&quot;: 0.15,
+                    &quot;max_ms&quot;: 0.14990000272518955
+                  },
+                  &quot;total_ms&quot;: {
+                    &quot;count&quot;: 3,
+                    &quot;window_count&quot;: 3,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 65.544,
+                    &quot;p50_ms&quot;: 65.544,
+                    &quot;p95_ms&quot;: 374.852,
+                    &quot;p99_ms&quot;: 374.852,
+                    &quot;max_ms&quot;: 374.85169999854406
+                  }
+                },
+                &quot;recent&quot;: [
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.027,
+                    &quot;setup_ms&quot;: 0.14,
+                    &quot;lock_wait_ms&quot;: 0.062,
+                    &quot;validation_ms&quot;: 0.573,
+                    &quot;apply_ms&quot;: 0.918,
+                    &quot;commit_ms&quot;: 370.669,
+                    &quot;cleanup_ms&quot;: 0.15,
+                    &quot;total_ms&quot;: 374.852,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729970182,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 1,
+                        &quot;kind&quot;: &quot;yk&quot;,
+                        &quot;pnt_no&quot;: 1,
+                        &quot;cmd_time&quot;: 1794729969808
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 1
+                  }
+                ]
+              },
+              &quot;latency&quot;: {
+                &quot;t_source_read_ms&quot;: {
+                  &quot;count&quot;: 98,
+                  &quot;window_count&quot;: 98,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 1.592,
+                  &quot;p50_ms&quot;: 0.749,
+                  &quot;p95_ms&quot;: 7.215,
+                  &quot;p99_ms&quot;: 13.588,
+                  &quot;max_ms&quot;: 13.5881
+                },
+                &quot;t_refresh_ms&quot;: {
+                  &quot;count&quot;: 98,
+                  &quot;window_count&quot;: 98,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 1.62,
+                  &quot;p50_ms&quot;: 0.83,
+                  &quot;p95_ms&quot;: 51.948,
+                  &quot;p99_ms&quot;: 133.509,
+                  &quot;max_ms&quot;: 133.5093
+                }
+              },
+              &quot;source_delta&quot;: {
+                &quot;rows_read&quot;: 2048,
+                &quot;polls&quot;: 98,
+                &quot;unchanged_polls&quot;: 81
+              },
+              &quot;reconnect_count&quot;: 1,
+              &quot;server_running&quot;: true,
+              &quot;open_connections&quot;: 1,
+              &quot;soe_cursor&quot;: null,
+              &quot;soe_pending&quot;: null,
+              &quot;soe_progress&quot;: null,
+              &quot;port&quot;: 6589,
+              &quot;protocol_errors&quot;: [],
+              &quot;unexpected_messages&quot;: []
+            }
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      },
+      {
+        &quot;channels&quot;: 4,
+        &quot;yc_per_rtu&quot;: 64,
+        &quot;yx_per_rtu&quot;: 64,
+        &quot;c_poll_ms&quot;: 50,
+        &quot;s_scan_ms&quot;: 50,
+        &quot;s_tick_ms&quot;: 100,
+        &quot;t_scan_ms&quot;: 50,
+        &quot;t_tick_ms&quot;: 50,
+        &quot;t_periodic_ms&quot;: 60000,
+        &quot;writer_batch_ms&quot;: 100,
+        &quot;k&quot;: 12,
+        &quot;w&quot;: 8,
+        &quot;topology&quot;: &quot;S service threads -&gt; C ChannelWorker threads -&gt; C writer process -&gt; SQLite -&gt; T runtime threads -&gt; downstream IEC104 clients&quot;,
+        &quot;t_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 5.58,
+          &quot;p95_ms&quot;: 8.025,
+          &quot;p99_ms&quot;: 8.162,
+          &quot;max_ms&quot;: 8.162
+        },
+        &quot;s_gi&quot;: {
+          &quot;samples&quot;: 20,
+          &quot;median_ms&quot;: 5.335,
+          &quot;p95_ms&quot;: 6.676,
+          &quot;p99_ms&quot;: 7.59,
+          &quot;max_ms&quot;: 7.59
+        },
+        &quot;checks&quot;: [
+          &quot;C startup GI commit&quot;,
+          &quot;S/T GI ACTCON -&gt; exact object count -&gt; ACTTERM&quot;,
+          &quot;CA/IOA mapping and RTU isolation&quot;,
+          &quot;5 GI repeats per S/T channel&quot;,
+          &quot;quality-only IV/BL/restoration with unchanged values&quot;,
+          &quot;no spontaneous duplicates during 400ms quiet window&quot;,
+          &quot;YK/YT direct and select-execute through shared DB; cancel causes no second execution&quot;,
+          &quot;periodic report COT=1 on existing T connection&quot;,
+          &quot;S stop/restart -&gt; C automatic reconnect + GI -&gt; T latest values&quot;,
+          &quot;downstream reconnect + GI retrieves latest values/qualities&quot;
+        ],
+        &quot;c_commit_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 289.486,
+          &quot;p95_ms&quot;: 532.163,
+          &quot;p99_ms&quot;: 532.163,
+          &quot;max_ms&quot;: 532.163
+        },
+        &quot;end_to_end_latency&quot;: {
+          &quot;samples&quot;: 12,
+          &quot;median_ms&quot;: 352.93,
+          &quot;p95_ms&quot;: 587.737,
+          &quot;p99_ms&quot;: 587.737,
+          &quot;max_ms&quot;: 587.737
+        },
+        &quot;c_commit_samples_ms&quot;: [
+          124.2906999978004,
+          282.2335999990173,
+          296.7382000024372,
+          271.52899999782676,
+          268.1821000005584,
+          268.4489000021131,
+          273.9736000003177,
+          366.7031000004499,
+          304.18749999807915,
+          372.08620000092196,
+          403.2628000022669,
+          532.1628999990935
+        ],
+        &quot;end_to_end_samples_ms&quot;: [
+          205.06979999845498,
+          331.07729999755975,
+          348.2350000012957,
+          306.5300999987812,
+          318.7123000025167,
+          357.08810000141966,
+          348.7709000000905,
+          426.9655000025523,
+          370.2099000001908,
+          431.4276000004611,
+          499.8675999995612,
+          587.7371999995376
+        ],
+        &quot;bursts&quot;: [
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          },
+          {
+            &quot;objects&quot;: 512,
+            &quot;frames&quot;: 20,
+            &quot;bytes&quot;: 3312
+          }
+        ],
+        &quot;workload_seconds&quot;: 4.889,
+        &quot;burst_milestones&quot;: [
+          {
+            &quot;burst&quot;: 1,
+            &quot;source_commit_monotonic&quot;: 24606.1493478,
+            &quot;c_first_rx_ms&quot;: 13.591599999926984,
+            &quot;c_last_rx_ms&quot;: 106.9361999980174,
+            &quot;c_commit_observed_ms&quot;: 124.2906999978004,
+            &quot;t_last_rx_ms&quot;: 202.58929999909014,
+            &quot;destination_observed_ms&quot;: 205.06979999845498
+          },
+          {
+            &quot;burst&quot;: 2,
+            &quot;source_commit_monotonic&quot;: 24606.3873128,
+            &quot;c_first_rx_ms&quot;: 23.005399998510256,
+            &quot;c_last_rx_ms&quot;: 147.30929999859654,
+            &quot;c_commit_observed_ms&quot;: 282.2335999990173,
+            &quot;t_last_rx_ms&quot;: 329.6632999990834,
+            &quot;destination_observed_ms&quot;: 331.07729999755975
+          },
+          {
+            &quot;burst&quot;: 3,
+            &quot;source_commit_monotonic&quot;: 24606.7385061,
+            &quot;c_first_rx_ms&quot;: 26.923000001261244,
+            &quot;c_last_rx_ms&quot;: 133.86480000190204,
+            &quot;c_commit_observed_ms&quot;: 296.7382000024372,
+            &quot;t_last_rx_ms&quot;: 345.67930000048364,
+            &quot;destination_observed_ms&quot;: 348.2350000012957
+          },
+          {
+            &quot;burst&quot;: 4,
+            &quot;source_commit_monotonic&quot;: 24607.1015392,
+            &quot;c_first_rx_ms&quot;: 15.170599999692058,
+            &quot;c_last_rx_ms&quot;: 106.03379999884055,
+            &quot;c_commit_observed_ms&quot;: 271.52899999782676,
+            &quot;t_last_rx_ms&quot;: 302.4751999982982,
+            &quot;destination_observed_ms&quot;: 306.5300999987812
+          },
+          {
+            &quot;burst&quot;: 5,
+            &quot;source_commit_monotonic&quot;: 24607.429661,
+            &quot;c_first_rx_ms&quot;: 10.343400001147529,
+            &quot;c_last_rx_ms&quot;: 100.4893000026641,
+            &quot;c_commit_observed_ms&quot;: 268.1821000005584,
+            &quot;t_last_rx_ms&quot;: 314.032700000098,
+            &quot;destination_observed_ms&quot;: 318.7123000025167
+          },
+          {
+            &quot;burst&quot;: 6,
+            &quot;source_commit_monotonic&quot;: 24607.7708674,
+            &quot;c_first_rx_ms&quot;: 28.768200001650257,
+            &quot;c_last_rx_ms&quot;: 132.53120000081253,
+            &quot;c_commit_observed_ms&quot;: 268.4489000021131,
+            &quot;t_last_rx_ms&quot;: 353.3951999997953,
+            &quot;destination_observed_ms&quot;: 357.08810000141966
+          },
+          {
+            &quot;burst&quot;: 7,
+            &quot;source_commit_monotonic&quot;: 24608.170183,
+            &quot;c_first_rx_ms&quot;: 14.539000003424007,
+            &quot;c_last_rx_ms&quot;: 173.49810000087018,
+            &quot;c_commit_observed_ms&quot;: 273.9736000003177,
+            &quot;t_last_rx_ms&quot;: 346.79830000095535,
+            &quot;destination_observed_ms&quot;: 348.7709000000905
+          },
+          {
+            &quot;burst&quot;: 8,
+            &quot;source_commit_monotonic&quot;: 24608.5609074,
+            &quot;c_first_rx_ms&quot;: 40.275600000313716,
+            &quot;c_last_rx_ms&quot;: 203.67130000158795,
+            &quot;c_commit_observed_ms&quot;: 366.7031000004499,
+            &quot;t_last_rx_ms&quot;: 422.0619000006991,
+            &quot;destination_observed_ms&quot;: 426.9655000025523
+          },
+          {
+            &quot;burst&quot;: 9,
+            &quot;source_commit_monotonic&quot;: 24609.0104986,
+            &quot;c_first_rx_ms&quot;: 26.61449999868637,
+            &quot;c_last_rx_ms&quot;: 151.25160000025062,
+            &quot;c_commit_observed_ms&quot;: 304.18749999807915,
+            &quot;t_last_rx_ms&quot;: 366.24830000073416,
+            &quot;destination_observed_ms&quot;: 370.2099000001908
+          },
+          {
+            &quot;burst&quot;: 10,
+            &quot;source_commit_monotonic&quot;: 24609.4019925,
+            &quot;c_first_rx_ms&quot;: 23.08170000105747,
+            &quot;c_last_rx_ms&quot;: 120.2804999993532,
+            &quot;c_commit_observed_ms&quot;: 372.08620000092196,
+            &quot;t_last_rx_ms&quot;: 426.86780000076396,
+            &quot;destination_observed_ms&quot;: 431.4276000004611
+          },
+          {
+            &quot;burst&quot;: 11,
+            &quot;source_commit_monotonic&quot;: 24609.8885122,
+            &quot;c_first_rx_ms&quot;: 33.450200000515906,
+            &quot;c_last_rx_ms&quot;: 167.75830000187852,
+            &quot;c_commit_observed_ms&quot;: 403.2628000022669,
+            &quot;t_last_rx_ms&quot;: 494.53990000256454,
+            &quot;destination_observed_ms&quot;: 499.8675999995612
+          },
+          {
+            &quot;burst&quot;: 12,
+            &quot;source_commit_monotonic&quot;: 24610.4340506,
+            &quot;c_first_rx_ms&quot;: 16.425099998741644,
+            &quot;c_last_rx_ms&quot;: 283.0231999978423,
+            &quot;c_commit_observed_ms&quot;: 532.1628999990935,
+            &quot;t_last_rx_ms&quot;: 581.8870000002789,
+            &quot;destination_observed_ms&quot;: 587.7371999995376
+          }
+        ],
+        &quot;milestone_note&quot;: &quot;Offsets correlate one complete burst from the S database commit return. Database/destination observation uses 5ms polling and may follow wire callbacks; parallel channel stages overlap. Do not subtract aggregated observations as exact stage durations.&quot;,
+        &quot;command_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 70.24,
+          &quot;p95_ms&quot;: 808.833,
+          &quot;p99_ms&quot;: 808.833,
+          &quot;max_ms&quot;: 808.833
+        },
+        &quot;command_receipt_latency&quot;: {
+          &quot;samples&quot;: 16,
+          &quot;median_ms&quot;: 183.8,
+          &quot;p95_ms&quot;: 940.024,
+          &quot;p99_ms&quot;: 940.024,
+          &quot;max_ms&quot;: 940.024
+        },
+        &quot;errors_before_injected_disconnect&quot;: 0,
+        &quot;upstream_restart_recovery_ms&quot;: 342.498,
+        &quot;workers&quot;: [
+          {
+            &quot;cycles&quot;: 239,
+            &quot;updated_yc&quot;: 1152,
+            &quot;updated_yx&quot;: 1152,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 1,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 236,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 237,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          },
+          {
+            &quot;cycles&quot;: 238,
+            &quot;updated_yc&quot;: 1088,
+            &quot;updated_yx&quot;: 1088,
+            &quot;sent_yk&quot;: 2,
+            &quot;sent_yt&quot;: 2,
+            &quot;errors&quot;: 0,
+            &quot;alarms&quot;: 0
+          }
+        ],
+        &quot;runtime_diagnostics&quot;: [
+          {
+            &quot;service&quot;: &quot;scdfe_c&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729989709,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 235,
+              &quot;latency&quot;: {
+                &quot;c_sample_submit_ms&quot;: {
+                  &quot;count&quot;: 235,
+                  &quot;window_count&quot;: 235,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 2.736,
+                  &quot;p50_ms&quot;: 0.958,
+                  &quot;p95_ms&quot;: 4.454,
+                  &quot;p99_ms&quot;: 10.11,
+                  &quot;max_ms&quot;: 16.3101
+                }
+              },
+              &quot;updated_yc&quot;: 1088,
+              &quot;updated_yx&quot;: 1088,
+              &quot;sent_yk&quot;: 2,
+              &quot;sent_yt&quot;: 2,
+              &quot;errors&quot;: 1,
+              &quot;channel_type&quot;: &quot;iec104&quot;
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_c&quot;,
+            &quot;channel_id&quot;: 2,
+            &quot;sampled_at&quot;: 1794729989885,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 236,
+              &quot;latency&quot;: {
+                &quot;c_sample_submit_ms&quot;: {
+                  &quot;count&quot;: 236,
+                  &quot;window_count&quot;: 236,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 3.607,
+                  &quot;p50_ms&quot;: 0.952,
+                  &quot;p95_ms&quot;: 4.894,
+                  &quot;p99_ms&quot;: 8.467,
+                  &quot;max_ms&quot;: 28.9771
+                }
+              },
+              &quot;updated_yc&quot;: 1088,
+              &quot;updated_yx&quot;: 1088,
+              &quot;sent_yk&quot;: 2,
+              &quot;sent_yt&quot;: 2,
+              &quot;errors&quot;: 0,
+              &quot;channel_type&quot;: &quot;iec104&quot;
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_c&quot;,
+            &quot;channel_id&quot;: 3,
+            &quot;sampled_at&quot;: 1794729984971,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 160,
+              &quot;latency&quot;: {
+                &quot;c_sample_submit_ms&quot;: {
+                  &quot;count&quot;: 160,
+                  &quot;window_count&quot;: 160,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.459,
+                  &quot;p50_ms&quot;: 1.181,
+                  &quot;p95_ms&quot;: 6.985,
+                  &quot;p99_ms&quot;: 11.051,
+                  &quot;max_ms&quot;: 13.5532
+                }
+              },
+              &quot;updated_yc&quot;: 1024,
+              &quot;updated_yx&quot;: 1024,
+              &quot;sent_yk&quot;: 0,
+              &quot;sent_yt&quot;: 0,
+              &quot;errors&quot;: 0,
+              &quot;channel_type&quot;: &quot;iec104&quot;
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_c&quot;,
+            &quot;channel_id&quot;: 4,
+            &quot;sampled_at&quot;: 1794729985093,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 162,
+              &quot;latency&quot;: {
+                &quot;c_sample_submit_ms&quot;: {
+                  &quot;count&quot;: 162,
+                  &quot;window_count&quot;: 162,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.301,
+                  &quot;p50_ms&quot;: 1.065,
+                  &quot;p95_ms&quot;: 5.506,
+                  &quot;p99_ms&quot;: 9.635,
+                  &quot;max_ms&quot;: 32.9016
+                }
+              },
+              &quot;updated_yc&quot;: 1024,
+              &quot;updated_yx&quot;: 1024,
+              &quot;sent_yk&quot;: 0,
+              &quot;sent_yt&quot;: 0,
+              &quot;errors&quot;: 0,
+              &quot;channel_type&quot;: &quot;iec104&quot;
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_c_writer&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729989297,
+            &quot;diagnostic&quot;: {
+              &quot;latency&quot;: {
+                &quot;c_db_lock_wait_ms&quot;: {
+                  &quot;count&quot;: 53,
+                  &quot;window_count&quot;: 53,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.054,
+                  &quot;p50_ms&quot;: 0.076,
+                  &quot;p95_ms&quot;: 94.681,
+                  &quot;p99_ms&quot;: 445.347,
+                  &quot;max_ms&quot;: 445.347
+                },
+                &quot;c_db_apply_ms&quot;: {
+                  &quot;count&quot;: 53,
+                  &quot;window_count&quot;: 53,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.051,
+                  &quot;p50_ms&quot;: 1.814,
+                  &quot;p95_ms&quot;: 7.541,
+                  &quot;p99_ms&quot;: 18.59,
+                  &quot;max_ms&quot;: 18.5902
+                },
+                &quot;c_db_commit_ms&quot;: {
+                  &quot;count&quot;: 53,
+                  &quot;window_count&quot;: 53,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.056,
+                  &quot;p50_ms&quot;: 0.154,
+                  &quot;p95_ms&quot;: 0.401,
+                  &quot;p99_ms&quot;: 3.21,
+                  &quot;max_ms&quot;: 3.2099
+                },
+                &quot;c_write_ms&quot;: {
+                  &quot;count&quot;: 53,
+                  &quot;window_count&quot;: 53,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.217,
+                  &quot;p50_ms&quot;: 4.158,
+                  &quot;p95_ms&quot;: 98.865,
+                  &quot;p99_ms&quot;: 452.796,
+                  &quot;max_ms&quot;: 452.7955
+                },
+                &quot;c_queue_ms&quot;: {
+                  &quot;count&quot;: 126,
+                  &quot;window_count&quot;: 126,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 113.12,
+                  &quot;p50_ms&quot;: 75.808,
+                  &quot;p95_ms&quot;: 113.625,
+                  &quot;p99_ms&quot;: 456.705,
+                  &quot;max_ms&quot;: 457.6871
+                },
+                &quot;c_queue_commit_ms&quot;: {
+                  &quot;count&quot;: 126,
+                  &quot;window_count&quot;: 126,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 113.337,
+                  &quot;p50_ms&quot;: 94.206,
+                  &quot;p95_ms&quot;: 202.978,
+                  &quot;p99_ms&quot;: 512.162,
+                  &quot;max_ms&quot;: 558.9017
+                },
+                &quot;c_receipt_log_ms&quot;: {
+                  &quot;count&quot;: 53,
+                  &quot;window_count&quot;: 53,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 1.912,
+                  &quot;p50_ms&quot;: 2.006,
+                  &quot;p95_ms&quot;: 4.297,
+                  &quot;p99_ms&quot;: 9.974,
+                  &quot;max_ms&quot;: 9.9742
+                }
+              },
+              &quot;pending_messages&quot;: 0,
+              &quot;pending_updates&quot;: 0,
+              &quot;slow_batches&quot;: {
+                &quot;threshold_ms&quot;: 100,
+                &quot;count&quot;: 46,
+                &quot;items&quot;: [
+                  {
+                    &quot;sequence&quot;: 31,
+                    &quot;sampled_at&quot;: 1794729983372,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 109.234,
+                    &quot;lock_wait_ms&quot;: 0.055,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.119,
+                    &quot;commit_ms&quot;: 0.08,
+                    &quot;transaction_ms&quot;: 0.346,
+                    &quot;queue_commit_ms&quot;: 109.581,
+                    &quot;receipt_log_ms&quot;: 1.96,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 32,
+                    &quot;sampled_at&quot;: 1794729983712,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      1
+                    ],
+                    &quot;queue_wait_ms&quot;: 107.822,
+                    &quot;lock_wait_ms&quot;: 0.049,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.073,
+                    &quot;commit_ms&quot;: 0.084,
+                    &quot;transaction_ms&quot;: 0.381,
+                    &quot;queue_commit_ms&quot;: 108.203,
+                    &quot;receipt_log_ms&quot;: 4.297,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 33,
+                    &quot;sampled_at&quot;: 1794729984325,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      2
+                    ],
+                    &quot;queue_wait_ms&quot;: 100.219,
+                    &quot;lock_wait_ms&quot;: 0.041,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.05,
+                    &quot;commit_ms&quot;: 0.154,
+                    &quot;transaction_ms&quot;: 0.338,
+                    &quot;queue_commit_ms&quot;: 100.556,
+                    &quot;receipt_log_ms&quot;: 1.646,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 34,
+                    &quot;sampled_at&quot;: 1794729984650,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      2
+                    ],
+                    &quot;queue_wait_ms&quot;: 100.782,
+                    &quot;lock_wait_ms&quot;: 0.09,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.062,
+                    &quot;commit_ms&quot;: 0.081,
+                    &quot;transaction_ms&quot;: 0.281,
+                    &quot;queue_commit_ms&quot;: 101.064,
+                    &quot;receipt_log_ms&quot;: 1.929,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 35,
+                    &quot;sampled_at&quot;: 1794729985030,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [],
+                    &quot;queue_wait_ms&quot;: 0.0,
+                    &quot;lock_wait_ms&quot;: 152.777,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.193,
+                    &quot;commit_ms&quot;: 0.05,
+                    &quot;transaction_ms&quot;: 153.076,
+                    &quot;queue_commit_ms&quot;: 153.076,
+                    &quot;receipt_log_ms&quot;: 0.048,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 36,
+                    &quot;sampled_at&quot;: 1794729985294,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      2
+                    ],
+                    &quot;queue_wait_ms&quot;: 108.847,
+                    &quot;lock_wait_ms&quot;: 0.05,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.047,
+                    &quot;commit_ms&quot;: 0.06,
+                    &quot;transaction_ms&quot;: 0.298,
+                    &quot;queue_commit_ms&quot;: 109.145,
+                    &quot;receipt_log_ms&quot;: 1.68,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 37,
+                    &quot;sampled_at&quot;: 1794729985630,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      2
+                    ],
+                    &quot;queue_wait_ms&quot;: 111.659,
+                    &quot;lock_wait_ms&quot;: 0.077,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.196,
+                    &quot;commit_ms&quot;: 0.052,
+                    &quot;transaction_ms&quot;: 0.419,
+                    &quot;queue_commit_ms&quot;: 112.077,
+                    &quot;receipt_log_ms&quot;: 3.026,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 38,
+                    &quot;sampled_at&quot;: 1794729985984,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      3
+                    ],
+                    &quot;queue_wait_ms&quot;: 111.327,
+                    &quot;lock_wait_ms&quot;: 0.164,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.094,
+                    &quot;commit_ms&quot;: 0.057,
+                    &quot;transaction_ms&quot;: 0.368,
+                    &quot;queue_commit_ms&quot;: 111.695,
+                    &quot;receipt_log_ms&quot;: 2.337,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 39,
+                    &quot;sampled_at&quot;: 1794729987065,
+                    &quot;messages&quot;: 3,
+                    &quot;updates&quot;: 320,
+                    &quot;rtus&quot;: [
+                      2,
+                      3,
+                      4
+                    ],
+                    &quot;queue_wait_ms&quot;: 106.106,
+                    &quot;lock_wait_ms&quot;: 445.347,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 4.066,
+                    &quot;commit_ms&quot;: 3.21,
+                    &quot;transaction_ms&quot;: 452.796,
+                    &quot;queue_commit_ms&quot;: 558.902,
+                    &quot;receipt_log_ms&quot;: 0.064,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 40,
+                    &quot;sampled_at&quot;: 1794729987076,
+                    &quot;messages&quot;: 3,
+                    &quot;updates&quot;: 193,
+                    &quot;rtus&quot;: [
+                      1,
+                      3
+                    ],
+                    &quot;queue_wait_ms&quot;: 457.687,
+                    &quot;lock_wait_ms&quot;: 0.093,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 2.817,
+                    &quot;commit_ms&quot;: 0.251,
+                    &quot;transaction_ms&quot;: 3.256,
+                    &quot;queue_commit_ms&quot;: 460.943,
+                    &quot;receipt_log_ms&quot;: 2.006,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 41,
+                    &quot;sampled_at&quot;: 1794729987383,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      3
+                    ],
+                    &quot;queue_wait_ms&quot;: 108.887,
+                    &quot;lock_wait_ms&quot;: 0.076,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.045,
+                    &quot;commit_ms&quot;: 0.052,
+                    &quot;transaction_ms&quot;: 0.218,
+                    &quot;queue_commit_ms&quot;: 109.106,
+                    &quot;receipt_log_ms&quot;: 1.838,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 42,
+                    &quot;sampled_at&quot;: 1794729987724,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      3
+                    ],
+                    &quot;queue_wait_ms&quot;: 113.625,
+                    &quot;lock_wait_ms&quot;: 0.084,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.059,
+                    &quot;commit_ms&quot;: 0.085,
+                    &quot;transaction_ms&quot;: 0.405,
+                    &quot;queue_commit_ms&quot;: 114.03,
+                    &quot;receipt_log_ms&quot;: 2.374,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 43,
+                    &quot;sampled_at&quot;: 1794729988314,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      4
+                    ],
+                    &quot;queue_wait_ms&quot;: 115.981,
+                    &quot;lock_wait_ms&quot;: 0.077,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.082,
+                    &quot;commit_ms&quot;: 0.061,
+                    &quot;transaction_ms&quot;: 0.316,
+                    &quot;queue_commit_ms&quot;: 116.296,
+                    &quot;receipt_log_ms&quot;: 2.513,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 44,
+                    &quot;sampled_at&quot;: 1794729988636,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      4
+                    ],
+                    &quot;queue_wait_ms&quot;: 104.309,
+                    &quot;lock_wait_ms&quot;: 0.053,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.047,
+                    &quot;commit_ms&quot;: 0.061,
+                    &quot;transaction_ms&quot;: 0.26,
+                    &quot;queue_commit_ms&quot;: 104.569,
+                    &quot;receipt_log_ms&quot;: 1.686,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 45,
+                    &quot;sampled_at&quot;: 1794729988959,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      4
+                    ],
+                    &quot;queue_wait_ms&quot;: 105.796,
+                    &quot;lock_wait_ms&quot;: 0.056,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.092,
+                    &quot;commit_ms&quot;: 0.086,
+                    &quot;transaction_ms&quot;: 0.282,
+                    &quot;queue_commit_ms&quot;: 106.078,
+                    &quot;receipt_log_ms&quot;: 1.837,
+                    &quot;attempts&quot;: 1
+                  },
+                  {
+                    &quot;sequence&quot;: 46,
+                    &quot;sampled_at&quot;: 1794729989296,
+                    &quot;messages&quot;: 1,
+                    &quot;updates&quot;: 1,
+                    &quot;rtus&quot;: [
+                      4
+                    ],
+                    &quot;queue_wait_ms&quot;: 113.12,
+                    &quot;lock_wait_ms&quot;: 0.054,
+                    &quot;backoff_ms&quot;: 0.0,
+                    &quot;apply_ms&quot;: 0.051,
+                    &quot;commit_ms&quot;: 0.056,
+                    &quot;transaction_ms&quot;: 0.217,
+                    &quot;queue_commit_ms&quot;: 113.337,
+                    &quot;receipt_log_ms&quot;: 1.912,
+                    &quot;attempts&quot;: 1
+                  }
+                ]
+              },
+              &quot;database_wait&quot;: {
+                &quot;lock_conflicts&quot;: 0,
+                &quot;retry_backoff_ms&quot;: 0,
+                &quot;wal_bytes&quot;: 4210672,
+                &quot;wal_autocheckpoint_pages&quot;: 10000
+              }
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_t&quot;,
+            &quot;channel_id&quot;: 1,
+            &quot;sampled_at&quot;: 1794729989285,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 189,
+              &quot;source_reads&quot;: 2176,
+              &quot;published_updates&quot;: 1920,
+              &quot;command_count&quot;: 4,
+              &quot;command_write&quot;: {
+                &quot;count&quot;: 4,
+                &quot;failed&quot;: 0,
+                &quot;threshold_ms&quot;: 100,
+                &quot;latency&quot;: {
+                  &quot;connection_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.007,
+                    &quot;p50_ms&quot;: 0.008,
+                    &quot;p95_ms&quot;: 0.01,
+                    &quot;p99_ms&quot;: 0.01,
+                    &quot;max_ms&quot;: 0.00969999746303074
+                  },
+                  &quot;setup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.034,
+                    &quot;p50_ms&quot;: 0.041,
+                    &quot;p95_ms&quot;: 0.056,
+                    &quot;p99_ms&quot;: 0.056,
+                    &quot;max_ms&quot;: 0.0560000044060871
+                  },
+                  &quot;lock_wait_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.012,
+                    &quot;p50_ms&quot;: 0.016,
+                    &quot;p95_ms&quot;: 0.018,
+                    &quot;p99_ms&quot;: 0.018,
+                    &quot;max_ms&quot;: 0.018299997464055195
+                  },
+                  &quot;validation_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.123,
+                    &quot;p50_ms&quot;: 0.123,
+                    &quot;p95_ms&quot;: 0.246,
+                    &quot;p99_ms&quot;: 0.246,
+                    &quot;max_ms&quot;: 0.24599999960628338
+                  },
+                  &quot;apply_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.254,
+                    &quot;p50_ms&quot;: 0.161,
+                    &quot;p95_ms&quot;: 0.459,
+                    &quot;p99_ms&quot;: 0.459,
+                    &quot;max_ms&quot;: 0.4590999997162726
+                  },
+                  &quot;commit_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 5.323,
+                    &quot;p50_ms&quot;: 2.919,
+                    &quot;p95_ms&quot;: 464.055,
+                    &quot;p99_ms&quot;: 464.055,
+                    &quot;max_ms&quot;: 464.0551999982563
+                  },
+                  &quot;cleanup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.03,
+                    &quot;p50_ms&quot;: 0.032,
+                    &quot;p95_ms&quot;: 0.041,
+                    &quot;p99_ms&quot;: 0.041,
+                    &quot;max_ms&quot;: 0.04070000068168156
+                  },
+                  &quot;total_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 5.858,
+                    &quot;p50_ms&quot;: 3.435,
+                    &quot;p95_ms&quot;: 464.943,
+                    &quot;p99_ms&quot;: 464.943,
+                    &quot;max_ms&quot;: 464.9433000013232
+                  }
+                },
+                &quot;recent&quot;: [
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.009,
+                    &quot;setup_ms&quot;: 0.051,
+                    &quot;lock_wait_ms&quot;: 0.018,
+                    &quot;validation_ms&quot;: 0.213,
+                    &quot;apply_ms&quot;: 0.459,
+                    &quot;commit_ms&quot;: 464.055,
+                    &quot;cleanup_ms&quot;: 0.041,
+                    &quot;total_ms&quot;: 464.943,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729982543,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 1,
+                        &quot;kind&quot;: &quot;yk&quot;,
+                        &quot;pnt_no&quot;: 1,
+                        &quot;cmd_time&quot;: 1794729982079
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 1
+                  }
+                ]
+              },
+              &quot;latency&quot;: {
+                &quot;t_source_read_ms&quot;: {
+                  &quot;count&quot;: 189,
+                  &quot;window_count&quot;: 189,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.074,
+                  &quot;p50_ms&quot;: 1.065,
+                  &quot;p95_ms&quot;: 10.627,
+                  &quot;p99_ms&quot;: 34.586,
+                  &quot;max_ms&quot;: 42.2356
+                },
+                &quot;t_refresh_ms&quot;: {
+                  &quot;count&quot;: 189,
+                  &quot;window_count&quot;: 189,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.093,
+                  &quot;p50_ms&quot;: 1.089,
+                  &quot;p95_ms&quot;: 35.062,
+                  &quot;p99_ms&quot;: 123.752,
+                  &quot;max_ms&quot;: 151.3639
+                }
+              },
+              &quot;source_delta&quot;: {
+                &quot;rows_read&quot;: 2176,
+                &quot;polls&quot;: 189,
+                &quot;unchanged_polls&quot;: 166
+              },
+              &quot;reconnect_count&quot;: 1,
+              &quot;server_running&quot;: true,
+              &quot;open_connections&quot;: 1,
+              &quot;soe_cursor&quot;: null,
+              &quot;soe_pending&quot;: null,
+              &quot;soe_progress&quot;: null,
+              &quot;port&quot;: 6639,
+              &quot;protocol_errors&quot;: [],
+              &quot;unexpected_messages&quot;: []
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_t&quot;,
+            &quot;channel_id&quot;: 2,
+            &quot;sampled_at&quot;: 1794729989507,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 202,
+              &quot;source_reads&quot;: 2176,
+              &quot;published_updates&quot;: 1920,
+              &quot;command_count&quot;: 4,
+              &quot;command_write&quot;: {
+                &quot;count&quot;: 4,
+                &quot;failed&quot;: 0,
+                &quot;threshold_ms&quot;: 100,
+                &quot;latency&quot;: {
+                  &quot;connection_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.007,
+                    &quot;p50_ms&quot;: 0.007,
+                    &quot;p95_ms&quot;: 0.011,
+                    &quot;p99_ms&quot;: 0.011,
+                    &quot;max_ms&quot;: 0.010600000678095967
+                  },
+                  &quot;setup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.037,
+                    &quot;p50_ms&quot;: 0.038,
+                    &quot;p95_ms&quot;: 0.668,
+                    &quot;p99_ms&quot;: 0.668,
+                    &quot;max_ms&quot;: 0.6677000019408297
+                  },
+                  &quot;lock_wait_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.013,
+                    &quot;p50_ms&quot;: 0.018,
+                    &quot;p95_ms&quot;: 0.092,
+                    &quot;p99_ms&quot;: 0.092,
+                    &quot;max_ms&quot;: 0.09210000280290842
+                  },
+                  &quot;validation_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.133,
+                    &quot;p50_ms&quot;: 0.14,
+                    &quot;p95_ms&quot;: 0.162,
+                    &quot;p99_ms&quot;: 0.162,
+                    &quot;max_ms&quot;: 0.16150000010384247
+                  },
+                  &quot;apply_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.265,
+                    &quot;p50_ms&quot;: 0.265,
+                    &quot;p95_ms&quot;: 0.368,
+                    &quot;p99_ms&quot;: 0.368,
+                    &quot;max_ms&quot;: 0.36810000165132806
+                  },
+                  &quot;commit_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 10.874,
+                    &quot;p50_ms&quot;: 10.874,
+                    &quot;p95_ms&quot;: 317.85,
+                    &quot;p99_ms&quot;: 317.85,
+                    &quot;max_ms&quot;: 317.8498000015679
+                  },
+                  &quot;cleanup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.028,
+                    &quot;p50_ms&quot;: 0.035,
+                    &quot;p95_ms&quot;: 0.042,
+                    &quot;p99_ms&quot;: 0.042,
+                    &quot;max_ms&quot;: 0.042100000428035855
+                  },
+                  &quot;total_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 11.427,
+                    &quot;p50_ms&quot;: 11.427,
+                    &quot;p95_ms&quot;: 319.14,
+                    &quot;p99_ms&quot;: 319.14,
+                    &quot;max_ms&quot;: 319.13970000096015
+                  }
+                },
+                &quot;recent&quot;: [
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.011,
+                    &quot;setup_ms&quot;: 0.046,
+                    &quot;lock_wait_ms&quot;: 0.018,
+                    &quot;validation_ms&quot;: 0.155,
+                    &quot;apply_ms&quot;: 0.368,
+                    &quot;commit_ms&quot;: 317.85,
+                    &quot;cleanup_ms&quot;: 0.042,
+                    &quot;total_ms&quot;: 319.14,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729984191,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 2,
+                        &quot;kind&quot;: &quot;yk&quot;,
+                        &quot;pnt_no&quot;: 1,
+                        &quot;cmd_time&quot;: 1794729983873
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 1
+                  },
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.007,
+                    &quot;setup_ms&quot;: 0.038,
+                    &quot;lock_wait_ms&quot;: 0.022,
+                    &quot;validation_ms&quot;: 0.14,
+                    &quot;apply_ms&quot;: 0.115,
+                    &quot;commit_ms&quot;: 215.861,
+                    &quot;cleanup_ms&quot;: 0.035,
+                    &quot;total_ms&quot;: 216.978,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729985019,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 2,
+                        &quot;kind&quot;: &quot;yt&quot;,
+                        &quot;pnt_no&quot;: 1,
+                        &quot;cmd_time&quot;: 1794729984801
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 3
+                  }
+                ]
+              },
+              &quot;latency&quot;: {
+                &quot;t_source_read_ms&quot;: {
+                  &quot;count&quot;: 202,
+                  &quot;window_count&quot;: 202,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.076,
+                  &quot;p50_ms&quot;: 1.065,
+                  &quot;p95_ms&quot;: 11.341,
+                  &quot;p99_ms&quot;: 26.647,
+                  &quot;max_ms&quot;: 42.999
+                },
+                &quot;t_refresh_ms&quot;: {
+                  &quot;count&quot;: 202,
+                  &quot;window_count&quot;: 202,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.09,
+                  &quot;p50_ms&quot;: 1.088,
+                  &quot;p95_ms&quot;: 41.552,
+                  &quot;p99_ms&quot;: 80.275,
+                  &quot;max_ms&quot;: 95.4329
+                }
+              },
+              &quot;source_delta&quot;: {
+                &quot;rows_read&quot;: 2210,
+                &quot;polls&quot;: 202,
+                &quot;unchanged_polls&quot;: 178
+              },
+              &quot;reconnect_count&quot;: 1,
+              &quot;server_running&quot;: true,
+              &quot;open_connections&quot;: 1,
+              &quot;soe_cursor&quot;: null,
+              &quot;soe_pending&quot;: null,
+              &quot;soe_progress&quot;: null,
+              &quot;port&quot;: 6640,
+              &quot;protocol_errors&quot;: [],
+              &quot;unexpected_messages&quot;: []
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_t&quot;,
+            &quot;channel_id&quot;: 3,
+            &quot;sampled_at&quot;: 1794729989534,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 201,
+              &quot;source_reads&quot;: 2176,
+              &quot;published_updates&quot;: 1920,
+              &quot;command_count&quot;: 4,
+              &quot;command_write&quot;: {
+                &quot;count&quot;: 4,
+                &quot;failed&quot;: 0,
+                &quot;threshold_ms&quot;: 100,
+                &quot;latency&quot;: {
+                  &quot;connection_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.008,
+                    &quot;p50_ms&quot;: 0.008,
+                    &quot;p95_ms&quot;: 0.008,
+                    &quot;p99_ms&quot;: 0.008,
+                    &quot;max_ms&quot;: 0.008400002116104588
+                  },
+                  &quot;setup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.128,
+                    &quot;p50_ms&quot;: 0.04,
+                    &quot;p95_ms&quot;: 0.128,
+                    &quot;p99_ms&quot;: 0.128,
+                    &quot;max_ms&quot;: 0.12789999891538173
+                  },
+                  &quot;lock_wait_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.017,
+                    &quot;p50_ms&quot;: 0.015,
+                    &quot;p95_ms&quot;: 0.019,
+                    &quot;p99_ms&quot;: 0.019,
+                    &quot;max_ms&quot;: 0.018999999156221747
+                  },
+                  &quot;validation_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.187,
+                    &quot;p50_ms&quot;: 0.117,
+                    &quot;p95_ms&quot;: 0.187,
+                    &quot;p99_ms&quot;: 0.187,
+                    &quot;max_ms&quot;: 0.18689999706111848
+                  },
+                  &quot;apply_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.292,
+                    &quot;p50_ms&quot;: 0.125,
+                    &quot;p95_ms&quot;: 0.375,
+                    &quot;p99_ms&quot;: 0.375,
+                    &quot;max_ms&quot;: 0.37460000021383166
+                  },
+                  &quot;commit_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 2.766,
+                    &quot;p50_ms&quot;: 3.0,
+                    &quot;p95_ms&quot;: 747.482,
+                    &quot;p99_ms&quot;: 747.482,
+                    &quot;max_ms&quot;: 747.4815999994462
+                  },
+                  &quot;cleanup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.037,
+                    &quot;p50_ms&quot;: 0.034,
+                    &quot;p95_ms&quot;: 0.044,
+                    &quot;p99_ms&quot;: 0.044,
+                    &quot;max_ms&quot;: 0.04369999805931002
+                  },
+                  &quot;total_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 3.534,
+                    &quot;p50_ms&quot;: 3.534,
+                    &quot;p95_ms&quot;: 747.861,
+                    &quot;p99_ms&quot;: 747.861,
+                    &quot;max_ms&quot;: 747.8612000013527
+                  }
+                },
+                &quot;recent&quot;: [
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.008,
+                    &quot;setup_ms&quot;: 0.051,
+                    &quot;lock_wait_ms&quot;: 0.019,
+                    &quot;validation_ms&quot;: 0.066,
+                    &quot;apply_ms&quot;: 0.125,
+                    &quot;commit_ms&quot;: 747.482,
+                    &quot;cleanup_ms&quot;: 0.028,
+                    &quot;total_ms&quot;: 747.861,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729986889,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 3,
+                        &quot;kind&quot;: &quot;yk&quot;,
+                        &quot;pnt_no&quot;: 2,
+                        &quot;cmd_time&quot;: 1794729986141
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 2
+                  }
+                ]
+              },
+              &quot;latency&quot;: {
+                &quot;t_source_read_ms&quot;: {
+                  &quot;count&quot;: 201,
+                  &quot;window_count&quot;: 201,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 1.797,
+                  &quot;p50_ms&quot;: 0.938,
+                  &quot;p95_ms&quot;: 11.803,
+                  &quot;p99_ms&quot;: 27.241,
+                  &quot;max_ms&quot;: 42.158
+                },
+                &quot;t_refresh_ms&quot;: {
+                  &quot;count&quot;: 201,
+                  &quot;window_count&quot;: 201,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 1.815,
+                  &quot;p50_ms&quot;: 0.956,
+                  &quot;p95_ms&quot;: 30.181,
+                  &quot;p99_ms&quot;: 82.615,
+                  &quot;max_ms&quot;: 109.5885
+                }
+              },
+              &quot;source_delta&quot;: {
+                &quot;rows_read&quot;: 2180,
+                &quot;polls&quot;: 201,
+                &quot;unchanged_polls&quot;: 181
+              },
+              &quot;reconnect_count&quot;: 1,
+              &quot;server_running&quot;: true,
+              &quot;open_connections&quot;: 1,
+              &quot;soe_cursor&quot;: null,
+              &quot;soe_pending&quot;: null,
+              &quot;soe_progress&quot;: null,
+              &quot;port&quot;: 6641,
+              &quot;protocol_errors&quot;: [],
+              &quot;unexpected_messages&quot;: []
+            }
+          },
+          {
+            &quot;service&quot;: &quot;scdfe_t&quot;,
+            &quot;channel_id&quot;: 4,
+            &quot;sampled_at&quot;: 1794729989627,
+            &quot;diagnostic&quot;: {
+              &quot;cycles&quot;: 200,
+              &quot;source_reads&quot;: 2176,
+              &quot;published_updates&quot;: 1920,
+              &quot;command_count&quot;: 4,
+              &quot;command_write&quot;: {
+                &quot;count&quot;: 4,
+                &quot;failed&quot;: 0,
+                &quot;threshold_ms&quot;: 100,
+                &quot;latency&quot;: {
+                  &quot;connection_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.007,
+                    &quot;p50_ms&quot;: 0.009,
+                    &quot;p95_ms&quot;: 5.619,
+                    &quot;p99_ms&quot;: 5.619,
+                    &quot;max_ms&quot;: 5.618700000923127
+                  },
+                  &quot;setup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.039,
+                    &quot;p50_ms&quot;: 0.039,
+                    &quot;p95_ms&quot;: 0.057,
+                    &quot;p99_ms&quot;: 0.057,
+                    &quot;max_ms&quot;: 0.05729999975301325
+                  },
+                  &quot;lock_wait_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.014,
+                    &quot;p50_ms&quot;: 0.017,
+                    &quot;p95_ms&quot;: 0.024,
+                    &quot;p99_ms&quot;: 0.024,
+                    &quot;max_ms&quot;: 0.024000000848900527
+                  },
+                  &quot;validation_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.096,
+                    &quot;p50_ms&quot;: 0.171,
+                    &quot;p95_ms&quot;: 0.333,
+                    &quot;p99_ms&quot;: 0.333,
+                    &quot;max_ms&quot;: 0.33289999919361435
+                  },
+                  &quot;apply_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.228,
+                    &quot;p50_ms&quot;: 0.3,
+                    &quot;p95_ms&quot;: 0.334,
+                    &quot;p99_ms&quot;: 0.334,
+                    &quot;max_ms&quot;: 0.3336000008857809
+                  },
+                  &quot;commit_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 6.489,
+                    &quot;p50_ms&quot;: 3.553,
+                    &quot;p95_ms&quot;: 262.166,
+                    &quot;p99_ms&quot;: 262.166,
+                    &quot;max_ms&quot;: 262.1662000019569
+                  },
+                  &quot;cleanup_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 0.039,
+                    &quot;p50_ms&quot;: 0.043,
+                    &quot;p95_ms&quot;: 0.094,
+                    &quot;p99_ms&quot;: 0.094,
+                    &quot;max_ms&quot;: 0.0943000013648998
+                  },
+                  &quot;total_ms&quot;: {
+                    &quot;count&quot;: 4,
+                    &quot;window_count&quot;: 4,
+                    &quot;invalid_count&quot;: 0,
+                    &quot;last_ms&quot;: 7.004,
+                    &quot;p50_ms&quot;: 7.004,
+                    &quot;p95_ms&quot;: 263.379,
+                    &quot;p99_ms&quot;: 263.379,
+                    &quot;max_ms&quot;: 263.3791000007477
+                  }
+                },
+                &quot;recent&quot;: [
+                  {
+                    &quot;committed&quot;: true,
+                    &quot;connection_ms&quot;: 0.009,
+                    &quot;setup_ms&quot;: 0.041,
+                    &quot;lock_wait_ms&quot;: 0.017,
+                    &quot;validation_ms&quot;: 0.171,
+                    &quot;apply_ms&quot;: 0.3,
+                    &quot;commit_ms&quot;: 262.166,
+                    &quot;cleanup_ms&quot;: 0.043,
+                    &quot;total_ms&quot;: 263.379,
+                    &quot;error&quot;: &quot;&quot;,
+                    &quot;sampled_at&quot;: 1794729988149,
+                    &quot;points&quot;: [
+                      {
+                        &quot;rtu_id&quot;: 4,
+                        &quot;kind&quot;: &quot;yk&quot;,
+                        &quot;pnt_no&quot;: 1,
+                        &quot;cmd_time&quot;: 1794729987885
+                      }
+                    ],
+                    &quot;point_count&quot;: 1,
+                    &quot;sequence&quot;: 1
+                  }
+                ]
+              },
+              &quot;latency&quot;: {
+                &quot;t_source_read_ms&quot;: {
+                  &quot;count&quot;: 200,
+                  &quot;window_count&quot;: 200,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.11,
+                  &quot;p50_ms&quot;: 0.81,
+                  &quot;p95_ms&quot;: 10.465,
+                  &quot;p99_ms&quot;: 32.379,
+                  &quot;max_ms&quot;: 47.2157
+                },
+                &quot;t_refresh_ms&quot;: {
+                  &quot;count&quot;: 200,
+                  &quot;window_count&quot;: 200,
+                  &quot;invalid_count&quot;: 0,
+                  &quot;last_ms&quot;: 0.131,
+                  &quot;p50_ms&quot;: 0.843,
+                  &quot;p95_ms&quot;: 25.128,
+                  &quot;p99_ms&quot;: 87.405,
+                  &quot;max_ms&quot;: 161.6193
+                }
+              },
+              &quot;source_delta&quot;: {
+                &quot;rows_read&quot;: 2184,
+                &quot;polls&quot;: 200,
+                &quot;unchanged_polls&quot;: 176
+              },
+              &quot;reconnect_count&quot;: 1,
+              &quot;server_running&quot;: true,
+              &quot;open_connections&quot;: 1,
+              &quot;soe_cursor&quot;: null,
+              &quot;soe_pending&quot;: null,
+              &quot;soe_progress&quot;: null,
+              &quot;port&quot;: 6642,
+              &quot;protocol_errors&quot;: [],
+              &quot;unexpected_messages&quot;: []
+            }
+          }
+        ],
+        &quot;frames&quot;: {
+          &quot;C-1&quot;: {
+            &quot;I&quot;: 111,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 4
+          },
+          &quot;C-2&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-3&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;C-4&quot;: {
+            &quot;I&quot;: 101,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-1&quot;: {
+            &quot;I&quot;: 149,
+            &quot;S&quot;: 11,
+            &quot;U&quot;: 2
+          },
+          &quot;T-2&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-3&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-4&quot;: {
+            &quot;I&quot;: 144,
+            &quot;S&quot;: 10,
+            &quot;U&quot;: 2
+          },
+          &quot;T-reconnect&quot;: {
+            &quot;I&quot;: 8,
+            &quot;S&quot;: 0,
+            &quot;U&quot;: 2
+          }
+        },
+        &quot;passed&quot;: true
+      }
+    ],
+    &quot;snapshot_boundary&quot;: {
+      &quot;wire_updates&quot;: 21,
+      &quot;collected_samples&quot;: 1,
+      &quot;final_value&quot;: true,
+      &quot;wire_states&quot;: [
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1
+      ],
+      &quot;conclusion&quot;: &quot;collect_once returns latest point snapshot; intermediate transitions require a separate event/SOE pipeline&quot;
+    },
+    &quot;passed&quot;: true
+  },
+  &quot;first_command_diagnostics&quot;: [
+    {
+      &quot;channel_id&quot;: 1,
+      &quot;command_write&quot;: {
+        &quot;count&quot;: 2,
+        &quot;failed&quot;: 0,
+        &quot;threshold_ms&quot;: 100,
+        &quot;latency&quot;: {
+          &quot;connection_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 0.016,
+            &quot;p50_ms&quot;: 0.016,
+            &quot;p95_ms&quot;: 0.018,
+            &quot;p99_ms&quot;: 0.018,
+            &quot;max_ms&quot;: 0.01849999898695387
+          },
+          &quot;setup_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 0.089,
+            &quot;p50_ms&quot;: 0.089,
+            &quot;p95_ms&quot;: 0.403,
+            &quot;p99_ms&quot;: 0.403,
+            &quot;max_ms&quot;: 0.4028000003017951
+          },
+          &quot;lock_wait_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 0.035,
+            &quot;p50_ms&quot;: 0.035,
+            &quot;p95_ms&quot;: 0.038,
+            &quot;p99_ms&quot;: 0.038,
+            &quot;max_ms&quot;: 0.03819999983534217
+          },
+          &quot;validation_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 0.841,
+            &quot;p50_ms&quot;: 0.297,
+            &quot;p95_ms&quot;: 0.841,
+            &quot;p99_ms&quot;: 0.841,
+            &quot;max_ms&quot;: 0.8412000024691224
+          },
+          &quot;apply_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 4.992,
+            &quot;p50_ms&quot;: 0.546,
+            &quot;p95_ms&quot;: 4.992,
+            &quot;p99_ms&quot;: 4.992,
+            &quot;max_ms&quot;: 4.992000001948327
+          },
+          &quot;commit_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 9.57,
+            &quot;p50_ms&quot;: 9.57,
+            &quot;p95_ms&quot;: 90.533,
+            &quot;p99_ms&quot;: 90.533,
+            &quot;max_ms&quot;: 90.53330000097048
+          },
+          &quot;cleanup_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 4.475,
+            &quot;p50_ms&quot;: 1.492,
+            &quot;p95_ms&quot;: 4.475,
+            &quot;p99_ms&quot;: 4.475,
+            &quot;max_ms&quot;: 4.475400004594121
+          },
+          &quot;total_ms&quot;: {
+            &quot;count&quot;: 2,
+            &quot;window_count&quot;: 2,
+            &quot;invalid_count&quot;: 0,
+            &quot;last_ms&quot;: 20.491,
+            &quot;p50_ms&quot;: 20.491,
+            &quot;p95_ms&quot;: 93.81,
+            &quot;p99_ms&quot;: 93.81,
+            &quot;max_ms&quot;: 93.81000000212225
+          }
+        },
+        &quot;recent&quot;: []
+      }
+    }
+  ]
+}</pre></details></section></body></html>

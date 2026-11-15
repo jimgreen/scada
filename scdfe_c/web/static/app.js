@@ -2595,6 +2595,13 @@ function debounce(handler, delay = 250) {
 }
 async function boot() {
   try {
+    const commandContext = new URLSearchParams(location.search);
+    const logRtu = commandContext.get("log_rtu");
+    if (location.hash === "#logs" && /^[1-9]\d*$/.test(logRtu || "")) {
+      $("#log-process").add(new Option("RTU " + logRtu, "rtu:" + logRtu));
+      $("#log-process").value = "rtu:" + logRtu;
+      $("#log-search").value = (commandContext.get("log_query") || "").slice(0, 120);
+    }
     const [, { items }] = await Promise.all([api("/api/health"), api("/api/schemas")]);
     items.forEach((schema) => state.schemas.set(schema.head.eng_name, schema));
     state.schemas.set("channels", channelSchema);

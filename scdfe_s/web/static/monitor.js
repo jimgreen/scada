@@ -143,8 +143,9 @@
         const connections = bound ? (service.open_connections ?? runtime.diagnostic?.open_connections ?? 0) : "—";
         const pointCount = bound ? (service.point_count ?? 0) : "—";
         const error = bound ? (runtime.last_error || service.last_error || "无") : (channel.process_error || "—");
-        const counts = bound ? [runtime.rx_count ?? service.rx_count ?? 0, runtime.tx_count ?? service.tx_count ?? 0, runtime.error_count ?? service.error_count ?? 0, runtime.reconnect_count ?? service.reconnect_count ?? 0].join(" / ") : "—";
-        const traffic = bound ? `${fmt(runtime.last_rx_time ?? service.last_rx_time)} / ${fmt(runtime.last_tx_time ?? service.last_tx_time)}` : "—";
+        // Live counters are newer than the periodically persisted snapshot.
+        const counts = bound ? [service.rx_count ?? runtime.rx_count ?? 0, service.tx_count ?? runtime.tx_count ?? 0, service.error_count ?? runtime.error_count ?? 0, service.reconnect_count ?? runtime.reconnect_count ?? 0].join(" / ") : "—";
+        const traffic = bound ? `${fmt(service.last_rx_time ?? runtime.last_rx_time)} / ${fmt(service.last_tx_time ?? runtime.last_tx_time)}` : "—";
         const diagnostic = runtime.diagnostic || service.diagnostic || {};
         const diagnosticText = Object.keys(diagnostic).length ? `诊断字段 ${Object.keys(diagnostic).length} 项` : "暂无诊断";
         const action = bound ? serviceControls(service.name, service.running) : "";

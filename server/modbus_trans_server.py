@@ -258,8 +258,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
             数据区=area, 起始地址0基=address, 数量=write_count)
         if self._command_batch_handler is not None:
             try:
-                accepted = self._command_batch_handler([
-                    (row['kind'], row['pnt_no'], value) for row, value in decoded])
+                accepted = await self._commit_command(lambda: self._command_batch_handler([
+                    (row['kind'], row['pnt_no'], value) for row, value in decoded]))
             except Exception as exc:
                 self._log('ERROR', f'Modbus 批量命令提交失败: {exc}')
                 return ExcCodes.DEVICE_FAILURE
@@ -268,7 +268,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
         for row, value in decoded:
             if self._command_batch_handler is None and self._command_handler is not None:
                 try:
-                    accepted = self._command_handler(row["kind"], row["pnt_no"], value)
+                    accepted = await self._commit_command(
+                        lambda: self._command_handler(row["kind"], row["pnt_no"], value))
                 except Exception as exc:  # callbacks must not kill pymodbus loop
                     self._log("ERROR", f"Modbus 转发命令回调失败: {exc}")
                     return ExcCodes.DEVICE_FAILURE
