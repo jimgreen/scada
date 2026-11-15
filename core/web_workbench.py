@@ -5,6 +5,8 @@ import re
 
 ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
+          "connections.css": "text/css; charset=utf-8",
+          "connections.js": "application/javascript; charset=utf-8",
           "audit-client.js": "application/javascript; charset=utf-8",
           "workbench.js": "application/javascript; charset=utf-8",
           "log-browser.css": "text/css; charset=utf-8",
@@ -15,6 +17,7 @@ S_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes", "▤", "进程监控", "按通信通道展示进程、PID、心跳和运行状态"),
         ("communication.html", "/communication", "◉", "通信监控", "连接、测点数量与通道状态"),
+        ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),
         ("soe.html", "/soe", "◷", "SOE 事件", "逐次变位、源时标与转发进度"),
         ("logs.html", "/logs", "≡", "日志报文", "按通信通道浏览运行日志和收发报文"),
     ]),
@@ -30,6 +33,7 @@ T_PAGES = [
     ("运行管理", [
         ("processes.html", "/processes.html", "▤", "进程监控", "转发进程的启停、心跳和运行状态"),
         ("communication.html", "/communication.html", "◉", "通信监控", "转发通道的监听地址与通信状态"),
+        ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),
         ("soe.html", "/soe", "◷", "SOE 事件", "源事件历史与转发确认进度"),
         ("logs.html", "/logs.html", "≡", "日志报文", "按年月日小时浏览运行日志和收发报文文件"),
     ]),

@@ -66,6 +66,26 @@ class PacketTrace:
     """Adapters expose a callback installed before connect/start by their owner."""
     PACKET_PROTOCOL = ""
 
+    def set_connection_history(self, history, metadata):
+        self._connection_history = (history, metadata)
+
+    def _start_connection_history(self):
+        settings = getattr(self, '_connection_history_settings', None)
+        if settings and not getattr(self, '_owned_connection_history', None):
+            from core.connection_history import journal
+            db, component, metadata = settings
+            self._owned_connection_history = journal(db, component)
+            self._connection_history = (self._owned_connection_history, metadata)
+        return getattr(self, '_connection_history', None)
+
+    def _stop_connection_history(self):
+        owned = getattr(self, '_owned_connection_history', None)
+        if owned:
+            from core.connection_history import release_journal
+            release_journal(owned)
+            self._owned_connection_history = None
+            self._connection_history = None
+
     def set_packet_handler(self, handler):
         if handler is not None and not callable(handler):
             raise TypeError("packet handler must be callable")
@@ -200,12 +220,18 @@ def trace_stream_protocol(protocol, trace):
     return protocol
 
 
-def trace_stream_server_loop(loop, trace):
+def trace_stream_server_loop(loop, trace, history=None):
     """Install a protocol factory wrapper on a server's private event loop."""
     create_server = loop.create_server
 
     async def traced_server(factory, *args, **kwargs):
-        return await create_server(lambda: trace_stream_protocol(factory(), trace), *args, **kwargs)
+        def observed():
+            protocol = trace_stream_protocol(factory(), trace)
+            if history:
+                from core.connection_trace import observe_protocol
+                protocol = observe_protocol(protocol, *history)
+            return protocol
+        return await create_server(observed, *args, **kwargs)
 
     loop.create_server = traced_server
 

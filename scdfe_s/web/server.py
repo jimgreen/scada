@@ -370,6 +370,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 items.append({"name": slug, "label": status.get("label", slug),
                               "running": bool(status.get("running")),
                               "rtu_id": rtu_id,
+                              "endpoint": status.get("endpoint"),
                               "connections": status.get("connections", []),
                               "open_connections": status.get("open_connections", 0),
                               "point_count": status.get("point_count", 0),
@@ -733,6 +734,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                                                packet_directory=packet_log_directory(runtime_directory)))
         # Handled routes return None after writing JSON; only False means
         # that dispatch should continue to the next route family.
+        from core.web_connections import handle_connections
+        if handle_connections(self,parts,query,method,self.server.store,'s') is not False:
+            return
         if self._monitor_control(parts, query, method) is not False:
             return
         if self._iec104_control(parts, query, method) is not False:

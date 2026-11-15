@@ -21,6 +21,7 @@ import time
 from typing import Any
 from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
+from core.network_endpoint import network_endpoint
 from core.service_log import ServiceFileLog
 from core.scdfe_control import log_message_text
 from scdfe_s.web.configuration import apply_config, write_config
@@ -339,6 +340,10 @@ class ProtocolService:
                 self._business_log = recorder.business
                 if hasattr(self._engine, "set_packet_handler"):
                     self._engine.set_packet_handler(recorder)
+                from core.connection_trace import configure_history
+                configure_history(self._engine, self.store.db_path, 's',
+                                  protocol=getattr(self._engine, 'PACKET_PROTOCOL', self.LABEL),
+                                  channel_id=channel, rtu_id=self._bound_rtu_id)
                 self._start_engine(self._engine)
             except Exception as exc:
                 if self._engine is not None:
@@ -390,6 +395,7 @@ class ProtocolService:
             return
         diagnostic = {
             "label": item.get("label"),
+            "endpoint": item.get("endpoint"),
             "config": item.get("config", {}),
             "connections": item.get("connections", []),
             "open_connections": item.get("open_connections", 0),
@@ -474,6 +480,7 @@ class ProtocolService:
                 "label": self.LABEL,
                 "running": self.running,
                 "config": config,
+                "endpoint": network_endpoint(self.PROTOCOL, config, server=config.get("mode") == "server"),
                 "rtu_id": rtu_id,
                 "started_at": self._started_at,
                 "stopped_at": self._stopped_at,

@@ -22,6 +22,7 @@ from functools import partial
 from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError
 from core.packet_trace import service_packet_recorder
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
+from core.network_endpoint import network_endpoint
 from core.service_log import ServiceFileLog
 from core.scdfe_control import log_message_text
 from scdfe_s.web.configuration import apply_config, write_config
@@ -255,6 +256,9 @@ class IEC104Service:
             command_handlers=handlers,
         )
         server.set_connect_handler(self._on_connect)
+        from core.connection_trace import configure_history
+        configure_history(server, self.store.db_path, 's', protocol='IEC104',
+                          channel_id=rtu_channel_id(self.store, rtu_id), rtu_id=rtu_id)
         sink.business.bind_points(server)
         server.set_raw_handlers(on_receive=partial(sink, 'RX', detail='IEC104 APDU'),
                                 on_send=partial(sink, 'TX', detail='IEC104 APDU'))
@@ -701,6 +705,7 @@ class IEC104Service:
             error = str(item.get("last_error") or "")
             diagnostic = {
                 "label": "IEC104 服务端",
+                "endpoint": item.get("endpoint"),
                 "config": item.get("config", {}),
                 "protocol_config": item.get("protocol_config", {}),
                 "open_connections": item.get("open_connections", 0),
@@ -748,6 +753,7 @@ class IEC104Service:
             item = {
                 "running": bool(server and server.running),
                 "config": config,
+                "endpoint": network_endpoint("iec104", config, server=True),
                 "rtu_id": getattr(server, "rtu_id", None) if server else config.get("effective_rtu_id"),
                 "common_address": getattr(server, "common_address", None) if server else None,
                 "open_connections": int(server.open_connection_count) if server else 0,

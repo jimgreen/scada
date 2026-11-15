@@ -20,6 +20,7 @@ else:
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
 from core.runtime_status import runtime_status_rows
+from core.network_endpoint import configured_endpoints
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core import operation_audit as audit
@@ -314,6 +315,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 None,
             )
             rows = result["items"]
+            endpoints = configured_endpoints(self.store, rows)
             runtime_by_channel = {
                 int(row["channel_id"]): row
                 for row in runtime_status_rows(
@@ -340,6 +342,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 "_version": row.get("_version"),
                 "channel_id": row.get("channel_id"),
                 "channel_type": row.get("channel_type"),
+                "endpoint": endpoints.get((row.get("channel_type"), row.get("channel_id"))),
                 "process_enable": row.get("process_enable"),
                 "process_status": row.get("process_status"),
                 "thread_id": row.get("process_pid"),

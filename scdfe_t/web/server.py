@@ -311,6 +311,10 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         try:
             self._prepare_request()
             parts, query = self._parts()
+            from core.web_connections import handle_connections
+            if handle_connections(self,parts,query,'GET' if self.command=='HEAD' else self.command,
+                                  self.service.store,'t') is not False:
+                return
             from core.web_soe import handle_soe
             if handle_soe(self,parts,query,'GET' if self.command=='HEAD' else self.command,
                           self.service.store,'t') is not False:

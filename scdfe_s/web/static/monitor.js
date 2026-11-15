@@ -148,8 +148,15 @@
         const diagnostic = runtime.diagnostic || service.diagnostic || {};
         const diagnosticText = Object.keys(diagnostic).length ? `诊断字段 ${Object.keys(diagnostic).length} 项` : "暂无诊断";
         const action = bound ? serviceControls(service.name, service.running) : "";
-        return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || "未命名")}</strong></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
-      }).join("") || `<tr><td colspan="12" class="empty">暂无通信通道</td></tr>`;
+        const endpoint = bound ? service.endpoint : null;
+        let address = ["can", "modbus-rtu"].includes(channel.channel_type) ? "不适用" : "—";
+        if (endpoint) {
+          const host = String(endpoint.host);
+          const hostPort = (host.includes(":") && !host.startsWith("[") ? `[${host}]` : host) + ":" + endpoint.port;
+          address = `<span class="mono">${esc(hostPort)}</span><small class="cell-sub">${endpoint.role === "listen" ? "监听" : "远端"} · ${esc(endpoint.transport)}</small>`;
+        }
+return `<tr><td><strong>${esc(channel.rtu_id)} · ${esc(channel.name || "未命名")}</strong></td><td>${esc(channel.channel_id ?? "—")}</td><td>${esc(protocolLabels[channel.channel_type] || channel.channel_type || "未配置")}</td><td>${address}</td><td>${Number(channel.process_enable) ? "启用" : "停用"}</td><td><span class="communication-state ${bound && (runtime.state === "running" || service.running) ? "is-running" : ""}">${esc(runtimeLabel(runtime, state))}</span></td><td>${esc(runtime.connection_state || (bound ? connections : "—"))}</td><td>${esc(pointCount)}</td><td class="mono">${esc(counts)}</td><td class="mono" title="接收 / 发送">${esc(traffic)}</td><td>${Number(channel.packet_recording) ? "开启" : "关闭"}</td><td class="communication-error" title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td class="communication-actions">${action}<a href="/connections?rtu_id=${encodeURIComponent(channel.rtu_id)}">连接详情</a><a href="/test?rtu_id=${encodeURIComponent(channel.rtu_id)}">查看</a></td></tr>`;
+      }).join("") || `<tr><td colspan="13" class="empty">暂无通信通道</td></tr>`;
       show("#communication-rows", rows);
       msg(`共 ${channels.total ?? (channels.items || []).length} 个通道`);
     } catch (e) { msg(e.message, true); }

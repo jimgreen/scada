@@ -691,6 +691,13 @@ python tools/benchmark_business_logging.py --baseline-ref fb8561f --repeat 9 --o
 <p class="note">截图来自前版操作演示，保留用于定位页面与按钮；页面名称、支持能力和数据流以本版正文及正在运行的能力接口为准。查不到旧日志的详细来源时，不要用新版本日志格式补造历史。</p>
 <a class="back" href="#toc">返回目录 ↑</a></section>
 
+<section class="sheet" id="client-connections"><div class="over">2026-11-15 · 客户端连接详情</div><h2>S / T：每个客户端连接单独查看</h2>
+<p>进入左侧“客户端连接”，或通信监控行内的连接入口。S 通过一个“通道 / RTU”名称下拉框选择关联对象，T 通过“转发通道”名称下拉框选择，再按连接状态查询。无需分别填写通道号和 RTU 编号；切换分页或自动刷新时保留选择。同名项附带规约和必要编号区分，列表与详情页优先显示名称。点击“独立详情”进入该会话专用页面：双方 IP 和端口、接入与断开时间、链路状态、收发次数及字节数。相同 IP 的多个客户端独立编号；断开重连生成新的连接页面。</p>
+<p>内容可切换为“交互内容”“连接日志”“原始报文”：IEC104 展示 STARTDT/STOPDT、总召、COT、CA、IOA、四遥值与质量、时间标签及指令选择/执行/确认；Modbus TCP 展示事务号、站号、功能码、0 基地址、数量/值及异常码。OPC UA 记录 TCP 片段，不解密加密业务内容；串口、CAN、UDP/BACnet 和本地模拟不生成 TCP 客户端会话。TX 只表示交给传输层，不代表对端业务处理已完成。</p>
+<p>页面支持 5 秒刷新、加载更早记录及导出当前显示。浏览旧记录时暂停自动替换；“回到最新”恢复。原始 HEX 保存遵循通道的“报文保存”开关，关闭时仍有连接日志、交互摘要和收发统计。旧版按通道保存的日志不能追溯拆分到每个连接。</p>
+<p>观察记录异步批量保存到业务库旁的 <code>&lt;库名&gt;.scdfe_s.connections.sqlite3</code> 或 <code>&lt;库名&gt;.scdfe_t.connections.sqlite3</code>；每连接保留最近 10000 条事件，离线记录保留 7 天。已清理条数、队列溢出和写入错误会提示；记录进程心跳超过 20 秒未更新时显示状态未知，不推断为正常断开。C/T 共享业务库、S 独立业务库的结构保持不变。</p>
+<p>IEC104 观察依赖项目提供的 <code>c104==2.2.1+scada.4</code>。升级时在实际服务解释器安装依赖并重启；T 子进程解释器可用 <code>SCADA_PYTHON</code> 明确指定。接口：<code>GET /api/connections?channel_id=1</code>、<code>GET /api/connections/&lt;编号&gt;</code>、<code>GET /api/connections/&lt;编号&gt;/events?kind=packet&amp;limit=100</code>；使用 <code>before</code> 分页查询更早事件。</p>
+</section>
 <footer class="foot">SCADA · SCDFE 操作手册　|　本文可离线阅读；示例中的本机 Web 地址仅在对应服务启动后可用。</footer></main></div>
 <script>
 (() => {

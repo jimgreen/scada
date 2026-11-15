@@ -2069,6 +2069,13 @@ async function loadScdfe() {
           esc(item.process_error) +
           "</div>"
         : "");
+    function endpointCell(row) {
+      const endpoint = row.endpoint;
+      if (!endpoint) return ["can", "modbus-rtu"].includes(row.channel_type) ? "不适用" : "—";
+      const host = String(endpoint.host);
+      const address = (host.includes(":") && !host.startsWith("[") ? `[${host}]` : host) + ":" + endpoint.port;
+      return '<span class="mono">' + esc(address) + '</span><span class="cell-sub">远端 · ' + esc(endpoint.transport) + '</span>';
+    }
     const threadRows = data.rtus
       .map(
           (row, index) =>
@@ -2081,7 +2088,7 @@ async function loadScdfe() {
             esc(row.channel_id) +
             '<span class="cell-sub">' +
             esc(channelTypeLabel(row.channel_type)) +
-            "</span></td>" +
+            "</span></td><td>" + endpointCell(row) + "</td>" +
             "<td>" +
             cellValue("process_enable", row.process_enable) +
             "</td><td>" +

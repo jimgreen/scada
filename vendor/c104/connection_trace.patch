@@ -1,0 +1,122 @@
+--- a/src/Server.h
++++ b/src/Server.h
+@@ -34,6 +34,7 @@
+ 
+ #include "remote/Helper.h"
+ #include "types.h"
++#include <deque>
+ 
+ #include "module/Callback.h"
+ #include "module/GilAwareMutex.h"
+@@ -671,6 +672,22 @@
+   std::map<IMasterConnection, bool> connectionMap{};
+   std::map<IMasterConnection, uint64_t> connectionEpochs{};
+   uint64_t connectionEpoch{0};
++  // Separate lifetime IDs: STARTDT/STOPDT do not create a new TCP session.
++  struct ConnectionTraceEvent {
++    uint64_t id;
++    int kind;
++    int64_t time;
++    std::string peer;
++    std::vector<uint8_t> data;
++  };
++  std::atomic_bool connectionTraceEnabled{false};
++  std::mutex connectionTraceMutex;
++  std::map<IMasterConnection, uint64_t> traceConnectionIds;
++  std::deque<ConnectionTraceEvent> connectionTraceEvents;
++  uint64_t traceNextId{0};
++  uint64_t traceDropped{0};
++  void recordConnectionTrace(IMasterConnection connection, int kind,
++                             const uint8_t *data = nullptr, int size = 0);
+   std::map<IMasterConnection, uint64_t> soeRecipients{};
+   bool soeFailed{false};
+ 
+@@ -738,6 +755,8 @@
+   // void thread_callback();
+ 
+ public:
++  void enableConnectionTrace(bool enabled);
++  py::list drainConnectionTrace();
+   /**
+    * @brief Retrieves the selector associated with a given common address (ca)
+    * and information object address (ioa) from the selection vector.
+--- a/src/Server.cpp
++++ b/src/Server.cpp
+@@ -888,6 +888,7 @@
+ 
+   char ipAddrStr[60];
+   IMasterConnection_getPeerAddress(connection, ipAddrStr, 60);
++  instance->recordConnectionTrace(connection, 10 + static_cast<int>(event));
+ 
+   {
+     std::lock_guard<Module::GilAwareMutex> const lock(
+@@ -1371,6 +1372,50 @@
+   return {nullptr};
+ }
+ 
++void Server::enableConnectionTrace(bool enabled) {
++  connectionTraceEnabled.store(enabled);
++}
++
++void Server::recordConnectionTrace(IMasterConnection connection, int kind,
++                                   const uint8_t *data, int size) {
++  if (!connectionTraceEnabled.load()) return;
++  char peer[100] = {};
++  IMasterConnection_getPeerAddress(connection, peer, sizeof(peer));
++  std::lock_guard<std::mutex> lock(connectionTraceMutex);
++  auto found = traceConnectionIds.find(connection);
++  if (found == traceConnectionIds.end())
++    found = traceConnectionIds.emplace(connection, ++traceNextId).first;
++  const auto id = found->second;
++  if (connectionTraceEvents.size() >= 32768) {
++    ++traceDropped;
++  } else {
++    ConnectionTraceEvent event{id, kind,
++      std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::system_clock::now().time_since_epoch()).count(), peer, {}};
++    if (data && size > 0) event.data.assign(data, data + size);
++    connectionTraceEvents.push_back(std::move(event));
++  }
++  if (kind == 11) traceConnectionIds.erase(connection);
++}
++
++py::list Server::drainConnectionTrace() {
++  std::deque<ConnectionTraceEvent> events;
++  uint64_t dropped;
++  {
++    std::lock_guard<std::mutex> lock(connectionTraceMutex);
++    events.swap(connectionTraceEvents);
++    dropped = traceDropped;
++    traceDropped = 0;
++  }
++  py::list result;
++  if (dropped) result.append(py::make_tuple(0, 99, 0, "", py::bytes(), dropped));
++  for (const auto &event : events) {
++    result.append(py::make_tuple(event.id, event.kind, event.time, event.peer,
++      py::bytes(reinterpret_cast<const char *>(event.data.data()), event.data.size()), 0));
++  }
++  return result;
++}
++
+ void Server::rawMessageHandler(void *parameter, IMasterConnection connection,
+                                uint_fast8_t *msg, int msgSize, bool sent) {
+   const auto instance = getInstance(parameter);
+@@ -1379,6 +1424,7 @@
+     return;
+   }
+ 
++  instance->recordConnectionTrace(connection, sent ? 2 : 1, msg, msgSize);
+   if (sent) {
+     instance->onSendRaw(msg, msgSize);
+   } else {
+--- a/src/python.cpp
++++ b/src/python.cpp
+@@ -1879,6 +1879,8 @@
+ -------
+ >>> my_server.start()
+ )def")
++      .def("enable_connection_trace", &Server::enableConnectionTrace)
++      .def("drain_connection_trace", &Server::drainConnectionTrace)
+       .def("stop", &Server::stop, R"def(stop(self: c104.Server) -> None
+ 
+ stop local server socket

@@ -122,6 +122,8 @@ class ModbusAsyncServer(PacketTrace):
         except BaseException as exc:
             self.error = exc
             self.ready.set()
+        finally:
+            self._stop_connection_history()
 
     async def _serve(self):
         self.loop = asyncio.get_running_loop()
@@ -138,6 +140,11 @@ class ModbusAsyncServer(PacketTrace):
         if self.tcp:
             kwargs["address"] = (self.host, self.port)
             self.server = ModbusTcpServer(**kwargs)
+            history = self._start_connection_history()
+            if history:
+                from core.connection_trace import observe_protocol
+                factory = self.server.callback_new_connection
+                self.server.callback_new_connection = lambda: observe_protocol(factory(), *history)
         else:
             kwargs.update({"port": self.serial, **self.serial_options})
             self.server = ModbusSerialServer(**kwargs)

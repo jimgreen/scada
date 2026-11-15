@@ -321,14 +321,26 @@ class IEC104Server(PacketTrace):
     def start(self):
         if not self.running:
             try:
+                history = self._start_connection_history()
+                if history:
+                    from core.connection_trace import NativeConnections
+                    self._connection_observer = NativeConnections(self._server, *history, (self.ip,self.port))
                 self._server.start()
+                if history:
+                    self._connection_observer.start()
             except Exception as exc:
+                self._stop_connection_history()
                 raise IEC104ServerError(f'启动 IEC104 服务失败 {self.ip}:{self.port}: {exc}') from exc
         return self
 
     def stop(self):
         if self.running:
             self._server.stop()
+        observer = getattr(self, '_connection_observer', None)
+        if observer:
+            observer.close()
+            self._connection_observer = None
+        self._stop_connection_history()
 
     def set_connect_handler(self, handler: Callable[[str], bool]):
         """设置连接准入回调；返回 False 会拒绝客户端连接。"""

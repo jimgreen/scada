@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>客户端连接 · SCADA</title><link rel="stylesheet" href="/static/connections.css">
+<script defer src="/static/connections.js"></script></head><body>
+<header></header><main>
+<section class="conn-panel">
+  <div class="conn-toolbar"><a id="back" href="/connections" hidden>← 连接列表</a><h2 id="title">客户端连接</h2>
+    <label><input id="auto" type="checkbox" checked> 5 秒刷新</label><button id="refresh">刷新</button></div>
+  <p id="notice" class="conn-muted">记录从升级后新接入的连接开始。串口、CAN 总线及本地模拟服务不产生 TCP 客户端连接；BACnet 使用 UDP，无连接会话。</p>
+  <p id="message" role="status"></p><p id="warnings" class="conn-warning"></p>
+  <form id="filters" class="conn-toolbar">
+    <label><span id="target-label">通道 / RTU</span> <select id="target" aria-label="通道 / RTU 名称" disabled><option value="">正在加载名称…</option></select></label>
+    <label>连接状态 <select id="state"><option value="">全部</option><option value="open">未结束</option><option value="closed">已断开</option></select></label>
+    <button>查询</button><button type="button" id="clear">清空</button>
+  </form>
+  <div id="list" class="conn-scroll"><table><thead><tr><th>通道 / RTU 名称</th><th>服务 / 规约</th><th>客户端 IP：源端口</th><th>服务监听地址</th><th>状态</th><th>接入 / 断开时间</th><th>收 / 发报文</th><th>详情</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div id="pages" class="conn-toolbar"><button id="prev">上一页</button><span id="total"></span><button id="next">下一页</button></div>
+  <div id="detail" hidden>
+    <dl id="summary" class="conn-summary"></dl>
+    <p class="conn-muted">RX = 服务接收，TX = 服务发送。交互内容从本连接实际报文解析；TX 表示交给传输层，不代表对端业务处理成功。原始报文保存遵循通道的“报文保存”开关；关闭后仍保留交互摘要。OPC UA 只记录 TCP 片段，不解密业务内容。</p>
+    <div class="conn-toolbar"><label>内容 <select id="kind"><option value="">全部</option><option value="interaction">交互内容</option><option value="log">连接日志</option><option value="packet">原始报文</option></select></label>
+      <button id="latest">回到最新</button><button id="export">导出当前显示</button><span id="event-count"></span></div>
+    <div id="events" class="conn-events" aria-live="polite"></div>
+    <button id="older">加载更早记录</button>
+  </div>
+</section></main></body></html>

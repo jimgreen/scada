@@ -101,6 +101,12 @@ GET/PATCH/DELETE       /api/channels/{rtu_id}/points/{kind}/{pnt_no}
 `GET /api/monitor/communications?rtu_id=<rtu_id>`（仅查询指定 RTU）、`GET /api/monitor/logs`，服务启停使用
 `POST /api/monitor/communications/{service}/start|stop`。
 
+通信监控的“IP 地址及端口”列按当前服务配置显示监听或远端地址及 TCP/UDP 类型；
+Modbus RTU 和 CAN 显示“不适用”，IPv6 使用 `[地址]:端口`。
+监控 API 的 `endpoint` 包含 `host`、`port`、`role`、`transport`，并随诊断快照保存到
+`fes_channel_runtime_status.diagnostic_json.endpoint`；服务停止或报错时仍显示配置地址。
+C 端通信监控按 `channel_type + channel_id` 批量读取已保存的通道地址，配置修改后刷新生效。
+
 日志页 `/logs` 先用分页标签选择“运行日志”或“报文日志”，再选择通信通道。每个通道
 独立生成 `scdfe_s-channel-{channel_id}-YYYYMMDD-HH.log`，左侧按年、月、日、小时展示
 该通道的文件，右侧读取正文；运行日志只读 `logs/YYYY/MM/DD/HH/`，报文日志只读
@@ -180,3 +186,17 @@ python -m scdfe_s.run_can_server --rtu-id 5 --mode server --simulation
 
 协议参数默认从指定 RTU 的参数表读取，显式命令行参数只覆盖本次启动配置。收到 Ctrl+C
 或 SIGTERM 后，入口会先停止协议对象，再退出进程。
+
+## 客户端连接详情
+
+通道与 RTU 合并为一个名称下拉框，一次选择即可筛选。列表和详情显示当前配置名称；同名项用规约和必要编号区分。分页和自动刷新保留选中项；手动刷新同步最新名称。旧链接中的 `rtu_id` 自动选中对应名称，单独的 `channel_id` 只在映射唯一时自动选择。`GET /api/connections/options` 返回窄字段名称选项，历史中已删除的 RTU 仍可查询。
+
+“客户端连接”（`/connections`）按通道、RTU、状态查询入站会话；通信监控每行的“连接详情”可直接限定 RTU。点击一条连接进入 `/connections/<连接编号>`：显示双方 IP/端口、接入和断开时间、STARTDT/STOPDT 状态、收发次数/字节、交互解析、连接日志及原始 HEX。每次 TCP 重连生成新编号，同一 IP 的不同客户端独立记录。可筛选内容、加载较早记录或导出当前显示，浏览历史时暂停自动替换。
+
+IEC104 覆盖链路控制、总召、变位/周期数据、SOE、遥控/遥调的选择、执行和确认；Modbus TCP 显示事务号、站号、功能码、0 基地址、数量/值和异常码。OPC UA 仅记录实际 TCP 片段及连接生命周期，不解密加密内容。串口、CAN 总线、UDP/BACnet 和本地模拟不会伪造 TCP 客户端。原始报文遵循通道“报文保存”开关，关闭后仍保留交互摘要和收发统计。
+
+连接观察异步批量写入业务库旁的 `<库名>.scdfe_s.connections.sqlite3`，不通过其他进程的内存交换。每连接保留最近 10000 条事件，离线历史保留 7 天；页面显示清理条数、队列丢失及写入错误。超过 20 秒没有记录进程心跳时显示“状态未知”，不会把进程异常退出误报成正常断开。此前没有连接编号的通道日志不能追溯拆分。
+
+查询接口：`GET /api/connections?rtu_id=2&limit=50&offset=0`、`GET /api/connections/<编号>`、`GET /api/connections/<编号>/events?kind=packet&before=<事件编号>&limit=100`。列表也支持 `channel_id` 和 `state=open|closed`；事件类型为 `packet|interaction|log`，单次最多 200 条。
+
+IEC104 连接记录依赖随项目提供的 `c104==2.2.1+scada.4`，在实际服务解释器中安装 `requirements.txt` 后重启对应服务。TX 表示报文提交传输层，不表示对端业务已经完成。

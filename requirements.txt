@@ -5,7 +5,7 @@ pyserial==3.5
 # Includes the confirmation-wait backport and strict activation/deactivation
 # and select/execute contracts; pip selects the matching wheel or source.
 --find-links ./vendor/c104
-c104==2.2.1+scada.3
+c104==2.2.1+scada.4
 python-can==4.6.1
 bacpypes3==0.0.110
 asyncua==2.1.0

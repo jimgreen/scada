@@ -102,7 +102,7 @@ class OpcUaServer(PacketTrace):
     def _run(self):
         try:
             self._loop = asyncio.new_event_loop()
-            trace_stream_server_loop(self._loop, self._packet)
+            trace_stream_server_loop(self._loop, self._packet, self._start_connection_history())
             asyncio.set_event_loop(self._loop)
             self._loop.run_until_complete(self._start_async())
             self._ready.set()
@@ -117,6 +117,7 @@ class OpcUaServer(PacketTrace):
             if self._loop is not None:
                 self._loop.close()
                 self._loop = None
+            self._stop_connection_history()
 
     def start(self):
         if self.connected:

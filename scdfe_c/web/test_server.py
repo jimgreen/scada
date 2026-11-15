@@ -622,6 +622,25 @@ class WebTests(unittest.TestCase):
         for query in ('limit=501', 'offset=-1', 'limit=no', 'process_status=bad', 'unknown=1'):
             self.assertEqual(self.call('/api/scdfe_c/status?' + query)[0], 400)
 
+    def test_communication_address_uses_typed_channel_and_saved_updates(self):
+        store = self.server.store
+        for rid, protocol, host, port in ((1, 'iec104', '192.0.2.1', 2404),
+                                          (2, 'modbus-tcp', '192.0.2.2', 1502)):
+            store.create_row('fes_rtu_define', {'rtu_id': rid, 'channel_id': 7, 'channel_type': protocol})
+            table = 'fes_channel_' + protocol.replace('-', '_') + '_define'
+            values = {'channel_id': 7, 'remote_host': host, 'remote_port': port}
+            if protocol == 'iec104':
+                values['id'] = 1
+            store.create_row(table, values)
+        code, body = self.call('/api/scdfe_c/status')
+        self.assertEqual(code, 200)
+        self.assertEqual([r['endpoint']['host'] for r in body['rtus']], ['192.0.2.1', '192.0.2.2'])
+        code, body = self.call('/api/rtus/2/channel/parameters', 'PATCH', {'remote_host': '::1', 'remote_port': 1503})
+        self.assertEqual(code, 200, body)
+        code, body = self.call('/api/scdfe_c/status?limit=1&offset=1')
+        self.assertEqual(code, 200)
+        self.assertEqual(body['rtus'][0]['endpoint'], {'host': '::1', 'port': 1503, 'role': 'remote', 'transport': 'TCP'})
+
     def test_log_search_combines_keyword_time_type_and_cursor(self):
         from scdfe_c import ScdfeLogger
         logger = ScdfeLogger(self.db.parent / 'logs', process_name='scdfe_c-main')

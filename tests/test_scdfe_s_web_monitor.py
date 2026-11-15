@@ -156,6 +156,57 @@ class ScdfeSWebMonitorTests(unittest.TestCase):
         status, _ = self.request("DELETE", "/api/channels/1", {})
         self.assertEqual(status, 200)
 
+    def test_monitor_saves_network_endpoints_for_each_transport(self):
+        cases = [
+            (1, "iec104", {"bind_ip": "127.0.0.2", "port": 24041},
+             {"host": "127.0.0.2", "port": 24041, "role": "listen", "transport": "TCP"}),
+            (2, "modbus-tcp", {"mode": "master", "remote_host": "192.0.2.10", "remote_port": 1502},
+             {"host": "192.0.2.10", "port": 1502, "role": "remote", "transport": "TCP"}),
+            (3, "modbus-tcp", {"mode": "server", "bind_ip": "0.0.0.0", "listen_port": 1503},
+             {"host": "0.0.0.0", "port": 1503, "role": "listen", "transport": "TCP"}),
+            (4, "opc", {"bind_ip": "::1", "port": 4841},
+             {"host": "::1", "port": 4841, "role": "listen", "transport": "TCP"}),
+            (5, "bacnet", {"bind_ip": "127.0.0.3", "bind_port": 47809},
+             {"host": "127.0.0.3", "port": 47809, "role": "listen", "transport": "UDP"}),
+            (6, "modbus-rtu", {}, None),
+            (7, "can", {}, None),
+        ]
+        for rid, protocol, config, expected in cases:
+            with self.subTest(protocol=protocol, mode=config.get("mode")):
+                self.store.create_row("fes_rtu_define", {
+                    "rtu_id": rid, "channel_id": rid + 100, "channel_type": protocol,
+                })
+                service = self.httpd.channel_services(rtu_id=rid)[f"{protocol}-rtu-{rid}"]
+                service._config.update(config)
+                status, payload = self.request("GET", f"/api/monitor/communications?rtu_id={rid}")
+                self.assertEqual(status, 200, payload)
+                self.assertEqual(payload["items"][0]["endpoint"], expected)
+                with self.store.connection() as con:
+                    stored = con.execute(
+                        "SELECT diagnostic_json FROM fes_channel_runtime_status "
+                        "WHERE service_name='scdfe_s' AND channel_id=?", (rid + 100,),
+                    ).fetchone()
+                self.assertEqual(json.loads(stored[0])["endpoint"], expected)
+
+    def test_saved_endpoint_survives_service_reload_and_changes_on_refresh(self):
+        from scdfe_s.web.iec104_service import IEC104Service
+        self.store.create_row("fes_rtu_define", {
+            "rtu_id": 1, "channel_id": 101, "channel_type": "iec104",
+        })
+        service = self.httpd.channel_services(rtu_id=1)["iec104-rtu-1"]
+        service.configure({"bind_ip": "127.0.0.2", "port": 24041})
+        self.request("GET", "/api/monitor/communications?rtu_id=1")
+        service.configure({"bind_ip": "::1", "port": 24042})
+        status, payload = self.request("GET", "/api/monitor/communications?rtu_id=1")
+        expected = {"host": "::1", "port": 24042, "role": "listen", "transport": "TCP"}
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["items"][0]["endpoint"], expected)
+        reloaded = IEC104Service(self.store, config_path=service.config_path)
+        try:
+            self.assertEqual(reloaded.status()["endpoint"], expected)
+        finally:
+            reloaded.close()
+
     def test_generic_yx_patch_only_updates_database(self):
         status, _ = self.request("POST", "/api/channels", {
             "rtu_id": 2, "channel_id": 12, "channel_type": "iec104",

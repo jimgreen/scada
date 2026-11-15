@@ -9,7 +9,7 @@ import re
 import tarfile
 
 
-VERSION = "2.2.1+scada.3"
+VERSION = "2.2.1+scada.4"
 UPSTREAM_SHA256 = "d1b427f94cd0eeef376020a250ea0e7deb97ac33df5ee4908c7b20452cc8bb23"
 # Backport the wait predicate from upstream commit 7f4b22d1ec71b450ace8a3c0a384a1e8db756e09.
 WAIT = b'''      if (response_wait.wait_until(map_lock, end) == std::cv_status::timeout) {
@@ -75,6 +75,7 @@ def backport(source, destination):
         raise ValueError("unexpected upstream sdist checksum")
     patches = command_patches()
     soe_patches = command_patches('soe_delivery.patch')
+    connection_patches = command_patches('connection_trace.patch')
     with (tarfile.open(source) as src, destination.open("wb") as f,
           gzip.GzipFile(fileobj=f, filename="", mode="wb", mtime=0) as gz,
           tarfile.open(fileobj=gz, mode="w") as dst):
@@ -102,6 +103,8 @@ def backport(source, destination):
                     data = apply_command_patch(data, patches.pop(relative))
                 if relative in soe_patches:
                     data = apply_command_patch(data, soe_patches.pop(relative))
+                if relative in connection_patches:
+                    data = apply_command_patch(data, connection_patches.pop(relative))
                 entry.size = len(data)
                 stream = io.BytesIO(data)
             dst.addfile(entry, stream)
@@ -109,6 +112,8 @@ def backport(source, destination):
         raise ValueError(f'patch files absent from sdist: {list(patches)}')
     if soe_patches:
         raise ValueError(f'SOE patch files absent from sdist: {list(soe_patches)}')
+    if connection_patches:
+        raise ValueError(f'connection patch files absent from sdist: {list(connection_patches)}')
 
 
 if __name__ == "__main__":

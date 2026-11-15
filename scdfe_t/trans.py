@@ -618,6 +618,8 @@ class TransRuntime:
                                   common_address=spec.common_address, tick_rate_ms=50,
                                   **spec.protocol_config.as_dict())
             server.set_packet_handler(self.business.wrap_packet(self.logger.packet))
+            from core.connection_trace import configure_history
+            configure_history(server, self.db_path, 't', protocol='IEC104', channel_id=self.channel_id)
             for key, p in self.points.items():
                 handler = (lambda event, point=p: self._iec104_command(point, event)) if p.kind in {"yk", "yt"} else None
                 value, quality, source_time = self._sample_parts(initial_samples.get(key))
@@ -667,6 +669,8 @@ class TransRuntime:
             command_handler=on_command, command_batch_handler=on_commands,
             log=lambda level, message: self.logger.emit("normal", message, level=level))
         server.set_packet_handler(self.business.wrap_packet(self.logger.packet))
+        from core.connection_trace import configure_history
+        configure_history(server, self.db_path, 't', protocol='Modbus-TCP', channel_id=self.channel_id)
         # The constructor already encoded the initial samples into the datastore.
         for key, sample in initial_samples.items():
             value, quality, source_time = self._sample_parts(sample)
