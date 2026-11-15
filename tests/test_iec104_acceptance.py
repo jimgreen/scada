@@ -9,7 +9,7 @@ import tempfile
 import time
 import unittest
 
-import c104
+from core import iec104_python as c104
 
 from client.iec104 import IEC104Master, IEC104Error
 from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu

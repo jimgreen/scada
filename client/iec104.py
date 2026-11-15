@@ -1,9 +1,9 @@
-"""IEC 60870-5-104 主站适配层，底层使用 ``c104`` (iec104-python)。
+"""IEC 60870-5-104 主站适配层，底层使用项目内纯 Python 引擎。
 
 旧 scdfe_c 的 IEC104 地址约定保留在这里：遥测/遥信/遥控/遥调点号均按
 ``起始地址 + 点号 - 1`` 映射到 information object address，默认起始地址
 分别为 0x4001/0x01/0x6001/0x6201。帧编解码、链路启动、I/S/U 计数和
-命令确认由 c104/lib60870-C 负责，本文件只负责业务点表适配。
+命令确认由 core.iec104_python 负责，本文件只负责业务点表适配。
 """
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -15,13 +15,7 @@ from core.iec104_values import binary_command_value, double_to_binary
 from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu
 from core.packet_trace import PacketTrace
 
-try:
-    import c104
-except ImportError as exc:  # pragma: no cover - exercised in dependency checks
-    c104 = None
-    _C104_IMPORT_ERROR = exc
-else:
-    _C104_IMPORT_ERROR = None
+from core import iec104_python as c104
 
 __all__ = ['IEC104Master', 'IEC104Error', 'IEC104Value', 'C104_AVAILABLE']
 C104_AVAILABLE = c104 is not None
@@ -57,8 +51,7 @@ def field(row, name, default=None):
 
 
 def _require_c104():
-    if c104 is None:
-        raise IEC104Error('缺少依赖 c104，请执行: python -m pip install -r requirements.txt') from _C104_IMPORT_ERROR
+    """Retained for adapter compatibility; the engine ships as Python source."""
 
 
 class IEC104Master(PacketTrace):
@@ -413,9 +406,13 @@ class IEC104Master(PacketTrace):
             raise IEC104Error('IEC104 应用测试命令失败')
         return True
 
-    def test_fr(self, **kwargs):
-        """U TESTFR is managed by the native connection's t3 timer."""
-        raise NotImplementedError('当前驱动仅自动发送 U TESTFR；应用测试请调用 test_command()')
+    def test_fr(self, *, wait_for_response=True):
+        """Send a U TESTFR request, independently of application test ASDUs."""
+        if not self.connected:
+            raise IEC104Error('未连接，请先 connect()')
+        if not self._connection.test_fr(wait_for_response=wait_for_response):
+            raise IEC104Error('U TESTFR 确认超时或连接关闭')
+        return True
 
     def __enter__(self):
         return self.connect()
@@ -626,7 +623,7 @@ class IEC104Master(PacketTrace):
     @staticmethod
     def _converter_for(value):
         """Return the stable Python value type and its plain-value converter."""
-        if isinstance(value, (bool, int, float, str, bytes)) or value is None:
+        if type(value) in (bool, int, float, str, bytes) or value is None:
             return type(value), _plain_identity
         value_type = type(value)
         converter = _PLAIN_CONVERTERS.get(value_type)
@@ -661,8 +658,8 @@ class IEC104Master(PacketTrace):
 
     def _value_from_point(self, kind, point_no, point, received_at=None):
         """从已解析的 c104 Point 生成快照，供批量轮询绕过字典查找。"""
-        # Hold one information object for value/quality/time. Separate Point
-        # getters repeatedly cross pybind11 and may see different updates.
+        # Hold one immutable information object for a consistent value,
+        # quality and timestamp even while the receiver updates the point.
         info = point.info
         value = self._cached_plain((kind, point_no), info.value)
         point_quality = info.quality
@@ -687,9 +684,8 @@ class IEC104Master(PacketTrace):
                     # snapshot. The worker observes this and tears down/retries.
                     self._soe_error = f'SOE 事件落库失败: {exc}'
                     return c104.ResponseState.FAILURE
-            # c104 2.2.1 replaces DataPoint::info without synchronizing getInfo.
-            # Read it on this point's receiver thread, before the next ASDU
-            # object is handled, and retain only detached Python values.
+            # Snapshot on the receiver thread before the next ASDU object;
+            # readers retain immutable values independently of point updates.
             sample = self._value_from_point(kind, point_no, point)
             with self._lock:
                 if self._points.get((kind, point_no)) is point:
@@ -704,8 +700,8 @@ class IEC104Master(PacketTrace):
             if sample is not None:
                 return sample if received_at is None else sample._replace(received_at=received_at)
             if self._started:
-                # Before the first received sample, native defaults are not
-                # valid measurements; never race its first pointer replacement.
+                # An unreceived point has no measurement yet. This sentinel
+                # is for individual inspection, not database collection.
                 return IEC104Value(self.rtu_id, point_no, kind, None, 128, None,
                                    received_at or datetime.now(timezone.utc))
         return self._value_from_point(kind, point_no, point, received_at)
@@ -729,8 +725,10 @@ class IEC104Master(PacketTrace):
     def _poll_entries(self, entries):
         # Capture all immutable monitoring references under one lock. Reusing
         # them preserves actual reception times and avoids per-point tuple
-        # copies/locks on every unchanged poll. Only offline/unreceived points
-        # and command points need the fallback path.
+        # copies/locks on every unchanged poll. Skip unreceived monitoring
+        # points until a real callback supplies data; only offline and command
+        # points use the fallback. Unknown double-point states ARE received
+        # samples and remain present with invalid quality.
         with self._lock:
             values = [self._received_values.get((kind, number))
                       if kind in ('yc', 'yx') else None
@@ -740,7 +738,10 @@ class IEC104Master(PacketTrace):
             received_at = datetime.now(timezone.utc)
             for index in missing:
                 kind, number, point = entries[index]
+                if self._started and kind in ('yc', 'yx'):
+                    continue
                 values[index] = self._read_value(kind, number, point, received_at)
+            values = [sample for sample in values if sample is not None]
         with self._lock:
             self._values.update({(value.kind, value.point_no): value for value in values})
         return values

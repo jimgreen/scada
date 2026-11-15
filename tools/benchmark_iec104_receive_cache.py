@@ -52,8 +52,7 @@ def main():
     loader=SourceFileLoader('_iec104_collector_before',str(args.before))
     spec=importlib.util.spec_from_loader(loader.name,loader);before=importlib.util.module_from_spec(spec)
     sys.modules[loader.name]=before;loader.exec_module(before)
-    result=dict(timestamp=datetime.now(timezone.utc).isoformat(),c104=importlib.metadata.version('c104'),
-                native_sha256=hashlib.sha256(Path(importlib.util.find_spec('c104._c104').origin).read_bytes()).hexdigest(),
+    result=dict(timestamp=datetime.now(timezone.utc).isoformat(),engine='python-stdlib',
                 before_sha256=hashlib.sha256(args.before.read_bytes()).hexdigest(),
                 after_sha256=hashlib.sha256((ROOT/'client/iec104.py').read_bytes()).hexdigest(),cases=[])
     for points in args.points:

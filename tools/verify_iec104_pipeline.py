@@ -333,6 +333,14 @@ def pipeline(channels, points, rounds, output):
                             for (_,w),m in zip(peers,marks)), 'T cyclic COT=1')
         for runtime in runtimes: runtime.server.set_monitor_report_interval(60000)
         result['checks'].append('periodic report COT=1 on existing T connection')
+        if any(w.stats.errors for w in workers):
+            failure = output / f'failure-{channels}ch-diagnostics'
+            failure.mkdir(parents=True, exist_ok=True)
+            (failure / 'state.json').write_text(json.dumps([
+                dict(stats=vars(w.stats), diagnostics=w._master.diagnostics if w._master else None)
+                for w in workers], default=str, ensure_ascii=False, indent=2), encoding='utf-8')
+            if (root / 'logs').exists():
+                shutil.copytree(root / 'logs', failure / 'logs', dirs_exist_ok=True)
         assert all(w.stats.errors==0 for w in workers), [w.stats for w in workers]
         result['errors_before_injected_disconnect']=0
         # Real upstream loss: only the private S service is stopped/restarted.
@@ -440,7 +448,7 @@ def main():
         preserved = runpy.run_path(str(args.collector_baseline))
         IEC104Master._poll_entries = preserved['IEC104Master']._poll_entries
     result=dict(timestamp=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),
-                python=sys.version,c104=importlib.metadata.version('c104'),pipelines=[])
+                python=sys.version,engine='python-stdlib',pipelines=[])
     if args.collector_baseline:
         import hashlib
         result['collector_baseline_sha256'] = hashlib.sha256(args.collector_baseline.read_bytes()).hexdigest()

@@ -1,6 +1,6 @@
 # SCADA 客户端/主站 API（client）
 
-这里的每个协议主站接口只负责把 SCADA 点表字段映射到成熟 Python 库；TCP/串口帧、IEC104 链路状态机和 CAN 驱动由第三方库维护。公开入口只使用当前主站名称，不提供旧旧主站名称或旧方法别名。
+协议主站接口负责把 SCADA 点表字段映射到协议对象。IEC104 使用项目内 `core.iec104_python` 标准库实现；Modbus、CAN 等继续使用各自的 Python 协议库及设备驱动。公开入口沿用当前主站接口。
 
 ## 安装
 
@@ -10,8 +10,7 @@
 python -m pip install -r <项目目录>/requirements.txt
 ```
 
-项目使用 `c104` 2.2.1+scada.1，保留 2.2.1 的接口并修复快速命令确认偶发误报超时。[随项目提供的源码和构建说明](../vendor/c104/README.md)包含 Windows x64 / CPython 3.11 wheel；其他平台没有匹配 wheel 时需要 C++ 构建环境。其余适配器
-使用跨平台 Python 包，但底层设备驱动仍由操作系统决定。
+IEC104 不再安装 `c104`、lib60870、专用 wheel，也不需要 C++ 编译器。C/S/T 共用随项目发布的 Python 源码；旧 `vendor/c104` 仅保留历史复现资料，不参与安装或运行。部署流程见 [纯 Python IEC104 说明](../docs/iec104_python.md)。其余适配器使用跨平台 Python 包，但底层设备驱动仍由操作系统决定。
 
 平台差异需要在部署配置中明确：Modbus RTU 在 Windows 使用 `COM3` 等串口名，Linux
 通常使用 `/dev/ttyUSB0` 或 `/dev/ttyS0`；`python-can` 在 Linux 可使用 SocketCAN，
@@ -21,11 +20,11 @@ python -m pip install -r <项目目录>/requirements.txt
 
 ## 接口文件
 
-| 文件 | 第三方库 | 用途 |
+| 文件 | 实现或依赖 | 用途 |
 | --- | --- | --- |
 | `modbus_tcp.py` | `pyModbusTCP` | Modbus TCP 主站：读写线圈/寄存器、按 `fes_channel_modbus_define_*` 采集和遥调遥控 |
 | `modbus_rtu.py` | `pymodbus[serial]` + `pyserial` | Modbus RTU 串口主站；串口参数必须由调用者显式指定 |
-| `iec104.py` | `c104` | IEC 60870-5-104 主站链路、总召唤、四遥点注册和命令对象 |
+| `iec104.py` | `core.iec104_python`（标准库） | IEC 60870-5-104 主站链路、总召唤、四遥点注册和命令对象 |
 | `can.py` | `python-can` | 原始 CAN/CAN-FD 帧收发、过滤、周期发送 |
 | `bacnet.py` | `bacpypes3` | BACnet/IP 客户端和主站：属性读写、四遥点轮询、遥控遥调 |
 | `opc.py` | `asyncua` | OPC UA 客户端和主站：节点读写、四遥点轮询、遥控遥调 |
@@ -195,7 +194,7 @@ with IEC104Master("10.0.0.20", common_address=1,
     current = master.collect_once()
 ```
 
-点号到信息体地址沿用旧工程的 `start + point_no - 1`。`data_type=1/2/3` 对应 IEC104 浮点/标度/归一化配置，遥信 `1/2` 对应单点/双点；点表也可以直接填写标准 Type ID（YC 9/11/13、YX 1/3、YK 45/46、YT 48/49/50），适配器会转换为对应的 c104 信息体类型。`c104` 自己的后台线程负责接收；`collect_once()` 只读取已接收的点，不阻塞等待某个报文。
+点号到信息体地址沿用旧工程的 `start + point_no - 1`。`data_type=1/2/3` 对应 IEC104 浮点/标度/归一化配置，遥信 `1/2` 对应单点/双点；点表也可以直接填写标准 Type ID（YC 9/11/13、YX 1/3、YK 45/46、YT 48/49/50），适配器转换为项目引擎的信息体类型。引擎后台线程负责接收；`collect_once()` 只读取已接收的点，不阻塞等待某个报文。
 `IEC104Master` 同时提供 `from_channel`、`from_store`、`collect_once`、`poll_loop`、
 `send_yk_point` 和 `send_yt_point`。`from_store` 读取当前 `fes_channel_iec104_define`
 参数表，并优先读取 `fes_channel_iec104_point_define` 中每个四遥点的 IOA、类型标识、

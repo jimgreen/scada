@@ -1,8 +1,8 @@
-"""IEC 60870-5-104 服务端 API，底层使用 ``c104.Server``。
+"""IEC 60870-5-104 服务端 API，底层使用项目内纯 Python 引擎。
 
 该模块对应旧工程 ``CRtu104`` 的 RTU 侧能力：提供公共地址、四遥点表映射、
 遥信/遥测主动上送、遥控/遥调命令回调和站点初始化通知。链路状态机、APDU、
-总召唤响应、选择/执行确认和 TCP 监听全部交给 c104/lib60870-C。
+总召唤响应、选择/执行确认和 TCP 监听由 core.iec104_python 处理。
 
 点号映射沿用主站 API：``IOA = 起始地址 + 点号 - 1``，默认起始地址为
 遥测 0x4001、遥信 0x01、遥控 0x6001、遥调 0x6201。
@@ -16,13 +16,7 @@ from core.iec104_values import binary_command_value, double_to_binary
 from core.iec104_protocol import IEC104ProtocolConfig, IEC104ProtocolError, parse_apdu
 from core.packet_trace import PacketTrace
 
-try:
-    import c104
-except ImportError as exc:  # pragma: no cover - dependency check path
-    c104 = None
-    _C104_IMPORT_ERROR = exc
-else:
-    _C104_IMPORT_ERROR = None
+from core import iec104_python as c104
 
 __all__ = ['IEC104Server', 'IEC104ServerError', 'IEC104Command']
 
@@ -32,10 +26,7 @@ class IEC104ServerError(RuntimeError):
 
 
 def _require_c104():
-    if c104 is None:
-        raise IEC104ServerError(
-            '缺少依赖 c104，请执行: python -m pip install -r requirements.txt'
-        ) from _C104_IMPORT_ERROR
+    """Retained for adapter compatibility; the engine ships as Python source."""
 
 
 @dataclass(frozen=True)
@@ -57,7 +48,7 @@ def field(row, name, default=None):
 
 
 def attr_value(obj, name):
-    """兼容 c104 不同 wheel 版本的属性/无参方法暴露方式。"""
+    """读取引擎的信息对象属性或无参方法。"""
     value = getattr(obj, name)
     return value() if callable(value) else value
 
@@ -306,7 +297,7 @@ class IEC104Server(PacketTrace):
 
     def require_soe_support(self):
         if not hasattr(self._server, 'submit_soe'):
-            raise IEC104ServerError('可靠 SOE 发送需要 c104 2.2.1+scada.3，请安装 requirements.txt 中的本地补丁包')
+            raise IEC104ServerError('IEC104 引擎缺少 SOE 确认接口')
 
     def submit_soe(self, events):
         from core.iec104_soe import encode_events
@@ -323,8 +314,8 @@ class IEC104Server(PacketTrace):
             try:
                 history = self._start_connection_history()
                 if history:
-                    from core.connection_trace import NativeConnections
-                    self._connection_observer = NativeConnections(self._server, *history, (self.ip,self.port))
+                    from core.connection_trace import ConnectionObserver
+                    self._connection_observer = ConnectionObserver(self._server, *history, (self.ip,self.port))
                 self._server.start()
                 if history:
                     self._connection_observer.start()
@@ -468,7 +459,7 @@ class IEC104Server(PacketTrace):
 
     @staticmethod
     def _plain(value):
-        if isinstance(value, (bool, int, float, str, bytes)) or value is None:
+        if type(value) in (bool, int, float, str, bytes) or value is None:
             return value
         name = value.__class__.__name__
         if name == 'Double':
@@ -685,20 +676,20 @@ class IEC104Server(PacketTrace):
         if key not in self._points:
             raise IEC104ServerError(f'点 {kind}/{point_no} 尚未注册')
         native = self._as_value(kind, self._point_types[key], value)
-        # c104 stores short floating-point information in single precision.
+        # IEC104 short floating-point information uses IEEE-754 single precision.
         # Return exactly what a later native snapshot will expose.
         if isinstance(native, float):
             native = c104.ShortInfo(native).value
         return self._plain(native)
 
     def update_monitoring(self, updates, *, transmit=True, cause='SPONTANEOUS', isolate_errors=False):
-        """Publish (kind, number, value, quality) samples grouped by native type.
+        """Publish (kind, number, value, quality) samples grouped by ASDU type.
 
-        Validate the complete input before mutation. A native send failure is
+        Validate the complete input before mutation. An enqueue failure is
         reported to the caller, which must retry the unconfirmed samples.
-        lib60870 splits each type group to its native ASDU size limit.
+        The Python engine splits groups at the configured ASDU size limit.
         With isolate_errors, return errors by point key and continue unrelated
-        points/type groups. Successful native submission is not peer execution.
+        points/type groups. Successful submission is not peer execution.
         """
         cot = self._cause(cause)
         with self._lock:

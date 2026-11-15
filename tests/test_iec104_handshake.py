@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import socket
 import unittest
 
-import c104
+from core import iec104_python as c104
 from client.iec104 import IEC104Master
 
 

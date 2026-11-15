@@ -26,7 +26,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import c104
+from core import iec104_python as c104
 
 from core.scdfe_control import InstanceLock
 from tools.benchmark_rtu_scale import load_runtime, writer_entry
@@ -258,12 +258,12 @@ def main():
                         master.close()
             report = {'created_at': datetime.now(timezone.utc).isoformat(), 'platform': platform.platform(),
                       'python': sys.version, 'sqlite': sqlite3.sqlite_version,
-                      'c104_version': version('c104'),
+                      'engine': c104.IMPLEMENTATION, 'engine_version': c104.__version__,
                       'config': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
                       'protocol_sha256': hashes, 'runtime_sha256': runtime_hash,
                       'benchmark_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                      'points_per_sample': 2000, 'native_values_quality_and_timestamps_verified': True,
-                      'scope': 'real c104 native points; local frame injection; no IEC104 network transport',
+                      'points_per_sample': 2000, 'values_quality_and_timestamps_verified': True,
+                      'scope': 'pure Python points; local injection; no IEC104 network transport',
                       'timing': 'CPU excludes injection and verification; pipeline includes injection, read, sync, IPC, writer drain',
                       'results': results, 'profiles': profiles,
                       'medians_ms': {case: {variant: statistics.median(

@@ -176,4 +176,4 @@ Modbus 15/16 多点写入在一个数据库事务内校验并提交。任一点�
 
 转发子进程异步批量写入 `<业务库名>.scdfe_t.connections.sqlite3`，Web 只读该库；仍保持 C/T 共享业务库、S 独立库的架构。原始报文遵循通道“报文保存”开关。每连接最近 10000 条事件、离线保留 7 天；清理数和观察记录丢失会显式显示，记录进程心跳超时显示状态未知。旧版通道日志不回填成独立连接日志。
 
-接口同 S：`GET /api/connections?channel_id=1`、`GET /api/connections/<编号>`、`GET /api/connections/<编号>/events?kind=interaction&limit=100`；`before` 可继续查较早事件。页面提供筛选、5 秒刷新、历史翻阅与当前显示导出。IEC104 转发进程的实际 Python 环境须安装项目 `c104==2.2.1+scada.4`；Web 的 `SCADA_PYTHON` 可明确指定运行解释器。
+接口同 S：`GET /api/connections?channel_id=1`、`GET /api/connections/<编号>`、`GET /api/connections/<编号>/events?kind=interaction&limit=100`；`before` 可继续查较早事件。页面提供筛选、5 秒刷新、历史翻阅与当前显示导出。IEC104 转发使用项目内纯 Python 引擎，无需 `c104` 或 C++ 编译；Web 的 `SCADA_PYTHON` 可明确指定运行解释器。部署与验证见 [纯 Python IEC104 说明](../docs/iec104_python.md)。

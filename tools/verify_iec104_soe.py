@@ -23,7 +23,7 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import c104
+from core import iec104_python as c104
 from client.iec104 import IEC104Master
 from server.iec104_server import IEC104Server
 from scdfe_c import ChannelSpec, ChannelWorker
@@ -354,8 +354,8 @@ def main():
     parser.add_argument('--rounds',type=int,default=3)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     if min(*args.channels,args.events,args.rounds)<1:parser.error('positive counts required')
-    result=dict(timestamp=datetime.now(timezone.utc).isoformat(),c104=importlib.metadata.version('c104'),
-                python=sys.version,native_sha256=hashlib.sha256(Path(importlib.util.find_spec('c104._c104').origin).read_bytes()).hexdigest())
+    result=dict(timestamp=datetime.now(timezone.utc).isoformat(),engine=c104.IMPLEMENTATION,
+                engine_version=c104.__version__,python=sys.version)
     code=2
     try:
         result['wire']=wire_correctness();print('wire',result['wire']['raw_exact'],flush=True)

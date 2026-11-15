@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timezone
-import c104
+from core import iec104_python as c104
 import threading
 import signal
 from unittest.mock import patch
@@ -139,7 +139,7 @@ class IEC104InterfaceContracts(unittest.TestCase):
     def test_explicit_testfr_does_not_send_application_command(self):
         peer = IEC104Master('127.0.0.1', free_port(), init='NONE')
         self.addCleanup(peer.close)
-        with self.assertRaisesRegex(NotImplementedError, 'test_command'):
+        with self.assertRaisesRegex(IEC104Error, '未连接'):
             peer.test_fr()
 
     def test_cli_uses_autonomous_database_sync_and_command_receipts(self):

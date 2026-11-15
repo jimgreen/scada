@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 import unittest
 
-import c104
+from core import iec104_python as c104
 
 from client.iec104 import IEC104Master
 from server.iec104_server import IEC104Server

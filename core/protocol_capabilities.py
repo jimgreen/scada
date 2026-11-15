@@ -6,8 +6,9 @@ from copy import deepcopy
 
 
 def validate_iec104_runtime_type(type_id):
-    if int(type_id) in {2, 4, 6, 10, 12, 14}:
-        raise ValueError('当前 c104 驱动不支持 CP24Time2a 监视类型；请明确配置 NONE 或 CP56Time2a')
+    from core.iec104_python.codec import MONITOR, COMMAND
+    if int(type_id) not in MONITOR | COMMAND:
+        raise ValueError(f'当前 IEC104 引擎不支持类型 {type_id}')
 
 
 def protocol_capabilities(component):
@@ -15,6 +16,7 @@ def protocol_capabilities(component):
         raise ValueError('未知组件')
     protocols = {
         'iec104': {
+            'implementation': 'python-stdlib', 'native_dependency': False,
             'general_interrogation': True, 'spontaneous': True, 'periodic': True,
             'monitoring_semantics': 'latest_point_snapshot_and_event_journal',
             'soe_event_log': True, 'soe_lossless_forwarding': False,
@@ -22,16 +24,17 @@ def protocol_capabilities(component):
             'soe_forward_types': [30,31],
             'soe_event_causes': [3],
             'soe_delivery': 'at_least_once_apci_ack',
-            'soe_native_requirement': '2.2.1+scada.3',
+            'soe_native_requirement': None,
             'soe_cp56_time_convention': 'UTC_calendar_raw_bytes_preserved',
             'soe_max_asdu_length_enforced': True,
             'direct_execute': True, 'select_and_execute': True,
             'separate_select': False, 'cancel_yk': True, 'cancel_yt': True,
             'cancel_scope': 'local_selection_only' if component == 'scdfe_t' else 'protocol_deactivation',
-            'time_tags': ['NONE', 'CP56Time2a'], 'cp24': False,
-            'u_testfr': 'native_t3_timer', 'explicit_u_testfr': False,
+            'time_tags': ['NONE', 'CP24Time2a', 'CP56Time2a'], 'cp24': True,
+            'cp24_hour_reference': 'nearest_UTC_hour_at_receive',
+            'u_testfr': 'python_t3_timer', 'explicit_u_testfr': component == 'scdfe_c',
             'application_test_command': component == 'scdfe_c',
-            'max_asdu_length_scope': 'diagnostic_threshold',
+            'max_asdu_length_scope': 'transport_enforced',
             'native_max_asdu_length': 249,
             'confirmation_scope': 'database_commit' if component == 'scdfe_t' else
                                   'simulator_database' if component == 'scdfe_s' else 'remote_acceptance',

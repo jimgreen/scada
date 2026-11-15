@@ -7,7 +7,7 @@ import importlib.metadata
 import time
 import unittest
 
-import c104
+from core import iec104_python as c104
 import server
 from pyModbusTCP.server import ModbusServer
 
@@ -292,7 +292,7 @@ class CanAdapterTests(unittest.TestCase):
 
 class DependencyTests(unittest.TestCase):
     def test_pinned_dependencies_are_installed(self):
-        self.assertEqual(importlib.metadata.version('c104'), '2.2.1+scada.1')
+        self.assertEqual(c104.IMPLEMENTATION, 'python-stdlib')
         self.assertEqual(importlib.metadata.version('pyModbusTCP'), '0.3.1')
         self.assertEqual(importlib.metadata.version('pymodbus'), '3.16.1')
         self.assertEqual(importlib.metadata.version('python-can'), '4.6.1')

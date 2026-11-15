@@ -17,10 +17,10 @@ def configure_history(server, db_path, component, *, protocol, channel_id=None, 
                               if channel_id is not None else lambda:False)})
 
 
-class NativeConnections:
+class ConnectionObserver:
     def __init__(self, native, history, metadata, local):
         if not hasattr(native, 'enable_connection_trace'):
-            raise RuntimeError('连接详情需要 c104 2.2.1+scada.4；请安装项目 requirements.txt')
+            raise RuntimeError('IEC104 引擎缺少连接观察接口')
         self.native, self.history, self.metadata, self.local = native, history, metadata, local
         self.sessions = {}
         self.stop_event = threading.Event()
@@ -35,7 +35,7 @@ class NativeConnections:
             if kind == 99:
                 self.history.dropped += dropped
                 for ident in self.sessions.values():
-                    self.history.event(ident,'log',f'原生观察队列溢出：服务共丢失 {dropped} 条记录；统计不完整')
+                    self.history.event(ident,'log',f'连接观察队列溢出：服务共丢失 {dropped} 条记录；统计不完整')
                     self.history.state(ident,'unknown','队列溢出后连接状态待确认')
                 continue
             at = stamp/1000
@@ -47,7 +47,7 @@ class NativeConnections:
             if kind in (1,2):
                 self.history.event(ident,'packet','IEC104','RX' if kind==1 else 'TX',data,at)
             elif kind in (11,12,13):
-                state, reason = {11:('closed','客户端连接关闭（协议栈未提供底层原因）'),
+                state, reason = {11:('closed',data.decode('utf8','replace') if data else '客户端连接关闭'),
                                  12:('active','STARTDT：数据传输已激活'),
                                  13:('inactive','STOPDT：数据传输未激活')}[kind]
                 self.history.state(ident,state,reason,at)

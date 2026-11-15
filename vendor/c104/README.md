@@ -1,12 +1,14 @@
 # c104 2.2.1+scada.4 命令修复、SOE 确认发送与连接观察
 
+> 历史实现归档：自纯 Python 引擎切换后，本目录不参与 `requirements.txt` 安装，也不被 C/S/T 运行时导入。以下构建命令仅用于复现旧版本及独立互通对照；新部署请使用 [纯 Python IEC104 说明](../../docs/iec104_python.md)，不需要编译 C++。
+
 scada.4 在 scada.3 后应用 [connection_trace.patch](connection_trace.patch)：服务端可选启用 `enable_connection_trace(True)`，再用 `drain_connection_trace()` 批量读取带 TCP 生命周期编号、客户端 IP/源端口、毫秒时间、收发原始字节及连接事件的观察记录。STARTDT/STOPDT 不改变该编号；断开重连生成新编号，与原有 SOE 确认编号独立。原有收发回调及协议处理保持原契约。
 
 原生观察队列最多 32768 条，默认不启用；Python S/T 每 100 ms 排空并异步入库。溢出单独报告丢失数，不宣称观察日志无损；不会阻塞等待数据库，也不使用 Python 回调占据协议线程。启用前应在服务尚未监听时配置；关闭服务后排空剩余记录。使用 Windows CPython 3.11 wheel，其他平台需从源码构建并自行验证。
 
 在 IEC104 本机回环测试中，同一条遥控只发送了一次；收到了肯定的 ACT_CON，旧客户端仍偶发返回超时。2.2.1 的等待函数先等待通知，再检查结果；如果确认先到，通知会丢失。这里保留项目原先的 2.2.1，移植[上游修复 7f4b22d](https://github.com/Fraunhofer-FIT-DIEN/iec104-python/commit/7f4b22d1ec71b450ace8a3c0a384a1e8db756e09)：在持锁期间先检查已有结果，只有还在等待时才睡眠。没有增加重发，也没有把否定确认或超时转换成成功。另为 Windows 原生编译分开静态库和 DLL 导入库文件名，避免 Ninja 的输出冲突。
 
-从项目根目录执行 `python -m pip install -r requirements.txt`。本目录提供 Windows x64 / CPython 3.11 的 wheel 和包含原始许可证、绑定及编译依赖源代码的 sdist。其他平台从 sdist 编译，需要适用的本机编译器与 Python 开发文件。项目此次实测平台是 Windows，未在 Linux 实机上编译或运行。
+旧版本曾通过 `requirements.txt` 安装本目录的包；当前依赖已移除此项。本目录保留 Windows x64 / CPython 3.11 的历史 wheel 和包含原始许可证、绑定及编译依赖源代码的 sdist。只在复现旧实现时才需要对应 wheel 或源码编译；历史实测平台为 Windows。
 
 复现源包：从 [PyPI c104 2.2.1](https://pypi.org/project/c104/2.2.1/#files) 下载原始 `c104-2.2.1.tar.gz`，运行 `python vendor/c104/backport.py <原始压缩包>`。脚本校验原始 SHA-256，要求目标代码精确匹配；输出可重复生成。构建 wheel：
 

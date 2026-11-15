@@ -110,16 +110,16 @@ class CommitVisibilityTests(unittest.TestCase):
     def test_forwarded_command_confirmation_does_not_depend_on_the_log_disk(self):
         run=TransRuntime(self.db); self.addCleanup(run.store.close)
         point=SimpleNamespace(kind='yk',source_rtu_id=7,source_pnt_no=1)
-        run.writer=Mock()
+        run.writer=Mock(spec=['submit_commands'])
         with patch.object(run.logger,'normal',side_effect=OSError('full')), self.assertLogs('scdfe_t.trans'):
             self.assertTrue(run.command(point,1))
-        run.writer.submit_command.assert_called_once_with(7,'yk',1,1,timeout=5)
-        run.writer.submit_command.side_effect=ConnectionError('offline')
+        run.writer.submit_commands.assert_called_once_with([(7,'yk',1,1)],timeout=5)
+        run.writer.submit_commands.side_effect=ConnectionError('offline')
         with patch.object(run.logger,'error',side_effect=OSError('full')), self.assertLogs('scdfe_t.trans'):
             self.assertFalse(run.command(point,1))
     def test_publish_failure_reports_the_commit_and_preserves_native_float_precision(self):
         svc,_=self.station()
-        import c104
+        from core import iec104_python as c104
         with patch.object(svc.server,'update',side_effect=OSError('send failed')):
             with self.assertRaisesRegex(IEC104ServiceError,'已写入'):
                 svc.incremental_update('yc',1,0.1)

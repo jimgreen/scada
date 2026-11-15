@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 
-import c104
+from core import iec104_python as c104
 from client.iec104 import IEC104Master
 from core.iec104_soe import decode_events
 from scdfe_c.web.service import ScadaStore

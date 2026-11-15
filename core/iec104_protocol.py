@@ -27,14 +27,13 @@ class IEC104ProtocolConfig:
                              self.max_asdu_length)
 
     def apply(self, parameters: Any) -> None:
-        """Apply values to a c104 ProtocolParameters object."""
+        """Apply values to the pure Python transport, including ASDU limits."""
         parameters.send_window_size = self.k
         parameters.receive_window_size = self.w
-        # c104 exposes timeout properties as integer seconds even though the
-        # persisted configuration accepts finite numeric values.
-        parameters.message_timeout = max(1, int(round(self.t1)))
-        parameters.confirm_interval = max(1, int(round(self.t2)))
-        parameters.keep_alive_interval = max(1, int(round(self.t3)))
+        parameters.message_timeout = self.t1
+        parameters.confirm_interval = self.t2
+        parameters.keep_alive_interval = self.t3
+        parameters.max_asdu_length = self.max_asdu_length
 
     @classmethod
     def from_mapping(cls, values: Any, *, defaults: "IEC104ProtocolConfig | None" = None) -> "IEC104ProtocolConfig":

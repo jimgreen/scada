@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import PropertyMock, patch
 
-import c104
+from core import iec104_python as c104
 from client.iec104 import IEC104Master
 from server.iec104_server import IEC104Server
 
@@ -50,6 +50,19 @@ class ReceiveSnapshotTests(unittest.TestCase):
         self.assertIsNone(sample.value)
         self.assertEqual(sample.quality, 128)
 
+    def test_collect_waits_for_first_measurement_without_fabricating_database_values(self):
+        peer = IEC104Master('127.0.0.1', init='NONE')
+        self.addCleanup(peer.close)
+        peer.configure([dict(kind='yc', pnt_no=1)])
+        point = peer._point('yc', 1)
+        with patch.object(peer, '_started', True), patch.object(
+                IEC104Master, 'connected', new_callable=PropertyMock, return_value=True):
+            self.assertEqual(peer.collect_once(), [])
+            point.info = c104.ShortInfo(actual=42, quality=c104.Quality.Good)
+            peer._make_receive_callback('yc', 1)(point, point.info, None)
+            self.assertEqual([(s.kind, s.point_no, s.value) for s in peer.collect_once()],
+                             [('yc', 1, 42)])
+
     def test_four_clients_do_not_mix_point_identity_during_batch_receive(self):
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0)); port = reservation.getsockname()[1]
@@ -71,7 +84,7 @@ class ReceiveSnapshotTests(unittest.TestCase):
                 for sample in samples:
                     if sample.value is not None:
                         self.assertEqual(sample.value % 1000, sample.point_no)
-                if all(s.value == step*1000+s.point_no for s in samples): break
+                if len(samples) == 4*64 and all(s.value == step*1000+s.point_no for s in samples): break
                 self.assertLess(time.monotonic(), deadline, 'all clients receive every batch')
                 time.sleep(.002)
 

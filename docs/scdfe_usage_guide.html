@@ -618,14 +618,16 @@ S 页面：编辑值/状态 → 提交 S 独立库 → S 服务自主检测，�
 <p>最新值表适合显示当前状态；一次扫描间发生多次变位，不能只凭最新值还原全部历史。需要逐条追踪遥信事件时，按下一节配置 SOE。</p>
 
 <h3 id="current-iec104">07.2　IEC104：总召、变位、控制与 SOE</h3>
+<p><b>2026-11-15 纯 Python 引擎：</b>C/S/T 的 IEC104 已改用随项目发布的 <code>core.iec104_python</code>，协议核心只依赖 Python 标准库。部署 Python 3.11+ 并安装 <code>requirements.txt</code>，无需 c104、lib60870 或 C++ 编译器。更新代码后应重启 Web 及实际通信进程；仅刷新页面不会替换进程内已加载的引擎。<code>GET /api/protocol-capabilities</code> 的 IEC104 应显示 <code>implementation=python-stdlib</code>、<code>native_dependency=false</code>。S 仍使用独立库，C/T 通过共享业务库交互。</p>
+<details><summary>纯 Python 替换验证与 SOE 性能对比</summary><p>验证覆盖独立报文字节、总召、变位/质量变化、周期上送、遥控/遥调选择执行与直接执行、撤销、SOE 持久化及确认转发、连接历史和异常连接。另以旧 c104 为独立对端进行双向互通，并在禁用第三方包加载的 Python 进程内完成建链与总召。</p><table class="schema-table"><thead><tr><th>同负载 SOE</th><th>旧引擎耗时中位数</th><th>纯 Python 耗时中位数</th><th>变化</th></tr></thead><tbody><tr><td>1 通道 / 128 事件</td><td>146.348 ms</td><td>147.010 ms</td><td>增加 0.45%，基本持平</td></tr><tr><td>4 通道 / 512 事件</td><td>752.658 ms</td><td>530.621 ms</td><td>降低 29.50%</td></tr></tbody></table><p>2026-11-15 Windows/Python 3.11 本机 TCP，旧版为提交 5ed8168 的 c104 2.2.1+scada.4；同参数交替运行各三轮，事件状态、质量与 CP56 字节全部一致。耗时覆盖 S 提交→C 落库→T 下游确认；工作区原有服务仍运行，结果受系统负载影响，不代表生产最大容量。Linux 实机、硬件与长时间稳定性尚需部署环境验收。</p></details>
 <ol class="steps"><li>先核对 TCP 监听/目标端口、CA、IOA、类型、<code>k/w/t1/t2/t3</code>；连接后检查 STARTDT 状态。Web 在线并不等于数据传输已启动。</li>
 <li>发起总召，查看激活、确认、返回数据和激活终止；核对数量、CA/IOA、值与质量。总召返回当前值，不是 SOE 历史回放。</li>
 <li>分别改变 YC 值、YX 值及质量状态，检查 COT=3 的突发/变位数据；配置周期上送时再验证 COT=1。只改质量及恢复质量也应被观察到。</li>
 <li>在模拟对象上分别检查直接执行及选择后执行；核对点定义的命令模式、限定词和时标。错误 CA/IOA、闭锁、越限、已有待处理命令应得到明确失败结果。</li>
 <li>验证撤销时确认没有追加执行。T 的撤销仅处理本地选择状态，不撤回已经提交的命令，也不回滚现场已完成动作。</li></ol>
-<div class="note care"><b>当前能力边界：</b>支持 <code>DIRECT</code> 与 <code>SELECT_AND_EXECUTE</code>；不提供独立的“只选择、稍后再由另一个接口执行”的客户端调用。支持无时标及 CP56Time2a，CP24Time2a 配置明确拒绝。U 帧 TESTFR 由原生驱动的 t3 定时器处理；应用测试命令不等于主动发 U TESTFR。普通 ASDU 长度配置是诊断阈值；SOE 批次发送另外执行长度限制。</div>
+<div class="note care"><b>当前能力边界：</b>支持 <code>DIRECT</code> 与 <code>SELECT_AND_EXECUTE</code>；不提供独立的“只选择、稍后再由另一个接口执行”的客户端调用。支持无时标、CP24Time2a 与 CP56Time2a。CP56 使用 UTC 日历；CP24 只有分秒，按接收时刻最近的 UTC 小时补全，不能用于唯一确定跨小时历史事件。t3 定时器自动发送 U TESTFR，C 的 <code>test_fr()</code> 也可主动发起；它与 ASDU 应用测试命令不同。普通 ASDU 与 SOE 均实际执行配置的长度限制。</div>
 <h4 id="current-soe">SOE 配置与查看</h4>
-<ol class="steps"><li>核对运行服务的原生依赖为项目要求的 <code>c104 2.2.1+scada.3</code>。为 S 遥信配置类型 30（CP56 单点）或 31（CP56 双点）；也可使用类型 1/3 配合 <code>time_tag=CP56Time2a</code>。普通无时标点不自动构成完整 SOE 来源。</li>
+<ol class="steps"><li>核对运行服务已加载纯 Python 引擎。为 S 遥信配置类型 30（CP56 单点）或 31（CP56 双点）；也可使用类型 1/3 配合 <code>time_tag=CP56Time2a</code>。普通无时标点不自动构成完整 SOE 来源。</li>
 <li>在 S 独立库更新已配置的遥信。值/质量变化和事件在同一事务提交；相同值与质量、只改刷新时间以及回滚事务不会增加事件。</li>
 <li>C 接收回调按 ASDU 提交事件，保留原始状态、品质、COT、CA/IOA 和 CP56 字节；相同 IOA 再次到达仍可作为新事件记录。T 选相应源 RTU/点号，映射目标 CA/IOA。</li>
 <li>进入 C/S/T 工作台“SOE 事件”（<code>/soe</code>），按 RTU 查看原始状态、品质、源时间、接收时间及确认进度。页面最多保留 500 行；页面裁剪不删除数据库历史，隐藏页面会暂停自动请求。</li>
@@ -696,7 +698,7 @@ python tools/benchmark_business_logging.py --baseline-ref fb8561f --repeat 9 --o
 <p>内容可切换为“交互内容”“连接日志”“原始报文”：IEC104 展示 STARTDT/STOPDT、总召、COT、CA、IOA、四遥值与质量、时间标签及指令选择/执行/确认；Modbus TCP 展示事务号、站号、功能码、0 基地址、数量/值及异常码。OPC UA 记录 TCP 片段，不解密加密业务内容；串口、CAN、UDP/BACnet 和本地模拟不生成 TCP 客户端会话。TX 只表示交给传输层，不代表对端业务处理已完成。</p>
 <p>页面支持 5 秒刷新、加载更早记录及导出当前显示。浏览旧记录时暂停自动替换；“回到最新”恢复。原始 HEX 保存遵循通道的“报文保存”开关，关闭时仍有连接日志、交互摘要和收发统计。旧版按通道保存的日志不能追溯拆分到每个连接。</p>
 <p>观察记录异步批量保存到业务库旁的 <code>&lt;库名&gt;.scdfe_s.connections.sqlite3</code> 或 <code>&lt;库名&gt;.scdfe_t.connections.sqlite3</code>；每连接保留最近 10000 条事件，离线记录保留 7 天。已清理条数、队列溢出和写入错误会提示；记录进程心跳超过 20 秒未更新时显示状态未知，不推断为正常断开。C/T 共享业务库、S 独立业务库的结构保持不变。</p>
-<p>IEC104 观察依赖项目提供的 <code>c104==2.2.1+scada.4</code>。升级时在实际服务解释器安装依赖并重启；T 子进程解释器可用 <code>SCADA_PYTHON</code> 明确指定。接口：<code>GET /api/connections?channel_id=1</code>、<code>GET /api/connections/&lt;编号&gt;</code>、<code>GET /api/connections/&lt;编号&gt;/events?kind=packet&amp;limit=100</code>；使用 <code>before</code> 分页查询更早事件。</p>
+<p>IEC104 连接观察由项目内纯 Python 引擎提供，包括每条连接的收发报文、激活状态和断开原因；无需原生扩展。升级代码后重启 Web 和对应通信服务；T 子进程解释器可用 <code>SCADA_PYTHON</code> 明确指定。接口：<code>GET /api/connections?channel_id=1</code>、<code>GET /api/connections/&lt;编号&gt;</code>、<code>GET /api/connections/&lt;编号&gt;/events?kind=packet&amp;limit=100</code>；使用 <code>before</code> 分页查询更早事件。</p>
 </section>
 <footer class="foot">SCADA · SCDFE 操作手册　|　本文可离线阅读；示例中的本机 Web 地址仅在对应服务启动后可用。</footer></main></div>
 <script>

@@ -199,4 +199,4 @@ IEC104 覆盖链路控制、总召、变位/周期数据、SOE、遥控/遥调�
 
 查询接口：`GET /api/connections?rtu_id=2&limit=50&offset=0`、`GET /api/connections/<编号>`、`GET /api/connections/<编号>/events?kind=packet&before=<事件编号>&limit=100`。列表也支持 `channel_id` 和 `state=open|closed`；事件类型为 `packet|interaction|log`，单次最多 200 条。
 
-IEC104 连接记录依赖随项目提供的 `c104==2.2.1+scada.4`，在实际服务解释器中安装 `requirements.txt` 后重启对应服务。TX 表示报文提交传输层，不表示对端业务已经完成。
+IEC104 连接记录由项目内纯 Python 引擎提供，无需 `c104` 或 C++ 编译。升级项目代码后重启对应服务；TX 表示报文提交传输层，不表示对端业务已经完成。部署与验证见 [纯 Python IEC104 说明](../docs/iec104_python.md)。

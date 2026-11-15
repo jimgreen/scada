@@ -4,7 +4,7 @@ import socket
 import struct
 import unittest
 
-import c104
+from core import iec104_python as c104
 from client.iec104 import IEC104Master, IEC104Error
 from server.iec104_server import IEC104Server
 from tools.verify_iec104_wire_contracts import RawPeer

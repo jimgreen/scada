@@ -23,13 +23,16 @@ class CapabilityApiContracts(unittest.TestCase):
                     self.assertEqual(response.status,200)
                     self.assertEqual(body['component'],component)
                     iec = body['protocols']['iec104']
-                    self.assertFalse(iec['cp24']); self.assertFalse(iec['explicit_u_testfr'])
+                    self.assertTrue(iec['cp24'])
+                    self.assertEqual(iec['explicit_u_testfr'], component == 'scdfe_c')
+                    self.assertEqual(iec['implementation'], 'python-stdlib')
+                    self.assertFalse(iec['native_dependency'])
                     self.assertTrue(iec['soe_event_log'])
                     self.assertFalse(iec['soe_lossless_forwarding'])
                     self.assertEqual(iec['monitoring_semantics'],'latest_point_snapshot_and_event_journal')
                     self.assertEqual(iec['soe_forward_types'],[30,31])
                     self.assertEqual(iec['soe_delivery'],'at_least_once_apci_ack')
-                    self.assertEqual(iec['max_asdu_length_scope'],'diagnostic_threshold')
+                    self.assertEqual(iec['max_asdu_length_scope'],'transport_enforced')
                     if component == 'scdfe_t':
                         self.assertEqual(set(body['protocols']),{'iec104','modbus-tcp'})
                         self.assertEqual(iec['confirmation_scope'],'database_commit')

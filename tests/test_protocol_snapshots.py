@@ -7,7 +7,7 @@ import time
 from types import SimpleNamespace
 import unittest
 
-import c104
+from core import iec104_python as c104
 
 from client.iec104 import IEC104Master, IEC104Value
 from server.iec104_server import IEC104Server
@@ -57,7 +57,9 @@ class ProtocolSnapshotTests(unittest.TestCase):
                 result = master.value(kind, number)
                 self.assertIs(type(result.value), type(value))
                 self.assertEqual((result.rtu_id, result.value, result.quality), (7, value, quality))
-                self.assertEqual(result.recorded_at, info.recorded_at)
+                # Untimed wire types have no recorded_at; assignment must not
+                # mutate the immutable information object supplied by the caller.
+                self.assertIsNone(result.recorded_at)
                 self.assertIsNotNone(result.received_at.tzinfo)
                 view = master.snapshot()
                 view.clear()
