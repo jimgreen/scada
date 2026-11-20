@@ -38,7 +38,7 @@
       '<input id="database-input" aria-label="数据库相对路径" autocomplete="off" required spellcheck="false" role="combobox" aria-expanded="false" aria-controls="database-tree" aria-haspopup="tree">' +
       '<button type="button" id="database-browse" aria-label="展开数据库目录">▾</button></div>' +
       '<div class="database-popup" hidden><div class="database-tree-toolbar">' +
-      '<button type="button" id="database-parent">上一级</button><button type="button" id="database-root">Web 服务目录</button>' +
+      '<button type="button" id="database-parent">上一级</button><button type="button" id="database-root">工作区根目录</button>' +
       '<button type="button" id="database-mkdir">新建目录</button><button type="button" id="database-new">新建数据库</button></div>' +
       '<p class="database-folder"></p><ul id="database-tree" role="tree" aria-label="数据库目录"></ul>' +
       '<div class="database-create" hidden><p class="database-create-directory"></p>' +
@@ -55,10 +55,11 @@
     const createPanel = $('.database-create'), createError = $('.database-create-error');
     let validatedPath = '', validationSequence = 0, treeSequence = 0, timer;
     let folder = current.directory || '.', selectedFolder = folder, parent = null, createKind = '';
-    $('.database-current').textContent = current.relative_database || '当前数据库位于其他磁盘，无法表示为相对路径';
+    $('.database-current').textContent = current.relative_database;
     input.value = current.relative_database || '';
     $('.database-current').title = '当前数据库';
-    input.title = '相对于 scdfe_' + current.role + '/web';
+    input.title = '相对于工作区根目录，使用 / 分隔';
+    input.placeholder = 'realtime/qinling/sqldb/scada/scdfe_' + current.role + '.sqlite3';
     function showError(message) { error.textContent = message; error.hidden = !message; }
     function positionPopup() {
       if (popup.hidden || !dialog.open) return;

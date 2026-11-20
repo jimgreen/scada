@@ -34,7 +34,7 @@ from scdfe_s.web.protocol_service import (
 )
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
-from core.web_database import DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
+from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
@@ -121,6 +121,8 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._audit_delivered = True
 
     def _json(self, status, payload):
+        if status < 400:
+            payload = self.server.public_file_paths(payload)
         audit.response(self, status, payload)
         headers = {}
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
@@ -795,7 +797,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 from core.protocol_capabilities import protocol_capabilities
                 return self._json(200, protocol_capabilities('scdfe_s'))
             if parts == ["api", "health"]:
-                return self._json(200, {"status": "ok", "service": "scdfe_s", "database_role": "simulator", "database": str(self.store.db_path)})
+                return self._json(200, {"status": "ok", "service": "scdfe_s", "database_role": "simulator", "database": self.server.relative_database_path(self.store.db_path)})
             if len(parts) == 4 and parts[:2] == ["api", "rtus"] and parts[3] == "delete-preview":
                 if query:
                     raise ApiError(400, "删除预览接口不接受查询参数")
@@ -959,8 +961,8 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
-    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
-        self._init_database('s', db_path, schema_dir, selection_path)
+    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None, workspace_root=None):
+        self._init_database('s', db_path, schema_dir, selection_path, workspace_root)
         try:
             super().__init__(address, ScadaHandler)
         except BaseException:
@@ -1041,8 +1043,8 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
             return selected
 
 
-def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
-    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path)
+def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None, workspace_root=None):
+    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path, workspace_root=workspace_root)
 
 
 def main():
@@ -1051,11 +1053,12 @@ def main():
     parser.add_argument("--port", type=int, default=8878)
     parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
+    parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE_ROOT, help="Web 文件访问根目录；相对路径均以此为基准")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     preference = selection_file('s', args.host, args.port)
-    database = selected_database(preference, args.db, DEFAULT_DB, base_directory=Path(__file__).resolve().parent)
-    server = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference)
+    database = selected_database(preference, args.db, args.workspace_root / DEFAULT_DB.name, workspace_root=args.workspace_root)
+    server = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference, workspace_root=args.workspace_root)
     print(f"SCADA web: http://{args.host}:{args.port}/", flush=True)
     print(f"SQLite: {server.store.db_path}", flush=True)
     try:

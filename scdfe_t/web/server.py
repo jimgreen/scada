@@ -18,7 +18,7 @@ from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
-from core.web_database import DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
+from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
@@ -68,6 +68,8 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._audit_delivered = True
 
     def _json(self, status, payload):
+        if status < 400:
+            payload = self.server.public_file_paths(payload)
         audit.response(self, status, payload)
         headers = {}
         item = payload.get("item") if isinstance(payload, dict) else None
@@ -174,7 +176,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts == ["api", "health"]:
             if method != "GET":
                 raise ApiError(405, "只支持 GET")
-            return self._json(200, {"status": "ok", "service": "scdfe_t", "database": str(self.service.db_path)})
+            return self._json(200, {"status": "ok", "service": "scdfe_t", "database": self.server.relative_database_path(self.service.db_path)})
         if parts == ["api", "trans", "schema"]:
             if method != "GET":
                 raise ApiError(405, "只支持 GET")
@@ -366,8 +368,8 @@ class TransHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
-    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
-        self._init_database('t', db_path, schema_dir, selection_path)
+    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None, workspace_root=None):
+        self._init_database('t', db_path, schema_dir, selection_path, workspace_root)
         try:
             super().__init__(address, TransHandler)
         except BaseException:
@@ -381,8 +383,8 @@ class TransHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
             super().server_close()
 
 
-def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
-    return TransHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path)
+def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None, workspace_root=None):
+    return TransHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path, workspace_root=workspace_root)
 
 
 def main(argv=None):
@@ -391,11 +393,12 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8879)
     parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
+    parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE_ROOT, help="Web 文件访问根目录；相对路径均以此为基准")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     preference = selection_file('t', args.host, args.port)
-    database = selected_database(preference, args.db, DEFAULT_DB, base_directory=Path(__file__).resolve().parent)
-    httpd = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference)
+    database = selected_database(preference, args.db, args.workspace_root / DEFAULT_DB.name, workspace_root=args.workspace_root)
+    httpd = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference, workspace_root=args.workspace_root)
     print(f"scdfe_t WEB: http://{args.host}:{args.port}/", flush=True)
     try:
         httpd.serve_forever()

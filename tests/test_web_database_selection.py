@@ -46,19 +46,19 @@ class DatabaseSelectionTests(unittest.TestCase):
                     status, before = self.request(server, 'GET', '/api/database')
                     self.assertEqual(status, 200)
                     status, switched = self.request(server, 'POST', '/api/database',
-                        {'database': str(second), 'expected_database': str(first.resolve())}, before['token'])
+                        {'database': second.name, 'expected_database': first.name}, before['token'])
                     self.assertEqual(status, 200, switched)
-                    self.assertEqual(switched['database'], str(second.resolve()))
+                    self.assertEqual(switched['database'], second.name)
                     self.assertNotEqual(switched['token'], before['token'])
                     from core.web_database import selected_database
                     self.assertEqual(selected_database(preference, None, first), second.resolve())
                     self.assertEqual(selected_database(preference, first, second), first)
                     status, health = self.request(server, 'GET', '/api/health')
-                    self.assertEqual(health['database'], str(second.resolve()))
+                    self.assertEqual(health['database'], second.name)
                     actual = server.trans_store.store if role == 't' else server.store
                     self.assertEqual(actual.get_row('fes_rtu_define', [17])['name'], '第二库')
                     status, error = self.request(server, 'POST', '/api/database',
-                        {'database': str(first), 'expected_database': str(second)}, before['token'])
+                        {'database': first.name, 'expected_database': second.name}, before['token'])
                     self.assertEqual(status, 409)
                     self.assertEqual(error['error']['code'], 'database_changed')
                 finally:
@@ -78,9 +78,9 @@ class DatabaseSelectionTests(unittest.TestCase):
                 try:
                     _, current = self.request(server, 'GET', '/api/database')
                     status, error = self.request(server, 'POST', '/api/database',
-                        {'database': str(bad), 'expected_database': current['database']})
+                        {'database': bad.name, 'expected_database': current['database']})
                     self.assertEqual(status, 400, error)
-                    self.assertEqual(str(server.store.db_path), current['database'])
+                    self.assertEqual(server.store.db_path, (root / current['database']).resolve())
                     self.assertEqual(bad.read_bytes() if bad.exists() else None, previous)
                 finally:
                     server.shutdown(); server.server_close(); thread.join(3)
@@ -96,7 +96,7 @@ class DatabaseSelectionTests(unittest.TestCase):
                 server._channel_service_cache['test-running'] = Mock(running=True)
                 _, before = self.request(server, 'GET', '/api/database')
                 status, error = self.request(server, 'POST', '/api/database',
-                    {'database': str(root / 'second.sqlite3'), 'expected_database': before['database']})
+                    {'database': 'second.sqlite3', 'expected_database': before['database']})
                 self.assertEqual(status, 409, error)
                 self.assertEqual(error['error']['code'], 'database_busy')
             finally:
@@ -120,7 +120,7 @@ class DatabaseSelectionTests(unittest.TestCase):
                 try:
                     _, before = self.request(server, 'GET', '/api/database')
                     status, error = self.request(server, 'POST', '/api/database',
-                        {'database': str(root / 'second.sqlite3'), 'expected_database': before['database']})
+                        {'database': 'second.sqlite3', 'expected_database': before['database']})
                     self.assertEqual(status, 409, error)
                     self.assertEqual(error['error']['code'], 'database_busy')
                 finally:
@@ -146,7 +146,7 @@ class DatabaseSelectionTests(unittest.TestCase):
                     read = pool.submit(self.request, server, 'GET', '/api/rtus/1')
                     self.assertTrue(entered.wait(3))
                     switch = pool.submit(self.request, server, 'POST', '/api/%64atabase/',
-                        {'database': str(root / 'second.sqlite3'), 'expected_database': str(server.store.db_path)})
+                        {'database': 'second.sqlite3', 'expected_database': 'first.sqlite3'})
                     self.assertFalse(switch.done())
                     release.set()
                     self.assertEqual(read.result()[1]['item']['name'], '旧库')
@@ -159,20 +159,18 @@ class DatabaseSelectionTests(unittest.TestCase):
         for role, factory in [('c', make_c), ('s', make_s), ('t', make_t)]:
             with self.subTest(role=role), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                base = root / ('scdfe_' + role) / 'web'; base.mkdir(parents=True)
                 preference = root / 'selection.json'
-                server = factory('127.0.0.1', 0, db_path=root / 'first.sqlite3', selection_path=preference)
-                self.assertEqual(server._database_base_directory, Path(__file__).resolve().parents[1] / ('scdfe_' + role) / 'web')
-                server._database_base_directory = base
+                server = factory('127.0.0.1', 0, db_path=root / 'first.sqlite3', selection_path=preference, workspace_root=root)
+                self.assertEqual(server._database_base_directory, root.resolve())
                 thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
                 try:
                     _, before = self.request(server, 'GET', '/api/database')
-                    self.assertEqual(before['relative_database'], '../../first.sqlite3')
-                    body = {'directory': '../..', 'name': '新目录 空格'}
+                    self.assertEqual(before['relative_database'], 'first.sqlite3')
+                    body = {'directory': '.', 'name': '新目录 空格'}
                     status, created = self.request(server, 'POST', '/api/database/mkdir', body)
                     self.assertEqual(status, 201, created)
                     directory = created['path']
-                    self.assertEqual(directory, '../../新目录 空格')
+                    self.assertEqual(directory, '新目录 空格')
                     self.assertEqual(self.request(server, 'POST', '/api/database/mkdir', body)[0], 409)
                     self.assertEqual(self.request(server, 'POST', '/api/database/mkdir', {'directory': directory, 'name': '../escape'})[0], 400)
                     status, result = self.request(server, 'POST', '/api/database/create', {'directory': directory, 'name': '空白.sqlite3'})
@@ -189,7 +187,7 @@ class DatabaseSelectionTests(unittest.TestCase):
                     status, switched = self.request(server, 'POST', '/api/database', {'database': result['path'], 'expected_database': before['database']})
                     self.assertEqual(status, 200, switched)
                     self.assertEqual(selected_database(preference, None, None), target.resolve())
-                    self.assertEqual(selected_database(preference, result['path'], None, base_directory=base), target.resolve())
+                    self.assertEqual(selected_database(preference, result['path'], None, workspace_root=root), target.resolve())
                     self.assertEqual(json.loads(preference.read_text(encoding='utf-8'))['database'], result['path'])
                 finally:
                     server.shutdown(); server.server_close(); thread.join(3)
@@ -206,7 +204,7 @@ class DatabaseSelectionTests(unittest.TestCase):
                 try:
                     with closing(sqlite3.connect(path)) as con:
                         con.execute('ALTER TABLE fes_yc_define ADD COLUMN unexpected INTEGER'); con.commit()
-                    _, checked = self.request(server, 'GET', '/api/database/validate?path=' + quote(str(path)))
+                    _, checked = self.request(server, 'GET', '/api/database/validate?path=' + quote(path.name))
                     self.assertFalse(checked['valid'])
                     self.assertIn('实际字段', checked['message'])
                     status, error = self.request(server, 'POST', endpoint, body)

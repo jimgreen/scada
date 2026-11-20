@@ -1,11 +1,10 @@
 """Select an existing database without mixing requests or active runtimes across stores."""
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from functools import wraps
 import hashlib
 import json
 import logging
-import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sqlite3
 import threading
 from urllib.parse import unquote, urlsplit
@@ -15,6 +14,7 @@ from scdfe_c.web.service import ApiError, ScadaStore
 from core.database_validation import validate_database
 
 LOG = logging.getLogger(__name__)
+DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / 'workspace'
 SERVICE_NAMES = ('iec104_service', 'modbus_tcp_service', 'modbus_tcp_server_service',
                  'modbus_rtu_service', 'modbus_rtu_server_service', 'can_service',
                  'can_server_service', 'opc_server_service', 'bacnet_server_service')
@@ -65,20 +65,33 @@ def selection_file(role, host, port):
     return Path(__file__).resolve().parents[1] / 'db' / f'web_database_{role}_{key}.json'
 
 
-def selected_database(path, explicit, default, *, base_directory=None):
+def selected_database(path, explicit, default, *, base_directory=None, workspace_root=None):
+    root = Path(workspace_root).resolve() if workspace_root is not None else None
+
+    def contained(value):
+        result = Path(value).resolve()
+        if root is not None and not result.is_relative_to(root):
+            raise ValueError('数据库必须位于配置的工作区根目录内；请用 --db 指定根目录内的数据库')
+        return result
+
     if explicit is not None:
         explicit = Path(explicit)
-        return (Path(base_directory) / explicit).resolve() if base_directory and not explicit.is_absolute() else explicit
+        base = root or base_directory
+        return contained(Path(base) / explicit if base and not explicit.is_absolute() else explicit)
     if path.is_file():
         # A broken remembered selection must be visible, not silently open a different DB.
         data = json.loads(path.read_text(encoding='utf-8'))
         saved = Path(data['database'])
         if not saved.is_absolute():
-            saved = Path(base_directory or data['base_directory']) / saved
+            # Read the saved base first so legacy Web-relative preferences still
+            # resolve to the same file, then enforce the new configured boundary.
+            saved = Path(data.get('workspace_root') or data.get('base_directory')
+                         or root or base_directory) / saved
+        saved = contained(saved)
         if not saved.is_file():
             raise ValueError(f'已选数据库不存在：{saved}；请用 --db 指定数据库')
         return saved.resolve()
-    return default
+    return contained(default)
 
 
 def prepare_database(role, path, schema_dir):
@@ -118,12 +131,20 @@ def prepare_database(role, path, schema_dir):
 
 
 class DatabaseSelectionMixin:
-    def _init_database(self, role, path, schema_dir, selection_path=None):
+    def _init_database(self, role, path, schema_dir, selection_path=None, workspace_root=None):
+        path = Path(path) if workspace_root is not None else Path(path).resolve()
+        root = Path(workspace_root).resolve() if workspace_root is not None else path.parent
+        path = (path if path.is_absolute() else root / path).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError('数据库必须位于配置的工作区根目录内')
+        if workspace_root is not None and not root.is_dir():
+            raise ValueError('工作区根目录不存在')
         self.database_role = role
         self._database_gate = RequestGate()
         self._database_token = uuid4().hex
         self._database_selection_path = selection_path
-        self._database_base_directory = Path(__file__).resolve().parents[1] / f'scdfe_{role}' / 'web'
+        self._database_base_directory = root
+        self.check_database_paths(path)
         self._resources, context = prepare_database(role, path, schema_dir)
         self.__dict__.update(context)
 
@@ -133,22 +154,31 @@ class DatabaseSelectionMixin:
     def database_info(self):
         current = self.database_store().db_path
         relative = self.relative_database_path(current)
-        return dict(database=str(current), role=self.database_role, token=self._database_token,
-                    relative_database=relative, base_directory=str(self._database_base_directory),
+        return dict(database=relative, role=self.database_role, token=self._database_token,
+                    relative_database=relative, workspace_root=str(self._database_base_directory),
                     directory=Path(relative).parent.as_posix() if relative else '.',
                     remembered=self._database_selection_path is not None)
 
     def relative_database_path(self, path):
         try:
-            return Path(os.path.relpath(path, self._database_base_directory)).as_posix()
-        except ValueError:
-            return None  # Another drive cannot be expressed as a relative path.
+            return Path(path).resolve().relative_to(self._database_base_directory).as_posix()
+        except (ValueError, OSError, RuntimeError):
+            return None
 
     def resolve_database_path(self, value):
-        if not isinstance(value, str) or not value.strip() or '\x00' in value:
-            raise ApiError(400, '请选择数据库文件或填写相对于Web服务目录的路径')
-        path = Path(value.strip()).expanduser()
-        return (path if path.is_absolute() else self._database_base_directory / path).resolve()
+        if (not isinstance(value, str) or not value or '\x00' in value
+                or '\\' in value or ':' in value or PureWindowsPath(value).drive
+                or PurePosixPath(value).is_absolute()
+                or (value != '.' and any(part in ('', '.', '..') or part.endswith((' ', '.'))
+                                        for part in value.split('/')))):
+            raise ApiError(400, '路径必须相对于工作区根目录，使用 / 分隔，不能包含 .. 或绝对路径')
+        try:
+            path = (self._database_base_directory / value).resolve()
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise ApiError(400, '路径无效或不可访问') from exc
+        if not path.is_relative_to(self._database_base_directory):
+            raise ApiError(400, '路径不能超出工作区根目录')
+        return path
 
     def database_tree(self, directory):
         folder = self.resolve_database_path(directory or '.')
@@ -167,11 +197,55 @@ class DatabaseSelectionMixin:
             raise ApiError(400, '无法读取此目录') from exc
         entries.sort(key=lambda row: (not row['directory'], row['name'].lower()))
         return dict(directory=self.relative_database_path(folder),
-                    parent=self.relative_database_path(folder.parent) if folder.parent != folder else None,
+                    parent=self.relative_database_path(folder.parent) if folder != self._database_base_directory else None,
                     entries=entries)
 
     def check_database(self, path):
+        self.check_database_paths(path)
         return validate_database(path, self.database_role, self.database_store().catalog)
+
+    def confined_file_path(self, path):
+        """Bound trusted absolute runtime paths as well as paths supplied by the UI."""
+        try:
+            resolved = Path(path).resolve()
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise ApiError(400, '文件路径无效或不可访问') from exc
+        if not resolved.is_relative_to(self._database_base_directory):
+            raise ApiError(400, '文件路径不能超出工作区根目录')
+        return resolved
+
+    def check_log_paths(self, directory):
+        from core.log_paths import packet_log_directory
+        directory = self.confined_file_path(directory)
+        self.confined_file_path(packet_log_directory(directory))
+        return directory
+
+    def check_database_paths(self, path):
+        path = self.confined_file_path(path)
+        self.check_log_paths(path.parent / 'logs')
+        # A persisted C log directory may predate the configured Web boundary.
+        # Check it read-only before selecting the database or starting a writer.
+        if self.database_role == 'c' and path.is_file():
+            try:
+                with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
+                    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fes_scdfe_c_define'").fetchone():
+                        row = con.execute('SELECT log_dir FROM fes_scdfe_c_define WHERE id=1').fetchone()
+                        if row and row[0]:
+                            self.check_log_paths(path.parent / row[0])
+            except sqlite3.Error:
+                # Schema/integrity validation reports malformed databases.
+                pass
+
+    def public_file_paths(self, payload):
+        """Keep directory labels in log responses and controls relative to the root."""
+        result = dict(payload)
+        if isinstance(result.get('directory'), str) and Path(result['directory']).is_absolute():
+            result['directory'] = self.relative_database_path(self.confined_file_path(result['directory']))
+        item = result.get('item')
+        if isinstance(item, dict) and item.get('log_dir'):
+            directory = self.check_log_paths(self.database_store().db_path.parent / item['log_dir'])
+            result['item'] = dict(item, log_dir=self.relative_database_path(directory))
+        return result
 
     def create_database_entry(self, body, *, directory=False):
         if not isinstance(body, dict) or set(body) != {'directory', 'name'}:
@@ -183,7 +257,7 @@ class DatabaseSelectionMixin:
             raise ApiError(400, '名称无效，请只输入文件名或目录名')
         if not parent.is_dir():
             raise ApiError(400, '父目录不存在')
-        target = parent / name
+        target = self.resolve_database_path((parent / name).relative_to(self._database_base_directory).as_posix())
         if not directory and target.suffix.lower() not in {'.sqlite3', '.sqlite', '.db'}:
             raise ApiError(400, '数据库扩展名必须为 .sqlite3、.sqlite 或 .db')
         created = False
@@ -245,7 +319,7 @@ class DatabaseSelectionMixin:
         if not isinstance(body, dict) or set(body) != {'database', 'expected_database'}:
             raise ApiError(400, '需要 database 和 expected_database 两个路径字段')
         current = self.database_store()
-        if body['expected_database'] != str(current.db_path):
+        if body['expected_database'] != self.relative_database_path(current.db_path):
             raise ApiError(409, '数据库已被其他页面切换，请刷新页面', code='database_changed')
         target = self.resolve_database_path(body['database'])
         self.require_valid_database(target)
@@ -279,8 +353,8 @@ class DatabaseSelectionMixin:
         temporary = path.with_name(path.name + '.' + uuid4().hex + '.tmp')
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps({'database': self.relative_database_path(target) or str(target),
-                                            'base_directory': str(self._database_base_directory)}, ensure_ascii=False), encoding='utf-8')
+            temporary.write_text(json.dumps({'database': self.relative_database_path(target),
+                                            'workspace_root': str(self._database_base_directory)}, ensure_ascii=False), encoding='utf-8')
             temporary.replace(path)
         except OSError as exc:
             raise ApiError(500, '保存数据库选择失败，仍使用原数据库') from exc
@@ -318,6 +392,12 @@ def handle_database(handler, parts, query, method):
         path = Path(__file__).with_name('web_static') / parts[-1]
         content_type = 'text/css' if path.suffix == '.css' else 'application/javascript'
         return handler._send(200, content_type + '; charset=utf-8', path.read_bytes())
+    if parts[:1] == ['api'] and any(part in {'logs', 'log', 'log-files'} for part in parts):
+        server.check_database_paths(server.database_store().db_path)
+    if parts == ['api', 'scdfe_c', 'control'] and method == 'PATCH':
+        body = handler._body()
+        if isinstance(body, dict) and 'log_dir' in body:
+            body['log_dir'] = str(server.check_log_paths(server.resolve_database_path(body['log_dir'])))
     if method in {'POST', 'PATCH', 'PUT'} and parts[:1] == ['api']:
         start = parts[-1] == 'start'
         if parts == ['api', 'processes', 'control']:
