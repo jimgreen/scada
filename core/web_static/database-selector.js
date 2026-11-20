@@ -1,0 +1,209 @@
+(() => {
+  'use strict';
+  async function api(url, options) {
+    const response = await fetch(url, options);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || '数据库操作失败');
+    return data;
+  }
+  async function boot() {
+    const current = await (window.scadaDatabaseReady || api('/api/database'));
+    if (!current?.database) return;
+    const brand = document.querySelector('.brand > strong, .workbench-brand > strong');
+    const host = brand || document.querySelector('.header-tools');
+    if (!host) return;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'database-select-button';
+    button.textContent = '选择数据库'; button.id = 'select-database';
+    const entry = document.createElement('span'); entry.id = 'database-entry';
+    const databasePath = document.createElement('code');
+    const path = (current.relative_database || current.database).replace(/\\/g, '/');
+    const separator = path.lastIndexOf('/') + 1;
+    const directory = document.createElement('span'); directory.className = 'database-directory';
+    directory.textContent = path.slice(0, separator);
+    const filename = document.createElement('span'); filename.className = 'database-filename';
+    filename.textContent = path.slice(separator);
+    databasePath.setAttribute('aria-label', '当前数据库路径');
+    databasePath.title = path;
+    databasePath.append(directory, filename);
+    entry.append(button, databasePath);
+    if (brand) { brand.classList.add('database-brand'); brand.insertBefore(entry, brand.querySelector('span')); }
+    else host.append(entry);
+    const dialog = document.createElement('dialog');
+    dialog.className = 'database-selector'; dialog.setAttribute('aria-labelledby', 'database-selector-title');
+    dialog.innerHTML = '<form id="database-selector-form">' +
+      '<h2 id="database-selector-title">启动数据库 · scdfe_' + current.role + '</h2>' +
+      '<code class="database-current" aria-label="当前数据库"></code>' +
+      '<div class="database-chooser"><div class="database-path-row">' +
+      '<input id="database-input" aria-label="数据库相对路径" autocomplete="off" required spellcheck="false" role="combobox" aria-expanded="false" aria-controls="database-tree" aria-haspopup="tree">' +
+      '<button type="button" id="database-browse" aria-label="展开数据库目录">▾</button></div>' +
+      '<div class="database-popup" hidden><div class="database-tree-toolbar">' +
+      '<button type="button" id="database-parent">上一级</button><button type="button" id="database-root">Web 服务目录</button>' +
+      '<button type="button" id="database-mkdir">新建目录</button><button type="button" id="database-new">新建数据库</button></div>' +
+      '<p class="database-folder"></p><ul id="database-tree" role="tree" aria-label="数据库目录"></ul>' +
+      '<div class="database-create" hidden><p class="database-create-directory"></p>' +
+      '<label for="database-new-name">名称</label><div class="database-path-row"><input id="database-new-name" autocomplete="off" spellcheck="false">' +
+      '<button type="button" id="database-create-confirm">创建</button><button type="button" id="database-create-cancel">取消</button></div>' +
+      '<p class="database-create-error" role="alert" hidden></p></div></div></div>' +
+      '<p class="database-validation" role="status"></p><p class="database-error" role="alert" hidden></p>' +
+      '<div class="database-actions"><button type="button" id="database-cancel">取消</button>' +
+      '<button type="submit" id="database-apply" disabled>使用此数据库</button></div></form>';
+    document.body.append(dialog);
+    const $ = selector => dialog.querySelector(selector);
+    const input = $('#database-input'), apply = $('#database-apply'), error = $('.database-error');
+    const popup = $('.database-popup'), tree = $('#database-tree'), status = $('.database-validation');
+    const createPanel = $('.database-create'), createError = $('.database-create-error');
+    let validatedPath = '', validationSequence = 0, treeSequence = 0, timer;
+    let folder = current.directory || '.', selectedFolder = folder, parent = null, createKind = '';
+    $('.database-current').textContent = current.relative_database || '当前数据库位于其他磁盘，无法表示为相对路径';
+    input.value = current.relative_database || '';
+    $('.database-current').title = '当前数据库';
+    input.title = '相对于 scdfe_' + current.role + '/web';
+    function showError(message) { error.textContent = message; error.hidden = !message; }
+    function positionPopup() {
+      if (popup.hidden || !dialog.open) return;
+      const anchor = input.parentElement.getBoundingClientRect();
+      const gap = 7, edge = 8;
+      const below = window.innerHeight - anchor.bottom - gap - edge;
+      const above = anchor.top - gap - edge;
+      const openBelow = below >= 280 || below >= above;
+      const width = Math.min(anchor.width, window.innerWidth - edge * 2);
+      popup.style.width = Math.max(0, width) + 'px';
+      popup.style.left = Math.max(edge, Math.min(anchor.left, window.innerWidth - width - edge)) + 'px';
+      popup.style.maxHeight = Math.max(0, Math.min(320, openBelow ? below : above)) + 'px';
+      popup.style.top = (openBelow ? anchor.bottom + gap : anchor.top - gap - popup.offsetHeight) + 'px';
+    }
+    function setPopup(open) {
+      popup.hidden = !open; input.setAttribute('aria-expanded', String(open));
+      $('#database-browse').setAttribute('aria-label', open ? '收起数据库目录' : '展开数据库目录');
+      if (open) positionPopup();
+    }
+    const popupObserver = new ResizeObserver(positionPopup);
+    popupObserver.observe(dialog); popupObserver.observe(popup);
+    window.addEventListener('resize', positionPopup);
+    window.addEventListener('scroll', positionPopup, true);
+    dialog.addEventListener('cancel', event => {
+      if (!popup.hidden) { event.preventDefault(); setPopup(false); input.focus({preventScroll:true}); }
+    });
+    async function validate() {
+      const sequence = ++validationSequence, path = input.value.trim();
+      validatedPath = ''; apply.disabled = true; showError('');
+      status.textContent = path ? '正在校验数据库…' : '请选择数据库';
+      if (!path) return;
+      try {
+        const result = await api('/api/database/validate?path=' + encodeURIComponent(path));
+        if (sequence !== validationSequence || path !== input.value.trim()) return;
+        if (!result.valid) { status.textContent = ''; showError(result.message); return; }
+        validatedPath = path; apply.disabled = false;
+        const c = result.counts;
+        status.textContent = '校验通过 · RTU ' + c.rtu + ' · 遥测 ' + c.yc + ' · 遥信 ' + c.yx + ' · 遥控 ' + c.yk + ' · 遥调 ' + c.yt;
+      } catch (err) {
+        if (sequence === validationSequence) { status.textContent = ''; showError(err.message); }
+      }
+    }
+    function selectFolder(path) {
+      selectedFolder = path;
+      $('.database-folder').textContent = '选中目录：' + path;
+      for (const row of tree.querySelectorAll('button[data-directory]')) row.classList.toggle('selected', row.dataset.directory === path);
+    }
+    function renderEntries(list, entries) {
+      list.replaceChildren();
+      if (!entries.length) {
+        const empty = document.createElement('li'); empty.textContent = '此目录没有数据库或子目录';
+        empty.className = 'database-tree-empty'; empty.setAttribute('role', 'none'); list.append(empty);
+      }
+      for (const entry of entries) {
+        const li = document.createElement('li'); li.setAttribute('role', 'none');
+        const row = document.createElement('button'); row.type = 'button'; row.setAttribute('role', 'treeitem');
+        row.textContent = (entry.directory ? '▸ 📁 ' : '▤ ') + entry.name;
+        row.title = entry.path; li.append(row); list.append(li);
+        if (entry.directory) {
+          row.dataset.directory = entry.path; row.setAttribute('aria-expanded', 'false');
+          const children = document.createElement('ul'); children.setAttribute('role', 'group'); children.hidden = true;
+          li.append(children); let loaded = false;
+          row.addEventListener('click', async () => {
+            selectFolder(entry.path); createPanel.hidden = true;
+            const open = row.getAttribute('aria-expanded') !== 'true';
+            row.setAttribute('aria-expanded', String(open)); children.hidden = !open;
+            row.textContent = (open ? '▾ 📁 ' : '▸ 📁 ') + entry.name;
+            if (open && !loaded) {
+              try {
+                const data = await api('/api/database/tree?directory=' + encodeURIComponent(entry.path));
+                renderEntries(children, data.entries); loaded = true;
+              } catch (err) { showError(err.message); }
+            }
+          });
+        } else {
+          row.addEventListener('click', () => { input.value = entry.path; setPopup(false); validate(); });
+        }
+      }
+    }
+    async function loadTree(path) {
+      const sequence = ++treeSequence;
+      try {
+        const data = await api('/api/database/tree?directory=' + encodeURIComponent(path));
+        if (sequence !== treeSequence) return;
+        folder = data.directory; parent = data.parent;
+        renderEntries(tree, data.entries); selectFolder(folder);
+        $('#database-parent').disabled = parent === null; createPanel.hidden = true;
+      } catch (err) { if (sequence === treeSequence) showError(err.message); }
+    }
+    async function browse() {
+      const open = popup.hidden; setPopup(open);
+      if (open) await loadTree(folder);
+    }
+    $('#database-browse').addEventListener('click', browse);
+    input.addEventListener('click', () => { if (popup.hidden) browse(); });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); if (popup.hidden) browse(); }
+      if (event.key === 'Escape' && !popup.hidden) { event.preventDefault(); event.stopPropagation(); setPopup(false); }
+    });
+    input.addEventListener('input', () => {
+      clearTimeout(timer); validationSequence++; validatedPath = ''; apply.disabled = true;
+      status.textContent = ''; showError(''); timer = setTimeout(validate, 300);
+    });
+    $('#database-parent').addEventListener('click', () => { if (parent !== null) loadTree(parent); });
+    $('#database-root').addEventListener('click', () => loadTree('.'));
+    for (const [id, kind] of [['database-mkdir', 'mkdir'], ['database-new', 'create']]) {
+      $('#' + id).addEventListener('click', () => {
+        createKind = kind; createPanel.hidden = false; createError.hidden = true;
+        $('.database-create-directory').textContent = '创建位置：' + selectedFolder;
+        $('label[for="database-new-name"]').textContent = kind === 'mkdir' ? '新目录名称' : '新数据库文件名';
+        $('#database-new-name').value = kind === 'mkdir' ? '' : 'scdfe_' + current.role + '.sqlite3';
+        $('#database-new-name').focus(); createPanel.scrollIntoView({block: 'nearest'});
+      });
+    }
+    $('#database-create-cancel').addEventListener('click', () => { createPanel.hidden = true; });
+    async function createEntry() {
+      const confirm = $('#database-create-confirm'); confirm.disabled = true; createError.hidden = true;
+      const kind = createKind, destination = selectedFolder;
+      try {
+        const data = await api('/api/database/' + kind, {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({directory: destination, name: $('#database-new-name').value})});
+        if (kind === 'mkdir') await loadTree(data.path);
+        else { input.value = data.path; folder = destination; setPopup(false); await validate(); }
+      } catch (err) { createError.textContent = err.message; createError.hidden = false; }
+      finally { confirm.disabled = false; }
+    }
+    $('#database-create-confirm').addEventListener('click', createEntry);
+    $('#database-new-name').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); if (!$('#database-create-confirm').disabled) createEntry(); }
+    });
+    dialog.addEventListener('click', event => { if (!event.target.closest('.database-chooser')) setPopup(false); });
+    button.addEventListener('click', () => { setPopup(false); dialog.showModal(); validate(); });
+    $('#database-cancel').addEventListener('click', () => dialog.close());
+    $('#database-selector-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (apply.disabled || validatedPath !== input.value.trim()) return;
+      apply.disabled = true; showError('');
+      try {
+        await api('/api/database', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({database: validatedPath, expected_database: current.database})});
+        location.reload();
+      } catch (err) { validatedPath = ''; showError(err.message); }
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => boot().catch(console.error));
+  else boot().catch(console.error);
+})();

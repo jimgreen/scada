@@ -16,10 +16,12 @@
   const state = {rtus:[], rtu:null, channel:null, protocol:null, service:null, points:{yc:[],yx:[],yk:[],yt:[]}, pages:{yc:0,yx:0,yk:0,yt:0}, request:0, editingPoint:null, loading:false};
   const PAGE_SIZE = 25;
   state.totals = {yc:0,yx:0,yk:0,yt:0};
+  state.unfilteredTotals = {yc:0,yx:0,yk:0,yt:0};
   state.pointRequests = {yc:0,yx:0,yk:0,yt:0};
   let pendingRtu = null;
   const commandKinds = new Set(["yk", "yt"]);
   const rawStatusKinds = new Set(["yc", "yt"]);
+  function pointNameFilter() { return $("#point-search").value.trim(); }
   async function api(path, options = {}) {
     const response = await fetch(path, {cache:"no-store", ...options, headers:{"Content-Type":"application/json", ...(options.headers || {})}});
     const data = await response.json();
@@ -62,7 +64,7 @@
     $("#metric-protocol").textContent = protocol.label;
     $("#metric-channel").textContent = item.channel_id ?? "—";
     $("#metric-packet").textContent = Number(item.packet_recording) ? "开启" : "关闭";
-    $("#metric-points").textContent = Object.values(state.totals).reduce((n, total) => n + total, 0);
+    $("#metric-points").textContent = Object.values(state.unfilteredTotals).reduce((n, total) => n + total, 0);
     $("#channel-table").innerHTML = table(channelRows(item));
     $("#parameter-table").innerHTML = table(parameterRows(state.channel.parameter, state.channel.parameter_schema), "该规约尚未配置参数");
   }
@@ -83,7 +85,7 @@
         states.map(value => `<td>${esc(value)}</td>`).join("") +
         times.map(value => `<td>${esc(value)}</td>`).join("") +
         `<td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${command ? "下发" : "更新"}</button></td></tr>`;
-    }).join("") : `<tr><td colspan="${6 + (rawStatus ? 1 : 0) + (command ? 1 : 0)}" class="muted">暂无定义</td></tr>`;
+    }).join("") : `<tr><td colspan="${6 + (rawStatus ? 1 : 0) + (command ? 1 : 0)}" class="muted">${pointNameFilter() ? "没有匹配的测点" : "暂无定义"}</td></tr>`;
     if (body._pointHtml !== html) { body.innerHTML = html; body._pointHtml = html; }
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     $(`[data-point-pager="${kind}"]`).innerHTML = total > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${total} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${total} 点</span>`;
@@ -99,16 +101,24 @@
     $("#service-stop").disabled = !state.service || !item.running;
     $("#service-poll").disabled = !state.service || !item.running || !["modbus-tcp","modbus-rtu","can"].includes(state.service);
   }
-  async function fetchPointPage(rtuId, kind, page) {
+  async function fetchPointPage(rtuId, kind, page, nameFilter = pointNameFilter()) {
     const fields = pointFields(kind).join(",");
-    const read = offset => api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?limit=${PAGE_SIZE}&offset=${offset}&fields=${fields}`);
-    let result = await read(page * PAGE_SIZE);
+    const read = (offset, filter = nameFilter, limit = PAGE_SIZE, projection = fields) => {
+      const query = new URLSearchParams({limit:String(limit), offset:String(offset), fields:projection, name_contains:filter});
+      return api(`/api/rtus/${encodeURIComponent(rtuId)}/points/${kind}?${query}`);
+    };
+    let [result, unfiltered] = await Promise.all([
+      read(page * PAGE_SIZE),
+      nameFilter ? read(0, "", 1, "pnt_no") : null,
+    ]);
     const last = Math.max(0, Math.ceil((result.total || 0) / PAGE_SIZE) - 1);
     if (page > last) { page = last; result = await read(page * PAGE_SIZE); }
-    return {items:result.items || [], total:result.total ?? (result.items || []).length, page};
+    const total = result.total ?? (result.items || []).length;
+    return {items:result.items || [], total, unfilteredTotal:unfiltered?.total ?? total, page};
   }
   function acceptPointPage(kind, result) {
     state.points[kind] = result.items; state.totals[kind] = result.total; state.pages[kind] = result.page;
+    state.unfilteredTotals[kind] = result.unfilteredTotal;
   }
   async function changePointPage(kind, direction) {
     if (!state.rtu) return;
@@ -129,19 +139,23 @@
     node.className = `refresh-status${active ? " is-active" : ""}${error ? " is-error" : ""}`;
   }
   function loadRtu(id, {fresh = false} = {}) {
-    if (pendingRtu && String(pendingRtu.id) === String(id)) {
+    const nameFilter = pointNameFilter();
+    if (pendingRtu && String(pendingRtu.id) === String(id) && pendingRtu.nameFilter === nameFilter && pendingRtu.request === state.request) {
       return fresh ? pendingRtu.promise.then(() => String($("#rtu-select").value) === String(id) ? loadRtu(id) : undefined) : pendingRtu.promise;
     }
-    const pending = {id};
+    const pending = {id, nameFilter};
     pending.promise = performLoadRtu(id).finally(() => { if (pendingRtu === pending) pendingRtu = null; });
+    pending.request = state.request;
     pendingRtu = pending;
     return pending.promise;
   }
   async function performLoadRtu(id) {
     const request = ++state.request;
+    const nameFilter = pointNameFilter();
     if (String(state.rtu?.rtu_id) !== String(id)) {
       state.pages = {yc:0,yx:0,yk:0,yt:0}; state.points = {yc:[],yx:[],yk:[],yt:[]};
       state.totals = {yc:0,yx:0,yk:0,yt:0}; state.channel = null;
+      state.unfilteredTotals = {yc:0,yx:0,yk:0,yt:0};
       closePointUpdate(); renderPoints(); renderService({});
     }
     state.rtu = state.rtus.find(item => String(item.rtu_id) === String(id)) || null;
@@ -154,7 +168,7 @@
       const pointRequests = Object.fromEntries(Object.keys(state.points).map(kind => [kind, ++state.pointRequests[kind]]));
       const [channel, points, communications] = await Promise.all([
         api(`/api/rtus/${encodeURIComponent(id)}/channel`),
-        Promise.all(Object.keys(state.points).map(async kind => [kind, await fetchPointPage(id, kind, state.pages[kind])])),
+        Promise.all(Object.keys(state.points).map(async kind => [kind, await fetchPointPage(id, kind, state.pages[kind], nameFilter)])),
         api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`)
       ]);
       if (request !== state.request) return;
@@ -264,12 +278,31 @@
     } catch (error) { message(error.message, true); }
   }
   function initTabs() {
-    $$("[data-page-tab]").forEach(tab => tab.addEventListener("click", () => { $$("[data-page-tab]").forEach(node => node.setAttribute("aria-selected", String(node === tab))); $$("[data-tab-panel]").forEach(panel => panel.hidden = panel.dataset.tabPanel !== tab.dataset.pageTab); }));
+    const showSection = () => {
+      const requested = location.hash.slice(1);
+      const section = ["channel", "points", "connection", "logs"].includes(requested) ? requested : "channel";
+      $$("[data-test-page]").forEach(link => {
+        if (link.dataset.testPage === section) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      });
+      $$("[data-tab-panel]").forEach(panel => { panel.hidden = panel.dataset.tabPanel !== section; });
+    };
+    window.addEventListener("hashchange", showSection);
+    showSection();
     $$("[data-point-tab]").forEach(tab => tab.addEventListener("click", () => { $$("[data-point-tab]").forEach(node => node.setAttribute("aria-selected", String(node === tab))); $$("[data-point-panel]").forEach(panel => panel.hidden = panel.dataset.pointPanel !== tab.dataset.pointTab); }));
   }
   $("#rtu-select").addEventListener("change", event => loadRtu(event.target.value));
   $("#test-refresh").addEventListener("click", () => loadRtu($("#rtu-select").value));
   $("#points-refresh").addEventListener("click", () => loadRtu($("#rtu-select").value));
+  let pointSearchTimer;
+  $("#point-search").addEventListener("input", () => {
+    clearTimeout(pointSearchTimer);
+    ++state.request;
+    for (const kind of Object.keys(state.points)) {
+      ++state.pointRequests[kind]; state.pages[kind] = 0;
+    }
+    pointSearchTimer = setTimeout(() => loadRtu($("#rtu-select").value), 250);
+  });
   $("#service-start").addEventListener("click", () => serviceAction("start"));
   $("#service-stop").addEventListener("click", () => serviceAction("stop"));
   $("#service-poll").addEventListener("click", poll);

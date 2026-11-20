@@ -18,6 +18,7 @@ from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core.web_database import DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
@@ -252,11 +253,12 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(201, {"items": self.service.create_points_batch(cid, self._body())})
         if len(tail) == 3:
             if method == "GET":
-                if set(query) - {"kind", "limit", "offset"}:
+                if set(query) - {"kind", "limit", "offset", "name_contains"}:
                     raise ApiError(400, "未知点映射查询参数")
                 return self._json(200, self.service.point_page(
                     cid, kind=query.get("kind"), limit=int(query.get("limit", "100")),
                     offset=int(query.get("offset", "0")),
+                    name_contains=query.get("name_contains", ""),
                 ))
             if method == "POST":
                 return self._json(201, {"item": self.service.create_point(cid, self._body())})
@@ -306,11 +308,14 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             data = render_workbench(data, "t", path.name)
         self._send(200, allowed[key], data)
 
+    @database_request
     @audit.audit_request('t')
     def _handle(self):
         try:
             self._prepare_request()
             parts, query = self._parts()
+            if handle_database(self, parts, query, 'GET' if self.command == 'HEAD' else self.command) is not False:
+                return
             from core.web_diagnostics import handle_diagnostics
             from core.web_commands import handle_commands
             if handle_commands(self,parts,query,'GET' if self.command=='HEAD' else self.command,
@@ -356,39 +361,41 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
 
 
-class TransHTTPServer(ThreadingHTTPServer):
+class TransHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
-    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self.trans_store = TransStore(db_path, schema_dir, connection_pool_size=4)
+    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+        self._init_database('t', db_path, schema_dir, selection_path)
         try:
             super().__init__(address, TransHandler)
         except BaseException:
-            self.trans_store.store.close()
+            self._resources.close()
             raise
 
     def server_close(self):
         try:
-            self.trans_store.store.close()
+            self._resources.close()
         finally:
             super().server_close()
 
 
-def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-    return TransHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir)
+def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+    return TransHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="scdfe_t four-remote transmission WEB service")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8879)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
-    httpd = make_server(args.host, args.port, db_path=args.db, schema_dir=args.schema_dir)
+    preference = selection_file('t', args.host, args.port)
+    database = selected_database(preference, args.db, DEFAULT_DB, base_directory=Path(__file__).resolve().parent)
+    httpd = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference)
     print(f"scdfe_t WEB: http://{args.host}:{args.port}/", flush=True)
     try:
         httpd.serve_forever()

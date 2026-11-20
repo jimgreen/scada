@@ -10,7 +10,6 @@
       status.textContent = "Web 已连接";
       status.classList.add("ok");
       status.classList.remove("error", "bad");
-      document.querySelector("#workbench-database").textContent = result.database || "已连接";
     } catch (_) {
       status.textContent = "Web 连接失败";
       status.classList.remove("ok");

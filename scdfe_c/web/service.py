@@ -1187,7 +1187,8 @@ class ScadaStore:
 
     def list_rows(self, table: str, *, where: dict[str, Any] | None = None, search: str = "", limit: int = 50,
                   offset: int = 0, sort: str | None = None, order: str = "asc",
-                  fields: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
+                  fields: list[str] | tuple[str, ...] | None = None,
+                  name_contains: str = "") -> dict[str, Any]:
         canonical, columns, primary_keys, by_name, text_columns = self._table_metadata(table)
         if limit < 1 or limit > 500 or offset < 0:
             raise ApiError(400, "limit 必须在 1 到 500 之间，offset 不能为负数")
@@ -1216,6 +1217,12 @@ class ScadaStore:
         for name, value in where.items():
             conditions.append(f"{quote_identifier(name)}=?")
             params.append(self._coerce(value, by_name[name], required=True))
+        if name_contains:
+            if "name" not in by_name:
+                raise ApiError(400, "该表不支持按名称过滤")
+            escaped_name = name_contains.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            conditions.append("\"name\" LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped_name}%")
         if search:
             if text_columns:
                 conditions.append("(" + " OR ".join(f"CAST({quote_identifier(name)} AS TEXT) LIKE ? ESCAPE '\\'" for name in text_columns) + ")")

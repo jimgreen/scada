@@ -75,7 +75,7 @@ def handle_commands(handler,parts,query,method,store,component):
         if parts[0]=='static':return handler._send(200,'application/javascript; charset=utf-8',(assets/'command-traces.js').read_bytes())
         if parts==['command-traces']:
             data=(assets/'command-traces.html').read_bytes()
-            if component in ('s','t'):
+            if component in ('s','c','t'):
                 from core.web_workbench import render_workbench
                 data=render_workbench(data,component,'command-traces.html')
             return handler._send(200,'text/html; charset=utf-8',data)

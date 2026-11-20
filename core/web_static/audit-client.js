@@ -2,6 +2,10 @@
 (() => {
   'use strict';
   const nativeFetch = window.fetch.bind(window);
+  // Bind this page to the database it loaded. A different tab may switch the
+  // server later; its token must never be adopted by an already open editor.
+  const databaseReady = nativeFetch('/api/database').then(r => r.ok ? r.json() : null).catch(() => null);
+  window.scadaDatabaseReady = databaseReady;
   const id = () => crypto.randomUUID?.() || [...crypto.getRandomValues(new Uint8Array(16))]
     .map(value => value.toString(16).padStart(2, '0')).join('');
   const tab = id();
@@ -28,6 +32,9 @@
     const action = performance.now() - gesture.at < 10000 ? gesture.label : '页面脚本';
     // HTTP header values are bytes; encode CJK labels explicitly.
     headers.set('X-Scada-Action', encodeURIComponent(action));
-    return nativeFetch(input, {...init, headers});
+    return databaseReady.then(database => {
+      if (database?.token && url.pathname.startsWith('/api/')) headers.set('X-Scada-Database', database.token);
+      return nativeFetch(input, {...init, headers});
+    });
   };
 })();

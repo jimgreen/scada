@@ -34,6 +34,7 @@ from scdfe_s.web.protocol_service import (
 )
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core.web_database import DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
 from core.service_log import ServiceFileLog
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
@@ -663,7 +664,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if "rtu_id" in query and "rtu_id" not in columns and "channel_id" in columns:
             query = dict(query)
             query["channel_id"] = self.store.channel_id_for_rtu(query.pop("rtu_id"))
-        reserved = {"q", "limit", "offset", "sort", "order", "fields"}
+        reserved = {"q", "name_contains", "limit", "offset", "sort", "order", "fields"}
         unknown = set(query) - reserved - set(columns)
         if unknown:
             raise ApiError(400, "未知查询参数", details=sorted(unknown))
@@ -686,6 +687,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if "fields" in query:
             fields = [name.strip() for name in query["fields"].split(",")]
         return self.store.list_rows(table, where=where, search=query.get("q", ""),
+                                    name_contains=query.get("name_contains", ""),
                                     limit=limit, offset=offset, sort=query.get("sort"),
                                     order=query.get("order", "asc"), fields=fields)
 
@@ -693,6 +695,8 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._prepare_request()
         parts, query = self._path()
         method = "GET" if self.command == "HEAD" else self.command
+        if handle_database(self, parts, query, method) is not False:
+            return
         from core.web_soe import handle_soe
         if handle_soe(self,parts,query,method,self.store,'s') is not False:
             return
@@ -894,6 +898,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"deleted": True})
         raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
 
+    @database_request
     @audit.audit_request('s')
     def _handle(self):
         try:
@@ -949,29 +954,14 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._send(200, allowed[name] + "; charset=utf-8", data)
 
 
-class ScadaHTTPServer(ThreadingHTTPServer):
+class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
-    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self._resources = ExitStack()
-        self.store = SimulatorStore(db_path, schema_dir, connection_pool_size=4)
-        self._channel_service_lock = threading.RLock()
-        self._channel_service_cache = {}
-        self._channel_service_history = None
-        self._resources.callback(self.store.close)
+    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+        self._init_database('s', db_path, schema_dir, selection_path)
         try:
-            history = ServiceFileLog.startup_catalog(self.store.db_path.parent / "logs")
-            self._channel_service_history = history
-            for attr, cls in [('iec104_service', IEC104Service), ('modbus_tcp_service', ModbusTcpService),
-                              ('modbus_tcp_server_service', ModbusTcpServerService), ('modbus_rtu_service', ModbusRtuService),
-                              ('modbus_rtu_server_service', ModbusRtuServerService), ('can_service', CanService),
-                              ('can_server_service', CanServerService), ('opc_server_service', OpcServerService),
-                              ('bacnet_server_service', BacnetServerService)]:
-                service = cls(self.store, startup_catalog=history)
-                setattr(self, attr, service)
-                self._resources.callback(service.close)
             super().__init__(address, ScadaHandler)
         except BaseException:
             self._resources.close()
@@ -1051,19 +1041,21 @@ class ScadaHTTPServer(ThreadingHTTPServer):
             return selected
 
 
-def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir)
+def make_server(host="127.0.0.1", port=8878, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description="SCADA protocol master/server test web service")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8878)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    server = make_server(args.host, args.port, db_path=args.db, schema_dir=args.schema_dir)
+    preference = selection_file('s', args.host, args.port)
+    database = selected_database(preference, args.db, DEFAULT_DB, base_directory=Path(__file__).resolve().parent)
+    server = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference)
     print(f"SCADA web: http://{args.host}:{args.port}/", flush=True)
     print(f"SQLite: {server.store.db_path}", flush=True)
     try:

@@ -1,9 +1,9 @@
 """Persistence and process control for ``scdfe_t`` transmission channels.
 
-The transmission tables are owned by the SCADA schema.  This module deliberately
-uses :class:`scdfe_c.web.service.ScadaStore` instead of a second database so
-that channel definitions, point mappings and runtime state are visible to the
-same operators and obey the same optimistic-version rules.
+The transmission tables remain in the shared SCADA schema. Their definitions
+are managed only through scdfe_t. This module reuses
+:class:`scdfe_c.web.service.ScadaStore` so source data, forwarding definitions
+and runtime state share the same database and optimistic-version rules.
 """
 from __future__ import annotations
 
@@ -264,14 +264,15 @@ class TransStore:
         return result
 
     def point_page(self, channel_id: Any, *, limit: int = 100, offset: int = 0,
-                   kind: str | None = None) -> dict[str, Any]:
+                   kind: str | None = None, name_contains: str = "") -> dict[str, Any]:
         self.get_channel(channel_id)
         where = {"channel_id": self._channel_key(channel_id)[0]}
         if kind:
             if kind not in {"yc", "yx", "yk", "yt"}:
                 raise ApiError(400, "点映射 kind 必须是 yc、yx、yk 或 yt")
             where["kind"] = kind
-        page = self.store.list_rows(POINT_TABLE, where=where, limit=limit, offset=offset, sort="pnt_no")
+        page = self.store.list_rows(POINT_TABLE, where=where, limit=limit, offset=offset,
+                                    sort="pnt_no", name_contains=name_contains)
         page["items"] = [self._point_response(row) for row in page["items"]]
         return page
 

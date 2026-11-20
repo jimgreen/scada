@@ -23,12 +23,33 @@ from core.runtime_status import runtime_status_rows
 from core.network_endpoint import configured_endpoints
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
+from core.web_database import DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
-from core.web_workbench import ASSET_DIR
+from core.web_workbench import ASSET_DIR, ASSETS
 from scdfe_c.web.process_control import ProcessController
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# C and T share the storage schema; only T exposes forwarding definitions.
+TRANS_DEFINITION_TABLES = frozenset({"fes_scdfe_t_define", "fes_scdfe_t_point_define"})
+
+
+def table_channel_types(table):
+    """Protocol applicability for the C definition/auxiliary table catalog."""
+    if table == "fes_channel_modbus_tcp_define":
+        return ["modbus-tcp"]
+    if table == "fes_channel_modbus_rtu_define":
+        return ["modbus-rtu"]
+    for prefix, types in (
+        ("fes_channel_can", ["can"]),
+        ("fes_channel_modbus", ["modbus-rtu", "modbus-tcp"]),
+        ("fes_channel_iec104", ["iec104"]),
+        ("fes_channel_bacnet", ["bacnet"]),
+        ("fes_channel_opc", ["opc"]),
+    ):
+        if table.startswith(prefix):
+            return types
+    return []
 def public_control_row(row):
     return dict(row)
 
@@ -448,10 +469,22 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _list(self, table, query, scope):
         columns = {c["eng_name"]: c for c in self.store.schema(table)["columns"]}
+        if "channel_type" in query and table_channel_types(table):
+            query = dict(query)
+            channel_type = query.pop("channel_type")
+            if channel_type not in table_channel_types(table):
+                raise ApiError(400, "所选通道类型与该表不匹配", code="channel_type_mismatch")
+            if not query.get("channel_id"):
+                raise ApiError(400, "按通道类型筛选时必须指定通道编号")
+            self.store.get_channel_definition(query["channel_id"], channel_type)
+        if query.get("rtu_id") and table_channel_types(table):
+            rtu = self.store.get_row("fes_rtu_define", query["rtu_id"])
+            if rtu["channel_type"] not in table_channel_types(table):
+                raise ApiError(400, "所选 RTU 的通道类型与该表不匹配", code="channel_type_mismatch")
         if "rtu_id" in query and "rtu_id" not in columns and "channel_id" in columns:
             query = dict(query)
             query["channel_id"] = self.store.channel_id_for_rtu(query.pop("rtu_id"))
-        reserved = {"q", "limit", "offset", "sort", "order", "fields"}
+        reserved = {"q", "name_contains", "limit", "offset", "sort", "order", "fields"}
         unknown = set(query) - reserved - set(columns)
         if unknown:
             raise ApiError(400, "未知查询参数", details=sorted(unknown))
@@ -474,6 +507,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if "fields" in query:
             fields = [name.strip() for name in query["fields"].split(",")]
         return self.store.list_rows(table, where=where, search=query.get("q", ""),
+                                    name_contains=query.get("name_contains", ""),
                                     limit=limit, offset=offset, sort=query.get("sort"),
                                     order=query.get("order", "asc"), fields=fields)
 
@@ -504,6 +538,12 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _dispatch(self):
         self._prepare_request()
         parts, query = self._path()
+        if (len(parts) >= 3 and parts[:2] == ["api", "tables"]
+                and parts[2] in TRANS_DEFINITION_TABLES):
+            raise ApiError(404, "四遥转发定义仅由 scdfe_t 维护，请使用 scdfe_t Web",
+                           code="trans_definition_owned_by_t")
+        if handle_database(self, parts, query, 'GET' if self.command == 'HEAD' else self.command) is not False:
+            return
         method = "GET" if self.command == "HEAD" else self.command
         from core.web_diagnostics import handle_diagnostics
         from core.web_commands import handle_commands
@@ -558,7 +598,9 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                     raise ApiError(400, "删除预览接口不接受查询参数")
                 return self._json(200, self.store.describe_rtu_cascade(parts[2]))
             if parts == ["api", "schemas"]:
-                items = self.store.schemas()
+                items = [dict(schema, channel_types=table_channel_types(schema["head"]["eng_name"]))
+                         for schema in self.store.schemas()
+                         if schema["head"]["eng_name"] not in TRANS_DEFINITION_TABLES]
                 return self._json(200, {"items": items, "total": len(items)})
             if parts == ["api", "channels"]:
                 return self._json(200, self._list_channels(query))
@@ -585,7 +627,10 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 if set(query) - {"rtu_id", "view"} or query.get("view", "full") not in {"full", "summary"}:
                     raise ApiError(400, "未知概览查询参数")
                 rid = self.store._key_values("fes_rtu_define", query["rtu_id"])["rtu_id"] if "rtu_id" in query else None
-                return self._json(200, self.store.overview(rid, summary=query.get("view") == "summary"))
+                overview = self.store.overview(rid, summary=query.get("view") == "summary")
+                for name in TRANS_DEFINITION_TABLES:
+                    overview["counts"].pop(name, None)
+                return self._json(200, overview)
             channel_endpoint = self._channel_endpoint(parts)
             if channel_endpoint is not None:
                 rtu_id, section = channel_endpoint
@@ -718,6 +763,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
             return self._json(200, {"deleted": True})
         raise ApiError(405, "该路径不支持此方法", code="method_not_allowed")
 
+    @database_request
     @audit.audit_request('c')
     def _handle(self):
         try:
@@ -751,49 +797,49 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
     def _static(self, name):
         allowed = {"index.html": "text/html", "api.html": "text/html",
                    "app.css": "text/css", "app.js": "application/javascript",
-                   "audit-client.js": "application/javascript",
-                   "log-browser.css": "text/css",
-                   "layout-resizer.js": "application/javascript"}
-        path = ASSET_DIR / name if name in {"log-browser.css", "layout-resizer.js", "audit-client.js"} else STATIC_DIR / name
+                   **ASSETS}
+        path = ASSET_DIR / name if name in ASSETS else STATIC_DIR / name
         if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        self._send(200, allowed[name] + "; charset=utf-8", path.read_bytes())
+        mime = allowed[name]
+        self._send(200, mime if "charset=" in mime else mime + "; charset=utf-8", path.read_bytes())
 
 
-class ScadaHTTPServer(ThreadingHTTPServer):
+class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
 
-    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-        self.store = ScadaStore(db_path, schema_dir, connection_pool_size=4)
+    def __init__(self, address, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+        self._init_database('c', db_path, schema_dir, selection_path)
         try:
-            self.process_controller = ProcessController(self.store)
             super().__init__(address, ScadaHandler)
         except BaseException:
-            self.store.close()
+            self._resources.close()
             raise
 
     def server_close(self):
         try:
             super().server_close()
         finally:
-            self.store.close()
+            self._resources.close()
 
 
-def make_server(host="127.0.0.1", port=8877, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR):
-    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir)
+def make_server(host="127.0.0.1", port=8877, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None):
+    return ScadaHTTPServer((host, port), db_path=db_path, schema_dir=schema_dir, selection_path=selection_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description="SCADA definitions and RTU data web service")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8877)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    server = make_server(args.host, args.port, db_path=args.db, schema_dir=args.schema_dir)
+    preference = selection_file('c', args.host, args.port)
+    database = selected_database(preference, args.db, DEFAULT_DB, base_directory=Path(__file__).resolve().parent)
+    server = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference)
     print(f"SCADA web: http://{args.host}:{args.port}/", flush=True)
     print(f"SQLite: {server.store.db_path}", flush=True)
     try:

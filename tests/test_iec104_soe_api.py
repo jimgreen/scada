@@ -1,5 +1,6 @@
 import http.client
 import json
+import re
 from pathlib import Path
 import tempfile
 import threading
@@ -47,6 +48,10 @@ class SoeApiTests(unittest.TestCase):
                     status,body=request('/soe')
                     self.assertEqual(status,200);self.assertIn('SOE 事件顺序记录',body.decode())
                     self.assertNotIn('<script>',body.decode())
+                    # Every shell asset must be served by all three Web roles,
+                    # especially C, which also has its own SPA assets.
+                    for asset in set(re.findall(r'(?:src|href)="(/static/[^"]+)"', body.decode())):
+                        self.assertEqual(request(asset)[0],200,(component,asset))
                     self.assertEqual(request('/static/soe.js')[0],200)
                     self.assertEqual(request('/static/soe.css')[0],200)
                 finally:

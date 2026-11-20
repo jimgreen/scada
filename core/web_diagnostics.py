@@ -16,7 +16,7 @@ def handle_diagnostics(handler, parts, query, method, store, component):
         return handler._send(200,mime+'; charset=utf-8',(assets/parts[1]).read_bytes())
     if parts==['diagnostics']:
         data=(assets/'diagnostics.html').read_bytes()
-        if component in ('s','t'):
+        if component in ('s','c','t'):
             from core.web_workbench import render_workbench
             data=render_workbench(data,component,'diagnostics.html')
         return handler._send(200,'text/html; charset=utf-8',data)

@@ -8,6 +8,7 @@
   let pointScope = "", channelsRequest = 0, channelRows = [];
   const pointKinds = Object.keys(names);
   function activeKind() { return $("#kind-filter")?.value || "yc"; }
+  function pointNameFilter() { return $("#point-search")?.value.trim() || ""; }
   function pointTableBody(kind = activeKind()) {
     if (typeof document.querySelectorAll === "function") {
       for (const page of document.querySelectorAll("[data-point-page]")) {
@@ -199,10 +200,11 @@
   }
   let pendingPoints = null, previousPointRows = null, previousPointBody = null;
   function loadPoints({fresh = false} = {}) {
-    const key = JSON.stringify([selected?.rtu_id, activeKind(), offset, limit]);
-    if (pendingPoints?.key === key) return fresh ? pendingPoints.promise.catch(() => {}).then(() => loadPoints()) : pendingPoints.promise;
+    const key = JSON.stringify([selected?.rtu_id, activeKind(), offset, limit, pointNameFilter()]);
+    if (pendingPoints?.key === key && pendingPoints.request === requestId) return fresh ? pendingPoints.promise.catch(() => {}).then(() => loadPoints()) : pendingPoints.promise;
     const pending = {key};
     pending.promise = performLoadPoints().finally(() => { if (pendingPoints === pending) pendingPoints = null; });
+    pending.request = requestId;
     pendingPoints = pending;
     return pending.promise;
   }
@@ -210,8 +212,8 @@
     const kind = activeKind(), body = pointTableBody(kind);
     if (!body) return;
     setPointTab(kind);
-    const request = ++requestId, rtu = selected?.rtu_id;
-    const scope = `${rtu}/${kind}`;
+    const request = ++requestId, rtu = selected?.rtu_id, nameFilter = pointNameFilter();
+    const scope = JSON.stringify([rtu, kind, nameFilter]);
     const commandPoint = ["yk", "yt"].includes(kind);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
@@ -225,7 +227,8 @@
       if (pointHasRawStatus(kind)) fields.push("raw_status");
       fields.push("refresh_time");
       if (["yk", "yt"].includes(kind)) fields.push("cmd_handle_time");
-      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?limit=${limit}&offset=${offset}&fields=${fields.join(",")}`) : {items:[],total:0};
+      const query = new URLSearchParams({limit:String(limit), offset:String(offset), fields:fields.join(","), name_contains:nameFilter});
+      const data = rtu ? await api(`/api/channels/${rtu}/points/${kind}?${query}`) : {items:[],total:0};
       if (request !== requestId || rtu !== selected?.rtu_id) return;
       total = data.total || 0;
       if (offset > 0 && offset >= total) { offset = Math.max(0, Math.floor((total - 1) / limit) * limit); return loadPoints(); }
@@ -340,6 +343,12 @@
     history.replaceState(null, "", url); loadPoints();
   };
   if ($("#kind-filter")) $("#kind-filter").onchange = () => { selectedPoint = null; offset = 0; setPointTab(activeKind()); loadPoints(); };
+  let pointSearchTimer;
+  $("#point-search")?.addEventListener("input", () => {
+    clearTimeout(pointSearchTimer);
+    ++requestId; offset = 0; selectedPoint = null;
+    pointSearchTimer = setTimeout(() => loadPoints(), 250);
+  });
   if ($("#point-limit")) $("#point-limit").onchange = () => { limit = Number($("#point-limit").value); offset = 0; loadPoints(); };
   if ($("#point-prev")) $("#point-prev").onclick = () => { offset = Math.max(0, offset - limit); loadPoints(); };
   if ($("#point-next")) $("#point-next").onclick = () => { offset += limit; loadPoints(); };

@@ -5,7 +5,12 @@ const state = {
   schemas: new Map(),
   tableGroups: { parameters: [], helpers: [] },
   groupSelection: {},
+  rtuOptions: new Map(),
+  parameterChannels: new Map(),
+  parameterChannel: "",
+  parameterChannelsReady: false,
   resource: "channels",
+  pointKind: "yc",
   rtu: "",
   view: "common",
   offset: 0,
@@ -527,9 +532,16 @@ function keyOf(item, schema) {
 function context() {
   const resource = state.resource;
   const schema = schemaFor(resource);
+  if (tableGroup(resource) === "parameters") {
+    const selected = state.parameterChannels.get(state.parameterChannel);
+    return { resource, schema, rtu: "", channel: selected?.channel_id ?? null,
+      channelType: selected?.channel_type || "" };
+  }
   const hasRtu =
-    resource !== "rtus" && schema.columns.some((c) => c.eng_name === "rtu_id");
-  return { resource, schema, rtu: hasRtu ? state.rtu : "" };
+    resource !== "rtus" && schema.columns.some((c) => c.eng_name === "rtu_id" ||
+      (tableGroup(resource) === "helpers" && c.eng_name === "channel_id"));
+  const rtu = hasRtu ? state.rtu : "";
+  return { resource, schema, rtu, channel: rtu ? state.rtuOptions.get(rtu)?.channel_id : null };
 }
 function pathFor(ctx, row = null) {
   let url;
@@ -577,7 +589,6 @@ async function refreshSummary() {
         "</span></div>",
     )
     .join("");
-  $("#database-path").textContent = data.database;
 }
 let rtuOptionsRequest = 0, pendingRtuOptions = null;
 function loadRtuOptions({fresh = false} = {}) {
@@ -589,20 +600,23 @@ async function fetchRtuOptions() {
   const request = ++rtuOptionsRequest;
   const items = new Map();
   for (let offset = 0; ; ) {
-    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name&offset=" + offset);
+    const data = await api("/api/rtus?limit=500&sort=rtu_id&fields=rtu_id,name,channel_id,channel_type&offset=" + offset);
     if (request !== rtuOptionsRequest) return;
     for (const row of data.items) items.set(row.rtu_id, row);
     offset += data.items.length;
     if (!data.items.length || offset >= data.total) break;
   }
   const rows = Array.from(items.values());
+  const previousScope = JSON.stringify([state.rtu, state.rtuOptions.get(state.rtu)]);
+  state.rtuOptions = new Map(rows.map(row => [String(row.rtu_id), row]));
+  if (state.rtu && !state.rtuOptions.has(state.rtu)) state.rtu = "";
   const options = rows
     .map(
       (row) =>
         '<option value="' +
         esc(row.rtu_id) +
         '">' +
-        esc(row.rtu_id + " · " + (row.name || "未命名")) +
+        esc(row.rtu_id + " · " + (row.name || "未命名") + " · " + channelTypeLabel(row.channel_type)) +
         "</option>",
     )
     .join("");
@@ -627,6 +641,14 @@ async function fetchRtuOptions() {
     .join("");
   const datalist = $("#rtu-options");
   if (datalist._rtuMarkup !== suggestions) { datalist.innerHTML = suggestions; datalist._rtuMarkup = suggestions; }
+  if (tableGroup(state.resource) === "helpers") {
+    const available = availableGroupTables("helpers");
+    if (!available.includes(state.resource)) changeResource("helpers");
+    else if (previousScope !== JSON.stringify([state.rtu, state.rtuOptions.get(state.rtu)])) {
+      state.offset = 0;
+      loadRows();
+    } else showView();
+  }
 }
 let channelOptionsRequest = 0;
 async function fetchChannelOptions(channelType = "", isCurrent = () => true) {
@@ -646,6 +668,47 @@ async function fetchChannelOptions(channelType = "", isCurrent = () => true) {
     if (!data.items.length || offset >= data.total) break;
   }
   return items;
+}
+function parameterChannelKey(row) {
+  return row.channel_type + ":" + row.channel_id;
+}
+let pendingParameterChannels = null;
+function loadParameterChannels({fresh = false} = {}) {
+  if (pendingParameterChannels)
+    return fresh ? pendingParameterChannels.catch(() => {}).then(() => loadParameterChannels()) : pendingParameterChannels;
+  pendingParameterChannels = fetchParameterChannels().finally(() => { pendingParameterChannels = null; });
+  return pendingParameterChannels;
+}
+async function fetchParameterChannels() {
+  const rows = await fetchChannelOptions();
+  const previous = state.parameterChannel;
+  state.parameterChannels = new Map(rows.map(row => [parameterChannelKey(row), row]));
+  if (!state.parameterChannels.has(previous)) {
+    const types = state.schemas.get(location.hash.slice(1))?.channel_types || [];
+    const preferred = rows.find(row => types.includes(row.channel_type)) || rows[0];
+    state.parameterChannel = preferred ? parameterChannelKey(preferred) : "";
+  }
+  state.parameterChannelsReady = true;
+  const select = $("#parameter-channel-filter");
+  const markup = rows.length ? rows.map(row => '<option value="' + esc(parameterChannelKey(row)) + '">' +
+    esc(row.channel_id + " · " + (row.name || "未命名") + " · " + channelTypeLabel(row.channel_type)) + '</option>').join("")
+    : '<option value="">暂无通道</option>';
+  if (select._channelMarkup !== markup) { select.innerHTML = markup; select._channelMarkup = markup; }
+  select.value = state.parameterChannel;
+  select.disabled = !rows.length;
+  if (tableGroup(state.resource) === "parameters") {
+    if (previous !== state.parameterChannel) changeParameterChannel();
+    else showView();
+  }
+}
+function changeParameterChannel() {
+  state.offset = 0;
+  for (const resource of state.tableGroups.parameters)
+    if (state.listStates[resource]) state.listStates[resource].offset = 0;
+  ++state.request;
+  if (!availableGroupTables("parameters").includes(state.resource)) return changeResource("parameters");
+  guardTableScope(context());
+  return loadRows();
 }
 function rtuEditorColumns(columns) {
   const order = new Map(RTU_EDITOR_ORDER.map((name, index) => [name, index]));
@@ -710,28 +773,74 @@ function tableGroup(resource) {
     state.tableGroups[group].includes(resource),
   );
 }
+function availableGroupTables(group) {
+  const tables = state.tableGroups[group] || [];
+  if (group === "parameters") {
+    const selected = state.parameterChannels.get(state.parameterChannel);
+    return selected ? tables.filter(name => state.schemas.get(name)?.channel_types?.includes(selected.channel_type)) : [];
+  }
+  if (group !== "helpers") return tables;
+  const rtus = state.rtu ? [state.rtuOptions.get(state.rtu)].filter(Boolean) : [...state.rtuOptions.values()];
+  const types = new Set(rtus.map(row => row.channel_type));
+  return tables.filter(name => {
+    const allowed = state.schemas.get(name)?.channel_types || [];
+    return !allowed.length || allowed.some(type => types.has(type));
+  });
+}
 function showView() {
   const [, title] = metadata();
   const schema = schemaFor();
   const isPoint = pointKinds.includes(state.resource);
+  $("#search").placeholder = isPoint ? "按名称过滤测点" : "搜索名称、编码或主键…";
+  $("#search").setAttribute("aria-label", isPoint ? "按名称过滤测点" : "搜索记录");
   $("#section-title").textContent = title;
   const group = tableGroup(state.resource);
+  const emptyParameters = group === "parameters" && !state.parameterChannels.has(state.parameterChannel);
+  $("#parameter-channel-picker").hidden = group !== "parameters";
+  $("#parameter-empty").hidden = !emptyParameters;
+  $("#parameter-empty").textContent = state.parameterChannelsReady
+    ? '暂无通道，请先在“通道定义”中创建通道。' : '通道尚未加载，请刷新重试。';
+  $("#point-definition-panel").hidden = emptyParameters;
+  $("#data-panel .view-tools").hidden = emptyParameters;
+  $("#data-panel .pager").hidden = emptyParameters;
+  $("#search").disabled = emptyParameters;
   $("#data-tabs").querySelectorAll("button").forEach((tab) => {
     const selected = tab.dataset.tabResource === state.resource ||
+      (isPoint && tab.dataset.tabResource === "points") ||
       (!!group && tab.dataset.tabGroup === group);
     tab.classList.toggle("selected", selected);
     tab.setAttribute("aria-pressed", String(selected));
+    if (selected) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
   });
-  $("#helper-tabs").hidden = !group;
+  $("#point-tabs").hidden = !isPoint;
+  $("#point-tabs").querySelectorAll("[data-point-kind]").forEach((tab) => {
+    const selected = tab.dataset.pointKind === state.resource;
+    tab.classList.toggle("selected", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  });
+  const pointPanel = $("#point-definition-panel");
+  if (isPoint) {
+    pointPanel.setAttribute("role", "tabpanel");
+    pointPanel.setAttribute("aria-labelledby", "point-tab-" + state.resource);
+    pointPanel.tabIndex = 0;
+  } else {
+    pointPanel.removeAttribute("role");
+    pointPanel.removeAttribute("aria-labelledby");
+    pointPanel.removeAttribute("tabindex");
+  }
+  $("#helper-tabs").hidden = !group || emptyParameters;
+  const available = availableGroupTables(group);
   $("#helper-tabs").querySelectorAll("button").forEach((tab) => {
     const selected = tab.dataset.tabResource === state.resource;
-    tab.hidden = tab.dataset.tableGroup !== group;
+    tab.hidden = tab.dataset.tableGroup !== group || !available.includes(tab.dataset.tabResource);
     tab.classList.toggle("selected", selected);
     tab.setAttribute("aria-pressed", String(selected));
   });
   $("#rtu-picker").hidden =
-    state.resource === "rtus" ||
-    !schema.columns.some((c) => c.eng_name === "rtu_id");
+    group === "parameters" || (group !== "helpers" && (state.resource === "rtus" ||
+    !schema.columns.some((c) => c.eng_name === "rtu_id")));
   $("#view-live").hidden = !isPoint;
   $("#add").textContent =
     state.resource === "channels"
@@ -744,8 +853,11 @@ function showView() {
   }
 }
 let displayedTableScope = null;
+function tableScope(ctx) {
+  return JSON.stringify([ctx.resource, ctx.rtu, ctx.channel, ctx.channelType]);
+}
 function guardTableScope(ctx) {
-  const stale = displayedTableScope !== JSON.stringify([ctx.resource, ctx.rtu]);
+  const stale = displayedTableScope !== tableScope(ctx);
   const body = $("#table-body");
   body.hidden = stale;
   body.inert = stale;
@@ -754,11 +866,21 @@ let pendingRows = null;
 function loadRows({fresh = false} = {}) {
   if (!state.schemas.size || ["processes", "scdfe", "logs"].includes(state.resource)) return Promise.resolve();
   const ctx = context();
+  if (tableGroup(ctx.resource) === "parameters" && ctx.channel == null) {
+    ++state.request;
+    state.loading = false;
+    state.items = [];
+    state.total = 0;
+    showView();
+    $("#table-error").hidden = true;
+    $("#add").disabled = true;
+    return Promise.resolve();
+  }
   const params = new URLSearchParams({
     limit: String(state.limit),
     offset: String(state.offset),
-    q: $("#search").value,
   });
+  params.set(pointKinds.includes(ctx.resource) ? "name_contains" : "q", $("#search").value.trim());
   if (state.sort) {
     params.set("sort", state.sort);
     params.set("order", state.order);
@@ -770,6 +892,10 @@ function loadRows({fresh = false} = {}) {
   params.set("fields", visibleColumns().map((column) => column.eng_name).join(","));
   if (ctx.rtu && !pointKinds.includes(ctx.resource))
     params.set("rtu_id", ctx.rtu);
+  if (tableGroup(ctx.resource) === "parameters") {
+    params.set("channel_id", String(ctx.channel));
+    params.set("channel_type", ctx.channelType);
+  }
   const key = pathFor(ctx) + "?" + params;
   if (pendingRows?.key === key && pendingRows.request === state.request) {
     return fresh ? pendingRows.promise.catch(() => {}).then(() => loadRows()) : pendingRows.promise;
@@ -813,7 +939,7 @@ async function performLoadRows(ctx, path) {
   } finally {
     if (sequence === state.request) {
       state.loading = false;
-      displayedTableScope = JSON.stringify([ctx.resource, ctx.rtu]);
+      displayedTableScope = tableScope(ctx);
       guardTableScope(ctx);
     }
   }
@@ -1138,7 +1264,7 @@ async function openEditor(row = null, options = {}) {
   try {
     // Always edit the latest record. A later concurrent edit is protected by If-Match.
     if (row) row = (await api(ctx.fetchPath || pathFor(ctx, row))).item;
-    if (base.resource !== state.resource || base.rtu !== context().rtu) return;
+    if (tableScope(base) !== tableScope(context())) return;
     const columns =
       ctx.resource === "rtus" ? rtuEditorColumns(ctx.columns) : ctx.columns;
     state.editing = { ...ctx, columns, row };
@@ -1166,7 +1292,10 @@ async function openEditor(row = null, options = {}) {
       .map((column) => {
         const name = column.eng_name;
         const isRtuChannelId = ctx.resource === "rtus" && name === "channel_id";
-        const scoped = name === "rtu_id" && !!ctx.rtu;
+        const scopedValue = name === "rtu_id" && ctx.rtu ? ctx.rtu
+          : name === "channel_id" && (tableGroup(ctx.resource) === "parameters" ||
+            (tableGroup(ctx.resource) === "helpers" && ctx.rtu)) ? ctx.channel : null;
+        const scoped = scopedValue != null;
         const disabled =
           (!!row && column.primary_key) ||
           options.autoPrimaryKeys?.includes(name) ||
@@ -1178,7 +1307,7 @@ async function openEditor(row = null, options = {}) {
         const value = row
           ? row[name] ?? ""
           : scoped
-            ? ctx.rtu
+            ? scopedValue
             : Object.hasOwn(column, "default") && column.default !== null
               ? column.default
               : rule.default !== undefined
@@ -1365,7 +1494,7 @@ async function openChannelParameters(row) {
     const info = await api(endpoint);
     if (!info.parameter_schema) return toast("该通道类型没有可维护的协议参数表", true);
     const schema = info.parameter_schema;
-    state.schemas.set(schema.head.eng_name, schema);
+    state.schemas.set(schema.head.eng_name, {...state.schemas.get(schema.head.eng_name), ...schema});
     const columns = schema.columns.filter((column) => column.eng_name !== "id");
     await openEditor(info.item, {
       schema,
@@ -1583,7 +1712,7 @@ async function saveRow(event) {
     $("#editor").close();
     toast(ctx.row ? "记录已更新" : "记录已创建");
     await loadRows({fresh:true});
-    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true})]);
+    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true}), loadParameterChannels({fresh:true})]);
   } catch (error) {
     $("#form-error").textContent = error.message;
   } finally {
@@ -1632,7 +1761,7 @@ async function removeRow(row) {
       state.rtu = "";
     }
     await loadRows({fresh:true});
-    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true})]);
+    await Promise.all([refreshSummary(), loadRtuOptions({fresh:true}), loadParameterChannels({fresh:true})]);
   } catch (error) {
     toast(error.message, true);
   }
@@ -1779,7 +1908,7 @@ function showError(selector, error) {
   $(selector).hidden = !error;
 }
 function saveListState(resource = state.resource) {
-  if (!resources[resource] && !pointKinds.includes(resource)) return;
+  if (!resources[resource] && !state.schemas.has(resource)) return;
   state.listStates[resource] = {
     offset: state.offset,
     limit: state.limit,
@@ -1810,12 +1939,28 @@ function restoreListState(resource) {
 function changeResource(resource, updateHash = true) {
   saveListState();
   if (resource === "data") resource = "rtus";
+  if (resource === "points") resource = state.pointKind;
+  if (Object.hasOwn(state.tableGroups, resource))
+    resource = availableGroupTables(resource).includes(state.groupSelection[resource])
+      ? state.groupSelection[resource] : availableGroupTables(resource)[0] ||
+        (resource === "parameters" ? state.tableGroups.parameters[0] : "rtus");
+  if (tableGroup(resource) === "parameters" && !availableGroupTables("parameters").includes(resource)) {
+    resource = availableGroupTables("parameters")[0] || state.tableGroups.parameters[0];
+    updateHash = true;
+  }
+  if (tableGroup(resource) === "helpers" && !availableGroupTables("helpers").includes(resource)) {
+    resource = availableGroupTables("helpers")[0] || "rtus";
+    updateHash = true;
+  }
   if (
     !["processes", "scdfe", "logs", ...Object.keys(resources)].includes(resource) &&
     !state.schemas.has(resource)
-  )
+  ) {
     resource = "rtus";
+    updateHash = true;
+  }
   state.resource = resource;
+  if (pointKinds.includes(resource)) state.pointKind = resource;
   restoreListState(resource);
   tableRender.head = null;
   tableRender.rows = [];
@@ -1826,6 +1971,13 @@ function changeResource(resource, updateHash = true) {
   ++state.request;
   state.loading = false;
   const dataResource = !["processes", "scdfe", "logs"].includes(resource);
+  $("#data-directory").classList.toggle("is-active", dataResource);
+  if (dataResource) $("#data-directory").open = true;
+  else $("#data-tabs").querySelectorAll("button").forEach((tab) => {
+    tab.classList.remove("selected");
+    tab.removeAttribute("aria-current");
+    tab.setAttribute("aria-pressed", "false");
+  });
   $("#data-panel").hidden = !dataResource;
   $("#summary").hidden = ["processes", "scdfe", "logs"].includes(resource);
   $("#processes-panel").hidden = resource !== "processes";
@@ -1853,12 +2005,12 @@ function changeResource(resource, updateHash = true) {
 }
 
 async function openDetails(row, resource = state.resource) {
-  const origin = state.resource, originRtu = state.rtu;
+  const origin = tableScope(context());
   try {
     const schema = schemaFor(resource);
     const ctx = { resource, schema, rtu: "" };
     const current = (await api(pathFor(ctx, row))).item;
-    if (state.resource !== origin || state.rtu !== originRtu) return;
+    if (origin !== tableScope(context())) return;
     state.detail = { resource, row: current };
     $("#detail-title").textContent =
       (current.name || schema.head.chn_name) + " · " + keyOf(current, schema);
@@ -2634,31 +2786,44 @@ async function boot() {
     const supplementary = Promise.allSettled([
       refreshSummary(),
       loadRtuOptions(),
+      loadParameterChannels(),
     ]);
-    changeResource(location.hash.slice(1) || "channels", false);
     for (const result of await supplementary) {
       if (result.status === "rejected") toast(result.reason.message, true);
     }
+    changeResource(location.hash.slice(1) || "channels", false);
   } catch (error) {
     $("#health").className = "health error";
     $("#health span:last-child").textContent = "连接失败";
     showError("#table-error", error);
   }
 }
-document.querySelectorAll(".nav").forEach((button) => {
+document.querySelectorAll(".nav[data-resource]").forEach((button) => {
   button.onclick = () => changeResource(button.dataset.resource);
 });
 $('#data-tabs').onclick = (event) => {
   const button = event.target.closest("button");
   if (!button || button.disabled) return;
   const group = button.dataset.tabGroup;
-  changeResource(group
-    ? state.groupSelection[group] || state.tableGroups[group][0]
-    : button.dataset.tabResource);
+  changeResource(group || button.dataset.tabResource);
 };
 $("#helper-tabs").onclick = (event) => {
   const button = event.target.closest("[data-tab-resource]");
   if (button) changeResource(button.dataset.tabResource);
+};
+$("#point-tabs").onclick = (event) => {
+  const button = event.target.closest("[data-point-kind]");
+  if (button) changeResource(button.dataset.pointKind);
+};
+$("#point-tabs").onkeydown = (event) => {
+  const buttons = [...$("#point-tabs").querySelectorAll("[data-point-kind]")];
+  const index = buttons.indexOf(event.target);
+  if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+    : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  changeResource(buttons[next].dataset.pointKind);
+  buttons[next].focus();
 };
 window.addEventListener("hashchange", () => {
   if (state.schemas.size) changeResource(location.hash.slice(1), false);
@@ -2836,6 +3001,7 @@ $("#refresh").onclick = async () => {
   manualRefreshPending = true;
   $("#refresh").disabled = true;
   try {
+    await loadParameterChannels();
     await loadRows();
     await Promise.all([refreshSummary(), loadRtuOptions()]);
   } catch (error) {
@@ -2871,22 +3037,36 @@ $("#detail-edit").onclick = () => {
   if (detail.resource !== state.resource) changeResource(detail.resource);
   openEditor(detail.row);
 };
-$("#search").oninput = debounce(() => {
+const searchRows = debounce(() => loadRows());
+$("#parameter-channel-filter").onchange = (event) => {
+  state.parameterChannel = event.target.value;
+  changeParameterChannel();
+};
+$("#search").oninput = () => {
+  ++state.request;
   state.offset = 0;
-  loadRows();
-});
+  searchRows();
+};
 $("#rtu-filter").onchange = (event) => {
   state.rtu = event.target.value.trim();
   state.offset = 0;
+  for (const saved of Object.values(state.listStates)) saved.offset = 0;
   ++state.request;
+  if (tableGroup(state.resource) === "helpers" && !availableGroupTables("helpers").includes(state.resource)) {
+    clearTimeout(state.rtuTimer);
+    return changeResource("helpers");
+  }
+  showView();
   guardTableScope(context());
   $("#add").disabled = true;
   clearTimeout(state.rtuTimer);
   state.rtuTimer = setTimeout(loadRows, 300);
 };
 $("#clear-filters").onclick = () => {
-  state.rtu = "";
-  $("#rtu-filter").value = "";
+  if (tableGroup(state.resource) !== "parameters") {
+    state.rtu = "";
+    $("#rtu-filter").value = "";
+  }
   $("#search").value = "";
   state.offset = 0;
   loadRows();

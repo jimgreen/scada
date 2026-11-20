@@ -27,8 +27,15 @@
 .workbench-sidebar .nav:hover { background:#ffffff08; color:white; }
 .workbench-sidebar .nav[aria-current=page] { background:#0c7482; color:white; }
 .workbench-sidebar .nav[aria-current=page] span { color:#bde5e9; }
-.workbench .side-note { padding:20px 12px 6px; margin-top:auto; color:#8c9cad; font-size:11px; }
-.workbench .side-note code { display:block; margin-top:8px; font:10px/1.5 Consolas,monospace; overflow-wrap:anywhere; }
+.workbench-sidebar .nav-branch { margin:0; padding:0; border:0; }
+.workbench-sidebar .nav-branch > summary { cursor:pointer; list-style:none; }
+.workbench-sidebar .nav-branch > summary::-webkit-details-marker { display:none; }
+.workbench-sidebar .nav-branch > summary::after { content:"▸"; margin-left:auto; font-size:10px; }
+.workbench-sidebar .nav-branch[open] > summary::after { content:"▾"; }
+.workbench-sidebar .nav-branch.is-active > summary { color:#e7f7f8; background:#ffffff08; }
+.workbench-sidebar .nav-children { margin:4px 0 4px 23px; padding-left:8px; border-left:1px solid #395265; }
+.workbench-sidebar .nav-children .nav { min-height:32px; padding:7px 10px; }
+.workbench-sidebar .nav-children .nav b { font-size:12px; }
 .workbench-content { display:flex; flex-direction:column; min-width:0; min-height:0; width:auto; max-width:none; margin:0; padding:16px 20px 20px; overflow:hidden; }
 /* Each workbench page already identifies itself in the sidebar and its first
    card/tab.  Keep the injected heading for accessibility, but remove the
@@ -37,6 +44,8 @@
 .workbench .page-heading h1,.workbench .page-heading p { margin:0; }
 .workbench .card,.workbench .panel { background:white; border:1px solid var(--line); border-radius:7px; box-shadow:0 3px 12px #183c4208; padding:12px; min-width:0; }
 .workbench .card h2,.workbench .panel h2 { color:var(--ink); font-size:14px; font-weight:650; }
+.workbench .diag-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:12px; border-radius:7px; }
+.workbench .diag-panel h2 { font-size:14px; }
 .workbench .toolbar { border-radius:7px; gap:8px; margin-bottom:10px; }
 .workbench .toolbar .message { min-height:0; margin:0; }
 .workbench .message:empty { display:none; }
@@ -92,8 +101,12 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor:row-resize !imp
 .workbench .tab-panel[data-tab-panel="points"] #point-panels > section:not([hidden]) { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; }
 .workbench .tab-panel[data-tab-panel="points"] #point-panels > section:not([hidden]) .table-wrap { flex:1 1 auto; min-height:0; max-height:none; }
 .workbench .workbench-content > .points-panel { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; overflow:hidden; }
-.workbench .points-panel .point-pages { display:flex; flex:1 1 auto; min-height:0; }
-.workbench .points-panel .point-pages > .point-page:not([hidden]) { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; }
+.workbench .points-panel > .toolbar,
+.workbench .points-panel > .point-tabs,
+.workbench .points-panel > .message,
+.workbench .points-panel > .pager { flex-shrink:0; }
+.workbench .points-panel .point-pages { display:flex; flex:1 1 auto; min-height:0; min-width:0; }
+.workbench .points-panel .point-pages > .point-page:not([hidden]) { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; min-width:0; }
 .workbench .points-panel .point-pages > .point-page:not([hidden]) .table-wrap { flex:1 1 auto; min-height:0; max-height:none; }
 .workbench .workbench-content > .split { display:grid; flex:1 1 auto; min-height:0; }
 .workbench .workbench-content > .split > .panel { display:flex; flex-direction:column; min-height:0; }
@@ -129,6 +142,7 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor:row-resize !imp
 .workbench .data-form { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-bottom:16px; }
 .workbench .point-filters { display:flex; flex-wrap:wrap; align-items:end; gap:16px; }
 .workbench .point-filters label { min-width:180px; }
+.workbench .point-name-filter { width:260px; max-width:100%; }
 .workbench .pager { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:16px; }
 .workbench .pager label { flex-direction:row; align-items:center; }
 .workbench .pager select { width:auto; }

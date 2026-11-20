@@ -2,10 +2,11 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>scdfe_s · 四遥数据</title><link rel="stylesheet" href="/static/protocol.css"></head>
 <body data-points="1"><header><h1>四遥数据</h1></header><main>
-<section class="card">
+<section class="card points-panel">
   <p>这里显示 S 测试库的四遥定义。在这里改点或删点不会修改 C 的同号点。</p>
   <div class="toolbar"><div class="point-filters">
     <label>当前通道<select id="point-rtu"><option value="">请选择通道</option></select></label>
+    <input id="point-search" class="point-name-filter" type="search" placeholder="按名称过滤测点" aria-label="按名称过滤测点" autocomplete="off">
     <label class="visually-hidden">数据类型<select id="kind-filter" aria-hidden="true" tabindex="-1"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
   </div><div class="actions"><button id="new-point" class="primary" type="button">新增测点</button><button id="reload" type="button">刷新</button></div></div>
   <div id="point-message" class="message" role="status"></div>

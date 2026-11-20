@@ -12,8 +12,9 @@ def handle_soe(handler, parts, query, method, store, component):
                              Path(__file__).with_name('web_static').joinpath(parts[1]).read_bytes())
     if parts == ['soe']:
         if query: raise ApiError(400,'页面不接受查询参数')
+        from core.web_workbench import ASSET_DIR, render_workbench
         return handler._send(200,'text/html; charset=utf-8',
-                             Path(__file__).with_name('web_static').joinpath('soe.html').read_bytes())
+                             render_workbench((ASSET_DIR/'soe.html').read_bytes(),component,'soe.html'))
     if set(query)-{'rtu_id','after_id','limit','tail'}:
         raise ApiError(400,'未知 SOE 查询参数')
     values={}

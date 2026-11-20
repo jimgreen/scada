@@ -95,8 +95,8 @@ class WebTests(unittest.TestCase):
     def test_catalog_and_empty_application(self):
         status, body = self.call('/api/schemas')
         self.assertEqual(status, 200)
-        self.assertEqual(len(body['items']), 32)
-        self.assertEqual(sum(len(s['columns']) for s in body['items']), 564)
+        self.assertEqual(len(body['items']), 30)
+        self.assertEqual(sum(len(s['columns']) for s in body['items']), 515)
         self.assertTrue({
             'fes_channel_can_diagnostic', 'fes_channel_can_frame_define',
             'fes_channel_can_j1939_define', 'fes_channel_can_uds_define',
@@ -108,8 +108,9 @@ class WebTests(unittest.TestCase):
                 {column['eng_name'] for column in schema['columns']},
                 schema['head']['eng_name'],
             )
-        mapping = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_scdfe_t_point_define')
-        self.assertNotIn('source_kind', {column['eng_name'] for column in mapping['columns']})
+        names = {s['head']['eng_name'] for s in body['items']}
+        self.assertNotIn('fes_scdfe_t_define', names)
+        self.assertNotIn('fes_scdfe_t_point_define', names)
         rtu_schema = next(s for s in body['items'] if s['head']['eng_name'] == 'fes_rtu_define')
         rtu_columns = {column['eng_name'] for column in rtu_schema['columns']}
         self.assertNotIn('proto_type', rtu_columns)
@@ -246,14 +247,6 @@ class WebTests(unittest.TestCase):
                         row[column_name] = column['allowed_values'][0]
                     else:
                         row[column_name] = 'test' if column['data_type'] == 'str' else 1
-            # scdfe_t mappings deliberately require an explicit source point;
-            # keep the generic schema CRUD test representative of the current
-            # validation contract instead of relying on removed forward-era
-            # defaults.
-            if name == 'fes_scdfe_t_define':
-                row.update(protocol='iec104')
-            elif name == 'fes_scdfe_t_point_define':
-                row.update(kind='yc', source_rtu_id=1, source_pnt_no=1)
             if any(c['eng_name'] == 'name' for c in schema['columns']):
                 row['name'] = name
             route = f'/api/tables/{name}/rows'

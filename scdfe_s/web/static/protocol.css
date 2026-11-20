@@ -135,6 +135,7 @@ body[data-points] .point-filters > label:not(.visually-hidden) select { width:28
 .point-tabs { margin-top:4px; }
 .point-tabs-row { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
 .point-tabs-row .point-tabs { flex:1; margin:0; }
+.point-tabs-row .point-name-filter { width:260px; max-width:100%; margin-left:6px; }
 /* Keep the first grid item in place while hiding its contents; display:none
    would move the reader into the divider column. */
 .layout-first-hidden > :first-child { visibility:hidden !important; pointer-events:none !important; min-width:0 !important; min-height:0 !important; overflow:hidden !important; }

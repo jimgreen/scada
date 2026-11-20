@@ -1,0 +1,87 @@
+.database-select-button {
+  display:block; margin-top:10px; padding:7px 12px; border:1px solid #c4d3e4;
+  border-radius:6px; background:#fff; color:#154b73; font:inherit; cursor:pointer;
+}
+.header-tools .database-select-button { display:inline-block; margin:0; white-space:nowrap; }
+.database-brand { display:flex; align-items:center; min-width:0; }
+#database-entry {
+  display:flex; flex-direction:row; align-items:center; gap:10px; min-width:0;
+  max-width:clamp(280px,40vw,600px); margin:0 0 0 12px; padding:0; border:0;
+  letter-spacing:normal; flex-shrink:1;
+}
+#database-entry .database-select-button {
+  display:block; flex-shrink:0; margin:0; padding:3px 9px; white-space:nowrap;
+  font:12px/1.4 system-ui,"Microsoft YaHei",sans-serif; letter-spacing:normal;
+}
+#database-entry code {
+  display:flex; min-width:0; max-width:100%; overflow:hidden; white-space:nowrap;
+  color:#63788b; font:11px/1.2 ui-monospace,Consolas,monospace;
+}
+#database-entry code span { display:block; margin:0; padding:0; border:0; font:inherit; letter-spacing:normal; }
+#database-entry .database-directory { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+#database-entry .database-filename { flex-shrink:0; }
+dialog.database-selector {
+  width:min(680px,calc(100vw - 32px)); max-height:90dvh; box-sizing:border-box;
+  overflow:auto; border:1px solid #d8e2ec; border-radius:12px; padding:24px;
+  color:#18344d; background:#fff; box-shadow:0 16px 60px #16304b40;
+  font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif;
+}
+.database-selector::backdrop { background:#132a4655; }
+/* Protocol pages use a two-column form grid; this dialog has its own layout. */
+dialog.database-selector > form {
+  display:flex; flex-direction:column; gap:14px; min-width:0; margin:0; padding:0;
+}
+.database-selector h2 { font-size:20px; margin:0 0 2px; }
+.database-selector p { margin:0; }
+.database-selector [hidden] { display:none; }
+.database-current {
+  display:block; white-space:normal; overflow-wrap:anywhere; padding:10px 12px;
+  border-radius:6px; background:#f3f6fa; color:#536b81; font:12px/1.6 ui-monospace,Consolas,monospace;
+}
+.database-selector label { display:block; margin:6px 0; font-size:13px; font-weight:600; }
+.database-selector input {
+  box-sizing:border-box; width:100%; min-width:0; padding:9px 10px;
+  border:1px solid #a7bbcf; border-radius:6px; background:#fff; color:#18344d; font:inherit;
+}
+.database-chooser { position:relative; min-width:0; }
+.database-path-row { display:flex; gap:6px; align-items:stretch; min-width:0; }
+.database-path-row input { flex:1; }
+.database-selector button { font:inherit; cursor:pointer; }
+.database-path-row button,.database-tree-toolbar button,.database-actions button {
+  white-space:nowrap; padding:7px 12px; border:1px solid #bdcede; border-radius:6px;
+  background:#fff; color:#173c5c;
+}
+.database-selector button:disabled { opacity:.55; cursor:not-allowed; }
+.database-popup {
+  position:fixed; z-index:10; box-sizing:border-box; max-height:320px; overflow:auto;
+  margin:0; padding:10px; border:1px solid #bdcede; border-radius:7px;
+  background:#fff; box-shadow:0 8px 24px #16304b30;
+}
+.database-tree-toolbar {
+  display:flex; gap:6px; flex-wrap:wrap; position:sticky; top:-10px; z-index:1;
+  padding:0 0 6px; background:#fff;
+}
+.database-popup .database-folder { margin:4px 0 7px; font-size:12px; color:#536b81; overflow-wrap:anywhere; }
+.database-popup ul { list-style:none; margin:0; padding:0; }
+.database-popup ul ul { padding-left:18px; }
+.database-popup li>button {
+  display:block; width:100%; text-align:left; overflow-wrap:anywhere; border:0;
+  border-radius:4px; background:transparent; padding:5px 8px; color:#18344d;
+}
+.database-popup li>button:hover,.database-popup li>button:focus,.database-popup li>button.selected { background:#e8f2fa; }
+.database-tree-empty { font-size:12px; padding:5px; color:#657c90; }
+.database-validation { color:#247046; font-size:13px; }
+.database-validation:empty { display:none; }
+.database-error { color:#a32626; background:#fff1f1; padding:10px 12px; border-radius:6px; overflow-wrap:anywhere; }
+.database-create { padding-top:8px; margin-top:8px; border-top:1px solid #dce5ee; }
+.database-create-directory { font-size:12px; overflow-wrap:anywhere; }
+.database-create-error { color:#a32626; }
+.database-actions {
+  display:flex; justify-content:flex-end; gap:10px; padding-top:14px; border-top:1px solid #e3eaf1;
+}
+.database-actions button { padding:8px 16px; }
+.database-actions #database-apply { background:#176b9c; color:#fff; border-color:#176b9c; }
+@media(max-width:560px) {
+  dialog.database-selector { padding:18px; }
+  .database-tree-toolbar button { padding:6px 9px; }
+}

@@ -287,6 +287,15 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
 .nav.active span {
   color: #b4e8e5;
 }
+.sidebar .nav-branch { margin:0; padding:0; border:0; }
+.sidebar .nav-branch > summary { cursor:pointer; list-style:none; }
+.sidebar .nav-branch > summary::-webkit-details-marker { display:none; }
+.sidebar .nav-branch > summary::after { content:"▸"; margin-left:auto; font-size:10px; }
+.sidebar .nav-branch[open] > summary::after { content:"▾"; }
+.sidebar .nav-branch.is-active > summary { color:#e7f7f8; background:#ffffff08; }
+.sidebar .nav-children { display:flex; flex-direction:column; gap:3px; margin:4px 0 4px 23px; padding-left:8px; border-left:1px solid #395265; }
+.sidebar .nav-children .nav { min-height:32px; padding:7px 10px; font-size:12px; }
+.sidebar .nav-children .nav.selected { background:#0c7482; color:#fff; box-shadow:inset 3px 0 #52d5c3; }
 .iec104-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -371,25 +380,6 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
   .iec104-inline-form .button {
     grid-column: 1 / -1;
   }
-}
-.side-note {
-  margin: auto 10px 0;
-  padding-top: 16px;
-  color: #90a4b7;
-  font-size: 11px;
-  line-height: 1.8;
-  overflow-wrap: anywhere;
-}
-.side-note .dot {
-  background: #2fb49a;
-  margin-right: 5px;
-}
-.side-note code {
-  display: block;
-  font:
-    10px/1.6 Consolas,
-    monospace;
-  margin-top: 6px;
 }
 .workspace {
   display: flex;
@@ -579,6 +569,7 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
   color: var(--teal);
   box-shadow: none;
 }
+#parameter-empty { flex:1; min-height:0; display:grid; place-items:center; color:var(--muted); }
 .rtu-picker {
   display: flex;
   align-items: center;
@@ -632,6 +623,9 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
 .thread-table {
   flex: 1;
   min-height: 120px;
+}
+.data-table {
+  min-height: 0;
 }
 table {
   border-collapse: separate;

@@ -24,9 +24,6 @@
           <span class="dot"></span><span>连接检查中</span>
         </div>
         <a href="/api-docs" target="_blank" rel="noopener">接口文档 ↗</a>
-        <a href="/soe">SOE 事件 ↗</a>
-        <a href="/diagnostics">运行诊断 ↗</a>
-        <a href="/command-traces">指令追踪 ↗</a>
       </div>
     </header>
     <main class="shell">
@@ -41,14 +38,20 @@
         <button class="nav" data-resource="logs">
           <span>≡</span><b>运行日志</b>
         </button>
+        <a class="nav" href="/soe"><span aria-hidden="true">◷</span><b>SOE 事件</b></a>
+        <a class="nav" href="/diagnostics"><span aria-hidden="true">◴</span><b>运行诊断</b></a>
+        <a class="nav" href="/command-traces"><span aria-hidden="true">↗</span><b>指令追踪</b></a>
         <div class="side-title">数据与定义</div>
-        <button class="nav active" data-resource="data">
-          <span>▦</span><b>数据与定义</b>
-        </button>
-        <div class="side-note">
-          <span class="dot"></span> 本地数据库<code id="database-path"
-            >读取中…</code>
-        </div>
+        <details class="nav-branch" id="data-directory">
+          <summary class="nav"><span aria-hidden="true">▦</span><b>数据与定义</b></summary>
+          <nav class="nav-children" id="data-tabs" aria-label="数据与定义子目录">
+            <button class="nav" type="button" data-tab-resource="channels">通道定义</button>
+            <button class="nav" type="button" data-tab-resource="rtus">RTU 定义</button>
+            <button class="nav" type="button" data-tab-resource="points">四遥定义</button>
+            <button class="nav" type="button" data-tab-group="parameters" disabled>协议参数</button>
+            <button class="nav" type="button" data-tab-group="helpers" disabled>辅助表</button>
+          </nav>
+        </details>
       </aside>
       <div class="workspace">
         <section
@@ -67,7 +70,12 @@
                 <select id="rtu-filter" aria-label="筛选 RTU 编号">
                   <option value="">全部 RTU</option>
                 </select></label
-              ><datalist id="rtu-options"></datalist
+              ><datalist id="rtu-options"></datalist>
+              <label class="rtu-picker" id="parameter-channel-picker" hidden>通道
+                <select id="parameter-channel-filter" aria-label="筛选协议参数通道" disabled>
+                  <option value="">正在加载通道…</option>
+                </select>
+              </label
               ><input
                 id="search"
                 type="search"
@@ -82,17 +90,13 @@
               </button>
             </div>
           </div>
-          <nav class="data-tabs" id="data-tabs" aria-label="数据与定义表">
-            <button type="button" data-tab-resource="channels" class="selected">通道定义</button>
-            <button type="button" data-tab-resource="rtus">RTU 定义</button>
-            <button type="button" data-tab-resource="yc">遥测</button>
-            <button type="button" data-tab-resource="yx">遥信</button>
-            <button type="button" data-tab-resource="yt">遥调</button>
-            <button type="button" data-tab-resource="yk">遥控</button>
-            <button type="button" data-tab-group="parameters" disabled>协议参数</button>
-            <button type="button" data-tab-group="helpers" disabled>辅助表</button>
-          </nav>
           <nav class="data-tabs table-tabs" id="helper-tabs" aria-label="选择参数或辅助表" hidden></nav>
+          <div class="data-tabs" id="point-tabs" role="tablist" aria-label="四遥定义" hidden>
+            <button type="button" role="tab" id="point-tab-yc" data-point-kind="yc" aria-controls="point-definition-panel" aria-selected="true">遥测 YC</button>
+            <button type="button" role="tab" id="point-tab-yx" data-point-kind="yx" aria-controls="point-definition-panel" aria-selected="false" tabindex="-1">遥信 YX</button>
+            <button type="button" role="tab" id="point-tab-yt" data-point-kind="yt" aria-controls="point-definition-panel" aria-selected="false" tabindex="-1">遥调 YT</button>
+            <button type="button" role="tab" id="point-tab-yk" data-point-kind="yk" aria-controls="point-definition-panel" aria-selected="false" tabindex="-1">遥控 YK</button>
+          </div>
           <div class="view-tools">
             <div class="segments" aria-label="显示字段">
               <button id="view-common" class="selected">常用字段</button
@@ -102,7 +106,8 @@
             <button class="row-button" id="show-schema">表结构</button>
           </div>
           <div id="table-error" class="error-panel" role="alert" hidden></div>
-          <div class="table-wrap data-table">
+          <div id="parameter-empty" role="status" hidden>暂无通道，请先在“通道定义”中创建通道。</div>
+          <div class="table-wrap data-table" id="point-definition-panel">
             <table>
               <thead id="table-head"></thead>
               <tbody id="table-body"></tbody>
@@ -421,5 +426,7 @@
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/static/app.js"></script>
+    <link rel="stylesheet" href="/static/database-selector.css">
+    <script src="/static/database-selector.js"></script>
   </body>
 </html>

@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from core.scdfe_control import InstanceLock
 from scdfe_c.web.service import ApiError
+from scdfe_c.web.server import make_server as make_c_server
 from scdfe_t.web.server import make_server
 from scdfe_t.web.service import CHANNEL_TABLE, TransStore
 
@@ -73,6 +74,43 @@ class TransWebReviewTests(unittest.TestCase):
         self.assertEqual(status, 400)
         status, _ = self.request(server, "/api/trans/channels/1/points/yc/1", "PATCH", {"kind": "yk"})
         self.assertEqual(status, 400)
+        status, _ = self.request(server, "/api/trans/channels/1/points/yc/1", "PATCH", {"source_kind": "yk"})
+        self.assertEqual(status, 400)
+        self.assertEqual(self.service.store.get_row("fes_scdfe_t_point_define", [1, 1, "yc"])["kind"], "yc")
+
+    def test_t_manages_forwarding_definitions_while_c_shares_database(self):
+        c_server = make_c_server("127.0.0.1", 0, db_path=self.db)
+        c_thread = threading.Thread(target=c_server.serve_forever, daemon=True)
+        c_thread.start()
+        self.addCleanup(lambda: (c_server.shutdown(), c_server.server_close(), c_thread.join(3)))
+        server = self.http_server()
+        status, schemas = self.request(server, "/api/trans/schema")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(schemas["items"]), {"channel", "point"})
+        status, result = self.request(server, "/api/trans/channels", "POST", {
+            "channel_id": 2, "name": "T owned", "protocol": "modbus-tcp",
+            "bind_host": "127.0.0.1", "bind_port": self.free_port(),
+        })
+        self.assertEqual(status, 201, result)
+        channel_path = "/api/trans/channels/2"
+        status, result = self.request(server, channel_path, "PATCH", {"name": "T channel edited"})
+        self.assertEqual(status, 200, result)
+        status, result = self.request(server, channel_path + "/points", "POST", {
+            "pnt_no": 1, "kind": "yc", "source_rtu_id": 7,
+            "source_pnt_no": 2, "name": "T point",
+        })
+        self.assertEqual(status, 201, result)
+        point_path = channel_path + "/points/yc/1"
+        status, result = self.request(server, point_path, "PATCH", {"name": "T point edited"})
+        self.assertEqual(status, 200, result)
+        status, result = self.request(server, point_path)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["item"]["name"], "T point edited")
+        self.assertEqual(c_server.store.get_row(CHANNEL_TABLE, [2])["name"], "T channel edited")
+        self.assertEqual(self.request(c_server, "/api/tables/" + CHANNEL_TABLE + "/rows/2")[0], 404)
+        self.assertEqual(self.request(server, point_path, "DELETE")[0], 200)
+        self.assertEqual(self.request(server, channel_path, "DELETE")[0], 200)
+        self.assertEqual(self.request(server, channel_path)[0], 404)
 
     def test_point_pagination_and_kind_filter_include_rows_after_500(self):
         with self.service.store.connection() as connection:
