@@ -16,6 +16,8 @@ import threading
 import time
 import uuid
 
+from core.rtdb_schema import sync_embedded_schema
+
 LOG = logging.getLogger(__name__)
 _journals = {}
 _lock = threading.Lock()
@@ -131,9 +133,11 @@ class ConnectionJournal:
             con = sqlite3.connect(self.path, timeout=5)
             con.execute('PRAGMA journal_mode=WAL')
             con.execute('PRAGMA synchronous=NORMAL')
-            con.executescript(SCHEMA)
+            con.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
             if 'packet_recording' not in {r[1] for r in con.execute('PRAGMA table_info(connection_session)')}:
                 con.execute('ALTER TABLE connection_session ADD COLUMN packet_recording INTEGER NOT NULL DEFAULT 1')
+            sync_embedded_schema(con)
+            con.commit()
             self._ready.set()
             last_beat = 0
             pending_prune = set()

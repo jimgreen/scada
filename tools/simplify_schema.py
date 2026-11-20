@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 from scdfe_c.web.service import (DEFAULT_DB, KIND_TABLES, RTU_VERSION_DDL,
                                  ScadaStore, SchemaCatalog, quote_identifier as q)
 
@@ -34,8 +35,9 @@ def plan(con, catalog):
     from core.iec104_soe import TABLES as SOE_TABLES
     from core.monitor_changes import TABLES as MONITOR_TABLES
     from core.command_trace import TABLES as COMMAND_TRACE_TABLES
+    internal_tables = SOE_TABLES | MONITOR_TABLES | COMMAND_TRACE_TABLES | RTDB_METADATA_TABLES
     tables = {r[1]:r[4] for r in con.execute('PRAGMA main.table_list')
-              if r[2]=='table' and not r[1].startswith('sqlite_') and r[1] not in SOE_TABLES | MONITOR_TABLES | COMMAND_TRACE_TABLES}
+              if r[2]=='table' and not r[1].startswith('sqlite_') and r[1] not in internal_tables}
     legacy = set(OLD).issubset(tables) and NEW not in tables
     if not legacy and not (NEW in tables and not set(OLD).intersection(tables)):
         raise ValueError('内部版本表缺失或新旧表并存，不执行迁移')
@@ -129,6 +131,7 @@ def apply(db=DEFAULT_DB, *, write=False, compact=False):
             raise RuntimeError('迁移后的结构或外键校验失败')
         if con.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
             raise RuntimeError('迁移后的数据库完整性校验失败')
+        sync_embedded_schema(con, catalog)
         con.commit()
         result.update(changed=True,backup=str(dest))
         if compact:

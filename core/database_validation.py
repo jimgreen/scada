@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from core.rtdb_schema import RTDB_METADATA_TABLES
+
 
 def validate_database(path, role, catalog):
     path = Path(path).resolve()
@@ -24,7 +26,8 @@ def validate_database(path, role, catalog):
             from core.command_trace import TABLES as COMMAND_TABLES
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             expected = set(catalog.names())
-            allowed = expected | {'_scada_schema', '_scada_rtu_version'} | SOE_TABLES | MONITOR_TABLES | COMMAND_TABLES
+            allowed = (expected | {'_scada_schema', '_scada_rtu_version'} | SOE_TABLES
+                       | MONITOR_TABLES | COMMAND_TABLES | RTDB_METADATA_TABLES)
             if tables - allowed:
                 raise ValueError('包含非SCADA表：' + ', '.join(sorted(tables - allowed)[:5]))
             if expected - tables or '_scada_schema' not in tables:

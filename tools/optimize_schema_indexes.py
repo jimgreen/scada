@@ -13,11 +13,19 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
+from scdfe_c.web.service import SchemaCatalog  # noqa: E402
+
+
 DEFAULT_DB = ROOT / "db" / "scada.sqlite3"
 SCHEMA = ROOT / "dbdef" / "json" / "fes_ytyk_message.json"
 
@@ -161,6 +169,7 @@ def apply(path: Path) -> dict:
             "UPDATE _scada_schema SET fingerprint=? WHERE table_name='fes_ytyk_message'",
             (fingerprint,),
         )
+        sync_embedded_schema(connection, SchemaCatalog(SCHEMA.parent))
         connection.commit()
     except Exception:
         connection.rollback()

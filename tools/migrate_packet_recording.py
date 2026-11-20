@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, quote_identifier
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
+from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, quote_identifier  # noqa: E402
 
 TABLES = ("fes_rtu_define", "fes_scdfe_t_define")
 
@@ -69,6 +70,7 @@ def migrate(db_path: Path | str, schema_dir: Path | str = SCHEMA_DIR, *, apply: 
                     raise RuntimeError("迁移后数据库完整性检查失败")
                 if con.execute("PRAGMA foreign_key_check").fetchall():
                     raise RuntimeError("迁移后外键检查失败")
+                sync_embedded_schema(con, SchemaCatalog(schema_root))
                 report["changed"] = True
             con.commit()
         except Exception:

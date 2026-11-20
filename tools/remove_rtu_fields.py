@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
 from core.scdfe_control import ServerInstanceLock
 from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, ScadaStore, quote_identifier
 
@@ -167,6 +168,7 @@ def migrate(db_path: Path | str = DEFAULT_DB, *, schema_dir: Path | str = SCHEMA
                     ).fetchone()
                     if row is None or row[0] != _fingerprint(catalog.get(table)):
                         raise RuntimeError(f"{table} schema 指纹不匹配")
+                sync_embedded_schema(connection, catalog)
                 connection.commit()
             except Exception:
                 connection.rollback()

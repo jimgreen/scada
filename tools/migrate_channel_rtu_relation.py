@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from core.rtdb_schema import sync_embedded_schema
 from scdfe_c.web.service import (
     DEFAULT_DB,
     RTU_VERSION_DDL,
@@ -238,6 +239,7 @@ def migrate(db_path: Path | str = DEFAULT_DB, *, apply: bool = False) -> dict:
             raise RuntimeError(f"迁移后外键校验失败: {foreign_keys[:3]}")
         if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("迁移后 integrity_check 失败")
+        sync_embedded_schema(connection, catalog)
         connection.commit()
         return result
 

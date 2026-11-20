@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from core.rtdb_schema import sync_embedded_schema
+
 TABLES = {'_scada_monitor_change'}
 
 
@@ -14,7 +16,12 @@ def ensure_monitor_changes(connection: sqlite3.Connection, *, track_refresh=Fals
     """Install idempotent triggers without committing the caller's transaction."""
     connection.execute('SAVEPOINT monitor_schema')
     try:
+        created = not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_scada_monitor_change'"
+        ).fetchone()
         _ensure_monitor_changes(connection,track_refresh=track_refresh)
+        if created:
+            sync_embedded_schema(connection)
     except Exception:
         connection.execute('ROLLBACK TO monitor_schema')
         raise

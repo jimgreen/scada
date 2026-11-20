@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, quote_identifier  # noqa: E402
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
+from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, quote_identifier  # noqa: E402
 
 
 ADDRESS_BASES = (0, 1, 10001, 30001, 40001)
@@ -169,6 +170,9 @@ def migrate(
                 raise RuntimeError("迁移后数据库完整性检查失败")
             if connection.execute("PRAGMA foreign_key_check").fetchall():
                 raise RuntimeError("迁移后外键检查失败")
+            # Older Modbus exports may lack primary keys. Keep the migration
+            # usable for those files and expose the keyed tables to RTDB.
+            sync_embedded_schema(connection, SchemaCatalog(schema_root), allow_keyless=True)
             connection.commit()
         except Exception:
             connection.rollback()

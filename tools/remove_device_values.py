@@ -18,6 +18,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
 from core.scdfe_control import ServerInstanceLock
 from scdfe_c.web.seed_protocol_test_data import _base_rtu_code, _point_values, expanded_protocols
 from scdfe_c.web.service import SCHEMA_DIR, ScadaStore, SchemaCatalog, quote_identifier
@@ -138,6 +139,7 @@ def migrate(db_path, *, refresh_test_values=False, schema_dir=SCHEMA_DIR):
                     row = connection.execute('SELECT fingerprint FROM _scada_schema WHERE table_name=?', (table,)).fetchone()
                     if row is None or row[0] != expected:
                         raise RuntimeError(f'{table} schema 指纹不匹配')
+                sync_embedded_schema(connection, catalog)
                 connection.commit()
             except Exception:
                 connection.rollback()

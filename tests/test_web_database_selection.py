@@ -10,6 +10,7 @@ import unittest
 from urllib.parse import quote
 
 from scdfe_c.web.server import make_server as make_c
+from scdfe_d.web.server import make_server as make_d
 from scdfe_s.web.server import make_server as make_s
 from scdfe_t.web.server import make_server as make_t
 from scdfe_c.web.service import ScadaStore
@@ -156,7 +157,7 @@ class DatabaseSelectionTests(unittest.TestCase):
 
     def test_relative_directory_creation_and_database_creation_all_roles(self):
         from core.web_database import selected_database
-        for role, factory in [('c', make_c), ('s', make_s), ('t', make_t)]:
+        for role, factory in [('c', make_c), ('s', make_s), ('t', make_t), ('d', make_d)]:
             with self.subTest(role=role), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 preference = root / 'selection.json'
@@ -171,6 +172,13 @@ class DatabaseSelectionTests(unittest.TestCase):
                     self.assertEqual(status, 201, created)
                     directory = created['path']
                     self.assertEqual(directory, '新目录 空格')
+                    status, saved = self.request(server, 'PUT', '/api/database/directory',
+                                                {'directory': directory}, before['token'])
+                    self.assertEqual(status, 200, saved)
+                    self.assertEqual(saved['browse_directory'], directory)
+                    self.assertEqual(saved['database'], before['database'])
+                    self.assertEqual(selected_database(preference, None, root / before['database']),
+                                     root.resolve() / before['database'])
                     self.assertEqual(self.request(server, 'POST', '/api/database/mkdir', body)[0], 409)
                     self.assertEqual(self.request(server, 'POST', '/api/database/mkdir', {'directory': directory, 'name': '../escape'})[0], 400)
                     status, result = self.request(server, 'POST', '/api/database/create', {'directory': directory, 'name': '空白.sqlite3'})
@@ -186,11 +194,25 @@ class DatabaseSelectionTests(unittest.TestCase):
                     self.assertTrue(checked['valid'], checked)
                     status, switched = self.request(server, 'POST', '/api/database', {'database': result['path'], 'expected_database': before['database']})
                     self.assertEqual(status, 200, switched)
+                    self.assertEqual(switched['browse_directory'], directory)
                     self.assertEqual(selected_database(preference, None, None), target.resolve())
                     self.assertEqual(selected_database(preference, result['path'], None, workspace_root=root), target.resolve())
+                    status, saved = self.request(server, 'PUT', '/api/database/directory', {'directory': '.'})
+                    self.assertEqual(status, 200, saved)
+                    self.assertEqual(saved['directory'], directory)
+                    self.assertEqual(saved['browse_directory'], '.')
+                    self.assertEqual(self.request(server, 'PUT', '/api/database/directory', {'directory': '../escape'})[0], 400)
+                    self.assertEqual(self.request(server, 'PUT', '/api/database/directory', {'directory': result['path']})[0], 400)
+                    self.assertEqual(self.request(server, 'PUT', '/api/database/directory', {'directory': directory}, before['token'])[0], 409)
                     self.assertEqual(json.loads(preference.read_text(encoding='utf-8'))['database'], result['path'])
                 finally:
                     server.shutdown(); server.server_close(); thread.join(3)
+                selected = selected_database(preference, None, root / 'first.sqlite3', workspace_root=root)
+                with factory('127.0.0.1', 0, db_path=selected, selection_path=preference, workspace_root=root) as reopened:
+                    info = reopened.database_info()
+                    self.assertEqual(info['database'], result['path'])
+                    self.assertEqual(info['directory'], directory)
+                    self.assertEqual(info['browse_directory'], '.')
 
     def test_actual_schema_corruption_blocks_start_for_all_roles(self):
         cases = [('c', make_c, '/api/processes/control', {'target': 'main', 'action': 'start'}),

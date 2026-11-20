@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
 from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, ScadaStore, quote_identifier
 from scdfe_s.database import SimulatorStore
 
@@ -147,6 +148,7 @@ def migrate(db_path: Path | str, schema_dir: Path | str = SCHEMA_DIR, *, apply: 
                 raise RuntimeError("迁移后外键检查失败")
             if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise RuntimeError("迁移后数据库完整性检查失败")
+            sync_embedded_schema(connection, catalog)
             connection.commit()
         except Exception:
             connection.rollback()

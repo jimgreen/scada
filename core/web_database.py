@@ -54,7 +54,8 @@ class RequestGate:
 def database_request(method):
     @wraps(method)
     def wrapped(handler, *args, **kwargs):
-        exclusive = unquote(urlsplit(handler.path).path).strip('/') == 'api/database' and handler.command == 'POST'
+        route = unquote(urlsplit(handler.path).path).strip('/')
+        exclusive = (handler.command, route) in {('POST', 'api/database'), ('PUT', 'api/database/directory')}
         with handler.server._database_gate.hold(exclusive):
             return method(handler, *args, **kwargs)
     return wrapped
@@ -78,9 +79,9 @@ def selected_database(path, explicit, default, *, base_directory=None, workspace
         explicit = Path(explicit)
         base = root or base_directory
         return contained(Path(base) / explicit if base and not explicit.is_absolute() else explicit)
-    if path.is_file():
+    data = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    if 'database' in data:
         # A broken remembered selection must be visible, not silently open a different DB.
-        data = json.loads(path.read_text(encoding='utf-8'))
         saved = Path(data['database'])
         if not saved.is_absolute():
             # Read the saved base first so legacy Web-relative preferences still
@@ -94,9 +95,16 @@ def selected_database(path, explicit, default, *, base_directory=None, workspace
     return contained(default)
 
 
-def prepare_database(role, path, schema_dir):
+def prepare_database(role, path, schema_dir, workspace_root=None):
     resources = ExitStack()
     try:
+        if role == 'd':
+            from scdfe_d.service import DeviceStore, Collector
+            store = DeviceStore(path, schema_dir, workspace_root=workspace_root)
+            resources.callback(store.close)
+            collector = Collector(store)
+            resources.callback(collector.close)
+            return resources, {'store': store, 'collector': collector}
         if role == 't':
             from scdfe_t.web.service import TransStore
             trans = TransStore(path, schema_dir, connection_pool_size=4)
@@ -144,8 +152,18 @@ class DatabaseSelectionMixin:
         self._database_token = uuid4().hex
         self._database_selection_path = selection_path
         self._database_base_directory = root
+        self._database_preferences = {}
+        if selection_path is not None:
+            try:
+                data = json.loads(Path(selection_path).read_text(encoding='utf-8'))
+                if isinstance(data, dict):
+                    self._database_preferences = data
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError):
+                LOG.warning('Unable to read Web database preferences: %s', selection_path)
         self.check_database_paths(path)
-        self._resources, context = prepare_database(role, path, schema_dir)
+        self._resources, context = prepare_database(role, path, schema_dir, root)
         self.__dict__.update(context)
 
     def database_store(self):
@@ -154,10 +172,22 @@ class DatabaseSelectionMixin:
     def database_info(self):
         current = self.database_store().db_path
         relative = self.relative_database_path(current)
+        directory = Path(relative).parent.as_posix() if relative else '.'
         return dict(database=relative, role=self.database_role, token=self._database_token,
                     relative_database=relative, workspace_root=str(self._database_base_directory),
-                    directory=Path(relative).parent.as_posix() if relative else '.',
+                    directory=directory, browse_directory=self._browse_directory(directory),
                     remembered=self._database_selection_path is not None)
+
+    def _browse_directory(self, fallback):
+        preferences = self._database_preferences
+        if preferences.get('browse_workspace_root') == str(self._database_base_directory):
+            try:
+                folder = self.resolve_database_path(preferences.get('browse_directory'))
+                if folder.is_dir():
+                    return self.relative_database_path(folder)
+            except (ApiError, OSError):
+                pass
+        return fallback
 
     def relative_database_path(self, path):
         try:
@@ -202,6 +232,9 @@ class DatabaseSelectionMixin:
 
     def check_database(self, path):
         self.check_database_paths(path)
+        if self.database_role == 'd':
+            from scdfe_d.service import validate_database as validate_device_database
+            return validate_device_database(path)
         return validate_database(path, self.database_role, self.database_store().catalog)
 
     def confined_file_path(self, path):
@@ -270,7 +303,11 @@ class DatabaseSelectionMixin:
                 created = True
             from scdfe_s.database import SimulatorStore
             store_type = SimulatorStore if self.database_role == 's' else ScadaStore
-            created_store = store_type(target, self.database_store().catalog.directory)
+            if self.database_role == 'd':
+                from scdfe_d.service import DeviceStore
+                created_store = DeviceStore(target, workspace_root=self._database_base_directory)
+            else:
+                created_store = store_type(target, self.database_store().catalog.directory)
             created_store.close()
             validation = self.require_valid_database(target)
             return dict(path=self.relative_database_path(target), validation=validation)
@@ -293,7 +330,9 @@ class DatabaseSelectionMixin:
         from core.scdfe_control import InstanceLock
         store = self.database_store()
         busy = False
-        if self.database_role == 's':
+        if self.database_role == 'd':
+            busy = self.collector.running or InstanceLock.held(store.db_path, 'device-collector')
+        elif self.database_role == 's':
             services = [getattr(self, name) for name in SERVICE_NAMES]
             services += list(self._channel_service_cache.values())
             busy = any(service.running for service in services)
@@ -328,7 +367,7 @@ class DatabaseSelectionMixin:
             return self.database_info()
         self._assert_database_idle()
         try:
-            resources, context = prepare_database(self.database_role, target, current.catalog.directory)
+            resources, context = prepare_database(self.database_role, target, current.catalog.directory, self._database_base_directory)
         except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
             raise ApiError(400, f'无法使用该数据库：{exc}', code='invalid_database') from exc
         try:
@@ -346,20 +385,44 @@ class DatabaseSelectionMixin:
             LOG.exception('closing previous database resources')
         return self.database_info()
 
+    def remember_directory(self, body):
+        if not isinstance(body, dict) or set(body) != {'directory'}:
+            raise ApiError(400, '需要目录相对路径 directory')
+        folder = self.resolve_database_path(body['directory'])
+        if not folder.is_dir():
+            raise ApiError(400, '目录不存在或不可访问')
+        data = dict(self._database_preferences, browse_directory=self.relative_database_path(folder),
+                    browse_workspace_root=str(self._database_base_directory))
+        self._save_database_preferences(data)
+        return self.database_info()
+
     def _remember_database(self, target):
+        root = str(self._database_base_directory)
+        data = dict(self._database_preferences, database=self.relative_database_path(target),
+                    workspace_root=root, browse_directory=self.relative_database_path(target.parent),
+                    browse_workspace_root=root)
+        self._save_database_preferences(data)
+
+    def _save_database_preferences(self, data):
+        if data == self._database_preferences:
+            return
         if self._database_selection_path is None:
+            self._database_preferences = data
             return
         path = Path(self._database_selection_path)
         temporary = path.with_name(path.name + '.' + uuid4().hex + '.tmp')
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps({'database': self.relative_database_path(target),
-                                            'workspace_root': str(self._database_base_directory)}, ensure_ascii=False), encoding='utf-8')
+            temporary.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
             temporary.replace(path)
         except OSError as exc:
-            raise ApiError(500, '保存数据库选择失败，仍使用原数据库') from exc
+            raise ApiError(500, '保存数据库或目录选择失败，仍使用原设置') from exc
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                LOG.warning('Unable to remove temporary Web database preferences: %s', temporary)
+        self._database_preferences = data
 
 
 def handle_database(handler, parts, query, method):
@@ -375,6 +438,12 @@ def handle_database(handler, parts, query, method):
         if set(query) - {'directory'}:
             raise ApiError(400, '未知目录查询参数')
         return handler._json(200, server.database_tree(query.get('directory', '.')))
+    if parts == ['api', 'database', 'directory']:
+        if query:
+            raise ApiError(400, '目录选择接口不接受查询参数')
+        if method == 'PUT':
+            return handler._json(200, server.remember_directory(handler._body()))
+        raise ApiError(405, '目录选择接口支持PUT')
     if parts == ['api', 'database', 'validate'] and method == 'GET':
         if set(query) != {'path'}:
             raise ApiError(400, '需要数据库相对路径path')

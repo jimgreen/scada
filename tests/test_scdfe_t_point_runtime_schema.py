@@ -1,6 +1,8 @@
+from contextlib import closing
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import tempfile
 import unittest
 
@@ -36,13 +38,24 @@ class ScdfeTPointRuntimeSchemaTests(unittest.TestCase):
             })
             old.close()
 
+            def embedded_columns():
+                with closing(sqlite3.connect(db)) as con:
+                    return {row[0] for row in con.execute(
+                        "SELECT eng_name FROM rtdb_schema_columns WHERE table_name=?",
+                        ("fes_scdfe_t_point_define",),
+                    )}
+
+            before_plan = db.read_bytes()
             plan = migrate(db, Path("dbdef/json"))
             self.assertEqual(set(plan["missing"]), runtime_names)
             self.assertFalse(plan["changed"])
+            self.assertEqual(db.read_bytes(), before_plan)
+            self.assertFalse(runtime_names & embedded_columns())
 
             result = migrate(db, Path("dbdef/json"), apply=True)
             self.assertTrue(result["changed"])
             self.assertTrue(Path(result["backup"]).is_file())
+            self.assertTrue(runtime_names <= embedded_columns())
 
             current = ScadaStore(db)
             try:

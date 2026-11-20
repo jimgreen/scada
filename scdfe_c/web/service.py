@@ -18,6 +18,7 @@ import threading
 import time
 from typing import Any, Iterator
 from core import operation_audit as audit
+from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -392,7 +393,8 @@ class ScadaStore:
                     from core.monitor_changes import TABLES as MONITOR_TABLES
                     from core.command_trace import TABLES as COMMAND_TRACE_TABLES, ensure_schema as ensure_command_trace
                     unexpected_tables = (actual_tables - expected_tables -
-                                         {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES - MONITOR_TABLES - COMMAND_TRACE_TABLES)
+                                         {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES - MONITOR_TABLES
+                                         - COMMAND_TRACE_TABLES - RTDB_METADATA_TABLES)
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -462,6 +464,7 @@ class ScadaStore:
                             '_scada_schema 与当前 schema 不一致；'
                             '请重新初始化数据库'
                         )
+                    sync_embedded_schema(connection, self.catalog)
                     connection.commit()
                 return
             except sqlite3.OperationalError as exc:

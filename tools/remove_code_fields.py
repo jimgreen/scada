@@ -17,6 +17,7 @@ import re
 import sqlite3
 from typing import Iterable
 
+from core.rtdb_schema import sync_embedded_schema
 from scdfe_c.web.service import DEFAULT_DB, KIND_TABLES, ScadaStore, SchemaCatalog, quote_identifier
 
 
@@ -218,6 +219,7 @@ def migrate(db: Path, *, write: bool = False) -> dict:
                 raise RuntimeError(f"外键检查失败: {[tuple(row) for row in violations[:10]]}")
             if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise RuntimeError("迁移后完整性检查失败")
+            sync_embedded_schema(connection, catalog)
             connection.commit()
             connection.execute("PRAGMA foreign_keys=ON")
         except Exception:

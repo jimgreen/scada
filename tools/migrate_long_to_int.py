@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
 from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog  # noqa: E402
 
 
@@ -152,6 +153,7 @@ def migrate(root: Path = ROOT, db: Path = DEFAULT_DB, *, apply: bool = False) ->
                 raise RuntimeError("迁移后数据库完整性检查失败")
             if connection.execute("PRAGMA foreign_key_check").fetchall():
                 raise RuntimeError("迁移后外键检查失败")
+            sync_embedded_schema(connection, catalog)
             connection.commit()
         except Exception:
             connection.rollback()

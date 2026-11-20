@@ -70,9 +70,18 @@ T_PAGES = [
 ]
 
 
+D_PAGES = [
+    ('运行管理', [('overview.html', '/', '◉', '设备采集', '设备量测采集状态与启停'),
+                  ('history.html', '/history', '≡', '采集与修改记录', '采集批次和映射修改记录')]),
+    ('设备量测', [('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联'),
+                 ('measurements.html', '/measurements', '▦', '量测查询', '按设备查看实时量测值、时间和状态'),
+                 ('parameters.html', '/parameters', '≡', '参数配置', '按设备调整量测可用状态、权重和超时阈值')]),
+]
+
+
 def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     """Wrap our trusted static templates; page controls/scripts stay intact."""
-    groups = {"s": S_PAGES, "c": C_PAGES, "t": T_PAGES}[module]
+    groups = {"s": S_PAGES, "c": C_PAGES, "t": T_PAGES, "d": D_PAGES}[module]
     active = "communication.html" if module == "t" and filename == "index.html" else filename
     page = next((item for _, items in groups for item in items if item[0] == active),
                 (filename, "/api-docs", "?", "接口文档", "通信服务接口说明"))
@@ -109,7 +118,7 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
             current = ' aria-current="page"' if name == active else ""
             links.append(f'<a class="nav" href="{href}"{current}>'
                          f'<span aria-hidden="true">{icon}</span><b>{label}</b></a>')
-    label = {"s": "协议服务", "c": "运行工作台", "t": "四遥转发"}[module]
+    label = {"s": "协议服务", "c": "运行工作台", "t": "四遥转发", "d": "设备量测"}[module]
     api_link = '<a href="/api-docs">接口文档 ↗</a>' if module in ("s", "c") else ""
     topbar = f'''<a class="workbench-skip" href="#workbench-content">跳到页面内容</a>
 <header class="workbench-topbar">

@@ -19,7 +19,8 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
+from core.rtdb_schema import sync_embedded_schema  # noqa: E402
+from scdfe_c.web.service import DEFAULT_DB, SCHEMA_DIR, SchemaCatalog, ScadaStore, quote_identifier
 
 TABLE = "fes_scdfe_t_point_define"
 
@@ -85,6 +86,7 @@ def migrate(db_path: Path | str = DEFAULT_DB, schema_dir: Path | str = SCHEMA_DI
             )
         fingerprint = hashlib.sha256(json.dumps(schema, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         connection.execute("UPDATE _scada_schema SET fingerprint=? WHERE table_name=?", (fingerprint, TABLE))
+        sync_embedded_schema(connection, SchemaCatalog(schema_dir))
         connection.commit()
         return {"changed": True, "rows": connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(TABLE)}").fetchone()[0]}
     except Exception:
