@@ -139,6 +139,21 @@ def prepare_database(role, path, schema_dir, workspace_root=None):
 
 
 class DatabaseSelectionMixin:
+    @staticmethod
+    def _prepare_web_database(role, path, schema_dir, root):
+        from core.web_point_trend_history import PointTrendHistory
+
+        resources, context = prepare_database(role, path, schema_dir, root)
+        try:
+            store = context['trans_store'].store if role == 't' else context['store']
+            history = PointTrendHistory(store, role, root)
+            resources.callback(history.close)
+            context['_point_trend_history'] = history
+        except BaseException:
+            resources.close()
+            raise
+        return resources, context
+
     def _init_database(self, role, path, schema_dir, selection_path=None, workspace_root=None):
         path = Path(path) if workspace_root is not None else Path(path).resolve()
         root = Path(workspace_root).resolve() if workspace_root is not None else path.parent
@@ -163,7 +178,7 @@ class DatabaseSelectionMixin:
             except (OSError, ValueError):
                 LOG.warning('Unable to read Web database preferences: %s', selection_path)
         self.check_database_paths(path)
-        self._resources, context = prepare_database(role, path, schema_dir, root)
+        self._resources, context = self._prepare_web_database(role, path, schema_dir, root)
         self.__dict__.update(context)
 
     def database_store(self):
@@ -367,7 +382,8 @@ class DatabaseSelectionMixin:
             return self.database_info()
         self._assert_database_idle()
         try:
-            resources, context = prepare_database(self.database_role, target, current.catalog.directory, self._database_base_directory)
+            resources, context = self._prepare_web_database(self.database_role, target, current.catalog.directory,
+                                                            self._database_base_directory)
         except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
             raise ApiError(400, f'无法使用该数据库：{exc}', code='invalid_database') from exc
         try:
@@ -428,8 +444,36 @@ class DatabaseSelectionMixin:
 def handle_database(handler, parts, query, method):
     server = handler.server
     token = handler.headers.get('X-Scada-Database')
-    if method not in {'GET', 'HEAD', 'OPTIONS'} and token and token != server._database_token:
+    trend_history = parts == ['api', 'point-trend', 'history']
+    if (trend_history or method not in {'GET', 'HEAD', 'OPTIONS'}) and token and token != server._database_token:
         raise ApiError(409, '数据库已切换，请刷新页面后再操作', code='database_changed')
+    if parts in (['point-trends'], ['point-trends.html']):
+        if method != 'GET':
+            raise ApiError(405, '采样管理页面只支持 GET', code='method_not_allowed')
+        from core.web_workbench import ASSET_DIR, render_workbench
+        name = 'point-trends.html'
+        page = render_workbench((ASSET_DIR / name).read_bytes(), server.database_role, name)
+        return handler._send(200, 'text/html; charset=utf-8', page)
+    if trend_history:
+        history = server._point_trend_history
+        if method == 'GET':
+            after = query.get('after_ms', '0')
+            if (set(query) - {'after_ms'} or not 1 <= len(after) <= 19 or not after.isascii()
+                    or not after.isdecimal() or int(after) > 2**63 - 1):
+                raise ApiError(400, 'after_ms 必须是有效的毫秒时间戳')
+            return handler._json(200, history.get(after_ms=int(after)))
+        if method == 'PUT' and not query:
+            return handler._json(200, history.put(handler._body(), expected_revision=handler.headers.get('If-Match')))
+        if method == 'PUT':
+            raise ApiError(400, '曲线设置接口不接受查询参数')
+        raise ApiError(405, '曲线历史接口支持 GET 和 PUT', code='method_not_allowed')
+    if parts == ['api', 'point-trend']:
+        if method != 'POST':
+            raise ApiError(405, '实时曲线取样接口支持 POST', code='method_not_allowed')
+        if query:
+            raise ApiError(400, '实时曲线取样接口不接受查询参数')
+        from core.web_point_trend import read_point_trend
+        return handler._json(200, read_point_trend(server.database_store(), server.database_role, handler._body()))
     if parts in (['api', 'database', 'create'], ['api', 'database', 'mkdir']) and method == 'POST':
         if query:
             raise ApiError(400, '创建接口不接受查询参数')
@@ -457,7 +501,9 @@ def handle_database(handler, parts, query, method):
         if method == 'POST':
             return handler._json(200, server.switch_database(handler._body()))
         raise ApiError(405, '数据库接口支持GET和POST')
-    if parts in (['static', 'database-selector.js'], ['static', 'database-selector.css']) and method == 'GET':
+    if (method == 'GET' and len(parts) == 2 and parts[0] == 'static' and parts[1] in
+            {'database-selector.js', 'database-selector.css', 'point-trend.js', 'point-trend.css',
+             'point-trends-page.js', 'point-trends-page.css'}):
         path = Path(__file__).with_name('web_static') / parts[-1]
         content_type = 'text/css' if path.suffix == '.css' else 'application/javascript'
         return handler._send(200, content_type + '; charset=utf-8', path.read_bytes())

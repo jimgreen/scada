@@ -1,4 +1,4 @@
-"""Shared server-rendered navigation for standalone C/S/T Web pages."""
+"""Shared server-rendered navigation for standalone SCDFE Web pages."""
 from html import escape
 from pathlib import Path
 import re
@@ -13,6 +13,8 @@ ASSETS = {"workbench.css": "text/css; charset=utf-8",
           "log-browser.js": "application/javascript; charset=utf-8",
           "layout-resizer.js": "application/javascript; charset=utf-8"}
 
+POINT_TRENDS_PAGE = ("point-trends.html", "/point-trends", "∿", "采样管理", "管理实时曲线采样与历史")
+
 S_PAGES = [
     ("运行管理", [
         ("command-traces.html", "/command-traces", "↗", "指令追踪", "入库、选择、执行与确认阶段"),
@@ -22,6 +24,7 @@ S_PAGES = [
         ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),
         ("soe.html", "/soe", "◷", "SOE 事件", "逐次变位、源时标与转发进度"),
         ("logs.html", "/logs", "≡", "日志报文", "按通信通道浏览运行日志和收发报文"),
+        POINT_TRENDS_PAGE,
     ]),
     ("数据与定义", [
         ("channels.html", "/channels", "▦", "通道数据", "维护 RTU、通道和规约定义"),
@@ -43,6 +46,7 @@ C_PAGES = [
         ("soe.html", "/soe", "◷", "SOE 事件", "逐次变位、源时标与转发进度"),
         ("diagnostics.html", "/diagnostics", "◴", "运行诊断", "分段耗时与启动配置检查"),
         ("command-traces.html", "/command-traces", "↗", "指令追踪", "入库、派发与确认阶段"),
+        POINT_TRENDS_PAGE,
     ]),
     ("数据与定义", [
         ("data", "/#data", "▦", "数据与定义", "通道、RTU 和四遥定义"),
@@ -62,6 +66,7 @@ T_PAGES = [
         ("connections.html", "/connections", "⇄", "客户端连接", "按连接查看客户端、交互内容、日志与报文"),
         ("soe.html", "/soe", "◷", "SOE 事件", "源事件历史与转发确认进度"),
         ("logs.html", "/logs.html", "≡", "日志报文", "按年月日小时浏览运行日志和收发报文文件"),
+        POINT_TRENDS_PAGE,
     ]),
     ("数据与定义", [
         ("channels.html", "/channels.html", "▦", "通道数据", "维护转发通道、规约和监听参数"),
@@ -72,7 +77,8 @@ T_PAGES = [
 
 D_PAGES = [
     ('运行管理', [('overview.html', '/', '◉', '设备采集', '设备量测采集状态与启停'),
-                  ('history.html', '/history', '≡', '采集与修改记录', '采集批次和映射修改记录')]),
+                  ('history.html', '/history', '≡', '采集与修改记录', '采集批次和映射修改记录'),
+                  POINT_TRENDS_PAGE]),
     ('设备量测', [('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联'),
                  ('measurements.html', '/measurements', '▦', '量测查询', '按设备查看实时量测值、时间和状态'),
                  ('parameters.html', '/parameters', '≡', '参数配置', '按设备调整量测可用状态、权重和超时阈值')]),

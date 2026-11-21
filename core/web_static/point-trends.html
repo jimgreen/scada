@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>采样管理 · SCADA</title>
+  <link rel="stylesheet" href="/static/point-trend.css">
+  <link rel="stylesheet" href="/static/point-trends-page.css">
+  <script defer src="/static/point-trend.js"></script>
+  <script defer src="/static/point-trends-page.js"></script>
+</head>
+<body data-point-trends>
+  <header></header>
+  <main>
+    <section class="card trend-point-list" aria-labelledby="trend-points-title">
+      <div class="trend-list-toolbar">
+        <div class="trend-list-title">
+          <h2 id="trend-points-title">当前采样点</h2>
+          <span id="trend-point-count" class="trend-muted"></span>
+        </div>
+        <form id="trend-retention-form">
+          <label for="trend-retention">最长留存（分钟）</label>
+          <input id="trend-retention" type="number" min="1" max="1440" step="1" value="60" required disabled>
+          <button id="trend-retention-save" type="submit" disabled>保存</button>
+        </form>
+      </div>
+      <p id="trend-list-error" class="trend-list-error" role="alert" hidden></p>
+      <div class="trend-list-table" role="region" aria-label="采样点列表" tabindex="0">
+        <table aria-labelledby="trend-points-title">
+          <thead><tr>
+            <th scope="col">测点</th>
+            <th scope="col">类型</th>
+            <th scope="col">编号</th>
+            <th scope="col">最近值</th>
+            <th scope="col">采样时间</th>
+            <th scope="col">曲线</th>
+            <th scope="col">操作</th>
+          </tr></thead>
+          <tbody id="trend-point-rows"></tbody>
+        </table>
+      </div>
+      <p id="trend-list-status" class="trend-muted trend-list-status" role="status"></p>
+    </section>
+    <section id="trend-management-chart" aria-label="实时曲线"></section>
+  </main>
+</body>
+</html>

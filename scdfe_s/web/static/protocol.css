@@ -113,6 +113,8 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 body[data-points] .point-filters { display:flex; align-items:center; gap:10px; flex:1 1 auto; min-width:280px; }
 body[data-points] .point-filters > label:not(.visually-hidden) { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
 body[data-points] .point-filters > label:not(.visually-hidden) select { width:280px; }
+.workbench .workbench-content > .points-panel:has(> .point-trend-host details[open]) { overflow-y:auto; }
+.workbench .points-panel:has(> .point-trend-host details[open]) > .point-pages { min-height:150px; }
 .test-actions { display:flex; flex:0 0 auto; align-items:center; gap:8px; flex-wrap:wrap; margin-top:0; }
 .refresh-status { color:#718694; font-size:12px; min-height:20px; padding:3px 8px; border-radius:4px; background:#f4f8fa; }
 .refresh-status.is-active { color:#087f8c; background:#e8f6f7; }

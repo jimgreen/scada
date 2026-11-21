@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_d · 设备量测</title><link rel="stylesheet" href="/static/app.css"></head>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_d · 设备量测</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/point-trend.css"></head>
 <body><header></header><main>
 <p id="alert" role="alert" hidden></p>
 <section id="overview-stats" class="stats" aria-label="采集概况" hidden><div><strong id="device-count">—</strong><span>设备</span></div><div><strong id="property-count">—</strong><span>量测属性</span></div><div><strong id="mapping-count">—</strong><span>点表映射</span></div><div><strong id="valid-count">—</strong><span>可用量测</span></div></section>
@@ -30,7 +30,8 @@
 <div class="toolbar" id="parameter-selection" hidden><span id="parameter-selection-count" class="muted" aria-live="polite"></span><button id="bulk-parameters" disabled>批量设置</button><label id="draft-filter" class="check" hidden><input id="only-draft" type="checkbox">仅看待保存</label></div>
 <div class="table-wrap"><table><thead id="measure-head"></thead><tbody id="measure-rows"></tbody></table></div>
 <div class="pager"><span id="page-summary"></span><div class="actions" id="page-actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div>
-<div class="actions" id="parameter-actions" hidden><span id="parameter-status" aria-live="polite"></span><button id="discard-parameters" disabled>撤销修改</button><button id="save-parameters" class="primary" disabled>保存参数</button></div></div></section>
+<div class="actions" id="parameter-actions" hidden><span id="parameter-status" aria-live="polite"></span><button id="discard-parameters" disabled>撤销修改</button><button id="save-parameters" class="primary" disabled>保存参数</button></div></div>
+<div id="point-trend" hidden></div></section>
 <section id="history-panel" class="panel flexible" hidden><div class="toolbar"><h2>采集与修改记录</h2><button id="history-refresh" class="actions">刷新</button></div><div class="type-tabs"><button id="show-refreshes" class="active">采集批次</button><button id="show-changes">定义修改</button></div><div class="table-wrap"><table><thead id="history-head"></thead><tbody id="history-rows"></tbody></table></div></section>
 </main>
 <dialog id="bulk-parameter-editor" aria-labelledby="bulk-parameter-title">
@@ -54,4 +55,4 @@
 <p id="editor-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="editor-cancel">取消</button><button id="editor-save" type="submit" class="primary">保存映射</button></div></form></dialog>
 <dialog id="device-editor"><form id="device-form"><h2>新增设备</h2><label>设备名称<input id="device-name" required maxlength="200"></label><label>设备类型<select id="device-category"></select></label><p id="device-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="device-cancel">取消</button><button type="submit" class="primary">创建</button></div></form></dialog>
 <dialog id="source-browser"><h2>选择源数据库</h2><div class="toolbar"><button id="source-up">上一级</button><button id="source-root">工作区根目录</button><button id="source-close" class="actions">关闭</button></div><p id="source-folder" class="muted"></p><p id="browser-error" class="error" role="alert" hidden></p><div id="source-files"></div></dialog>
-<script src="/static/app.js"></script></body></html>
+<script src="/static/point-trend.js"></script><script src="/static/app.js"></script></body></html>

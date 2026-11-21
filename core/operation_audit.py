@@ -195,7 +195,8 @@ def audit_request(component):
     def decorate(method):
         @wraps(method)
         def wrapped(handler, *args, **kwargs):
-            if handler.command in {'GET', 'HEAD', 'OPTIONS'}:
+            if (handler.command in {'GET', 'HEAD', 'OPTIONS'}
+                    or (handler.command == 'POST' and path_only(handler.path) == '/api/point-trend')):
                 return method(handler, *args, **kwargs)
             store = handler.service.store if component == 't' else handler.store
             root = store.db_path.parent / 'logs'

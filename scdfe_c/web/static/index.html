@@ -7,6 +7,7 @@
     <title>SCADA · 运行工作台</title>
     <link rel="stylesheet" href="/static/app.css" />
     <link rel="stylesheet" href="/static/log-browser.css" />
+    <link rel="stylesheet" href="/static/point-trend.css" />
     <script defer src="/static/layout-resizer.js"></script>
   </head>
   <body>
@@ -41,6 +42,7 @@
         <a class="nav" href="/soe"><span aria-hidden="true">◷</span><b>SOE 事件</b></a>
         <a class="nav" href="/diagnostics"><span aria-hidden="true">◴</span><b>运行诊断</b></a>
         <a class="nav" href="/command-traces"><span aria-hidden="true">↗</span><b>指令追踪</b></a>
+        <a class="nav" href="/point-trends"><span aria-hidden="true">∿</span><b>采样管理</b></a>
         <div class="side-title">数据与定义</div>
         <details class="nav-branch" id="data-directory">
           <summary class="nav"><span aria-hidden="true">▦</span><b>数据与定义</b></summary>
@@ -129,6 +131,7 @@
             ><span id="page"></span
             ><button class="button secondary" id="next">下一页</button>
           </div>
+          <div class="point-trend-host" id="point-trend" hidden></div>
         </section>
         <section id="processes-panel" class="page-panel" hidden>
           <div class="toolbar">
@@ -425,6 +428,7 @@
       </div>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/static/point-trend.js"></script>
     <script src="/static/app.js"></script>
     <link rel="stylesheet" href="/static/database-selector.css">
     <script src="/static/database-selector.js"></script>

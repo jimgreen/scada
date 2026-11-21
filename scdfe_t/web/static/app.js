@@ -64,12 +64,35 @@ function renderChannels() {
 }
 function renderDetail(){if(!$("#channel-detail"))return;const x=selected();if(!x){$("#channel-detail").innerHTML='<dt>通道</dt><dd>未选择</dd>';return}const protocol=String(x.protocol||"").toLowerCase(),r=x.runtime_status||{};const common={channel_id:"编号",name:"名称",protocol:"规约",bind_host:"监听地址",bind_port:"监听端口",scan_interval_ms:"读取周期(ms)",log_retention_hours:"日志保留小时",packet_recording:"保存报文",process_enable:"自动运行",process_pid:"进程号",process_start_time:"启动时间",process_stop_time:"停止时间",process_heartbeat_time:"心跳",process_error:"错误"};const specific=protocol==="iec104"?{common_address:"IEC104 公共地址",report_interval_ms:"全量上送周期(ms)"}:{unit_id:"Modbus 从站地址"};const n={...common,...specific};const fields=Object.entries(n).filter(([k])=>k in x).map(([k,v])=>`<dt>${v}</dt><dd>${k.includes("time")?fmt(x[k],k.includes("heartbeat")):k==="process_enable"||k==="packet_recording"?(Number(x[k])?"是":"否"):esc(x[k])||"—"}`).join("");$("#channel-detail").innerHTML=fields+`<dt>运行状态</dt><dd>${runtimeBadge(r)}</dd><dt>连接状态</dt><dd>${esc(r.connection_state||"—")}</dd><dt>收/发/错/重连</dt><dd class="mono">${esc([r.rx_count||0,r.tx_count||0,r.error_count||0,r.reconnect_count||0].join(" / "))}</dd><dt>最近错误</dt><dd>${esc(r.last_error||"—")}</dd><dt>诊断</dt><dd class="mono">${esc(JSON.stringify(r.diagnostic||{}))}</dd>`}
 function pno(x){return x.pnt_no??0}
+const pointTrendHost = $("#point-trend");
+const pointTrend = pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
+const pointColumnOffset = pointTrend ? 1 : 0;
+const pointColumnCount = 13 + pointColumnOffset;
+
+function renderPointTrendRow(row, point) {
+  const identity = `通道 ${point.owner} · ${point.kind.toUpperCase()} ${point.no}`;
+  const name = point.cells[4] ? `${identity} · ${point.cells[4]}` : identity;
+  const definition = {channel_id: point.owner, pnt_no: point.no, kind: point.kind, name};
+  row.cells[0].replaceChildren(pointTrend.checkbox(definition));
+  pointTrend.bindRow?.(row, definition, row.cells[1 + pointColumnOffset]);
+}
+
 let previousRows = null;
 function renderPoints(){
   const r=state.points, kind=activePointKind(), body=pointTableBody(kind), protocol=String(selected()?.protocol||"iec104").toLowerCase();
   if(!body)return;
   const head=pointTableHead(kind);
-  if(head){const markup=["类型","转发点号","源 RTU","源点号","名称",protocol==="iec104"?"IEC IOA":"Modbus 区/地址","实时值","状态","刷新时间","指令接收时间","最后转发","启用","操作"].map(x=>`<th>${x}</th>`).join("");if(head._pointMarkup!==markup){head.innerHTML=markup;head._pointMarkup=markup;}}
+  if (head) {
+    const selection = pointTrend ? '<th class="point-trend-cell" scope="col">曲线</th>' : '';
+    const headings = ["类型", "转发点号", "源 RTU", "源点号", "名称",
+      protocol === "iec104" ? "IEC IOA" : "Modbus 区/地址", "实时值", "状态", "刷新时间",
+      "指令接收时间", "最后转发", "启用", "操作"];
+    const markup = selection + headings.map(label => `<th>${label}</th>`).join("");
+    if (head._pointMarkup !== markup) {
+      head.innerHTML = markup;
+      head._pointMarkup = markup;
+    }
+  }
   const rows=r.map(x=>({owner:String(x.channel_id),kind:x.kind,no:String(pno(x)),version:String(x._version),
     cells:[kindName[x.kind]||x.kind,pno(x),x.source_rtu_id,x.source_pnt_no,x.name,
       protocol==="iec104"?(x.io_address??"—"):(x.register_area??"—")+" / "+(x.address??"—"),
@@ -79,11 +102,18 @@ function renderPoints(){
     const old=previousRows[i];return x.owner===old.owner && x.kind===old.kind && x.no===old.no;
   });
   if (!same) {
-    body.innerHTML=rows.map(x=>`<tr>${x.cells.map(v=>`<td>${esc(v)}</td>`).join("")}<td class="actions"><button data-point-edit="${esc(x.no)}" data-point-kind="${esc(x.kind)}">编辑</button><button data-owner="${esc(x.owner)}" data-version="${esc(x.version)}" data-point-delete="${esc(x.no)}" data-point-kind="${esc(x.kind)}" class="danger">删除</button></td></tr>`).join("")||'<tr><td colspan="13" class="muted">暂无点映射</td></tr>';
+    const selection = pointTrend ? '<td class="point-trend-cell"></td>' : '';
+    body.innerHTML = rows.map(point => `<tr>${selection}${point.cells.map(value => `<td>${esc(value)}</td>`).join("")}
+      <td class="actions"><button data-point-edit="${esc(point.no)}" data-point-kind="${esc(point.kind)}">编辑</button><button
+        data-owner="${esc(point.owner)}" data-version="${esc(point.version)}" data-point-delete="${esc(point.no)}"
+        data-point-kind="${esc(point.kind)}" class="danger">删除</button></td></tr>`).join("")
+      || `<tr><td colspan="${pointColumnCount}" class="muted">暂无点映射</td></tr>`;
+    if (pointTrend) rows.forEach((point, index) => renderPointTrendRow(body.rows[index], point));
   } else {
     rows.forEach((x,i)=>{
       const old=previousRows[i];
-      x.cells.forEach((value,j)=>{if(value!==old.cells[j]) body.rows[i].cells[j].textContent=value;});
+      x.cells.forEach((value,j)=>{if(value!==old.cells[j]) body.rows[i].cells[j + pointColumnOffset].textContent=value;});
+      if (pointTrend && x.cells[4] !== old.cells[4]) renderPointTrendRow(body.rows[i], x);
       if(x.version!==old.version) body.rows[i].querySelector("[data-point-delete]").dataset.version=x.version;
     });
   }
@@ -131,7 +161,7 @@ async function loadPoints({background=false}={}){
     const cid=state.selected,offset=state.pointOffset,limit=state.pointLimit,q=new URLSearchParams({limit:String(limit),offset:String(offset),kind,name_contains:nameFilter});
     const current=()=>request===state.pointRequest&&cid===state.selected&&kind===activePointKind()&&offset===state.pointOffset&&limit===state.pointLimit&&nameFilter===($("#point-search")?.value.trim()||"");
     const scope=JSON.stringify([cid,kind,nameFilter]);
-    if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;body.innerHTML='<tr><td colspan="13">正在读取点映射…</td></tr>'}
+    if(state.pointScope!==scope){state.pointScope=scope;state.points=[];state.pointTotal=0;renderPoints();previousRows=null;body.innerHTML=`<tr><td colspan="${pointColumnCount}">正在读取点映射…</td></tr>`}
     let page;
     try{page=await api(`/api/trans/channels/${cid}/points?${q}`)}catch(error){if(!current())return;throw error}
     if(!current())return;

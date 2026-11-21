@@ -10,6 +10,10 @@
   const queryMode = mode === '/measurements' || mode === '/devices';
   const parameterMode = mode === '/parameters';
   const deviceMode = mappingMode || queryMode || parameterMode;
+  const pointTrendHost = $('#point-trend');
+  const pointTrend = queryMode && pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
+  const liveColumnOffset = pointTrend ? 1 : 0;
+  if (pointTrend) pointTrendHost.hidden = false;
   const pointKinds = ['', 'yc', 'yx'];
   const reasons = {
     bad_quality: '源质量不合格', stale: '数据超时', missing_point: '测点缺失',
@@ -334,7 +338,8 @@
   }
 
   function liveRow(row) {
-    return '<tr>' + quantityMarkup(row, false) + '<td>' + kindLabel(row.kind) + '</td>'
+    return '<tr>' + (pointTrend ? '<td class="point-trend-cell"></td>' : '')
+      + quantityMarkup(row, false) + '<td>' + kindLabel(row.kind) + '</td>'
       + '<td class="quantity-value">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
       + '<td>' + html(time(row.source_time_ms)) + '</td><td>' + html(time(row.collected_at)) + '</td>'
       + '<td>' + html(number(row.quality)) + '</td><td>' + statusMarkup(row) + '</td>'
@@ -351,15 +356,15 @@
     items.forEach((row, index) => {
       const prior = previous[index];
       const cells = body.rows[index].cells;
-      if (row.value !== prior.value) cells[2].textContent = number(row.value) + (row.unit ? ' ' + row.unit : '');
-      if (row.source_time_ms !== prior.source_time_ms) cells[3].textContent = time(row.source_time_ms);
-      if (row.collected_at !== prior.collected_at) cells[4].textContent = time(row.collected_at);
-      if (row.quality !== prior.quality) cells[5].textContent = number(row.quality);
+      if (row.value !== prior.value) cells[2 + liveColumnOffset].textContent = number(row.value) + (row.unit ? ' ' + row.unit : '');
+      if (row.source_time_ms !== prior.source_time_ms) cells[3 + liveColumnOffset].textContent = time(row.source_time_ms);
+      if (row.collected_at !== prior.collected_at) cells[4 + liveColumnOffset].textContent = time(row.collected_at);
+      if (row.quality !== prior.quality) cells[5 + liveColumnOffset].textContent = number(row.quality);
       if (['enabled', 'notuse', 'valid', 'reason'].some(field => row[field] !== prior[field])
-          || bound(row) !== bound(prior)) cells[6].innerHTML = statusMarkup(row);
-      if (row.previous_value !== prior.previous_value) cells[7].textContent = number(row.previous_value);
+          || bound(row) !== bound(prior)) cells[6 + liveColumnOffset].innerHTML = statusMarkup(row);
+      if (row.previous_value !== prior.previous_value) cells[7 + liveColumnOffset].textContent = number(row.previous_value);
       if (row.rtu_id !== prior.rtu_id || row.pnt_no !== prior.pnt_no || bound(row) !== bound(prior)) {
-        cells[8].textContent = bound(row) ? row.rtu_id + ' / ' + row.pnt_no : '—';
+        cells[8 + liveColumnOffset].textContent = bound(row) ? row.rtu_id + ' / ' + row.pnt_no : '—';
       }
     });
     return true;
@@ -399,14 +404,30 @@
       ? ['目标设备量测', '类型', '源数据库', 'RTU / 点号', '变换', '映射状态', '操作']
       : parameterMode
         ? ['<input id="choose-all" type="checkbox" aria-label="选择当前显示的可配置量测" title="全选当前显示的可配置量测">', '量测属性', '类型', 'RTU / 点号', '启用采集映射', '禁用量测', '量测权重', '超时阈值（秒）']
-        : ['量测属性', '类型', '实时值', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
+        : [...(pointTrend ? ['曲线'] : []), '量测属性', '类型', '实时值', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
     const renderer = mappingMode ? mappingRow : parameterMode ? configRow : liveRow;
     if (!$('#measure-head').firstElementChild) {
-      $('#measure-head').innerHTML = '<tr>' + headers.map(label => '<th scope="col">' + label + '</th>').join('') + '</tr>';
+      $('#measure-head').innerHTML = '<tr>' + headers.map(label => '<th scope="col"'
+        + (label === '曲线' ? ' class="point-trend-cell"' : '') + '>' + label + '</th>').join('') + '</tr>';
     }
     if (!queryMode || !updateLiveRows(previous, items)) {
-      $('#measure-rows').innerHTML = rows.map(renderer).join('')
+      const body = $('#measure-rows');
+      body.innerHTML = rows.map(renderer).join('')
         || emptyRow(headers, detail || mappingMode ? '没有匹配的量测' : '请选择设备表和设备');
+      if (pointTrend) rows.forEach((row, index) => {
+        const element = body.rows[index];
+        const cell = element.cells[0];
+        if (!attached(row)) {
+          cell.textContent = '—';
+          cell.title = '绑定量测后可绘制曲线';
+          return;
+        }
+        const quantity = row.name || row.metric;
+        const name = `${detail.device.name} · ${quantity}`;
+        const definition = {measurement_id: row.measurement_id, kind: row.kind, name, unit: row.unit};
+        cell.append(pointTrend.checkbox(definition));
+        pointTrend.bindRow?.(element, definition, element.cells[liveColumnOffset]);
+      });
     }
     const count = total ?? rows.length;
     $('#table-hint').textContent = detail?.device

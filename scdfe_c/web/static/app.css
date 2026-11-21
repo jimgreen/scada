@@ -627,6 +627,12 @@ body.layout-resizing:has(.layout-resizer-y.is-dragging) { cursor: row-resize !im
 .data-table {
   min-height: 0;
 }
+#data-panel:has(> .point-trend-host:not([hidden]) details[open]) {
+  overflow-y: auto;
+}
+#data-panel:has(> .point-trend-host:not([hidden]) details[open]) > .data-table {
+  min-height: 150px;
+}
 table {
   border-collapse: separate;
   border-spacing: 0;

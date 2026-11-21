@@ -2,6 +2,10 @@
   "use strict";
   const $ = s => document.querySelector(s);
   const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const trendHost = $("#point-trend");
+  const pointTrend = trendHost && globalThis.scadaPointTrend?.mount(trendHost);
+  const trendColumn = pointTrend ? '<td class="point-trend-cell"></td>' : "";
+  if (pointTrend) document.querySelectorAll("th.point-trend-cell").forEach(cell => { cell.hidden = false; });
   const names = {yc:"遥测",yx:"遥信",yk:"遥控",yt:"遥调"};
   let selected = null, selectedPoint = null, selectedParameter = null, parameterSchema = null;
   let offset = 0, limit = 100, total = 0, requestId = 0, parameterRequest = 0;
@@ -215,10 +219,11 @@
     const request = ++requestId, rtu = selected?.rtu_id, nameFilter = pointNameFilter();
     const scope = JSON.stringify([rtu, kind, nameFilter]);
     const commandPoint = ["yk", "yt"].includes(kind);
+    const dataOffset = pointTrend ? 1 : 0;
+    const columnCount = 7 + dataOffset + Number(pointHasRawStatus(kind)) + Number(commandPoint);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
       previousPointRows = null;
-      const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
       body.innerHTML = `<tr><td colspan="${columnCount}">正在读取测点…</td></tr>`;
       $("#point-page-summary").textContent = ""; $("#point-prev").disabled = $("#point-next").disabled = true;
     }
@@ -241,19 +246,25 @@
         return {key: `${rtu}/${kind}/${p.pnt_no}`, cells: values.map(v => String(v ?? "")),
           edit: JSON.stringify({...p,kind}), version: String(p._version), no: String(p.pnt_no)};
       });
-      const columnCount = 7 + (pointHasRawStatus(kind) ? 1 : 0) + (commandPoint ? 1 : 0);
       const stable = body === previousPointBody && previousPointRows && rows.length === previousPointRows.length &&
         rows.every((row, i) => row.key === previousPointRows[i].key);
       if (!stable) {
-        body.innerHTML = rows.map(row => `<tr>${row.cells.map(value => `<td>${esc(value)}</td>`).join("")}<td><button data-point-edit='${esc(row.edit)}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(row.version)}" data-point-delete="${kind}" data-point-no="${esc(row.no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
+        body.innerHTML = rows.map(row => `<tr>${trendColumn}${row.cells.map(value => `<td>${esc(value)}</td>`).join("")}<td><button data-point-edit='${esc(row.edit)}'>编辑</button> <button data-owner="${esc(rtu)}" data-version="${esc(row.version)}" data-point-delete="${kind}" data-point-no="${esc(row.no)}">删除</button></td></tr>`).join("") || `<tr><td colspan="${columnCount}">${rtu ? "暂无测点" : "请先选择通道"}</td></tr>`;
       } else {
         rows.forEach((row, i) => {
           const old = previousPointRows[i], node = body.rows[i];
-          row.cells.forEach((value, j) => { if (value !== old.cells[j]) node.cells[j].textContent = value; });
+          row.cells.forEach((value, j) => { if (value !== old.cells[j]) node.cells[j + dataOffset].textContent = value; });
           if (row.edit !== old.edit) node.querySelector('[data-point-edit]').dataset.pointEdit = row.edit;
           if (row.version !== old.version) node.querySelector('[data-point-delete]').dataset.version = row.version;
         });
       }
+      if (pointTrend) points.forEach((point, index) => {
+        if (stable && rows[index].cells[2] === previousPointRows[index].cells[2]) return;
+        const row = body.rows[index];
+        const definition = {kind, rtu_id: rtu, pnt_no: point.pnt_no, name: point.name};
+        row.cells[0].replaceChildren(pointTrend.checkbox(definition));
+        pointTrend.bindRow?.(row, definition);
+      });
       previousPointRows = rows; previousPointBody = body;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;
       $("#point-prev").disabled = offset === 0;
