@@ -104,10 +104,7 @@ def _read_device(store, con, table, idx, *, live=False):
         item = definitions.get(metric)
         if item is None:
             if types is None:
-                types = {
-                    row[1]: row[2]
-                    for row in con.execute(f"PRAGMA table_info({table_sql})")
-                }
+                types = store.table_column_types(con, table)
             item = dict(
                 measurement_id=None,
                 metric=metric,
@@ -262,4 +259,7 @@ def update_parameters(store, payload):
                 f"UPDATE {store._table_name(table)} SET {fields} WHERE idx=?",
                 (*physical_values.values(), detail["device"]["idx"]),
             )
-        return _read_device(store, con, table, idx)
+        result = _read_device(store, con, table, idx)
+    if updates:
+        store.bump_config_epoch()
+    return result

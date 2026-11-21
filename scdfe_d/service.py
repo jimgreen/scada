@@ -206,6 +206,8 @@ class DeviceStore:
         self.connection_pool_size = max(0, int(connection_pool_size))
         self._connection_pool = []
         self._pool_closed = False
+        self._config_epoch = 0
+        self._table_types_cache = {}
         existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
         if existing:
             result = validate_database(self.db_path)
@@ -213,7 +215,11 @@ class DeviceStore:
                 raise ValueError(result["message"])
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._open_connection()) as init_con:
-            init_con.execute("PRAGMA journal_mode=WAL")
+            mode = str(init_con.execute("PRAGMA journal_mode").fetchone()[0] or "").lower()
+            if mode != "wal":
+                init_con.execute("PRAGMA journal_mode=WAL")
+            if existing and self._schema_ready(init_con):
+                return
         with self.connection() as con:
             con.executescript(
                 "BEGIN IMMEDIATE;\n"
@@ -307,6 +313,96 @@ class DeviceStore:
             )
             self._tables(con, sync_schema=True)
 
+    @staticmethod
+    def _schema_ready(con):
+        """检查已有设备库是否已满足最新版本结构与索引，命中时跳过全量重建。"""
+        if con.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
+            return False
+        if con.execute("PRAGMA user_version").fetchone()[0] != 3:
+            return False
+        objects = {
+            (row[0], row[1])
+            for row in con.execute(
+                "SELECT type, name FROM sqlite_master WHERE type IN ('table','index')"
+            )
+        }
+        required_tables = {
+            "d_settings",
+            "d_device_tables",
+            "d_device_members",
+            "rtdb_schema_tables",
+            "rtdb_schema_columns",
+        }
+        if not all(("table", name) in objects for name in required_tables):
+            return False
+        required_indexes = {
+            "d_measurement_device",
+            "d_device_members_device_table",
+            "d_measurement_value_refresh",
+            "d_measurement_active_device",
+            "d_measurement_value_valid",
+            "d_device_category",
+            "d_mapping_source_db",
+            "d_measurement_qty_device",
+        }
+        if not all(("index", name) in objects for name in required_indexes):
+            return False
+        for table, column in (
+            ("device", "category"),
+            ("device_measurement", "notuse"),
+            ("device_measurement", "quantity_table"),
+            ("measurement_value", "previous_value"),
+        ):
+            if column not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
+                return False
+        settings = dict(
+            con.execute(
+                "SELECT key, value FROM d_settings WHERE key IN ('root_paths','interval_seconds')"
+            ).fetchall()
+        )
+        if settings.get("root_paths") != "1":
+            return False
+        interval_raw = settings.get("interval_seconds")
+        if interval_raw is None or interval_raw != str(stored_interval(con)):
+            return False
+        if con.execute(
+            "SELECT 1 FROM device_measurement WHERE catalog_active=1 AND quantity_table='' LIMIT 1"
+        ).fetchone():
+            return False
+        registered_tables = {
+            row[0] for row in con.execute("SELECT table_name FROM d_device_tables")
+        }
+        device_tables = {
+            row[0] for row in con.execute("SELECT DISTINCT model_table FROM device")
+        }
+        if not device_tables <= registered_tables:
+            return False
+        if not all(("table", name) in objects for name in registered_tables):
+            return False
+        return True
+
+    def bump_config_epoch(self):
+        """配置变更后递增内存版本号，使采集器的映射缓存及时失效。"""
+        with self._mutex:
+            self._config_epoch += 1
+
+    def table_column_types(self, con, table):
+        """按 schema_version 缓存设备宽表列类型，避免高频实时轮询重复执行 PRAGMA。"""
+        schema_ver = con.execute("PRAGMA schema_version").fetchone()[0]
+        cache_key = (table, schema_ver)
+        with self._mutex:
+            cached = self._table_types_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        table_sql = self._table_name(table)
+        types = {row[1]: row[2] for row in con.execute(f"PRAGMA table_info({table_sql})")}
+        with self._mutex:
+            # 清理同一表旧 schema_version 缓存，防止字典膨胀
+            for key in [k for k in self._table_types_cache if k[0] == table]:
+                self._table_types_cache.pop(key, None)
+            self._table_types_cache[cache_key] = types
+        return types
+
     def _open_connection(self):
         con = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
         try:
@@ -367,18 +463,46 @@ class DeviceStore:
             raise ValueError("模型设备表名称不合法")
         return '"' + name + '"'
 
-    def _tables(self, con, *, sync_schema=False):
+    def _tables(
+        self,
+        con,
+        *,
+        sync_schema=False,
+        target_tables=None,
+        target_device_ids=None,
+    ):
         """Reconcile device tables to their model membership and owned quantities."""
-        for d in con.execute(
-            "SELECT device_id,model_table,model_idx,name FROM device"
-        ).fetchall():
-            self._table_name(d["model_table"])
-            con.execute(
-                "INSERT OR IGNORE INTO d_device_tables VALUES(?)", (d["model_table"],)
-            )
-            con.execute(
+        full_mode = target_tables is None and target_device_ids is None
+        if target_device_ids is not None:
+            dev_ids = sorted({int(did) for did in target_device_ids})
+            if dev_ids:
+                placeholders = ",".join("?" for _ in dev_ids)
+                dev_rows = con.execute(
+                    f"SELECT device_id,model_table,model_idx,name FROM device WHERE device_id IN ({placeholders})",
+                    dev_ids,
+                ).fetchall()
+            else:
+                dev_rows = []
+        else:
+            dev_rows = con.execute(
+                "SELECT device_id,model_table,model_idx,name FROM device"
+            ).fetchall()
+        table_rows = []
+        member_rows = []
+        seen_tables = set()
+        for d in dev_rows:
+            model_table = d["model_table"]
+            self._table_name(model_table)
+            if model_table not in seen_tables:
+                seen_tables.add(model_table)
+                table_rows.append((model_table,))
+            member_rows.append((model_table, d["model_idx"], d["name"], d["device_id"]))
+        if table_rows:
+            con.executemany("INSERT OR IGNORE INTO d_device_tables VALUES(?)", table_rows)
+        if member_rows:
+            con.executemany(
                 "INSERT INTO d_device_members VALUES(?,?,?,?) ON CONFLICT(table_name,idx) DO UPDATE SET name=excluded.name,device_id=excluded.device_id",
-                (d["model_table"], d["model_idx"], d["name"], d["device_id"]),
+                member_rows,
             )
         tables = [
             row[0]
@@ -386,25 +510,69 @@ class DeviceStore:
                 "SELECT table_name FROM d_device_tables ORDER BY table_name"
             )
         ]
+        if full_mode:
+            scope_set = set(tables)
+        else:
+            scope_set = set(target_tables or ()) | seen_tables
+            if target_device_ids:
+                dev_ids = sorted({int(did) for did in target_device_ids})
+                placeholders = ",".join("?" for _ in dev_ids)
+                for (tbl,) in con.execute(
+                    f"SELECT DISTINCT table_name FROM d_device_members WHERE device_id IN ({placeholders})",
+                    dev_ids,
+                ):
+                    scope_set.add(tbl)
+            scope_set &= set(tables)
+
         metrics_by_table = {table: {} for table in tables}
         locations = {}
+        ext_tables = tuple(EXTENSION_METRICS)
+        ext_placeholders = ",".join("?" for _ in ext_tables)
         for table, device_id in con.execute(
-            "SELECT table_name,device_id FROM d_device_members"
+            f"SELECT table_name,device_id FROM d_device_members WHERE table_name IN ({ext_placeholders})",
+            ext_tables,
         ):
-            if table in EXTENSION_METRICS:
-                for metric in EXTENSION_METRICS[table]:
-                    key = (device_id, metric)
-                    if key in locations:
-                        raise ApiError(
-                            400, f"同一设备存在重复量测扩展定义：{table}.{metric}"
-                        )
-                    locations[key] = table
+            for metric in EXTENSION_METRICS[table]:
+                key = (device_id, metric)
+                if key in locations:
+                    raise ApiError(
+                        400, f"同一设备存在重复量测扩展定义：{table}.{metric}"
+                    )
+                locations[key] = table
         for table, (analog, signals) in UNBOUND_PROFILES.items():
             if table in metrics_by_table:
                 metrics_by_table[table].update(dict.fromkeys(analog, "yc"))
                 metrics_by_table[table].update(dict.fromkeys(signals, "yx"))
-        active = con.execute("""SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,d.model_table
-            FROM device_measurement m JOIN device d USING(device_id) WHERE m.catalog_active=1""").fetchall()
+
+        if full_mode:
+            active = con.execute(
+                """SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,d.model_table
+                FROM device_measurement m JOIN device d USING(device_id) WHERE m.catalog_active=1"""
+            ).fetchall()
+        elif scope_set:
+            t_list = sorted(scope_set)
+            t_ph = ",".join("?" for _ in t_list)
+            conds = [
+                f"m.quantity_table IN ({t_ph})",
+                f"d.model_table IN ({t_ph})",
+                "m.quantity_table=''",
+            ]
+            params = t_list + t_list
+            if target_device_ids:
+                d_list = sorted({int(did) for did in target_device_ids})
+                d_ph = ",".join("?" for _ in d_list)
+                conds.append(f"m.device_id IN ({d_ph})")
+                params.extend(d_list)
+            active = con.execute(
+                f"""SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,d.model_table
+                FROM device_measurement m JOIN device d USING(device_id)
+                WHERE m.catalog_active=1 AND ({' OR '.join(conds)})""",
+                params,
+            ).fetchall()
+        else:
+            active = []
+
+        qty_updates = []
         for row in active:
             metric, kind = row["metric"], row["kind"]
             if (
@@ -418,11 +586,25 @@ class DeviceStore:
             if current_kind != kind:
                 raise ApiError(400, f"同一设备表的量测类型必须一致：{table}.{metric}")
             if row["quantity_table"] != table:
-                con.execute(
-                    "UPDATE device_measurement SET quantity_table=? WHERE measurement_id=?",
-                    (table, row["measurement_id"]),
-                )
-        for table in tables:
+                qty_updates.append((table, row["measurement_id"]))
+                if not full_mode:
+                    scope_set.add(table)
+        if qty_updates:
+            con.executemany(
+                "UPDATE device_measurement SET quantity_table=? WHERE measurement_id=?",
+                qty_updates,
+            )
+
+        scope_tables = [t for t in tables if t in scope_set]
+        # 一次性加载当前所有触发器定义，避免逐量测查询 sqlite_master
+        existing_triggers = {
+            row[0]: row[1]
+            for row in con.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        rebuilt_tables = set()
+        for table in scope_tables:
             name = self._table_name(table)
             metrics = sorted(metrics_by_table[table].items(), key=metric_order)
             columns = [
@@ -448,23 +630,36 @@ class DeviceStore:
                 )
                 con.execute(f"CREATE TABLE {name} ({', '.join(definitions)})")
                 sync_schema = True
+                rebuilt_tables.add(table)
+                # DROP TABLE 会级联删除该表触发器，需清除对应的内存缓存项
+                prefix = f"d_binding_{table}_"
+                for trig in [k for k in existing_triggers if k.startswith(prefix)]:
+                    existing_triggers.pop(trig, None)
             for metric, _ in metrics:
-                self._ensure_binding_trigger(con, table, metric)
+                self._ensure_binding_trigger(
+                    con, table, metric, existing_triggers=existing_triggers
+                )
             con.execute(
                 f"DELETE FROM {name} WHERE idx NOT IN (SELECT idx FROM d_device_members WHERE table_name=?)",
                 (table,),
             )
             con.execute(
-                f"INSERT INTO {name}(idx,name) SELECT idx,name FROM d_device_members WHERE table_name=? ON CONFLICT(idx) DO UPDATE SET name=excluded.name",
+                f"INSERT INTO {name}(idx,name) SELECT idx,name FROM d_device_members WHERE table_name=? ON CONFLICT(idx) DO UPDATE SET name=excluded.name WHERE name IS NOT excluded.name",
                 (table,),
             )
-        for category in CATEGORIES:
-            con.execute(f"DROP VIEW IF EXISTS device_{category}")
-        self._write_tables(con)
+        if full_mode:
+            for category in CATEGORIES:
+                con.execute(f"DROP VIEW IF EXISTS device_{category}")
+        self._write_tables(
+            con,
+            target_tables=None if full_mode else scope_tables,
+            target_device_ids=None if full_mode else target_device_ids,
+            full_tables=rebuilt_tables,
+        )
         if sync_schema:
             sync_embedded_schema(con, include_tables=tables)
 
-    def _ensure_binding_trigger(self, con, table, metric):
+    def _ensure_binding_trigger(self, con, table, metric, *, existing_triggers=None):
         # Direct edits to an existing mapping are reflected in the collector's definition.
         name = self._table_name(table)
         mid = f"""(SELECT m.measurement_id FROM device_measurement m JOIN d_device_members b USING(device_id)
@@ -487,25 +682,64 @@ class DeviceStore:
                       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE measurement_id={mid};
                     UPDATE measurement_value SET valid=0,reason='definition_changed' WHERE measurement_id={mid};
                     END'''
-        current = con.execute(
-            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
-            (trigger_name,),
-        ).fetchone()
-        if current is None or current[0] != definition:
+        if existing_triggers is not None:
+            current_sql = existing_triggers.get(trigger_name)
+        else:
+            row = con.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+                (trigger_name,),
+            ).fetchone()
+            current_sql = row[0] if row is not None else None
+        if current_sql != definition:
             con.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             con.execute(definition)
+            if existing_triggers is not None:
+                existing_triggers[trigger_name] = definition
 
-    def _write_tables(self, con):
-        measurements = {}
-        for m in con.execute("""SELECT m.*,s.rtu_id,s.pnt_no,s.enabled,v.value,v.previous_value,v.quality,v.source_time_ms,v.valid
+    def _write_tables(
+        self, con, *, target_tables=None, target_device_ids=None, full_tables=None
+    ):
+        if target_tables is None:
+            tables = [
+                row[0] for row in con.execute("SELECT table_name FROM d_device_tables")
+            ]
+        else:
+            tables = list(target_tables)
+        if not tables:
+            return
+        full_set = set(full_tables or ())
+        dev_filter = (
+            sorted({int(did) for did in target_device_ids})
+            if target_device_ids is not None
+            else None
+        )
+        need_all_devs_for_some = dev_filter is None or any(t in full_set for t in tables)
+
+        meas_sql = """SELECT m.device_id,m.quantity_table,m.metric,m.notuse,m.weight,
+                s.rtu_id,s.pnt_no,v.value,v.previous_value,v.quality,v.source_time_ms,v.valid
                 FROM device_measurement m LEFT JOIN scada_point_mapping s USING(measurement_id)
-                LEFT JOIN measurement_value v USING(measurement_id) WHERE m.catalog_active=1"""):
-            measurements.setdefault((m["device_id"], m["quantity_table"]), []).append(m)
-        for (table,) in con.execute(
-            "SELECT table_name FROM d_device_tables"
-        ).fetchall():
+                LEFT JOIN measurement_value v USING(measurement_id) WHERE m.catalog_active=1"""
+        meas_params = []
+        if target_tables is not None:
+            t_ph = ",".join("?" for _ in tables)
+            meas_sql += f" AND m.quantity_table IN ({t_ph})"
+            meas_params.extend(tables)
+        if not need_all_devs_for_some and dev_filter:
+            d_ph = ",".join("?" for _ in dev_filter)
+            meas_sql += f" AND m.device_id IN ({d_ph})"
+            meas_params.extend(dev_filter)
+
+        cur = con.cursor()
+        cur.row_factory = None
+        measurements = {}
+        for row in cur.execute(meas_sql, meas_params):
+            measurements.setdefault((row[0], row[1]), []).append(row)
+
+        for table in tables:
             name = self._table_name(table)
             columns = [r[1] for r in con.execute(f"PRAGMA table_info({name})")][2:]
+            if not columns:
+                continue
             # Include default values so removed properties never leave stale data.
             base = {
                 c: 128
@@ -515,31 +749,53 @@ class DeviceStore:
                 else None
                 for c in columns
             }
+            if dev_filter is not None and table not in full_set:
+                if not dev_filter:
+                    continue
+                d_ph = ",".join("?" for _ in dev_filter)
+                members_iter = cur.execute(
+                    f"SELECT idx,device_id FROM d_device_members WHERE table_name=? AND device_id IN ({d_ph})",
+                    [table] + dev_filter,
+                )
+            else:
+                members_iter = cur.execute(
+                    "SELECT idx,device_id FROM d_device_members WHERE table_name=?",
+                    (table,),
+                )
             rows = []
-            for b in con.execute(
-                "SELECT idx,device_id FROM d_device_members WHERE table_name=?",
-                (table,),
-            ):
+            for idx, device_id in members_iter:
                 values = dict(base)
-                for m in measurements.get((b["device_id"], table), []):
-                    quality = (
-                        (m["quality"] or 0) if m["valid"] else (m["quality"] or 0) | 128
-                    )
+                for (
+                    _did,
+                    _qtbl,
+                    metric,
+                    notuse,
+                    weight,
+                    rtu_id,
+                    pnt_no,
+                    val,
+                    prev_val,
+                    qual,
+                    src_time,
+                    valid,
+                ) in measurements.get((device_id, table), ()):
+                    quality = (qual or 0) if valid else (qual or 0) | 128
                     group = (
-                        m["value"],
+                        val,
                         quality,
-                        m["previous_value"],
-                        m["source_time_ms"],
-                        m["notuse"],
-                        m["weight"],
-                        m["rtu_id"],
-                        m["pnt_no"],
+                        prev_val,
+                        src_time,
+                        notuse,
+                        weight,
+                        rtu_id,
+                        pnt_no,
                     )
                     for suffix, value in zip(SUFFIXES, group):
-                        if m["metric"] + suffix in values:
-                            values[m["metric"] + suffix] = value
-                rows.append(tuple(values[c] for c in columns) + (b["idx"],))
-            if columns:
+                        col = metric + suffix
+                        if col in values:
+                            values[col] = value
+                rows.append(tuple(values[c] for c in columns) + (idx,))
+            if rows:
                 con.executemany(
                     f"UPDATE {name} SET "
                     + ",".join('"' + c + '"=?' for c in columns)
@@ -585,21 +841,22 @@ class DeviceStore:
         columns = "rtu_id,pnt_no,value,status,refresh_time"
         params = ()
         sql = f"SELECT {columns} FROM {table}"
+        has_pk = pk_cache.get(table) if pk_cache is not None else None
+        if has_pk is None:
+            primary_key = {
+                row[1]
+                for row in connection.execute(f"PRAGMA table_info({table})")
+                if row[5]
+            }
+            has_pk = primary_key == {"rtu_id", "pnt_no"}
+            if pk_cache is not None:
+                pk_cache[table] = has_pk
         # Small, scattered bindings can use the source table's unique point key
-        # instead of scanning every point. A dense mapping is cheaper to scan.
+        # instead of scanning every point. For denser sets on a few RTUs, filter
+        # by the leading primary-key column rtu_id to avoid scanning unrelated RTUs.
         # Keep the full duplicate check for legacy sources without that key.
-        if len(keys) <= 128:
-            has_pk = pk_cache.get(table) if pk_cache is not None else None
-            if has_pk is None:
-                primary_key = {
-                    row[1]
-                    for row in connection.execute(f"PRAGMA table_info({table})")
-                    if row[5]
-                }
-                has_pk = primary_key == {"rtu_id", "pnt_no"}
-                if pk_cache is not None:
-                    pk_cache[table] = has_pk
-            if has_pk:
+        if has_pk:
+            if len(keys) <= 128:
                 wanted = ",".join("(?,?)" for _ in keys)
                 params = tuple(value for pair in sorted(keys) for value in pair)
                 qualified = ",".join(f"p.{field}" for field in columns.split(","))
@@ -608,15 +865,29 @@ class DeviceStore:
                     f"SELECT {qualified} FROM wanted CROSS JOIN {table} p "
                     "ON p.rtu_id=wanted.rtu_id AND p.pnt_no=wanted.pnt_no"
                 )
+            else:
+                distinct_rtus = sorted({rtu for rtu, _ in keys})
+                if len(distinct_rtus) <= 64:
+                    placeholders = ",".join("?" for _ in distinct_rtus)
+                    sql = f"SELECT {columns} FROM {table} WHERE rtu_id IN ({placeholders})"
+                    params = tuple(distinct_rtus)
+        cur = connection.cursor()
+        cur.row_factory = None
         snapshot = {}
-        seen = set()
-        for rtu_id, pnt_no, value, status, stamp in connection.execute(sql, params):
-            key = (rtu_id, pnt_no)
-            if key in seen:
-                raise ApiError(400, "源测点主键重复")
-            seen.add(key)
-            if key in keys:
-                snapshot[key] = (value, status, stamp)
+        if has_pk:
+            for rtu_id, pnt_no, value, status, stamp in cur.execute(sql, params):
+                key = (rtu_id, pnt_no)
+                if key in keys:
+                    snapshot[key] = (value, status, stamp)
+        else:
+            seen = set()
+            for rtu_id, pnt_no, value, status, stamp in cur.execute(sql, params):
+                key = (rtu_id, pnt_no)
+                if key in seen:
+                    raise ApiError(400, "源测点主键重复")
+                seen.add(key)
+                if key in keys:
+                    snapshot[key] = (value, status, stamp)
         return snapshot
 
     def import_model(self, relative_path):
@@ -652,37 +923,62 @@ class DeviceStore:
         if not model:
             raise ApiError(400, "模型库没有含 idx/name 的设备定义")
         with self.connection() as con:
+            con.executemany(
+                "INSERT OR IGNORE INTO d_device_tables VALUES(?)",
+                [(table,) for table in model],
+            )
+            device_rows = []
             for table, items in model.items():
-                con.execute("INSERT OR IGNORE INTO d_device_tables VALUES(?)", (table,))
                 if table in EXTENSIONS:
                     continue
                 for item in items:
-                    con.execute(
-                        """INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)
-                        ON CONFLICT(model_table,model_idx) DO UPDATE SET name=excluded.name,model_json=excluded.model_json,category=excluded.category""",
+                    device_rows.append(
                         (
                             table,
                             int(item["idx"]),
                             item["name"],
                             json.dumps(item, ensure_ascii=False),
                             category_for(table, item),
-                        ),
+                        )
                     )
+            if device_rows:
+                con.executemany(
+                    """INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)
+                    ON CONFLICT(model_table,model_idx) DO UPDATE SET name=excluded.name,model_json=excluded.model_json,category=excluded.category""",
+                    device_rows,
+                )
             # Extension tables use their own idx and the owning generator's name.
             # Their property values and mappings reference the same physical device.
+            ext_needed_parents = sorted(
+                {
+                    parent
+                    for table, (parent, _key) in EXTENSIONS.items()
+                    if model.get(table)
+                }
+            )
+            parent_lookup = {}
+            if ext_needed_parents:
+                ph = ",".join("?" for _ in ext_needed_parents)
+                cur = con.cursor()
+                cur.row_factory = None
+                for m_table, m_idx, d_id, d_name in cur.execute(
+                    f"SELECT model_table,model_idx,device_id,name FROM device WHERE model_table IN ({ph})",
+                    ext_needed_parents,
+                ):
+                    parent_lookup[(m_table, m_idx)] = (d_id, d_name)
+            ext_member_rows = []
             for table, (parent, key) in EXTENSIONS.items():
                 for item in model.get(table, []):
-                    d = con.execute(
-                        "SELECT device_id,name FROM device WHERE model_table=? AND model_idx=?",
-                        (parent, item[key]),
-                    ).fetchone()
-                    if not d:
+                    found = parent_lookup.get((parent, item[key]))
+                    if not found:
                         raise ApiError(400, f"{table} 中的设备关联不存在")
-                    con.execute(
-                        """INSERT INTO d_device_members VALUES(?,?,?,?) ON CONFLICT(table_name,idx)
-                        DO UPDATE SET name=excluded.name,device_id=excluded.device_id""",
-                        (table, int(item["idx"]), d["name"], d["device_id"]),
-                    )
+                    ext_member_rows.append((table, int(item["idx"]), found[1], found[0]))
+            if ext_member_rows:
+                con.executemany(
+                    """INSERT INTO d_device_members VALUES(?,?,?,?) ON CONFLICT(table_name,idx)
+                    DO UPDATE SET name=excluded.name,device_id=excluded.device_id""",
+                    ext_member_rows,
+                )
             self._tables(con)
             con.execute(
                 "INSERT INTO d_settings VALUES('model_database',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -695,6 +991,7 @@ class DeviceStore:
                 {},
                 dict(path=relative_path, tables=len(model)),
             )
+        self.bump_config_epoch()
         return dict(
             tables=len(model),
             devices=sum(len(v) for k, v in model.items() if k not in EXTENSIONS),
@@ -799,13 +1096,17 @@ class DeviceStore:
                 "INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)",
                 (table, idx, name, "{}", category),
             )
+            device_id = cur.lastrowid
             result = dict(
                 con.execute(
-                    "SELECT * FROM device WHERE device_id=?", (cur.lastrowid,)
+                    "SELECT * FROM device WHERE device_id=?", (device_id,)
                 ).fetchone()
             )
-            self._audit(con, "device", cur.lastrowid, {}, result)
-            self._tables(con)
+            self._audit(con, "device", device_id, {}, result)
+            self._tables(
+                con, target_tables={table}, target_device_ids={device_id}
+            )
+        self.bump_config_epoch()
         return result
 
     @staticmethod
@@ -856,7 +1157,8 @@ class DeviceStore:
             if query.get(field):
                 where.append("m." + field + "=?")
                 args.append(query[field])
-        if query.get("category"):
+        need_device = bool(query.get("category"))
+        if need_device:
             where.append("d.category=?")
             args.append(query["category"])
         if query.get("table"):
@@ -867,18 +1169,29 @@ class DeviceStore:
                 "(instr(lower(m.name),lower(?))>0 OR instr(lower(m.metric),lower(?))>0)"
             )
             args += [query["q"]] * 2
-        if query.get("invalid") == "1":
+        need_value = query.get("invalid") == "1"
+        if need_value:
             where.append("coalesce(v.valid,0)=0")
-        joined = """ FROM device_measurement m JOIN device d USING(device_id)
+        where_clause = " WHERE " + " AND ".join(where)
+        count_from = (
+            " FROM device_measurement m"
+            + (" JOIN device d USING(device_id)" if need_device else "")
+            + " JOIN d_device_members b ON b.device_id=m.device_id AND b.table_name=m.quantity_table"
+            + (" LEFT JOIN measurement_value v USING(measurement_id)" if need_value else "")
+            + where_clause
+        )
+        joined = (
+            """ FROM device_measurement m JOIN device d USING(device_id)
             JOIN d_device_members b ON b.device_id=m.device_id AND b.table_name=m.quantity_table
-            LEFT JOIN scada_point_mapping s USING(measurement_id) LEFT JOIN measurement_value v USING(measurement_id)
-            WHERE """ + " AND ".join(where)
+            LEFT JOIN scada_point_mapping s USING(measurement_id) LEFT JOIN measurement_value v USING(measurement_id)"""
+            + where_clause
+        )
         page, limit = (
             max(1, int(query.get("page", 1))),
             min(200, max(1, int(query.get("limit", 50)))),
         )
         with self.connection() as con:
-            total = con.execute("SELECT count(*)" + joined, args).fetchone()[0]
+            total = con.execute("SELECT count(*)" + count_from, args).fetchone()[0]
             rows = con.execute(
                 """SELECT m.*,d.name device_name,d.category,s.source_database,s.rtu_id,s.pnt_no,
                 b.table_name model_table,b.idx model_idx,s.enabled,s.scale,s.offset,v.value,v.source_value,v.previous_value,v.quality,v.source_time_ms,
@@ -1053,7 +1366,18 @@ class DeviceStore:
                 dict(before, mapping=dict(old_mapping) if old_mapping else None),
                 after,
             )
-            self._tables(con)
+            affected_devices = {device_id}
+            if before.get("device_id") is not None:
+                affected_devices.add(before["device_id"])
+            affected_tables = set()
+            if before.get("quantity_table"):
+                affected_tables.add(before["quantity_table"])
+            self._tables(
+                con,
+                target_tables=affected_tables,
+                target_device_ids=affected_devices,
+            )
+        self.bump_config_epoch()
         return after
 
     def delete_measurement(self, measurement_id, version):
@@ -1073,7 +1397,16 @@ class DeviceStore:
                 con.execute(
                     f"DELETE FROM {table} WHERE measurement_id=?", (measurement_id,)
                 )
-            self._tables(con)
+            old_table = row["quantity_table"]
+            if old_table:
+                self._tables(
+                    con,
+                    target_tables={old_table},
+                    target_device_ids={row["device_id"]},
+                )
+            else:
+                self._tables(con)
+        self.bump_config_epoch()
 
     def _read_cached_source(self, source_name, kinds, source_cache):
         path = self.source_path(source_name)
@@ -1107,17 +1440,19 @@ class DeviceStore:
                             raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
                         pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
                     schema_version = con.execute("PRAGMA schema_version").fetchone()[0]
-                    entry = [con, identity, schema_version, pk_cache]
+                    # entry: [con, identity, schema_version, pk_cache, data_version, snapshots]
+                    entry = [con, identity, schema_version, pk_cache, None, {}]
                     source_cache[source_name] = entry
                 except BaseException:
                     con.close()
                     raise
-            con, _, schema_version, pk_cache = entry
+            con, _, schema_version, pk_cache, cached_data_version, cached_snapshots = entry
             con.execute("BEGIN")
             try:
                 current_schema = con.execute("PRAGMA schema_version").fetchone()[0]
                 if current_schema != schema_version:
                     pk_cache.clear()
+                    cached_snapshots.clear()
                     for kind in ("yc", "yx"):
                         table = f"fes_{kind}_define"
                         info = con.execute(f"PRAGMA table_info({table})").fetchall()
@@ -1126,10 +1461,27 @@ class DeviceStore:
                             raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
                         pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
                     entry[2] = current_schema
-                return {
-                    kind: self._source_values(con, kind, keys, pk_cache=pk_cache)
-                    for kind, keys in kinds.items()
-                }
+                current_data_version = con.execute("PRAGMA data_version").fetchone()[0]
+                if current_data_version != cached_data_version:
+                    cached_snapshots.clear()
+                    entry[4] = current_data_version
+                result = {}
+                for kind, keys in kinds.items():
+                    cached = cached_snapshots.get(kind)
+                    if cached is not None:
+                        cached_keys, cached_snap = cached
+                        if keys == cached_keys:
+                            result[kind] = cached_snap
+                            continue
+                        if keys <= cached_keys:
+                            result[kind] = {
+                                k: cached_snap[k] for k in keys if k in cached_snap
+                            }
+                            continue
+                    snap = self._source_values(con, kind, keys, pk_cache=pk_cache)
+                    cached_snapshots[kind] = (frozenset(keys), snap)
+                    result[kind] = snap
+                return result
             finally:
                 con.rollback()
         except ApiError:
@@ -1143,29 +1495,44 @@ class DeviceStore:
                 cached[0].close()
             raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
 
-    def collect_once(self, *, _writer=None, _source_cache=None):
+    def collect_once(self, *, _writer=None, _source_cache=None, _plan_cache=None):
         started = utc_now()
         mapping_sql = """SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,
             m.max_age_seconds,m.se_enabled,m.notuse,d.active,
             s.source_database,s.rtu_id,s.pnt_no,s.enabled,s.scale,s.offset,
-            v.measurement_id old_id,v.source_value,v.value,v.quality,v.source_time_ms,v.previous_value,v.valid,v.reason
+            v.measurement_id,v.source_value,v.value,v.quality,v.source_time_ms,v.previous_value,v.valid,v.reason
             FROM device_measurement m JOIN device d USING(device_id)
             LEFT JOIN scada_point_mapping s USING(measurement_id)
             LEFT JOIN measurement_value v USING(measurement_id)
             WHERE m.catalog_active=1"""
         # 第一阶段：短读事务获取待采源点列表，立即释放本地库连接，严禁持写锁执行外部源库 I/O。
-        with self.connection(_writer=_writer) as read_con:
-            requested_rows = read_con.execute(
-                """SELECT m.kind, d.active, s.source_database, s.rtu_id, s.pnt_no, s.enabled
-                FROM device_measurement m JOIN device d USING(device_id)
-                JOIN scada_point_mapping s USING(measurement_id)
-                WHERE m.catalog_active=1 AND d.active=1 AND s.enabled=1 AND s.source_database<>''"""
-            ).fetchall()
-        requested = defaultdict(lambda: defaultdict(set))
-        for row in requested_rows:
-            requested[row["source_database"]][row["kind"]].add(
-                (row["rtu_id"], row["pnt_no"])
-            )
+        requested = None
+        plan_key = None
+        if _writer is not None and _plan_cache is not None:
+            data_ver = _writer.execute("PRAGMA data_version").fetchone()[0]
+            plan_key = (data_ver, self._config_epoch)
+            if _plan_cache.get("key") == plan_key:
+                requested = _plan_cache["requested"]
+        if requested is None:
+            with self.connection(_writer=_writer) as read_con:
+                cur = read_con.cursor()
+                cur.row_factory = None
+                requested_rows = cur.execute(
+                    """SELECT m.kind, s.source_database, s.rtu_id, s.pnt_no
+                    FROM device_measurement m JOIN device d USING(device_id)
+                    JOIN scada_point_mapping s USING(measurement_id)
+                    WHERE m.catalog_active=1 AND d.active=1 AND s.enabled=1 AND s.source_database<>''"""
+                ).fetchall()
+            tmp_requested = defaultdict(lambda: defaultdict(set))
+            for kind, source_db, rtu_id, pnt_no in requested_rows:
+                tmp_requested[source_db][kind].add((rtu_id, pnt_no))
+            requested = {
+                src: {k: frozenset(pts) for k, pts in kind_map.items()}
+                for src, kind_map in tmp_requested.items()
+            }
+            if _plan_cache is not None and plan_key is not None:
+                _plan_cache["key"] = plan_key
+                _plan_cache["requested"] = requested
         if _source_cache is not None:
             for stale in [key for key in _source_cache if key not in requested]:
                 _source_cache.pop(stale)[0].close()
@@ -1184,140 +1551,272 @@ class DeviceStore:
             except (ApiError, OSError, ValueError) as exc:
                 errors[source] = str(exc)
         now_ms = int(time.time() * 1000)
+        future_limit = now_ms + 5000
         # 第三阶段：进入 BEGIN IMMEDIATE 写事务，重新读取最新映射快照并原子落盘。
-        with self.connection(_writer=_writer) as con:
-            con.execute("BEGIN IMMEDIATE")
-            mappings = con.execute(mapping_sql).fetchall()
-            refresh = con.execute(
-                "INSERT INTO measurement_refresh(started_at,source_database,error) VALUES(?,?,?)",
-                (
-                    started,
-                    json.dumps(list(sources), ensure_ascii=False),
-                    json.dumps(errors, ensure_ascii=False) if errors else "",
-                ),
-            ).lastrowid
-            valid_count = se_count = 0
-            collected_at = utc_now()
-            samples = []
-            changes = defaultdict(dict)
-            for m in mappings:
-                raw, value, quality, stamp, previous = (
-                    m[k]
-                    for k in (
-                        "source_value",
-                        "value",
-                        "quality",
-                        "source_time_ms",
-                        "previous_value",
+        next_mappings = None
+        tx_key = None
+        has_inactive = None
+        try:
+            with self.connection(_writer=_writer) as con:
+                con.execute("BEGIN IMMEDIATE")
+                cur = con.cursor()
+                cur.row_factory = None
+                mappings = None
+                if _writer is not None and _plan_cache is not None:
+                    tx_key = (
+                        cur.execute("PRAGMA data_version").fetchone()[0],
+                        self._config_epoch,
                     )
-                )
-                old_quality = (quality or 0) if m["valid"] else (quality or 0) | 128
-                old_runtime = (value, old_quality, previous, stamp)
-                reason = ""
-                points = sources.get(m["source_database"], {}).get(m["kind"], {})
-                point = points.get((m["rtu_id"], m["pnt_no"]))
-                if not m["active"] or not m["enabled"]:
-                    reason = "disabled"
-                elif m["source_database"] in errors:
-                    reason = "source_error"
-                elif point is None:
-                    reason = "missing_point"
-                else:
-                    try:
-                        new_raw, new_quality, new_stamp = (
-                            float(point[0]),
-                            int(point[1]),
-                            int(point[2]),
-                        )
-                        new_value = new_raw * m["scale"] + m["offset"]
-                        if (
-                            not math.isfinite(new_raw)
-                            or not math.isfinite(new_value)
-                            or not 0 <= new_quality <= 255
-                        ):
-                            raise ValueError("invalid sample")
-                        if m["kind"] == "yx" and new_raw not in (0, 1):
-                            raise ValueError("invalid status")
-                        if m["old_id"] is not None and (
-                            new_stamp != stamp or new_raw != raw
-                        ):
-                            previous = value
-                        raw, value, quality, stamp = (
-                            new_raw,
-                            new_value,
-                            new_quality,
-                            new_stamp,
-                        )
-                        if quality:
-                            reason = "bad_quality"
-                        elif stamp <= 0:
-                            reason = "missing_time"
-                        elif stamp > now_ms + 5000:
-                            reason = "future_time"
-                        elif now_ms - stamp > m["max_age_seconds"] * 1000:
-                            reason = "stale"
-                    except (ValueError, TypeError, OverflowError):
-                        reason = "invalid_value"
-                if reason in (
+                    if _plan_cache.get("mappings_key") == tx_key:
+                        mappings = _plan_cache["mappings"]
+                        has_inactive = _plan_cache.get("has_inactive")
+                if mappings is None:
+                    mappings = cur.execute(mapping_sql).fetchall()
+                refresh = cur.execute(
+                    "INSERT INTO measurement_refresh(started_at,source_database,error) VALUES(?,?,?)",
+                    (
+                        started,
+                        json.dumps(list(sources), ensure_ascii=False),
+                        json.dumps(errors, ensure_ascii=False) if errors else "",
+                    ),
+                ).lastrowid
+                valid_count = 0
+                se_count = 0
+                collected_at = utc_now()
+                changed_samples = []
+                unchanged_count = 0
+                changes = defaultdict(dict)
+                isfinite = math.isfinite
+                invalid_quality_reasons = (
                     "disabled",
                     "source_error",
                     "missing_point",
                     "invalid_value",
-                ):
-                    quality = (quality or 0) | 128
-                if not reason and m["notuse"]:
-                    reason = "notuse"
-                valid = int(not reason)
-                valid_count += valid
-                se_count += valid * bool(m["se_enabled"])
-                samples.append(
+                )
+                track_next = _writer is not None and _plan_cache is not None
+                if track_next:
+                    next_mappings = []
+                for row in mappings:
                     (
-                        m["measurement_id"],
-                        refresh,
-                        raw,
-                        value,
-                        quality,
-                        stamp,
-                        collected_at,
-                        valid,
-                        reason,
-                        previous,
+                        mid,
+                        device_id,
+                        metric,
+                        kind,
+                        quantity_table,
+                        max_age_seconds,
+                        se_enabled,
+                        notuse,
+                        active,
+                        source_db,
+                        rtu_id,
+                        pnt_no,
+                        enabled,
+                        scale,
+                        offset,
+                        old_id,
+                        old_raw,
+                        old_value,
+                        old_quality,
+                        old_stamp,
+                        old_previous,
+                        old_valid,
+                        old_reason,
+                    ) = row
+                    raw = old_raw
+                    value = old_value
+                    quality = old_quality
+                    stamp = old_stamp
+                    previous = old_previous
+                    old_runtime_quality = (
+                        (old_quality or 0) if old_valid else (old_quality or 0) | 128
                     )
-                )
-                runtime = (
-                    value,
-                    (quality or 0) if valid else (quality or 0) | 128,
-                    previous,
-                    stamp,
-                )
-                # A binding trigger can invalidate or remove the normalized row
-                # before the next scan. Refresh all its physical runtime fields.
-                reset_runtime = (
-                    m["old_id"] is None or m["reason"] == "definition_changed"
-                )
-                if reset_runtime or runtime != old_runtime:
-                    updates = changes[m["quantity_table"], m["device_id"]]
-                    for suffix, current, prior in zip(
-                        SUFFIXES[:4], runtime, old_runtime
+                    reason = ""
+                    src_kinds = sources.get(source_db)
+                    points = src_kinds.get(kind) if src_kinds else None
+                    point = points.get((rtu_id, pnt_no)) if points else None
+                    if not active or not enabled:
+                        reason = "disabled"
+                    elif source_db in errors:
+                        reason = "source_error"
+                    elif point is None:
+                        reason = "missing_point"
+                    else:
+                        try:
+                            new_raw = float(point[0])
+                            new_quality = int(point[1])
+                            new_stamp = int(point[2])
+                            new_value = new_raw * scale + offset
+                            if (
+                                not isfinite(new_raw)
+                                or not isfinite(new_value)
+                                or not 0 <= new_quality <= 255
+                            ):
+                                raise ValueError("invalid sample")
+                            if kind == "yx" and new_raw not in (0, 1):
+                                raise ValueError("invalid status")
+                            if old_id is not None and (
+                                new_stamp != stamp or new_raw != raw
+                            ):
+                                previous = value
+                            raw = new_raw
+                            value = new_value
+                            quality = new_quality
+                            stamp = new_stamp
+                            if quality:
+                                reason = "bad_quality"
+                            elif stamp <= 0:
+                                reason = "missing_time"
+                            elif stamp > future_limit:
+                                reason = "future_time"
+                            elif now_ms - stamp > max_age_seconds * 1000:
+                                reason = "stale"
+                        except (ValueError, TypeError, OverflowError):
+                            reason = "invalid_value"
+                    if reason in invalid_quality_reasons:
+                        quality = (quality or 0) | 128
+                    if not reason and notuse:
+                        reason = "notuse"
+                    valid = 0 if reason else 1
+                    valid_count += valid
+                    if valid and se_enabled:
+                        se_count += 1
+                    if (
+                        old_id is None
+                        or raw != old_raw
+                        or value != old_value
+                        or quality != old_quality
+                        or stamp != old_stamp
+                        or valid != old_valid
+                        or reason != old_reason
+                        or previous != old_previous
                     ):
-                        if reset_runtime or current != prior:
-                            updates[m["metric"] + suffix] = current
-            con.executemany(
-                """INSERT INTO measurement_value(measurement_id,refresh_id,source_value,value,quality,source_time_ms,collected_at,valid,reason,previous_value)
-                VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(measurement_id) DO UPDATE SET refresh_id=excluded.refresh_id,source_value=excluded.source_value,
-                value=excluded.value,quality=excluded.quality,source_time_ms=excluded.source_time_ms,collected_at=excluded.collected_at,
-                valid=excluded.valid,reason=excluded.reason,previous_value=excluded.previous_value""",
-                samples,
-            )
-            self._write_runtime_values(con, changes)
-            con.execute(
-                "UPDATE measurement_refresh SET finished_at=?,total_count=?,valid_count=?,se_valid_count=? WHERE refresh_id=?",
-                (utc_now(), len(mappings), valid_count, se_count, refresh),
-            )
-            con.execute(
-                "DELETE FROM measurement_refresh WHERE refresh_id<? AND refresh_id NOT IN (SELECT refresh_id FROM measurement_value)",
-                (refresh - 1000,),
-            )
+                        changed_samples.append(
+                            (
+                                mid,
+                                refresh,
+                                raw,
+                                value,
+                                quality,
+                                stamp,
+                                collected_at,
+                                valid,
+                                reason,
+                                previous,
+                            )
+                        )
+                        if track_next:
+                            next_mappings.append(
+                                (
+                                    mid,
+                                    device_id,
+                                    metric,
+                                    kind,
+                                    quantity_table,
+                                    max_age_seconds,
+                                    se_enabled,
+                                    notuse,
+                                    active,
+                                    source_db,
+                                    rtu_id,
+                                    pnt_no,
+                                    enabled,
+                                    scale,
+                                    offset,
+                                    mid,
+                                    raw,
+                                    value,
+                                    quality,
+                                    stamp,
+                                    previous,
+                                    valid,
+                                    reason,
+                                )
+                            )
+                    else:
+                        unchanged_count += 1
+                        if track_next:
+                            next_mappings.append(row)
+                    runtime_quality = (quality or 0) if valid else (quality or 0) | 128
+                    # A binding trigger can invalidate or remove the normalized row
+                    # before the next scan. Refresh all its physical runtime fields.
+                    reset_runtime = old_id is None or old_reason == "definition_changed"
+                    if (
+                        reset_runtime
+                        or value != old_value
+                        or runtime_quality != old_runtime_quality
+                        or previous != old_previous
+                        or stamp != old_stamp
+                    ):
+                        updates = changes[quantity_table, device_id]
+                        if reset_runtime or value != old_value:
+                            updates[metric] = value
+                        if reset_runtime or runtime_quality != old_runtime_quality:
+                            updates[metric + "_qual"] = runtime_quality
+                        if reset_runtime or previous != old_previous:
+                            updates[metric + "_pre"] = previous
+                        if reset_runtime or stamp != old_stamp:
+                            updates[metric + "_time"] = stamp
+                if changed_samples:
+                    con.executemany(
+                        """INSERT INTO measurement_value(measurement_id,refresh_id,source_value,value,quality,source_time_ms,collected_at,valid,reason,previous_value)
+                        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(measurement_id) DO UPDATE SET refresh_id=excluded.refresh_id,source_value=excluded.source_value,
+                        value=excluded.value,quality=excluded.quality,source_time_ms=excluded.source_time_ms,collected_at=excluded.collected_at,
+                        valid=excluded.valid,reason=excluded.reason,previous_value=excluded.previous_value""",
+                        changed_samples,
+                    )
+                if unchanged_count:
+                    if has_inactive is None:
+                        has_inactive = (
+                            cur.execute(
+                                "SELECT 1 FROM device_measurement WHERE catalog_active=0 LIMIT 1"
+                            ).fetchone()
+                            is not None
+                        )
+                    if not changed_samples:
+                        if not has_inactive:
+                            cur.execute(
+                                "UPDATE measurement_value SET refresh_id=?,collected_at=?",
+                                (refresh, collected_at),
+                            )
+                        else:
+                            cur.execute(
+                                """UPDATE measurement_value SET refresh_id=?,collected_at=?
+                                WHERE measurement_id IN (SELECT measurement_id FROM device_measurement WHERE catalog_active=1)""",
+                                (refresh, collected_at),
+                            )
+                    else:
+                        if not has_inactive:
+                            cur.execute(
+                                "UPDATE measurement_value SET refresh_id=?,collected_at=? WHERE refresh_id<>?",
+                                (refresh, collected_at, refresh),
+                            )
+                        else:
+                            cur.execute(
+                                """UPDATE measurement_value SET refresh_id=?,collected_at=?
+                                WHERE refresh_id<>? AND measurement_id IN (SELECT measurement_id FROM device_measurement WHERE catalog_active=1)""",
+                                (refresh, collected_at, refresh),
+                            )
+                self._write_runtime_values(con, changes)
+                cur.execute(
+                    "UPDATE measurement_refresh SET finished_at=?,total_count=?,valid_count=?,se_valid_count=? WHERE refresh_id=?",
+                    (utc_now(), len(mappings), valid_count, se_count, refresh),
+                )
+                if _plan_cache is None or refresh % 50 == 0:
+                    cur.execute(
+                        """DELETE FROM measurement_refresh
+                        WHERE refresh_id<? AND NOT EXISTS (
+                            SELECT 1 FROM measurement_value v WHERE v.refresh_id=measurement_refresh.refresh_id
+                        )""",
+                        (refresh - 1000,),
+                    )
+        except BaseException:
+            if _plan_cache is not None:
+                _plan_cache.clear()
+            raise
+        if _plan_cache is not None and tx_key is not None and next_mappings is not None:
+            _plan_cache["mappings_key"] = tx_key
+            _plan_cache["mappings"] = next_mappings
+            _plan_cache["has_inactive"] = has_inactive
         return dict(
             refresh_id=refresh,
             total_count=len(mappings),
@@ -1451,6 +1950,7 @@ class Collector:
                 def run():
                     writer = None
                     source_cache = {}
+                    plan_cache = {}
                     try:
                         next_scan = time.monotonic()
                         last_scan = None
@@ -1478,11 +1978,14 @@ class Collector:
                                 last_scan = next_scan
                                 sample_due = True
                                 result = self.store.collect_once(
-                                    _writer=writer, _source_cache=source_cache
+                                    _writer=writer,
+                                    _source_cache=source_cache,
+                                    _plan_cache=plan_cache,
                                 )
                                 self.last_error = "; ".join(result["errors"].values())
                             except Exception as exc:
                                 self.last_error = str(exc)
+                                plan_cache.clear()
                                 if writer is not None:
                                     writer.close()
                                     writer = None
