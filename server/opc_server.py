@@ -153,13 +153,18 @@ class OpcUaServer(PacketTrace):
             raise OpcUaServerError("运行中的 OPC UA 点表需要重启服务端后重新建模")
         return item
 
+    async def _read_nodes_async(self, items):
+        values = await asyncio.gather(*(node.read_value() for _, node in items), return_exceptions=True)
+        return [(key, value) for (key, _), value in zip(items, values) if not isinstance(value, Exception)]
+
     def snapshot(self):
         if not self.connected:
             return self.point_store.snapshot()
-        for key, node in list(self._nodes.items()):
+        items = list(self._nodes.items())
+        if items:
             try:
-                value = self._call(node.read_value())
-                self.point_store.update(*key, value)
+                for key, value in self._call(self._read_nodes_async(items), timeout=max(5, len(items) * 0.1)):
+                    self.point_store.update(*key, value)
             except Exception:
                 pass
         return self.point_store.snapshot()

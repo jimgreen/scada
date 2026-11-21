@@ -20,6 +20,7 @@ from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
+from core.web_http import encode_json, prepare_response, send_static
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 
@@ -55,12 +56,14 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         LOG.debug(message, *args)
 
     def _send(self, status, content_type, data, headers=None):
+        data, extra = prepare_response(self, status, content_type, data, headers)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        if "cache-control" not in {key.lower() for key in extra}:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        for key, value in (headers or {}).items():
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
@@ -75,7 +78,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         item = payload.get("item") if isinstance(payload, dict) else None
         if isinstance(item, dict) and "_version" in item:
             headers["ETag"] = '"' + str(item["_version"]) + '"'
-        data = json.dumps(_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        data = encode_json(_safe(payload))
         self._send(status, "application/json; charset=utf-8", data, headers)
 
     def _if_match(self):
@@ -287,7 +290,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if parts and parts[0] == "static":
             name = "/".join(parts[1:])
         if name in ASSETS:
-            return self._send(200, ASSETS[name], (ASSET_DIR / name).read_bytes())
+            return send_static(self, ASSET_DIR / name, ASSETS[name])
         allowed = {
             "index.html": "text/html; charset=utf-8", "static/index.html": "text/html; charset=utf-8",
             "communication.html": "text/html; charset=utf-8", "static/communication.html": "text/html; charset=utf-8",
@@ -305,10 +308,17 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         path = STATIC_DIR / (name.removeprefix("static/") if name.startswith("static/") else name)
         if key not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        data = path.read_bytes()
         if name.endswith(".html"):
-            data = render_workbench(data, "t", path.name)
-        self._send(200, allowed[key], data)
+            page_name = path.name
+            send_static(
+                self,
+                path,
+                allowed[key],
+                transform=lambda data, p=page_name: render_workbench(data, "t", p),
+                cache_key=f"t:{page_name}",
+            )
+            return
+        send_static(self, path, allowed[key])
 
     @database_request
     @audit.audit_request('t')

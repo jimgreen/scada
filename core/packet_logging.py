@@ -50,6 +50,9 @@ class DatabasePacketLogSwitch:
         self._lock = threading.Lock()
         self._cache = {}
         self._next_check = {}
+        self._bulk_next_check = 0.0
+        self._db_rows = None
+        self._legacy_cache = None
 
     @property
     def path(self):
@@ -98,33 +101,57 @@ class DatabasePacketLogSwitch:
             raise ValueError("channel_id 必须为非负整数")
         return value
 
-    def _read(self, channel_id):
+    def _read_all(self):
         try:
             with closing(sqlite3.connect(self.db_path, timeout=2)) as con:
-                row = con.execute(
-                    f"SELECT packet_recording FROM {self.table} WHERE channel_id=?",
-                    (channel_id,),
-                ).fetchone()
+                rows = con.execute(
+                    f"SELECT channel_id, packet_recording FROM {self.table} "
+                    "WHERE channel_id IS NOT NULL"
+                ).fetchall()
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return None
-        return (None if row[0] is None else bool(row[0])) if row is not None else None
+        return {
+            int(channel_id): (None if value is None else bool(value))
+            for channel_id, value in rows
+        }
+
+    def _safe_legacy_policy(self):
+        try:
+            return self._legacy_policy()
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return {"enabled": False, "channels": {}}
+
+    def _refresh_bulk_locked(self, now):
+        db_rows = self._read_all()
+        legacy = self._safe_legacy_policy()
+        self._db_rows = db_rows if db_rows is not None else {}
+        self._legacy_cache = legacy
+        self._cache.clear()
+        self._next_check.clear()
+        self._bulk_next_check = now + 1.0
+
+    def _resolve_locked(self, key):
+        if key is not None and self._db_rows is not None:
+            value = self._db_rows.get(key)
+            if value is not None:
+                return value
+        legacy = self._legacy_cache if self._legacy_cache is not None else self._safe_legacy_policy()
+        if key is not None:
+            return bool(legacy["channels"].get(str(key), legacy["enabled"]))
+        return bool(legacy["enabled"])
 
     def enabled(self, channel_id=None, *, refresh=False):
         key = None if channel_id is None else self._channel_key(channel_id)
         now = time.monotonic()
         with self._lock:
-            if refresh or now >= self._next_check.get(key, 0.0):
-                value = self._read(key) if key is not None else None
-                if value is None:
-                    try:
-                        legacy = self._legacy_policy()
-                        value = (legacy["channels"].get(str(key), legacy["enabled"])
-                                 if key is not None else legacy["enabled"])
-                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                        value = False
-                self._cache[key] = bool(value)
-                self._next_check[key] = now + 1.0
-            return self._cache.get(key, False)
+            if refresh or now >= self._bulk_next_check:
+                self._refresh_bulk_locked(now)
+            cached = self._cache.get(key)
+            if cached is None or now >= self._next_check.get(key, 0.0):
+                cached = bool(self._resolve_locked(key))
+                self._cache[key] = cached
+                self._next_check[key] = self._bulk_next_check
+            return cached
 
     def for_channel(self, channel_id):
         return ChannelPacketLogSwitch(self, self._channel_key(channel_id))
@@ -140,10 +167,7 @@ class DatabasePacketLogSwitch:
         except (OSError, sqlite3.Error):
             rows = []
         values = {str(int(channel_id)): bool(value) for channel_id, value in rows if value is not None}
-        try:
-            legacy = self._legacy_policy()
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            legacy = {"enabled": False, "channels": {}}
+        legacy = self._safe_legacy_policy()
         values.update(legacy["channels"])
         return {"enabled": bool(legacy["enabled"]), "channels": values,
                 "source": "channel_parameter"}
@@ -160,8 +184,18 @@ class DatabasePacketLogSwitch:
         if row is None:
             raise KeyError(f"通道不存在: {key}")
         override = None if row[0] is None else bool(row[0])
-        return {"channel_id": key, "override": override,
-                "enabled": self.enabled(key, refresh=True)}
+        if override is not None:
+            effective = override
+        else:
+            legacy = self._safe_legacy_policy()
+            effective = bool(legacy["channels"].get(str(key), legacy["enabled"]))
+        now = time.monotonic()
+        with self._lock:
+            if self._db_rows is not None:
+                self._db_rows[key] = override
+            self._cache[key] = effective
+            self._next_check[key] = now + 1.0
+        return {"channel_id": key, "override": override, "enabled": effective}
 
     def set_enabled(self, enabled):
         """Set the deprecated unbound default used by old integrations."""
@@ -173,6 +207,8 @@ class DatabasePacketLogSwitch:
             self._write_legacy_policy(payload)
             self._cache.clear()
             self._next_check.clear()
+            self._bulk_next_check = 0.0
+            self._legacy_cache = payload
 
     def set_channel(self, channel_id, enabled):
         if enabled is not None and type(enabled) is not bool:
@@ -208,6 +244,12 @@ class DatabasePacketLogSwitch:
                 self._write_legacy_policy(legacy)
             else:
                 legacy["channels"].pop(str(key), None)
+            if self._db_rows is not None:
+                if persisted:
+                    self._db_rows[key] = enabled
+                else:
+                    self._db_rows.pop(key, None)
+            self._legacy_cache = legacy
             if enabled is None:
                 self._cache[key] = bool(legacy["channels"].get(str(key), legacy["enabled"]))
             else:
@@ -237,6 +279,7 @@ class PacketLogSwitch(DatabasePacketLogSwitch):
                 else:
                     payload["channels"][str(key)] = enabled
                 self._write_legacy_policy(payload)
+                self._legacy_cache = payload
                 self._cache[key] = (payload["channels"].get(str(key), payload["enabled"])
                                      if enabled is None else enabled)
                 self._next_check[key] = time.monotonic() + 1.0
@@ -264,10 +307,27 @@ def packet_recording_state(db_path, family):
     try:
         with closing(sqlite3.connect(Path(db_path).resolve(), timeout=2)) as con:
             rows = con.execute(
-                f"SELECT channel_id FROM {switch.table} "
+                f"SELECT channel_id, packet_recording FROM {switch.table} "
                 "WHERE channel_id IS NOT NULL ORDER BY channel_id"
             ).fetchall()
     except (OSError, sqlite3.Error) as exc:
         raise RuntimeError("读取报文记录通道失败") from exc
-    channels = [switch.channel_snapshot(int(row[0])) for row in rows]
-    return {"enabled": switch.enabled(), "channels": channels}
+    legacy = switch._safe_legacy_policy()
+    default_enabled = bool(legacy["enabled"])
+    legacy_channels = legacy["channels"]
+    channels = []
+    db_rows = {}
+    for channel_id, raw in rows:
+        key = int(channel_id)
+        override = None if raw is None else bool(raw)
+        db_rows[key] = override
+        effective = override if override is not None else bool(legacy_channels.get(str(key), default_enabled))
+        channels.append({"channel_id": key, "override": override, "enabled": effective})
+    now = time.monotonic()
+    with switch._lock:
+        switch._db_rows = db_rows
+        switch._legacy_cache = legacy
+        switch._cache.clear()
+        switch._next_check.clear()
+        switch._bulk_next_check = now + 1.0
+    return {"enabled": default_enabled, "channels": channels}

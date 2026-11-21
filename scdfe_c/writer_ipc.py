@@ -288,8 +288,23 @@ class WriterIpcServer:
         self.close()
 
 
+_ENDPOINT_CACHE_LOCK = threading.Lock()
+_ENDPOINT_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+
+
 def _read_endpoint(db_path: str | Path) -> dict[str, Any]:
     path = endpoint_path(db_path)
+    cache_key = str(path)
+    try:
+        st = path.stat()
+    except OSError as exc:
+        with _ENDPOINT_CACHE_LOCK:
+            _ENDPOINT_CACHE.pop(cache_key, None)
+        raise WriterUnavailable("scdfe_c 写库进程未运行") from exc
+    with _ENDPOINT_CACHE_LOCK:
+        cached = _ENDPOINT_CACHE.get(cache_key)
+        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+            return cached[2]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -299,7 +314,11 @@ def _read_endpoint(db_path: str | Path) -> dict[str, Any]:
     host, port, token = data.get("host"), data.get("port"), data.get("token")
     if host != "127.0.0.1" or type(port) is not int or not 1 <= port <= 65535 or not isinstance(token, str):
         raise WriterUnavailable("scdfe_c 写库 IPC 端点无效")
-    data["endpoint_path"] = str(path)
+    data["endpoint_path"] = cache_key
+    with _ENDPOINT_CACHE_LOCK:
+        if len(_ENDPOINT_CACHE) >= 64:
+            _ENDPOINT_CACHE.clear()
+        _ENDPOINT_CACHE[cache_key] = (st.st_mtime_ns, st.st_size, data)
     return data
 
 
@@ -323,6 +342,10 @@ class WriterClient:
         try:
             with socket.create_connection((endpoint["host"], endpoint["port"]), timeout=wait) as conn:
                 conn.settimeout(wait)
+                try:
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError:
+                    pass
                 conn.sendall(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n")
                 stream = conn.makefile("rb")
                 raw = stream.readline(MAX_LINE + 1)

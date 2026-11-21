@@ -77,9 +77,14 @@ class ForwardBatchTests(unittest.TestCase):
         transport=Mock(transmit_batch=Mock(side_effect=[False,True]),active_connection_count=1)
         server._server=transport
         runtime=object.__new__(TransRuntime)
+        import threading
+        from core.pipeline_metrics import LatencyStats
         runtime.server=server;runtime.points={('yc',n):SimpleNamespace(kind='yc',pnt_no=n) for n in (1,2)}
         runtime.values={('yc',n):0 for n in (1,2)};runtime.qualities={('yc',n):0 for n in (1,2)}
         runtime._rx_count=runtime._tx_count=0;runtime._scan_plan=()
+        runtime._source_reader=None;runtime._source_dirty=set();runtime._latency=LatencyStats()
+        runtime._soe_keys=set();runtime._soe_forwarder=None
+        runtime._business_lock=threading.Lock();runtime._business_events=[]
         runtime._record_sample=Mock();runtime._queue_point_runtime=Mock();runtime._flush_point_runtime=Mock()
         runtime._runtime_error=Mock();runtime.logger=Mock()
         runtime._read_sources=Mock(return_value={('yc',1):(7,128,12),('yc',2):(9,0,13)})

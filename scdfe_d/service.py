@@ -1,7 +1,7 @@
 """Transactional device measurements. Source SCADA databases are always read-only."""
 
 from collections import defaultdict
-from contextlib import contextmanager, closing, nullcontext
+from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 import json
 import math
@@ -196,13 +196,16 @@ def validate_database(path):
 
 
 class DeviceStore:
-    def __init__(self, db_path, schema_dir=None, *, workspace_root=None):
+    def __init__(self, db_path, schema_dir=None, *, workspace_root=None, connection_pool_size=0):
         self.db_path = Path(db_path).resolve()
         self.root = Path(workspace_root or self.db_path.parent).resolve()
         if not self.db_path.is_relative_to(self.root):
             raise ValueError("设备数据库不能超出工作区根目录")
         self.catalog = SimpleNamespace(directory=schema_dir)
         self._mutex = threading.RLock()
+        self.connection_pool_size = max(0, int(connection_pool_size))
+        self._connection_pool = []
+        self._pool_closed = False
         existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
         if existing:
             result = validate_database(self.db_path)
@@ -279,13 +282,25 @@ class DeviceStore:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS d_measurement_device ON device_measurement(device_id,metric)"
             )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_device_members_device_table ON d_device_members(device_id,table_name)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_measurement_value_refresh ON measurement_value(refresh_id)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_measurement_active_device ON device_measurement(catalog_active,device_id)"
+            )
             self._tables(con, sync_schema=True)
 
     def _open_connection(self):
-        con = sqlite3.connect(self.db_path, timeout=10)
+        con = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
         try:
             con.row_factory = sqlite3.Row
             con.execute("PRAGMA foreign_keys=ON")
+            con.execute("PRAGMA synchronous=NORMAL")
+            con.execute("PRAGMA temp_store=MEMORY")
+            con.execute("PRAGMA cache_size=-16384")
         except BaseException:
             con.close()
             raise
@@ -294,16 +309,33 @@ class DeviceStore:
     @contextmanager
     def connection(self, *, _writer=None):
         with self._mutex:
-            scope = (
-                closing(self._open_connection())
-                if _writer is None
-                else nullcontext(_writer)
-            )
-            with scope as con, con:
-                yield con
+            if _writer is not None:
+                with _writer:
+                    yield _writer
+                return
+            if self.connection_pool_size <= 0 or self._pool_closed:
+                with closing(self._open_connection()) as con, con:
+                    yield con
+                return
+            con = self._connection_pool.pop() if self._connection_pool else self._open_connection()
+            healthy = True
+            try:
+                with con:
+                    yield con
+            except BaseException:
+                healthy = False
+                raise
+            finally:
+                if healthy and not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
+                    self._connection_pool.append(con)
+                else:
+                    con.close()
 
     def close(self):
-        pass  # Each caller, including the collector thread, owns its connection.
+        with self._mutex:
+            self._pool_closed = True
+            while self._connection_pool:
+                self._connection_pool.pop().close()
 
     @staticmethod
     def _table_name(name):
@@ -498,9 +530,18 @@ class DeviceStore:
         if not changes:
             return
         updates = defaultdict(list)
-        for table, device_id, idx in con.execute(
-            "SELECT table_name,device_id,idx FROM d_device_members"
-        ):
+        device_ids = sorted({device_id for _, device_id in changes})
+        if len(device_ids) <= 500:
+            placeholders = ",".join("?" for _ in device_ids)
+            rows_iter = con.execute(
+                f"SELECT table_name,device_id,idx FROM d_device_members WHERE device_id IN ({placeholders})",
+                device_ids,
+            )
+        else:
+            rows_iter = con.execute(
+                "SELECT table_name,device_id,idx FROM d_device_members"
+            )
+        for table, device_id, idx in rows_iter:
             fields = changes.get((table, device_id))
             if fields:
                 updates[table, tuple(fields)].append((*fields.values(), idx))
@@ -515,7 +556,7 @@ class DeviceStore:
             )
 
     @staticmethod
-    def _source_values(connection, kind, keys):
+    def _source_values(connection, kind, keys, *, pk_cache=None):
         if not keys:
             return {}
         table = f"fes_{kind}_define"
@@ -526,12 +567,17 @@ class DeviceStore:
         # instead of scanning every point. A dense mapping is cheaper to scan.
         # Keep the full duplicate check for legacy sources without that key.
         if len(keys) <= 128:
-            primary_key = {
-                row[1]
-                for row in connection.execute(f"PRAGMA table_info({table})")
-                if row[5]
-            }
-            if primary_key == {"rtu_id", "pnt_no"}:
+            has_pk = pk_cache.get(table) if pk_cache is not None else None
+            if has_pk is None:
+                primary_key = {
+                    row[1]
+                    for row in connection.execute(f"PRAGMA table_info({table})")
+                    if row[5]
+                }
+                has_pk = primary_key == {"rtu_id", "pnt_no"}
+                if pk_cache is not None:
+                    pk_cache[table] = has_pk
+            if has_pk:
                 wanted = ",".join("(?,?)" for _ in keys)
                 params = tuple(value for pair in sorted(keys) for value in pair)
                 qualified = ",".join(f"p.{field}" for field in columns.split(","))
@@ -1007,7 +1053,75 @@ class DeviceStore:
                 )
             self._tables(con)
 
-    def collect_once(self, *, _writer=None):
+    def _read_cached_source(self, source_name, kinds, source_cache):
+        path = self.source_path(source_name)
+        try:
+            st = path.stat()
+        except OSError as exc:
+            entry = source_cache.pop(source_name, None)
+            if entry is not None:
+                entry[0].close()
+            raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
+        identity = (st.st_dev, st.st_ino)
+        entry = source_cache.get(source_name)
+        if entry is not None and entry[1] != identity:
+            entry[0].close()
+            source_cache.pop(source_name, None)
+            entry = None
+        try:
+            if entry is None:
+                con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+                try:
+                    con.row_factory = sqlite3.Row
+                    con.execute("PRAGMA temp_store=MEMORY")
+                    if con.execute("PRAGMA application_id").fetchone()[0] != 0:
+                        raise ApiError(400, "请选择 scdfe_c 的采集业务数据库")
+                    pk_cache = {}
+                    for kind in ("yc", "yx"):
+                        table = f"fes_{kind}_define"
+                        info = con.execute(f"PRAGMA table_info({table})").fetchall()
+                        columns = {r[1] for r in info}
+                        if not {"rtu_id", "pnt_no", "name", "value", "status", "refresh_time"} <= columns:
+                            raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
+                        pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
+                    schema_version = con.execute("PRAGMA schema_version").fetchone()[0]
+                    entry = [con, identity, schema_version, pk_cache]
+                    source_cache[source_name] = entry
+                except BaseException:
+                    con.close()
+                    raise
+            con, _, schema_version, pk_cache = entry
+            con.execute("BEGIN")
+            try:
+                current_schema = con.execute("PRAGMA schema_version").fetchone()[0]
+                if current_schema != schema_version:
+                    pk_cache.clear()
+                    for kind in ("yc", "yx"):
+                        table = f"fes_{kind}_define"
+                        info = con.execute(f"PRAGMA table_info({table})").fetchall()
+                        columns = {r[1] for r in info}
+                        if not {"rtu_id", "pnt_no", "name", "value", "status", "refresh_time"} <= columns:
+                            raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
+                        pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
+                    entry[2] = current_schema
+                return {
+                    kind: self._source_values(con, kind, keys, pk_cache=pk_cache)
+                    for kind, keys in kinds.items()
+                }
+            finally:
+                con.rollback()
+        except ApiError:
+            cached = source_cache.pop(source_name, None)
+            if cached is not None:
+                cached[0].close()
+            raise
+        except sqlite3.Error as exc:
+            cached = source_cache.pop(source_name, None)
+            if cached is not None:
+                cached[0].close()
+            raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
+
+    def collect_once(self, *, _writer=None, _source_cache=None):
         started, now_ms = utc_now(), int(time.time() * 1000)
         with self.connection(_writer=_writer) as con:
             # Take the write lock before loading mappings so no editor can
@@ -1027,14 +1141,20 @@ class DeviceStore:
                     requested[row["source_database"]][row["kind"]].add(
                         (row["rtu_id"], row["pnt_no"])
                     )
+            if _source_cache is not None:
+                for stale in [key for key in _source_cache if key not in requested]:
+                    _source_cache.pop(stale)[0].close()
             sources, errors = {}, {}
             for source, kinds in sorted(requested.items()):
                 try:
-                    with self.source(source) as src:
-                        sources[source] = {
-                            kind: self._source_values(src, kind, keys)
-                            for kind, keys in kinds.items()
-                        }
+                    if _source_cache is not None:
+                        sources[source] = self._read_cached_source(source, kinds, _source_cache)
+                    else:
+                        with self.source(source) as src:
+                            sources[source] = {
+                                kind: self._source_values(src, kind, keys)
+                                for kind, keys in kinds.items()
+                            }
                 except (ApiError, OSError, ValueError) as exc:
                     errors[source] = str(exc)
             refresh = con.execute(
@@ -1299,6 +1419,7 @@ class Collector:
 
                 def run():
                     writer = None
+                    source_cache = {}
                     try:
                         next_scan = time.monotonic()
                         last_scan = None
@@ -1325,7 +1446,9 @@ class Collector:
                                     break
                                 last_scan = next_scan
                                 sample_due = True
-                                result = self.store.collect_once(_writer=writer)
+                                result = self.store.collect_once(
+                                    _writer=writer, _source_cache=source_cache
+                                )
                                 self.last_error = "; ".join(result["errors"].values())
                             except Exception as exc:
                                 self.last_error = str(exc)
@@ -1344,6 +1467,12 @@ class Collector:
                             self._wake.wait(min(next_scan - now, 1))
                     finally:
                         try:
+                            for entry in source_cache.values():
+                                try:
+                                    entry[0].close()
+                                except sqlite3.Error:
+                                    pass
+                            source_cache.clear()
                             if writer is not None:
                                 writer.close()
                         finally:

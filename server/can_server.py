@@ -178,7 +178,8 @@ class CanServer(PacketTrace):
                 frame = self._frame_dict(message, "RX")
                 with self._lock:
                     self._frames.append(frame)
-                self._log("INFO", f"CAN RX 0x{frame['arbitration_id']:X} {frame['data']}")
+                if self._on_log is not None:
+                    self._log("INFO", f"CAN RX 0x{frame['arbitration_id']:X} {frame['data']}")
                 if self.request_id is not None and message.arbitration_id == self.request_id:
                     if self.response_id is not None:
                         self.send_frame(self.response_id, self.response_data or frame["data"], log_direction="TX")

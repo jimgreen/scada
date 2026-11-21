@@ -8,11 +8,12 @@ import threading
 import time
 
 from .types import *
-from .codec import (BASE, MONITOR, COMMAND, CP24, CP56, INFO, SIZES, decode_asdu, decode_time,
+from .codec import (BASE, MONITOR, COMMAND, CP56, TIMED, INFO, SIZES, decode_asdu, decode_time,
                     encode_time, encode_information, header, pack_points)
 from .transport import Link, Reactor, MAX_QUEUED_BYTES
 
 LOG = logging.getLogger(__name__)
+_MONITOR_COTS = frozenset({1, 2, 3, 5, *range(20, 37)})
 
 
 def invoke(callback, *args, default=None):
@@ -25,13 +26,29 @@ class Point:
                  related_io_autoreturn=False, command_mode=CommandMode.DIRECT):
         if not 0 <= int(io_address) <= 0xffffff: raise ValueError('IOA 超出范围')
         self.station=station;self.io_address=int(io_address);self.type=Type(type)
-        self.report_ms=int(report_ms);self.command_mode=command_mode
+        self._type_int=int(self.type)
+        self._base_type=BASE.get(self._type_int,self._type_int)
+        self._is_timed=self._type_int in TIMED
+        self._is_monitor=self._type_int in MONITOR
+        self._info_cls=INFO[self._base_type]
+        self._report_ms=int(report_ms);self.command_mode=command_mode
         self.related_io_address=related_io_address;self.related_io_autoreturn=related_io_autoreturn
         self._receive=None;self._before_read=None
-        self._info=INFO[BASE.get(int(type),int(type))]()
+        self._info=self._info_cls()
         self._lock=threading.RLock()
         self.received_at=None
         self._last_report=time.monotonic()
+
+    @property
+    def report_ms(self):
+        return self._report_ms
+
+    @report_ms.setter
+    def report_ms(self, value):
+        value=int(value)
+        self._report_ms=value
+        if self._is_monitor and self.station is not None:
+            self.station._track_periodic(self)
 
     @property
     def info(self):
@@ -40,7 +57,7 @@ class Point:
     @info.setter
     def info(self, value):
         if not isinstance(value,Information): raise TypeError('info 必须是 Information')
-        if int(self.type) not in CP24 | CP56:
+        if not self._is_timed:
             value=Information(value.value,value.quality,None,value.qualifier,value.transient)
         with self._lock: self._info=value
 
@@ -49,11 +66,11 @@ class Point:
 
     @value.setter
     def value(self, value):
-        base=BASE.get(int(self.type),int(self.type))
+        base=self._base_type
         with self._lock:
             old=self._info
-            constructor=INFO[base]
-            stamp=datetime.now(timezone.utc) if int(self.type) in CP24 | CP56 else None
+            constructor=self._info_cls
+            stamp=datetime.now(timezone.utc) if self._is_timed else None
             if base in COMMAND:
                 self._info=constructor(value,qualifier=old.qualifier,recorded_at=stamp)
             elif base==5:
@@ -81,8 +98,14 @@ class Point:
         if isinstance(owner,Server): return owner.transmit_batch(Batch(cause,[self]))
         return owner._point_command(self,cause)
 
-    def _received(self, info, message):
-        old=self.info;self.info=info;self.received_at=datetime.now(timezone.utc)
+    def _received(self, info, message, received_at=None):
+        if not isinstance(info,Information): raise TypeError('info 必须是 Information')
+        if not self._is_timed:
+            info=Information(info.value,info.quality,None,info.qualifier,info.transient)
+        with self._lock:
+            old=self._info
+            self._info=info
+        self.received_at=received_at or datetime.now(timezone.utc)
         result=invoke(self._receive,self,old,message,default=ResponseState.SUCCESS)
         return result is not False and result != ResponseState.FAILURE
 
@@ -91,23 +114,40 @@ class Station:
     def __init__(self, owner, common_address):
         if not 1<=int(common_address)<=65534: raise ValueError('CA 超出范围')
         self.owner=owner;self.common_address=int(common_address)
-        self._points={};self._lock=threading.RLock()
+        self._points={};self._periodic_points=set();self._lock=threading.RLock()
 
     @property
     def points(self):
         with self._lock: return list(self._points.values())
 
+    def _track_periodic(self, point):
+        with self._lock:
+            if point._is_monitor and point._report_ms and self._points.get(point.io_address) is point:
+                self._periodic_points.add(point)
+            else:
+                self._periodic_points.discard(point)
+
+    def periodic_points(self):
+        with self._lock:
+            return tuple(self._periodic_points) if self._periodic_points else ()
+
     def add_point(self, io_address, type, **kwargs):
         with self._lock:
             if io_address in self._points: return None
             point=Point(self,io_address,type,**kwargs);self._points[io_address]=point
+            if point._is_monitor and point._report_ms:
+                self._periodic_points.add(point)
             return point
 
     def get_point(self, io_address):
         with self._lock: return self._points.get(int(io_address))
 
     def remove_point(self, io_address):
-        with self._lock: return self._points.pop(int(io_address),None)
+        with self._lock:
+            point=self._points.pop(int(io_address),None)
+            if point is not None:
+                self._periodic_points.discard(point)
+            return point
 
     def signal_initialized(self, cause=Coi.LOCAL_POWER_ON):
         if isinstance(self.owner,Server):
@@ -289,11 +329,12 @@ class Server:
         self._next_periodic=now+self.tick_rate_ms/1000
         groups={}
         for station in self.stations:
-            for point in station.points:
-                if int(point.type) in MONITOR and point.report_ms and now-point._last_report>=point.report_ms/1000:
+            for point in station.periodic_points():
+                if point._report_ms and now-point._last_report>=point._report_ms/1000:
                     groups.setdefault((station.common_address,point.type),[]).append(point)
                     point._last_report=now
-        for points in groups.values(): self.transmit_batch(Batch(Cot.PERIODIC,points))
+        if groups:
+            for points in groups.values(): self.transmit_batch(Batch(Cot.PERIODIC,points))
 
     def _reply(self, link, asdu, cot, *, negative=False):
         answer=asdu[:2]+bytes((int(cot) | (asdu[2]&128) | (64 if negative else 0),))+asdu[3:]
@@ -484,15 +525,19 @@ class Connection:
             invoke(self._unexpected,self,message,Umc.UNKNOWN_CA);return
         if int(message.type) in MONITOR:
             if message.is_negative: return
-            if int(message.cot) not in {1,2,3,5,*range(20,37)}:
+            if int(message.cot) not in _MONITOR_COTS:
                 invoke(self._unexpected,self,message,Umc.INVALID_COT);return
-            for ioa,info,_ in rows:
-                point=station.get_point(ioa);message.io_address=ioa
+            with station._lock:
+                resolved=[(ioa,info,station._points.get(ioa)) for ioa,info,_ in rows]
+            received_at=datetime.now(timezone.utc)
+            msg_type=message.type
+            for ioa,info,point in resolved:
+                message.io_address=ioa
                 if point is None:
                     invoke(self._unexpected,self,message,Umc.UNKNOWN_IOA);continue
-                if point.type!=message.type:
+                if point.type!=msg_type:
                     invoke(self._unexpected,self,message,Umc.MISMATCHED_TYPE_ID);continue
-                if not point._received(info,message): return False
+                if not point._received(info,message,received_at=received_at): return False
         with self._pending_lock:
             pending=self._pending
             if pending and frame[6:8]==pending['asdu'][:2] and frame[9:]==pending['asdu'][3:]:
@@ -545,12 +590,15 @@ class Connection:
     def test_fr(self, wait_for_response=True):
         link=self._link
         if not link or link.closed or link.connecting: return False
+        link._testfr_event.clear()
         if not link.u(67,request=True): return False
         if not wait_for_response: return True
         deadline=time.monotonic()+self.client.command_timeout_ms/1000
-        while time.monotonic()<deadline:
+        while True:
             if link.closed: return False
             with link.lock:
                 if 67 not in link.pending_u: return True
-            time.sleep(.005)
-        return False
+            remaining=deadline-time.monotonic()
+            if remaining<=0: return False
+            link._testfr_event.wait(min(remaining,0.05))
+            link._testfr_event.clear()

@@ -151,20 +151,26 @@ class PacketTrace:
         return data  # pymodbus trace hooks may transform bytes; ours never do.
 
     def _trace_can(self, direction, message):
-        self._business('CAN错误帧' if message.is_error_frame else 'CAN帧',
-            方向=direction, 接口=getattr(self, 'interface', ''), 总线=getattr(self, 'channel', ''),
-            帧ID=f'0x{message.arbitration_id:X}', DLC=message.dlc, 数据长度=len(message.data),
-            帧格式='扩展帧' if message.is_extended_id else '标准帧', FD=int(message.is_fd),
-            RTR=int(message.is_remote_frame), BRS=int(getattr(message, 'bitrate_switch', False)),
-            ESI=int(getattr(message, 'error_state_indicator', False)),
-            驱动时标=getattr(message, 'timestamp', None), 数据=bytes(message.data).hex(' '),
-            确认范围='驱动提交，不代表ACK或设备执行' if direction == 'TX' else '驱动接收')
-        self._packet(direction, message.data,
-                     f"ID=0x{message.arbitration_id:X} DLC={message.dlc} "
-                     f"EXT={int(message.is_extended_id)} FD={int(message.is_fd)} "
-                     f"RTR={int(message.is_remote_frame)} ERR={int(message.is_error_frame)} "
-                     f"BRS={int(getattr(message, 'bitrate_switch', False))} "
-                     f"ESI={int(getattr(message, 'error_state_indicator', False))}")
+        business = self._business_logger()
+        packet_handler = getattr(self, "_packet_handler", None)
+        if business is None and packet_handler is None:
+            return
+        if business is not None:
+            self._business('CAN错误帧' if message.is_error_frame else 'CAN帧',
+                方向=direction, 接口=getattr(self, 'interface', ''), 总线=getattr(self, 'channel', ''),
+                帧ID=f'0x{message.arbitration_id:X}', DLC=message.dlc, 数据长度=len(message.data),
+                帧格式='扩展帧' if message.is_extended_id else '标准帧', FD=int(message.is_fd),
+                RTR=int(message.is_remote_frame), BRS=int(getattr(message, 'bitrate_switch', False)),
+                ESI=int(getattr(message, 'error_state_indicator', False)),
+                驱动时标=getattr(message, 'timestamp', None), 数据=bytes(message.data).hex(' '),
+                确认范围='驱动提交，不代表ACK或设备执行' if direction == 'TX' else '驱动接收')
+        if packet_handler is not None:
+            self._packet(direction, message.data,
+                         f"ID=0x{message.arbitration_id:X} DLC={message.dlc} "
+                         f"EXT={int(message.is_extended_id)} FD={int(message.is_fd)} "
+                         f"RTR={int(message.is_remote_frame)} ERR={int(message.is_error_frame)} "
+                         f"BRS={int(getattr(message, 'bitrate_switch', False))} "
+                         f"ESI={int(getattr(message, 'error_state_indicator', False))}")
 
     def _trace_can_state(self, bus):
         if self._business_logger() is None or time.monotonic() < getattr(self, '_next_can_state', 0):
@@ -182,15 +188,19 @@ class PacketTrace:
 
 
 class _TracedTransport:
-    def __init__(self, transport, trace):
+    def __init__(self, transport, trace, peer=None):
         self._transport, self._trace = transport, trace
+        self._peer_detail = f"TCP peer={peer}" if peer is not None else None
 
     def __getattr__(self, name):
         return getattr(self._transport, name)
 
     def write(self, data):
         result = self._transport.write(data)
-        self._trace("TX", data, f"TCP peer={self._transport.get_extra_info('peername')}")
+        detail = self._peer_detail
+        if detail is None:
+            detail = f"TCP peer={self._transport.get_extra_info('peername')}"
+        self._trace("TX", data, detail)
         return result
 
     def writelines(self, lines):
@@ -204,15 +214,16 @@ def trace_stream_protocol(protocol, trace):
     bytes as actually transported. Their boundaries need not be UA messages.
     """
     made, received = protocol.connection_made, protocol.data_received
-    peer = None
+    peer_detail = "TCP peer=None"
 
     def connection_made(transport):
-        nonlocal peer
+        nonlocal peer_detail
         peer = transport.get_extra_info("peername")
-        return made(_TracedTransport(transport, trace))
+        peer_detail = f"TCP peer={peer}"
+        return made(_TracedTransport(transport, trace, peer=peer))
 
     def data_received(data):
-        trace("RX", data, f"TCP peer={peer}")
+        trace("RX", data, peer_detail)
         return received(data)
 
     protocol.connection_made = connection_made

@@ -107,6 +107,7 @@ class ChannelConcurrencyTests(unittest.TestCase):
         for cid in cids:
             rid=1000+cid
             api('c','rtus','POST',dict(rtu_id=rid,channel_id=cid,channel_type='iec104'),accept=(201,))
+            api('c','tables/fes_channel_iec104_define/rows','POST',dict(id=cid,channel_id=cid,rtu_addr=cid),accept=(201,))
             api('c',f'rtus/{rid}/points/yc','POST',dict(pnt_no=1,value=cid),accept=(201,))
             api('s','channels','POST',dict(rtu_id=rid,channel_id=cid,channel_type='iec104'),accept=(201,))
             api('s',f'channels/{rid}/points/yc','POST',dict(pnt_no=1,value=0),accept=(201,))

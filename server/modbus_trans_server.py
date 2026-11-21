@@ -28,6 +28,8 @@ __all__ = ["ModbusTcpTransServer"]
 _AREA_TO_INDEX = {"coil": 0, "discrete": 1, "holding": 2, "input": 3}
 _AREA_TO_FUNCTION = {"coil": {1, 5, 15}, "discrete": {2}, "holding": {3, 6, 16}, "input": {4}}
 _KIND_DEFAULT_AREA = {"yx": "discrete", "yk": "coil", "yc": "input", "yt": "holding"}
+_STRUCT_F32 = struct.Struct(">f")
+_STRUCT_F64 = struct.Struct(">d")
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -122,9 +124,15 @@ class ModbusTcpTransServer(ModbusTcpServer):
         key = (kind, point_no)
         if key in self._mappings:
             raise ValueError(f"重复转发点 {kind}/{point_no}")
+        scale = _number(row.get("scale"), 1.0)
+        offset = _number(row.get("offset"), 0.0)
+        effective_scale = scale or 1.0
         row.update(kind=kind, pnt_no=point_no, source_pnt_no=source_point_no, register_area=area,
                    address=address, address_base=address_base, data_type=dtype, size=size,
-                   scale=_number(row.get("scale"), 1.0), offset=_number(row.get("offset"), 0.0),
+                   scale=scale, offset=offset,
+                   _dec_scale=Decimal(str(effective_scale)),
+                   _dec_offset=Decimal(str(offset)),
+                   _identity_scale=(effective_scale == 1.0 and offset == 0.0),
                    byte_order=_text(row.get("byte_order"), "big"),
                    word_order=_text(row.get("word_order"), "big"))
         self._validate_mapping_overlap(row)
@@ -175,28 +183,37 @@ class ModbusTcpTransServer(ModbusTcpServer):
         dtype = row["data_type"]
         if dtype in {"float32", "single", "float64", "double"}:
             raw_value = (float(engineering) - row["offset"]) / scale
+        elif row.get("_identity_scale") and isinstance(engineering, (int, bool)):
+            raw_value = int(engineering)
         else:
             # Integer wire types must not pass through float64: uint64 values
             # above 2**53 otherwise lose bits, and UINT64_MAX rounds to 2**64.
             numeric = int(engineering) if isinstance(engineering, bool) else engineering
-            raw_value = ((Decimal(str(numeric)) - Decimal(str(row["offset"]))) /
-                         Decimal(str(scale)))
+            dec_offset = row.get("_dec_offset")
+            if dec_offset is None:
+                dec_offset = Decimal(str(row["offset"]))
+            dec_scale = row.get("_dec_scale")
+            if dec_scale is None:
+                dec_scale = Decimal(str(scale))
+            raw_value = (Decimal(str(numeric)) - dec_offset) / dec_scale
         if dtype in {"float32", "single"}:
-            payload = struct.pack(">f", raw_value)
+            payload = _STRUCT_F32.pack(raw_value)
         elif dtype in {"float64", "double"}:
-            payload = struct.pack(">d", raw_value)
+            payload = _STRUCT_F64.pack(raw_value)
         elif dtype in {"int32", "uint32", "int64", "uint64"}:
             bits = self._TYPE_SIZES[dtype] * 16
             payload = int(raw_value).to_bytes(bits // 8, "big", signed=dtype.startswith("int"))
         else:
-            value = int(round(raw_value))
-            if dtype.startswith("uint"):
-                value = max(0, value)
+            value = raw_value if type(raw_value) is int else int(round(raw_value))
+            if dtype.startswith("uint") and value < 0:
+                value = 0
             payload = value.to_bytes(2, "big", signed=dtype in {"int16"})
         if row["byte_order"] == "little":
-            payload = bytes(reversed(payload))
-        words = [int.from_bytes(payload[i:i + 2], "big") for i in range(0, len(payload), 2)]
-        if row["word_order"] == "little" and len(words) > 1:
+            payload = payload[::-1]
+        if len(payload) == 2:
+            return [(payload[0] << 8) | payload[1]]
+        words = [(payload[i] << 8) | payload[i + 1] for i in range(0, len(payload), 2)]
+        if row["word_order"] == "little":
             words.reverse()
         return words
 
@@ -206,10 +223,10 @@ class ModbusTcpTransServer(ModbusTcpServer):
             words.reverse()
         payload = b"".join(int(word).to_bytes(2, "big") for word in words)
         if row["byte_order"] == "little":
-            payload = bytes(reversed(payload))
+            payload = payload[::-1]
         dtype = row["data_type"]
-        if dtype in {"float32", "single"}: raw = struct.unpack(">f", payload)[0]
-        elif dtype in {"float64", "double"}: raw = struct.unpack(">d", payload)[0]
+        if dtype in {"float32", "single"}: raw = _STRUCT_F32.unpack(payload)[0]
+        elif dtype in {"float64", "double"}: raw = _STRUCT_F64.unpack(payload)[0]
         elif dtype in {"int32", "uint32", "int64", "uint64"}: raw = int.from_bytes(payload, "big", signed=dtype.startswith("int"))
         elif dtype in {"bool", "boolean"}: raw = bool(words[0])
         else: raw = int.from_bytes(payload[:2], "big", signed=dtype in {"int16", "int"})

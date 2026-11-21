@@ -37,6 +37,7 @@ from core.web_request import RequestBodyMixin
 from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
 from core.service_log import ServiceFileLog
+from core.web_http import encode_json, prepare_response, send_static
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 from core.runtime_status import now_ms, runtime_status_rows, write_runtime_status_batch
@@ -103,17 +104,19 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         LOG.debug(message, *args)
 
     def _send(self, status, content_type, data, headers=None):
+        data, extra = prepare_response(self, status, content_type, data, headers)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        if "cache-control" not in {key.lower() for key in extra}:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; script-src 'self'; style-src 'self'; "
                          "img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
-        for key, value in (headers or {}).items():
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
@@ -127,7 +130,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         headers = {}
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
-        data = json.dumps(browser_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        data = encode_json(browser_safe(payload))
         self._send(status, "application/json; charset=utf-8", data, headers)
 
     def _if_match(self):
@@ -725,7 +728,13 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                 raise ApiError(405, '指令下发只支持 POST')
             if query:
                 raise ApiError(400, '指令下发不接受查询参数')
-            item = self.store.submit_command(self._rtu_id(parts[2]), parts[4], parts[5],
+            rtu_id = self._rtu_id(parts[2])
+            simulator_command = getattr(self.server, "simulator_command", None)
+            if simulator_command is not None:
+                result = simulator_command(rtu_id, parts[4], parts[5], self._body())
+                if result is not None:
+                    return self._json(200, {"item": result, "command_status": "applied"})
+            item = self.store.submit_command(rtu_id, parts[4], parts[5],
                                              self._body(), self._if_match())
             return self._json(202, {'item': item, 'command_status': 'pending'})
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
@@ -936,7 +945,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _static(self, name):
         if name in ASSETS:
-            return self._send(200, ASSETS[name], (ASSET_DIR / name).read_bytes())
+            return send_static(self, ASSET_DIR / name, ASSETS[name])
         allowed = {"index.html": "text/html", "test.html": "text/html", "iec104.html": "text/html", "api.html": "text/html",
                    "processes.html": "text/html", "communication.html": "text/html", "logs.html": "text/html",
                    "channels.html": "text/html", "points.html": "text/html",
@@ -948,15 +957,23 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
                    "protocol.js": "application/javascript", "test.js": "application/javascript", "monitor.js": "application/javascript",
                    "iec104.js": "application/javascript", "index.js": "application/javascript",
                    "channels.js": "application/javascript"}
-        if name not in allowed or not (STATIC_DIR / name).is_file():
+        path = STATIC_DIR / name
+        if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
-        data = (STATIC_DIR / name).read_bytes()
         if name.endswith(".html"):
-            data = render_workbench(data, "s", name)
-        self._send(200, allowed[name] + "; charset=utf-8", data)
+            send_static(
+                self,
+                path,
+                allowed[name] + "; charset=utf-8",
+                transform=lambda data, n=name: render_workbench(data, "s", n),
+                cache_key=f"s:{name}",
+            )
+            return
+        send_static(self, path, allowed[name] + "; charset=utf-8")
 
 
 class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
+    iec104_service_class = IEC104Service
     daemon_threads = True
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
@@ -988,7 +1005,7 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
         transport is never replaced by a monitor request.
         """
         classes = {
-            "iec104": IEC104Service,
+            "iec104": self.iec104_service_class,
             "modbus-tcp": ModbusTcpService,
             "modbus-rtu": ModbusRtuService,
             "can": CanService,

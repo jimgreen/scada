@@ -44,6 +44,7 @@ _WIRE_FIELDS = {
 _POINT_RUNTIME_FIELDS = (
     "value", "status", "refresh_time", "forward_time", "command_receive_time",
 )
+_POINT_RUNTIME_FIELD_SET = frozenset(_POINT_RUNTIME_FIELDS)
 
 
 def _get(row: Mapping[str, Any], key: str, default: Any = None) -> Any:
@@ -458,19 +459,32 @@ class TransRuntime:
         )
 
     def _queue_point_runtime(self, key, **updates):
-        allowed = set(_POINT_RUNTIME_FIELDS)
-        updates = {name: value for name, value in updates.items() if name in allowed}
         if not updates:
             return
         with self._point_runtime_lock:
-            current = dict(self._point_runtime_state.get(key, {}))
-            current.update(self._point_runtime_pending.get(key, {}))
-            changed = {name: value for name, value in updates.items()
-                       if current.get(name) != value}
+            state_row = self._point_runtime_state.get(key)
+            pending_row = self._point_runtime_pending.get(key)
+            changed = None
+            for name, value in updates.items():
+                if name not in _POINT_RUNTIME_FIELD_SET:
+                    continue
+                if pending_row is not None and name in pending_row:
+                    current_value = pending_row[name]
+                elif state_row is not None:
+                    current_value = state_row.get(name)
+                else:
+                    current_value = None
+                if current_value != value:
+                    if changed is None:
+                        changed = {}
+                    changed[name] = value
             if changed:
                 if not self._point_runtime_pending:
                     self._point_runtime_since = time.monotonic()
-                self._point_runtime_pending.setdefault(key, {}).update(changed)
+                if pending_row is None:
+                    self._point_runtime_pending[key] = changed
+                else:
+                    pending_row.update(changed)
 
     def _point_runtime_diagnostic(self):
         with self._point_runtime_lock:
@@ -841,18 +855,25 @@ class TransRuntime:
             else:
                 self._source_dirty.discard(key)
         if changes:
+            soe_keys = self._soe_keys
+            has_active = self.server.active_connection_count > 0
             try:
-                ordinary = [item for item in changes if item[:2] not in self._soe_keys]
-                current_only = [item for item in changes if item[:2] in self._soe_keys]
                 errors = {}
-                if current_only:
-                    errors.update(self.server.update_monitoring(current_only, isolate_errors=True,transmit=False))
-                if ordinary:
-                    errors.update(self.server.update_monitoring(ordinary, isolate_errors=True,
-                                  transmit=self.server.active_connection_count > 0))
+                if not soe_keys:
+                    errors.update(self.server.update_monitoring(changes, isolate_errors=True,
+                                  transmit=has_active))
+                else:
+                    ordinary = [item for item in changes if item[:2] not in soe_keys]
+                    current_only = [item for item in changes if item[:2] in soe_keys]
+                    if current_only:
+                        errors.update(self.server.update_monitoring(current_only, isolate_errors=True, transmit=False))
+                    if ordinary:
+                        errors.update(self.server.update_monitoring(ordinary, isolate_errors=True,
+                                      transmit=has_active))
             except Exception as exc:
                 errors = {(kind, no): exc for kind, no, _, _ in changes}
             stamp = now_ms()
+            publish_mode = '突发传送已提交' if has_active else '仅缓存，无活动连接'
             for kind, no, value, quality in changes:
                 key = (kind, no)
                 if key in errors:
@@ -861,11 +882,11 @@ class TransRuntime:
                     continue
                 self.values[key], self.qualities[key] = value, quality
                 self._source_dirty.discard(key)
+                is_soe = key in soe_keys
                 self._record_business(('转发协议缓存已更新', {
                     '四遥': kind.upper(), '转发点号': no, '值': value, '质量': quality,
-                    '发布方式': 'SOE另行投递' if key in self._soe_keys else
-                        '突发传送已提交' if self.server.active_connection_count > 0 else '仅缓存，无活动连接'}))
-                if key not in self._soe_keys:
+                    '发布方式': 'SOE另行投递' if is_soe else publish_mode}))
+                if not is_soe:
                     self._queue_point_runtime(key, forward_time=stamp)
                     self._tx_count += 1
                     self._last_tx_time = stamp
@@ -926,6 +947,7 @@ class TransRuntime:
                     self.logger.error(f"Modbus 扫描发布未确认: {exc}")
                     self._flush_point_runtime()
                     return  # Retry unconfirmed values on the next scan.
+                stamp = now_ms()
                 for kind, no, value in changes:
                     key = (kind, no)
                     if key in errors:
@@ -938,9 +960,9 @@ class TransRuntime:
                         self._record_business(('Modbus寄存器已更新，等待对端读取', {
                             '四遥': kind.upper(), '转发点号': no, '值': sample[0],
                             '本地质量': sample[1], '源刷新时刻': sample[2]}))
-                        self._queue_point_runtime(key, forward_time=now_ms())
+                        self._queue_point_runtime(key, forward_time=stamp)
                         self._tx_count += 1
-                        self._last_tx_time = now_ms()
+                        self._last_tx_time = stamp
             self._flush_point_runtime()
             return
         for key, point in self.points.items():

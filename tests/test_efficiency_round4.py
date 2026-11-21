@@ -108,7 +108,7 @@ class MonitoringBatchTests(unittest.TestCase):
     def test_sync_retries_failed_send_even_after_native_values_changed(self):
         con=sqlite3.connect(':memory:'); self.addCleanup(con.close)
         for kind in ('yc','yx'):
-            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT,refresh_time INT)')
+            con.execute(f'CREATE TABLE fes_{kind}_define(rtu_id INT,pnt_no INT,value REAL,status INT,refresh_time INT,PRIMARY KEY(rtu_id,pnt_no))')
         con.execute('INSERT INTO fes_yc_define VALUES(1,1,7,128,0)')
         native={('yc',1):(0,0)}
         def publish(updates,transmit):

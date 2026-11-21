@@ -8,19 +8,28 @@ from .types import (Information, Quality, Double, Type, Cot, IncomingMessage,
 
 BASE = {2:1,4:3,6:5,10:9,12:11,14:13,21:9,
         30:1,31:3,32:5,34:9,35:11,36:13,58:45,59:46,61:48,62:49,63:50}
-CP24 = {2,4,6,10,12,14}
-CP56 = {30,31,32,34,35,36,58,59,61,62,63}
-MONITOR = {1,2,3,4,5,6,9,10,11,12,13,14,21,30,31,32,34,35,36}
-COMMAND = {45,46,48,49,50,58,59,61,62,63}
+CP24 = frozenset({2,4,6,10,12,14})
+CP56 = frozenset({30,31,32,34,35,36,58,59,61,62,63})
+TIMED = CP24 | CP56
+MONITOR = frozenset({1,2,3,4,5,6,9,10,11,12,13,14,21,30,31,32,34,35,36})
+COMMAND = frozenset({45,46,48,49,50,58,59,61,62,63})
 SIZES = {1:1,3:1,5:2,9:3,11:3,13:5,45:1,46:1,48:3,49:3,50:5,
          70:1,100:1,103:7,104:2,107:9}
 INFO = {1:SingleInfo,3:DoubleInfo,5:StepInfo,9:NormalizedInfo,11:ScaledInfo,
         13:ShortInfo,45:SingleCmd,46:DoubleCmd,48:NormalizedCmd,49:ScaledCmd,50:ShortCmd}
+_SIZE_BY_TYPE = {
+    typ: (2 if typ == 21 else SIZES[BASE.get(typ, typ)]) + (3 if typ in CP24 else 7 if typ in CP56 else 0)
+    for typ in (*SIZES, *BASE)
+}
+_STRUCT_HB = struct.Struct('<HB')
+_STRUCT_h = struct.Struct('<h')
+_STRUCT_f = struct.Struct('<f')
+_STRUCT_fB = struct.Struct('<fB')
+_STRUCT_hB = struct.Struct('<hB')
 
 
 def size_of(typ):
-    typ = int(typ)
-    return (2 if typ == 21 else SIZES[BASE.get(typ,typ)]) + (3 if typ in CP24 else 7 if typ in CP56 else 0)
+    return _SIZE_BY_TYPE[int(typ)]
 
 
 def encode_time(stamp=None, *, short=False):
@@ -30,19 +39,20 @@ def encode_time(stamp=None, *, short=False):
         stamp = stamp.astimezone(timezone.utc)
     if not 2000 <= stamp.year <= 2099:
         raise ValueError('IEC104 时间年份必须在 2000..2099')
-    raw = struct.pack('<HB', stamp.second*1000+stamp.microsecond//1000, stamp.minute)
+    raw = _STRUCT_HB.pack(stamp.second*1000+stamp.microsecond//1000, stamp.minute)
     if short:
         return raw
     return raw+bytes((stamp.hour,stamp.day | stamp.isoweekday()<<5,stamp.month,stamp.year-2000))
 
 
 def decode_time(data, *, reference=None):
-    if len(data) not in (3,7):
+    length = len(data)
+    if length not in (3,7):
         raise ValueError('时间标签长度无效')
-    ms = int.from_bytes(data[:2],'little')
+    ms = data[0] | (data[1] << 8)
     if ms >= 60000 or data[2]&63 >= 60:
         raise ValueError('时间标签分秒无效')
-    if len(data) == 7:
+    if length == 7:
         return datetime(2000+(data[6]&127),data[5]&15,data[4]&31,data[3]&31,
                         data[2]&63,ms//1000,ms%1000*1000,tzinfo=timezone.utc)
     ref = reference or datetime.now(timezone.utc)
@@ -62,33 +72,33 @@ def encode_information(typ, info, *, select=False):
     elif base in (9,11):
         n = int(round(float(value)*32768)) if base == 9 else int(value)
         n = min(n,32767) if base == 9 else n
-        data = struct.pack('<h',n)+(b'' if typ == 21 else bytes((quality,)))
+        data = _STRUCT_h.pack(n) if typ == 21 else _STRUCT_hB.pack(n,quality)
     elif base == 13:
-        data = struct.pack('<fB',float(value),quality)
+        data = _STRUCT_fB.pack(float(value),quality)
     elif base in (45,46):
         n = int(bool(value)) if base == 45 else int(value)
         data = bytes((n | int(info.qualifier)<<2 | (128 if select else 0),))
     elif base in (48,49,50):
+        qualifier = int(info.qualifier) | (128 if select else 0)
         if base == 48:
-            data = struct.pack('<h',min(32767,round(float(value)*32768)))
+            data = _STRUCT_hB.pack(min(32767,round(float(value)*32768)),qualifier)
         elif base == 49:
-            data = struct.pack('<h',int(value))
+            data = _STRUCT_hB.pack(int(value),qualifier)
         else:
-            data = struct.pack('<f',float(value))
-        data += bytes((int(info.qualifier) | (128 if select else 0),))
+            data = _STRUCT_fB.pack(float(value),qualifier)
     else:
         raise ValueError(f'不支持编码类型 {typ}')
-    if typ in CP24 | CP56:
+    if typ in TIMED:
         data += encode_time(info.recorded_at,short=typ in CP24)
     return data
 
 
 def decode_information(typ, data, *, reference=None):
     typ = int(typ); base = BASE.get(typ,typ)
-    if len(data) != size_of(typ):
+    if len(data) != _SIZE_BY_TYPE[typ]:
         raise ValueError('信息体长度无效')
     stamp, invalid = None, 0
-    if typ in CP24 | CP56:
+    if typ in TIMED:
         time_data = data[-(3 if typ in CP24 else 7):]
         invalid = 128 if time_data[2]&128 else 0
         try:
@@ -101,14 +111,14 @@ def decode_information(typ, data, *, reference=None):
         value = data[0]&127
         return StepInfo(value-128 if value&64 else value,bool(data[0]&128),Quality(data[1]|invalid),stamp)
     if base in (9,11,13):
-        value = struct.unpack_from('<f' if base==13 else '<h',data)[0]
+        value = (_STRUCT_f if base==13 else _STRUCT_h).unpack_from(data)[0]
         if base==9: value /= 32768
         q = 0 if typ==21 else data[4 if base==13 else 2]
         return INFO[base](value,Quality(q|invalid),stamp)
     if base in (45,46):
         return INFO[base](bool(data[0]&1) if base==45 else Double(data[0]&3),(data[0]>>2)&31,stamp)
     if base in (48,49,50):
-        value = struct.unpack_from('<f' if base==50 else '<h',data)[0]
+        value = (_STRUCT_f if base==50 else _STRUCT_h).unpack_from(data)[0]
         if base==48: value /= 32768
         return INFO[base](value,data[4 if base==50 else 2]&127,stamp)
     return Information(bytes(data),None,stamp)

@@ -496,6 +496,7 @@ class IEC104Service:
             connection = sqlite3.connect(
                 str(self.store.db_path), timeout=2.0, isolation_level=None
             )
+            connection.execute("PRAGMA temp_store=MEMORY")
             previous_data_version = None
             while not self._database_sync_stop.wait(self.DATABASE_SYNC_INTERVAL_S):
                 try:
@@ -532,16 +533,26 @@ class IEC104Service:
     def _persist_point(self, kind: str, point_no: int, value: Any) -> dict[str, Any]:
         return self.store.update_row(*self._point_update(kind, point_no, value))
 
+    def _table_columns(self, table: str) -> frozenset[str]:
+        cache = getattr(self, "_table_columns_cache", None)
+        if cache is None:
+            cache = self._table_columns_cache = {}
+        columns = cache.get(table)
+        if columns is None:
+            columns = frozenset(c["eng_name"] for c in self.store.schema(table)["columns"])
+            cache[table] = columns
+        return columns
+
     def _point_update(self, kind, point_no, value, rtu_id=None):
         table, key = self._row_for_point(kind, point_no, rtu_id)
         now = _now_ms()
+        columns = self._table_columns(table)
         if value is None and kind in {"yx", "yk"}:
             if kind == "yk":
                 raise IEC104ServiceError("中间态或不确定双点状态不能作为遥控命令")
             # An unknown double-point monitoring state is not an OFF update.
             # Keep the last business value and explicitly invalidate quality.
             values = {"status": 128, "refresh_time": now}
-            columns = {c["eng_name"] for c in self.store.schema(table)["columns"]}
             if "raw_status" in columns:
                 values.update(raw_status=128, raw_time=now)
             return table, key, values
@@ -550,7 +561,7 @@ class IEC104Service:
         elif kind in {"yc", "yt"}:
             value = float(value)
         values = {"value": value, "status": 0, "refresh_time": now}
-        if "raw_value" in {c["eng_name"] for c in self.store.schema(table)["columns"]}:
+        if "raw_value" in columns:
             values["raw_value"] = value
             values["raw_time"] = now
             values["raw_status"] = 0

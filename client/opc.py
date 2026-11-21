@@ -51,14 +51,19 @@ def _seconds(value, name: str, *, positive: bool = False):
     return value
 
 
+_ATTRIBUTE_ALIASES = None
+
+
 def _attribute_id(value):
     """Resolve the OPC UA attribute name stored in the point table."""
-    if value is None or str(value).strip().lower() == "value":
+    if value is None or (isinstance(value, str) and value.strip().lower() == "value"):
         return ua.AttributeIds.Value
-    text = str(value).strip()
-    aliases = {name.lower(): item for name, item in ua.AttributeIds.__members__.items()}
+    global _ATTRIBUTE_ALIASES
+    if _ATTRIBUTE_ALIASES is None:
+        _ATTRIBUTE_ALIASES = {name.lower(): item for name, item in ua.AttributeIds.__members__.items()}
+    text = str(value).strip().lower()
     try:
-        return aliases[text.lower()]
+        return _ATTRIBUTE_ALIASES[text]
     except KeyError as exc:
         raise ValueError(f"不支持的 OPC UA 值属性: {value!r}") from exc
 
@@ -391,11 +396,12 @@ class _OpcUaProtocol(PacketTrace):
                 continue
             if len(data) != len(chunk):
                 raise OpcError("OPC UA 批量读取返回的节点数量不匹配")
+            received = datetime.now(timezone.utc)
             for item in data:
                 if item.StatusCode is None:
                     raise OpcError("OPC UA 读取未返回状态码")
                 item.StatusCode.check()
-                results.append((item.Value.Value, item.StatusCode, datetime.now(timezone.utc)))
+                results.append((item.Value.Value, item.StatusCode, received))
             offset += len(chunk)
         return results
 
@@ -474,6 +480,9 @@ class _OpcUaProtocol(PacketTrace):
     def configure(self, points):
         checked, seen = [], set()
         command_index = {}
+        poll_entries = []
+        poll_nodes = []
+        all_value_attr = True
         for point in points:
             row = dict(point) if isinstance(point, Mapping) else vars(point).copy()
             node_id = self._node_for(row)
@@ -486,16 +495,24 @@ class _OpcUaProtocol(PacketTrace):
                 raise ValueError(f"重复 OPC UA 点 {key}")
             seen.add(key)
             row["node_id"] = node_id
-            row["value_attribute"] = _attribute_id(_field(row, "value_attribute", "Value")).name
+            attr_name = _attribute_id(_field(row, "value_attribute", "Value")).name
+            row["value_attribute"] = attr_name
             row["quality_attribute"] = _quality_attribute(_field(row, "quality_attribute", "StatusCode"))
-            if _field(row, "data_type") not in (None, ""):
-                _coerce_point_value(0, _field(row, "data_type"))
+            data_type = _field(row, "data_type")
+            if data_type not in (None, ""):
+                _coerce_point_value(0, data_type)
             checked.append(row)
+            if self.rtu_id is None or _field(row, "rtu_id") == self.rtu_id:
+                if attr_name.lower() != "value":
+                    all_value_attr = False
+                poll_entries.append((row, point_no, kind, node_id, data_type))
+                poll_nodes.append(node_id)
             if kind in ("yk", "yt"):
                 command_index[key] = row
         with self._lock:
             self._points = checked
             self._command_index = command_index
+            self._poll_plan = (tuple(poll_entries), tuple(poll_nodes), all_value_attr)
         return self
 
     def read_point(self, point):
@@ -514,6 +531,18 @@ class _OpcUaProtocol(PacketTrace):
                                _coerce_point_value(value, _field(point, "data_type")))
 
     def _collect_once(self, points=None):
+        if points is None:
+            plan = getattr(self, "_poll_plan", None)
+            if plan is not None:
+                entries, nodes, all_value_attr = plan
+                if self._backend is not None or not all_value_attr:
+                    return [self.read_point(row) for row, _, _, _, _ in entries]
+                data = self._read_batches(nodes)
+                rtu_id = self.rtu_id
+                return [OpcValue(rtu_id, point_no, kind, node_id,
+                                 _coerce_point_value(value, data_type),
+                                 status, received)
+                        for (_, point_no, kind, node_id, data_type), (value, status, received) in zip(entries, data)]
         rows = self._points if points is None else list(points)
         selected = [row for row in rows if self.rtu_id is None or _field(row, "rtu_id") == self.rtu_id]
         if self._backend is not None:
@@ -575,7 +604,11 @@ class OpcUaMaster(_OpcUaProtocol):
         return matches[0]
 
     def collect_once(self, points=None):
-        rows = self._points if points is None else list(points)
+        if points is None:
+            if not self._points:
+                raise ValueError("尚未配置 OPC UA 点表")
+            return super()._collect_once(None)
+        rows = list(points)
         if not rows:
             raise ValueError("尚未配置 OPC UA 点表")
         return super()._collect_once(rows)

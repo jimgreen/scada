@@ -100,7 +100,7 @@ def prepare_database(role, path, schema_dir, workspace_root=None):
     try:
         if role == 'd':
             from scdfe_d.service import DeviceStore, Collector
-            store = DeviceStore(path, schema_dir, workspace_root=workspace_root)
+            store = DeviceStore(path, schema_dir, workspace_root=workspace_root, connection_pool_size=4)
             resources.callback(store.close)
             collector = Collector(store)
             resources.callback(collector.close)

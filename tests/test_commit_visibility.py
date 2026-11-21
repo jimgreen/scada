@@ -111,7 +111,9 @@ class CommitVisibilityTests(unittest.TestCase):
         run=TransRuntime(self.db); self.addCleanup(run.store.close)
         point=SimpleNamespace(kind='yk',source_rtu_id=7,source_pnt_no=1)
         run.writer=Mock(spec=['submit_commands'])
-        with patch.object(run.logger,'normal',side_effect=OSError('full')), self.assertLogs('scdfe_t.trans'):
+        with (patch.object(run.logger,'normal',side_effect=OSError('full')),
+              patch.object(run.business,'write_context',side_effect=OSError('full')),
+              self.assertLogs('core.communication_log')):
             self.assertTrue(run.command(point,1))
         run.writer.submit_commands.assert_called_once_with([(7,'yk',1,1)],timeout=5)
         run.writer.submit_commands.side_effect=ConnectionError('offline')

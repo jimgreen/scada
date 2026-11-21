@@ -139,17 +139,44 @@ class PointTrendHistory:
                 pass
             self._check_path(self.path)
         with closing(sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=3)) as con, con:
-            con.execute('PRAGMA trusted_schema=OFF')
-            if create:
-                con.execute('BEGIN IMMEDIATE')
-            application_id = con.execute('PRAGMA application_id').fetchone()[0]
-            if application_id == 0 and create and con.execute('SELECT 1 FROM sqlite_master LIMIT 1').fetchone() is None:
-                con.execute(f'PRAGMA application_id={_APPLICATION_ID}')
-                con.execute('CREATE TABLE trend_settings (id INTEGER PRIMARY KEY CHECK(id=1), settings TEXT NOT NULL)')
-                con.execute('CREATE TABLE trend_sample (time_ms INTEGER PRIMARY KEY, samples TEXT NOT NULL)')
-            elif application_id != _APPLICATION_ID:
-                raise ApiError(400, '曲线历史文件格式无效')
+            self._configure_connection(con, create=create)
             yield con
+
+    def _configure_connection(self, con, *, create=False):
+        con.execute('PRAGMA trusted_schema=OFF')
+        con.execute('PRAGMA busy_timeout=5000')
+        con.execute('PRAGMA temp_store=MEMORY')
+        con.execute('PRAGMA synchronous=NORMAL')
+        if create:
+            con.execute('PRAGMA journal_mode=WAL')
+            con.execute('BEGIN IMMEDIATE')
+        application_id = con.execute('PRAGMA application_id').fetchone()[0]
+        if application_id == 0 and create and con.execute('SELECT 1 FROM sqlite_master LIMIT 1').fetchone() is None:
+            con.execute(f'PRAGMA application_id={_APPLICATION_ID}')
+            con.execute('CREATE TABLE trend_settings (id INTEGER PRIMARY KEY CHECK(id=1), settings TEXT NOT NULL)')
+            con.execute('CREATE TABLE trend_sample (time_ms INTEGER PRIMARY KEY, samples TEXT NOT NULL)')
+        elif application_id != _APPLICATION_ID:
+            raise ApiError(400, '曲线历史文件格式无效')
+
+    def _open_sampler_connection(self):
+        exists = self._check_path(self.path.parent, directory=True)
+        if not exists:
+            return None, None
+        exists = self._check_path(self.path)
+        for suffix in ('-wal', '-shm', '-journal'):
+            self._check_path(self.path.with_name(self.path.name + suffix))
+        if not exists:
+            return None, None
+        info = self.path.lstat()
+        identity = (info.st_dev, info.st_ino)
+        con = sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=3)
+        try:
+            self._configure_connection(con, create=False)
+            con.commit()
+        except BaseException:
+            con.close()
+            raise
+        return con, identity
 
     @staticmethod
     def _load(con):
@@ -233,6 +260,8 @@ class PointTrendHistory:
         last_start = float('-inf')
         last_payload = None
         failed = False
+        con = None
+        con_identity = None
         try:
             while not self._stop.is_set():
                 self._wake.clear()
@@ -244,8 +273,26 @@ class PointTrendHistory:
                         if not lease.acquire():
                             self._wake.wait(delay)
                             continue
-                    with self._database() as con:
-                        payload = None if con is None else self._load(con)
+                    if con is not None:
+                        try:
+                            info = self.path.lstat()
+                            if (info.st_dev, info.st_ino) != con_identity:
+                                con.close()
+                                con = None
+                                con_identity = None
+                        except FileNotFoundError:
+                            con.close()
+                            con = None
+                            con_identity = None
+                    if con is None:
+                        con, con_identity = self._open_sampler_connection()
+                    payload = None
+                    if con is not None:
+                        con.execute('BEGIN')
+                        try:
+                            payload = self._load(con)
+                        finally:
+                            con.rollback()
                     if payload is not None:
                         settings, _ = _settings(json.loads(payload), self.role)
                         points = [item['point'] for item in settings['series']]
@@ -256,27 +303,38 @@ class PointTrendHistory:
                             last_start = start
                             batch = read_point_trend(self.store, self.role, {'points': points})
                         prune = start >= next_prune or payload != last_payload
-                        if (batch is not None or prune) and not self._stop.is_set():
-                            with self._database() as con:
-                                if con is not None:
-                                    con.execute('BEGIN IMMEDIATE')
-                                    if self._load(con) == payload:
-                                        if batch is not None:
-                                            values = dict(zip((_key(point) for point in points), batch['values']))
-                                            con.execute('INSERT INTO trend_sample VALUES(?,?) ON CONFLICT DO NOTHING',
-                                                        (batch['time_ms'], json.dumps(values, separators=(',', ':'))))
-                                        if prune:
-                                            self._prune(con, settings)
-                                            next_prune = start + 15
-                                    else:
-                                        self._wake.set()
+                        if (batch is not None or prune) and not self._stop.is_set() and con is not None:
+                            with con:
+                                con.execute('BEGIN IMMEDIATE')
+                                if self._load(con) == payload:
+                                    if batch is not None:
+                                        values = dict(zip((_key(point) for point in points), batch['values']))
+                                        con.execute('INSERT INTO trend_sample VALUES(?,?) ON CONFLICT DO NOTHING',
+                                                    (batch['time_ms'], json.dumps(values, separators=(',', ':'))))
+                                    if prune:
+                                        self._prune(con, settings)
+                                        next_prune = start + 15
+                                else:
+                                    self._wake.set()
                             last_payload = payload
                         delay = max(0, interval - (time.monotonic() - last_start)) if points else 15
                     failed = False
                 except (ApiError, OSError, sqlite3.Error, ValueError):
+                    if con is not None:
+                        try:
+                            con.close()
+                        except sqlite3.Error:
+                            pass
+                        con = None
+                        con_identity = None
                     if not failed:
                         LOG.warning('实时曲线采样失败：%s', self.path, exc_info=True)
                         failed = True
                 self._wake.wait(delay)
         finally:
+            if con is not None:
+                try:
+                    con.close()
+                except sqlite3.Error:
+                    pass
             lease.release()

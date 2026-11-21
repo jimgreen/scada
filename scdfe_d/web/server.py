@@ -14,6 +14,7 @@ from core.web_database import (
     selected_database,
     selection_file,
 )
+from core.web_http import encode_json, prepare_response, send_static
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from scdfe_c.web.service import ApiError
@@ -33,16 +34,20 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         LOG.debug(fmt, *args)
 
-    def _send(self, status, content_type, data):
+    def _send(self, status, content_type, data, headers=None):
+        data, extra = prepare_response(self, status, content_type, data, headers)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        if "cache-control" not in {key.lower() for key in extra}:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'",
         )
+        for key, value in extra.items():
+            self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -51,7 +56,7 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
         self._send(
             status,
             "application/json; charset=utf-8",
-            json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+            encode_json(payload),
         )
 
     def _api(self, method, parts, query):
@@ -155,16 +160,14 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
                 raise ApiError(405, "此路径只支持 GET")
             if len(parts) == 2 and parts[0] == "static":
                 if parts[1] in ASSETS:
-                    return self._send(
-                        200, ASSETS[parts[1]], (ASSET_DIR / parts[1]).read_bytes()
-                    )
+                    return send_static(self, ASSET_DIR / parts[1], ASSETS[parts[1]])
                 if parts[1] in ("app.css", "app.js"):
-                    return self._send(
-                        200,
-                        "text/css"
+                    return send_static(
+                        self,
+                        STATIC / parts[1],
+                        "text/css; charset=utf-8"
                         if parts[1].endswith("css")
-                        else "application/javascript",
-                        (STATIC / parts[1]).read_bytes(),
+                        else "application/javascript; charset=utf-8",
                     )
             pages = {
                 "/": "overview.html",
@@ -175,12 +178,13 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
                 "/history": "history.html",
             }
             if url.path in pages:
-                return self._send(
-                    200,
+                page_name = pages[url.path]
+                return send_static(
+                    self,
+                    STATIC / "index.html",
                     "text/html; charset=utf-8",
-                    render_workbench(
-                        (STATIC / "index.html").read_bytes(), "d", pages[url.path]
-                    ),
+                    transform=lambda data, p=page_name: render_workbench(data, "d", p),
+                    cache_key=f"d:{page_name}",
                 )
             if parts == ["favicon.ico"]:
                 return self._send(204, "image/x-icon", b"")

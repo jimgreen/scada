@@ -1428,7 +1428,8 @@ class ChannelWorker:
                  poll_interval: float = 1.0, retry_interval: float = 5.0,
                  master_factory: Callable[[ScadaStore, ChannelSpec], Any] | None = None,
                  stop_event: Any | None = None, writer_queue: Any | None = None,
-                 measurement_heartbeat_interval: float = MEASUREMENT_HEARTBEAT_INTERVAL):
+                 measurement_heartbeat_interval: float = MEASUREMENT_HEARTBEAT_INTERVAL,
+                 logger: ScdfeLogger | None = None):
         if poll_interval < 0 or retry_interval <= 0:
             raise ValueError("poll_interval 必须非负，retry_interval 必须为正")
         if measurement_heartbeat_interval < 0:
@@ -1442,11 +1443,12 @@ class ChannelWorker:
         self.stop_event = stop_event or threading.Event()
         self.writer_queue = writer_queue
         from core.packet_logging import packet_log_switch
-        self.logger = ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
-                                 packet_directory=packet_log_directory(log_dir),
-                                 runtime_packet_compat=True,
-                                 packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
-                                 if store is not None else None)
+        self.logger = logger if logger is not None else ScdfeLogger(
+            log_dir, process_name=_worker_process_name(spec.rtu_id),
+            packet_directory=packet_log_directory(log_dir),
+            runtime_packet_compat=True,
+            packet_switch=packet_log_switch(store.db_path, 'c').for_channel(spec.channel_id)
+            if store is not None else None)
         self.stats = WorkerStats()
         from core.pipeline_metrics import LatencyStats
         self._latency = LatencyStats()
@@ -2367,9 +2369,8 @@ def run_channel_debug(
                     retry_interval=retry_interval, stop_event=stop_event,
                     master_factory=master_factory, send_commands=send_commands,
                     scan_interval=scan_interval, retention_hours=retention_hours,
-                    process_lease=lease,
+                    process_lease=lease, logger=logger,
                 )
-                worker.logger = logger
                 worker.stats = stats
                 remaining = None if max_cycles is None else max_cycles - stats.cycles
                 worker.run(max_cycles=remaining)

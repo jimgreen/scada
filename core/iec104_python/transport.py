@@ -12,6 +12,8 @@ from core.iec104_protocol import parse_apdu
 
 LOG = logging.getLogger(__name__)
 MAX_QUEUED_BYTES = 4 * 1024 * 1024
+_STRUCT_H = struct.Struct('<H')
+_STRUCT_HH = struct.Struct('<HH')
 
 
 class Link:
@@ -40,6 +42,8 @@ class Link:
         self.peer = None
         self.ident = id(self)
         self.selections = {}
+        self._selector_events = None
+        self._testfr_event = threading.Event()
         sock.setblocking(False)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -74,7 +78,7 @@ class Link:
         return True
 
     def _s(self):
-        self.output.append(b'\x68\x04\x01\x00'+struct.pack('<H',self.receive_sequence*2))
+        self.output.append(b'\x68\x04\x01\x00'+_STRUCT_H.pack(self.receive_sequence*2))
         self.received_unacked = 0
         self.first_unacked = None
 
@@ -98,51 +102,71 @@ class Link:
         if not data:
             self.close('对端关闭 TCP 连接')
             return
-        self.input.extend(data)
-        while len(self.input)>=2 and not self.closed:
-            if self.input[0]!=0x68 or not 4<=self.input[1]<=253:
-                raise ValueError('无效 IEC104 起始字节或长度')
-            size=self.input[1]+2
-            if len(self.input)<size: break
-            frame=bytes(self.input[:size]);del self.input[:size]
-            self.last_activity=time.monotonic()
-            self.owner._raw(self,'RX',frame)
-            parsed=parse_apdu(frame,max_asdu_length=self.parameters.max_asdu_length)
-            if parsed.frame_type!='I' and len(frame)!=6:
-                raise ValueError('S/U 帧不能携带 ASDU')
-            if parsed.frame_type=='I':
-                if not self.active or frame[4]&1 or len(frame)<12:
-                    raise ValueError('未激活的数据帧或无效 I 帧')
-                if parsed.send_sequence!=self.receive_sequence:
-                    raise ValueError(f'异常发送序号 {parsed.send_sequence}，期望 {self.receive_sequence}')
-                with self.lock:
-                    self._ack(parsed.receive_sequence)
-                    self.receive_sequence=(self.receive_sequence+1)&32767
-                # Application persistence completes before an APCI ACK can leave.
-                if self.owner._asdu(self,frame) is False:
-                    raise ValueError('接收回调失败，未确认该帧')
-                with self.lock:
-                    self.received_unacked+=1
-                    if self.first_unacked is None: self.first_unacked=time.monotonic()
-                    if self.received_unacked>=self.parameters.receive_window_size: self._s()
-            elif parsed.frame_type=='S':
-                with self.lock: self._ack(parsed.receive_sequence)
-            else:
-                code=frame[2]
-                if code==7:
-                    self.u(11);self.set_active(True)
-                elif code==11:
-                    self.pending_u.pop(7,None);self.set_active(True)
-                elif code==19:
+        buf = self.input
+        buf.extend(data)
+        offset = 0
+        total = len(buf)
+        try:
+            while total - offset >= 2 and not self.closed:
+                length = buf[offset + 1]
+                if buf[offset] != 0x68 or not 4 <= length <= 253:
+                    raise ValueError('无效 IEC104 起始字节或长度')
+                size = length + 2
+                if total - offset < size:
+                    break
+                frame = bytes(buf[offset:offset + size])
+                offset += size
+                self.last_activity = time.monotonic()
+                self.owner._raw(self, 'RX', frame)
+                parsed = parse_apdu(frame, max_asdu_length=self.parameters.max_asdu_length)
+                if parsed.frame_type != 'I' and size != 6:
+                    raise ValueError('S/U 帧不能携带 ASDU')
+                if parsed.frame_type == 'I':
+                    if not self.active or frame[4] & 1 or size < 12:
+                        raise ValueError('未激活的数据帧或无效 I 帧')
+                    if parsed.send_sequence != self.receive_sequence:
+                        raise ValueError(f'异常发送序号 {parsed.send_sequence}，期望 {self.receive_sequence}')
                     with self.lock:
-                        if self.received_unacked: self._s()
-                    self.u(35);self.set_active(False)
-                elif code==35:
-                    self.pending_u.pop(19,None);self.set_active(False)
-                elif code==67:
-                    self.u(131)
-                elif code==131:
-                    self.pending_u.pop(67,None)
+                        self._ack(parsed.receive_sequence)
+                        self.receive_sequence = (self.receive_sequence + 1) & 32767
+                    # Application persistence completes before an APCI ACK can leave.
+                    if self.owner._asdu(self, frame) is False:
+                        raise ValueError('接收回调失败，未确认该帧')
+                    with self.lock:
+                        self.received_unacked += 1
+                        if self.first_unacked is None:
+                            self.first_unacked = time.monotonic()
+                        if self.received_unacked >= self.parameters.receive_window_size:
+                            self._s()
+                elif parsed.frame_type == 'S':
+                    with self.lock:
+                        self._ack(parsed.receive_sequence)
+                else:
+                    code = frame[2]
+                    if code == 7:
+                        self.u(11)
+                        self.set_active(True)
+                    elif code == 11:
+                        self.pending_u.pop(7, None)
+                        self.set_active(True)
+                    elif code == 19:
+                        with self.lock:
+                            if self.received_unacked:
+                                self._s()
+                        self.u(35)
+                        self.set_active(False)
+                    elif code == 35:
+                        self.pending_u.pop(19, None)
+                        self.set_active(False)
+                    elif code == 67:
+                        self.u(131)
+                    elif code == 131:
+                        with self.lock:
+                            self.pending_u.pop(67, None)
+                        self._testfr_event.set()
+        finally:
+            if offset:
+                del buf[:offset]
 
     def tick(self, now):
         if self.closed: return
@@ -154,7 +178,7 @@ class Link:
                 return
             if self.outstanding and now-self.outstanding[0][1]>p.message_timeout:
                 raise TimeoutError('t1：I 帧确认超时')
-            if any(now-since>p.message_timeout for since in self.pending_u.values()):
+            if self.pending_u and any(now-since>p.message_timeout for since in self.pending_u.values()):
                 raise TimeoutError('t1：U 帧确认超时')
             if self.received_unacked and now-self.first_unacked>=p.confirm_interval:
                 self._s()
@@ -162,7 +186,7 @@ class Link:
                 self.u(67,request=True)
             while self.active and self.pending and len(self.outstanding)<p.send_window_size:
                 asdu,serial=self.pending.popleft();self.pending_bytes-=len(asdu)
-                frame=bytes((0x68,len(asdu)+4))+struct.pack('<HH',self.send_sequence*2,self.receive_sequence*2)+asdu
+                frame=bytes((0x68,len(asdu)+4))+_STRUCT_HH.pack(self.send_sequence*2,self.receive_sequence*2)+asdu
                 self.outstanding.append((self.send_sequence,now,serial))
                 self.send_sequence=(self.send_sequence+1)&32767
                 self.output.append(frame)
@@ -173,18 +197,49 @@ class Link:
         with self.lock:
             budget=65536
             while self.output and budget>0:
-                frame=self.output[0]
-                try: count=self.sock.send(memoryview(frame)[self.output_offset:])
+                if len(self.output)==1:
+                    frame=self.output[0]
+                    try: count=self.sock.send(memoryview(frame)[self.output_offset:])
+                    except BlockingIOError: break
+                    if count==0: raise ConnectionError('TCP 发送返回 0')
+                    budget-=count;self.output_offset+=count;self.last_activity=time.monotonic()
+                    if self.output_offset==len(frame):
+                        self.output.popleft();self.output_offset=0;sent_frames.append(frame)
+                    break
+                # Coalesce queued APDUs into one TCP write to avoid per-frame
+                # syscall and TCP_NODELAY packet overhead during bursts.
+                chunk=bytearray()
+                offset=self.output_offset
+                for frame in self.output:
+                    part=memoryview(frame)[offset:]
+                    offset=0
+                    if chunk and len(chunk)+len(part)>budget:
+                        break
+                    chunk.extend(part)
+                    if len(chunk)>=budget:
+                        break
+                try: count=self.sock.send(chunk)
                 except BlockingIOError: break
                 if count==0: raise ConnectionError('TCP 发送返回 0')
-                budget-=count;self.output_offset+=count;self.last_activity=time.monotonic()
-                if self.output_offset==len(frame):
-                    self.output.popleft();self.output_offset=0;sent_frames.append(frame)
+                budget-=count;self.last_activity=time.monotonic()
+                remaining=count
+                while remaining and self.output:
+                    frame=self.output[0]
+                    need=len(frame)-self.output_offset
+                    if remaining>=need:
+                        remaining-=need
+                        self.output.popleft();self.output_offset=0;sent_frames.append(frame)
+                    else:
+                        self.output_offset+=remaining
+                        remaining=0
+                if count<len(chunk):
+                    break
         for frame in sent_frames: self.owner._raw(self,'TX',frame)
 
     def close(self, reason):
         if self.closed: return
-        self.closed=True;self.active=False;self.generation+=1
+        self.closed=True;self.active=False;self.generation+=1;self._selector_events=None
+        self._testfr_event.set()
         try: self.reactor.selector.unregister(self.sock)
         except (KeyError,ValueError,AttributeError): pass
         try: self.sock.shutdown(socket.SHUT_RDWR)
@@ -212,7 +267,9 @@ class Reactor:
 
     def add(self, link):
         self.links.append(link)
-        self.selector.register(link.sock,selectors.EVENT_READ | (selectors.EVENT_WRITE if link.connecting else 0),link)
+        events=selectors.EVENT_READ | (selectors.EVENT_WRITE if link.connecting else 0)
+        self.selector.register(link.sock,events,link)
+        link._selector_events=events
         if not link.connecting: link.established()
 
     def start(self, listener=None):
@@ -231,14 +288,17 @@ class Reactor:
     def run(self):
         try:
             while not self.stopped.is_set():
-                self.owner._poll(time.monotonic())
+                now=time.monotonic()
+                self.owner._poll(now)
                 for link in tuple(self.links):
                     if link.closed:
                         self.links.remove(link);continue
                     try:
-                        link.tick(time.monotonic())
+                        link.tick(now)
                         events=selectors.EVENT_READ | (selectors.EVENT_WRITE if link.output or link.connecting else 0)
-                        self.selector.modify(link.sock,events,link)
+                        if events!=link._selector_events:
+                            self.selector.modify(link.sock,events,link)
+                            link._selector_events=events
                     except (OSError,ValueError,TimeoutError) as exc:
                         link.close(str(exc))
                 for key,mask in self.selector.select(.02):

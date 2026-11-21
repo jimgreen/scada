@@ -25,6 +25,7 @@ from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
 from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
 from core import operation_audit as audit
+from core.web_http import encode_json, prepare_response, send_static
 from core.web_workbench import ASSET_DIR, ASSETS
 from scdfe_c.web.process_control import ProcessController
 
@@ -87,17 +88,19 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         LOG.debug(message, *args)
 
     def _send(self, status, content_type, data, headers=None):
+        data, extra = prepare_response(self, status, content_type, data, headers)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        if "cache-control" not in {key.lower() for key in extra}:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; script-src 'self'; style-src 'self'; "
                          "img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
-        for key, value in (headers or {}).items():
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
@@ -111,7 +114,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         headers = {}
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
-        data = json.dumps(browser_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        data = encode_json(browser_safe(payload))
         self._send(status, "application/json; charset=utf-8", data, headers)
 
     def _if_match(self):
@@ -804,7 +807,7 @@ class ScadaHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         if name not in allowed or not path.is_file():
             raise ApiError(404, "资源不存在", code="not_found")
         mime = allowed[name]
-        self._send(200, mime if "charset=" in mime else mime + "; charset=utf-8", path.read_bytes())
+        send_static(self, path, mime if "charset=" in mime else mime + "; charset=utf-8")
 
 
 class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
