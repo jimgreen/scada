@@ -75,12 +75,29 @@ def _quality_attribute(value):
     raise ValueError("OPC UA 质量属性必须为 StatusCode")
 
 
+def _parse_bool(value):
+    """安全解析布尔值，防止 'false'/'0' 等字符串被 bool() 误判为 True。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value in (0, 1):
+            return bool(int(value))
+        raise ValueError(f"布尔值仅允许 0/1，实际收到: {value!r}")
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    raise ValueError(f"无法解析布尔值: {value!r}")
+
+
 def _coerce_point_value(value, data_type):
     if data_type in (None, ""):
         return value
     kind = str(data_type).strip().lower()
     if kind in {"bool", "boolean"}:
-        return bool(value)
+        return _parse_bool(value)
     if kind in {"int", "int8", "int16", "int32", "int64", "integer"}:
         return int(value)
     if kind in {"uint", "uint8", "uint16", "uint32", "uint64"}:
@@ -272,7 +289,7 @@ class _OpcUaProtocol(PacketTrace):
             # Only a missing mapping uses the runtime default; invalid explicit
             # mappings remain errors. Points and addresses came from one snapshot.
             if row.pop("mapping_owner") is None and default_unmapped:
-                row["node_id"] = f"ns=2;s={row['kind'].upper()}_{row['pnt_no']:03d}"
+                row["node_id"] = f"ns=2;s={row['kind'].upper()}_{row['pnt_no']}"
         if point_map:
             for row in rows:
                 key = (row["kind"], row.get("pnt_no"))

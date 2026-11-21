@@ -51,21 +51,31 @@ def _samples_for_devices(store, con, points):
             raise ApiError(400, '每个量测需要 measurement_id')
         ids[_identifier(point['measurement_id'], 'measurement_id')].append(slot)
     placeholders = ', '.join(['?'] * len(ids))
-    devices = defaultdict(list)
+    by_table = defaultdict(lambda: defaultdict(list))
     for mid, metric, table, idx in con.execute(
         f'''SELECT m.measurement_id, m.metric, m.quantity_table, b.idx
             FROM device_measurement m JOIN d_device_members b
             ON b.device_id=m.device_id AND b.table_name=m.quantity_table
             WHERE m.catalog_active=1 AND m.measurement_id IN ({placeholders})''', tuple(ids)):
-        devices[table, idx].append((mid, metric))
-    for (table, idx), measurements in devices.items():
+        by_table[table][idx].append((mid, metric))
+    for table, idx_map in by_table.items():
+        # 按表合并为单条 WHERE idx IN (...) 查询，消除多设备选点时的 N+1 查询。
+        metrics = list(dict.fromkeys(metric for rows in idx_map.values() for _, metric in rows))
+        metric_pos = {metric: pos for pos, metric in enumerate(metrics)}
         cols = ', '.join(quote_identifier(metric + suffix)
-                         for _, metric in measurements for suffix in ('', '_qual', '_time'))
-        row = con.execute(f'SELECT {cols} FROM {store._table_name(table)} WHERE idx=?', (idx,)).fetchone()
-        if row is not None:
-            for offset, (mid, _) in enumerate(measurements):
+                         for metric in metrics for suffix in ('', '_qual', '_time'))
+        idx_list = list(idx_map.keys())
+        idx_placeholders = ', '.join(['?'] * len(idx_list))
+        for row in con.execute(
+            f'SELECT idx, {cols} FROM {store._table_name(table)} WHERE idx IN ({idx_placeholders})',
+            tuple(idx_list),
+        ):
+            row_idx = row[0]
+            for mid, metric in idx_map.get(row_idx, ()):
+                base = 1 + 3 * metric_pos[metric]
+                sample = (row[base], row[base + 1], row[base + 2])
                 for slot in ids[mid]:
-                    yield (slot, *row[3 * offset:3 * offset + 3])
+                    yield (slot, *sample)
 
 
 def read_point_trend(store, role, body):

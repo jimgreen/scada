@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_ytyk_check_define
-Chinese name: 五防定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_ytyk_check_define
+中文名：五防定义表
 """
 
 from dataclasses import dataclass, field

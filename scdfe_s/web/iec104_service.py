@@ -295,6 +295,12 @@ class IEC104Service:
                         on_event=self._packet_sink.business.soe)
                 server.start()
             except Exception as exc:
+                if self._soe_forwarder is not None:
+                    try:
+                        self._soe_forwarder.close()
+                    except Exception:
+                        pass
+                    self._soe_forwarder = None
                 self._last_error = str(exc)
                 self._record("ERROR", f"IEC104 服务启动失败: {exc}", alert=True)
                 self._file_log.end_session()
@@ -303,9 +309,12 @@ class IEC104Service:
             self._database_samples.clear()
             self._database_pending.clear()
             self._database_cursor = None
-            self._database_sync_stop.clear()
+            # 每次启动分配独立 stop Event，避免旧同步线程尚未退出时被 clear() 复活形成双线程竞态。
+            sync_stop = threading.Event()
+            self._database_sync_stop = sync_stop
             self._database_sync_thread = threading.Thread(
                 target=self._database_sync_loop,
+                args=(sync_stop,),
                 name=f"iec104-db-sync-{server.rtu_id}",
                 daemon=True,
             )
@@ -324,31 +333,40 @@ class IEC104Service:
     def stop(self) -> dict[str, Any]:
         from .lifecycle import stop_cause
         sync_thread = None
+        stop_error = None
         with self._lock:
             server = self._server
             self._database_sync_stop.set()
-            if server is not None:
-                detail = (f'停止原因={stop_cause()}；RTU编号={server.rtu_id} '
-                          f'通道编号={self._file_log.channel_id} 监听={server.ip}:{server.port}')
-                self._record('INFO', 'IEC104 服务开始停止 ' + detail)
-                try:
-                    server.stop()
-                except Exception as exc:
-                    self._last_error = str(exc)
-                    self._record("ERROR", f"IEC104 服务停止失败: {exc}；{detail}", alert=True)
-                    raise IEC104ServiceError(str(exc)) from exc
-                self._record("INFO", "IEC104 服务已停止 " + detail)
-            self._server = None
-            if self._soe_forwarder is not None:
-                self._soe_forwarder.close()
-                self._soe_forwarder = None
-            sync_thread = self._database_sync_thread
-            self._database_sync_thread = None
-            self._stopped_at = _now_ms()
-            self._file_log.end_session()
+            try:
+                if server is not None:
+                    detail = (f'停止原因={stop_cause()}；RTU编号={server.rtu_id} '
+                              f'通道编号={self._file_log.channel_id} 监听={server.ip}:{server.port}')
+                    self._record('INFO', 'IEC104 服务开始停止 ' + detail)
+                    try:
+                        server.stop()
+                    except Exception as exc:
+                        self._last_error = str(exc)
+                        self._record("ERROR", f"IEC104 服务停止失败: {exc}；{detail}", alert=True)
+                        stop_error = IEC104ServiceError(str(exc))
+                    else:
+                        self._record("INFO", "IEC104 服务已停止 " + detail)
+            finally:
+                self._server = None
+                if self._soe_forwarder is not None:
+                    try:
+                        self._soe_forwarder.close()
+                    except Exception:
+                        pass
+                    self._soe_forwarder = None
+                sync_thread = self._database_sync_thread
+                self._database_sync_thread = None
+                self._stopped_at = _now_ms()
+                self._file_log.end_session()
             result = self.status()
         if sync_thread is not None and sync_thread is not threading.current_thread():
             sync_thread.join(timeout=2)
+        if stop_error is not None:
+            raise stop_error
         return result
 
     def close(self) -> None:
@@ -486,19 +504,17 @@ class IEC104Service:
             raise ValueError(f'SOE 历史事件类型与当前点类型不同: {key}')
         return [dict(row, common_address=server.common_address, io_address=point.io_address)]
 
-    def _database_sync_loop(self) -> None:
+    def _database_sync_loop(self, stop_event: threading.Event | None = None) -> None:
+        stop_signal = stop_event or self._database_sync_stop
         connection = None
         try:
-            # PRAGMA data_version lets the worker avoid scanning all YC/YX
-            # rows on every 50 ms tick.  Keep this connection open because
-            # data_version is scoped to a connection and must be compared with
-            # its own previous value.
             connection = sqlite3.connect(
                 str(self.store.db_path), timeout=2.0, isolation_level=None
             )
+            connection.execute("PRAGMA busy_timeout=2000")
             connection.execute("PRAGMA temp_store=MEMORY")
             previous_data_version = None
-            while not self._database_sync_stop.wait(self.DATABASE_SYNC_INTERVAL_S):
+            while not stop_signal.wait(self.DATABASE_SYNC_INTERVAL_S):
                 try:
                     current_data_version = int(
                         connection.execute("PRAGMA data_version").fetchone()[0]

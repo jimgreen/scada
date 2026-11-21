@@ -215,6 +215,45 @@ function lockProtocolConfiguration(form) {
   $("#poll").onclick = async () => { try { const result = await api(`/api/${cfg.slug}/poll`, {method:"POST", body:"{}"}); await load(true); message("采集完成 " + (result.item.count ?? 0) + " 个值"); } catch (e) { message(e.message, true); } };
   // Use one delegated handler for all four-remote tables.  The fallback keeps
   // the handler compatible with compact DOMs that expose only the YC body.
+  function askPointValue(kind, point, command) {
+    const isBinary = kind === "yx" || kind === "yk";
+    // 兼容无 showModal 的极简回归测试 DOM 环境
+    if (typeof document.createElement !== "function" || !document.body) {
+      return Promise.resolve(typeof prompt === "function" ? prompt(command ? "输入下发值" : "输入新值", "0") : null);
+    }
+    let dialog = document.getElementById("protocol-value-dialog");
+    if (!dialog) {
+      dialog = document.createElement("dialog");
+      dialog.id = "protocol-value-dialog";
+      dialog.className = "protocol-value-dialog";
+      document.body.append(dialog);
+    }
+    if (typeof dialog.showModal !== "function") {
+      return Promise.resolve(typeof prompt === "function" ? prompt(command ? "输入下发值" : "输入新值", "0") : null);
+    }
+    const title = `${command ? "下发" : "更新"} ${kind.toUpperCase()} 点 ${point}`;
+    const control = isBinary
+      ? `<select id="pv-input"><option value="0">0 · 分 / 关</option><option value="1">1 · 合 / 开</option></select>`
+      : `<input id="pv-input" type="number" step="any" value="0" required>`;
+    dialog.innerHTML = `<form method="dialog" id="pv-form"><h3>${esc(title)}</h3><label>${command ? "目标值" : "新值"}${control}</label><div class="dialog-actions"><button type="button" id="pv-cancel">取消</button><button type="submit" class="primary">确认</button></div></form>`;
+    return new Promise(resolve => {
+      let settled = false;
+      const done = val => {
+        if (settled) return;
+        settled = true;
+        if (dialog.open) dialog.close();
+        resolve(val);
+      };
+      dialog.querySelector("#pv-cancel").onclick = () => done(null);
+      dialog.oncancel = () => done(null);
+      dialog.querySelector("#pv-form").onsubmit = ev => {
+        ev.preventDefault();
+        done(dialog.querySelector("#pv-input").value);
+      };
+      dialog.showModal();
+      dialog.querySelector("#pv-input")?.focus();
+    });
+  }
   const pointRoot = document.querySelector("[data-point-panels]") || $("#points");
   if (pointRoot) pointRoot.onclick = async (e) => {
     const b = e.target.closest("button");
@@ -223,10 +262,10 @@ function lockProtocolConfiguration(form) {
     try {
       if (b.dataset.update) {
         const command = isCommand(kind);
-        const input = prompt(command ? "输入下发值" : "输入新值", "0");
+        const input = await askPointValue(kind, point, command);
         if (input === null) return;
         const numeric = Number(input);
-        if (!input.trim() || !Number.isFinite(numeric)) throw new Error("请输入有限数字");
+        if (!String(input).trim() || !Number.isFinite(numeric)) throw new Error("请输入有限数字");
         if ((kind === "yx" || kind === "yk") && numeric !== 0 && numeric !== 1) throw new Error("遥信/遥控值只能为 0 或 1");
         const value = kind === "yx" || kind === "yk" ? numeric === 1 : numeric;
         const path = command ? `/api/${cfg.slug}/commands/${kind}/${point}` : `/api/${cfg.slug}/update/incremental`;

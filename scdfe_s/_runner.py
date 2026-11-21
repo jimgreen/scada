@@ -29,7 +29,9 @@ from scdfe_s.web.protocol_service import (
 
 
 def add_common_arguments(parser: argparse.ArgumentParser, *, modes: tuple[str, ...]) -> None:
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
+    from core.workspace_paths import add_workspace_arguments
+    parser.add_argument("--db", type=Path, default=None, help="SQLite 数据库路径；省略时按三参数默认定位")
+    add_workspace_arguments(parser)
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR, help="JSON 表定义目录")
     parser.add_argument("--rtu-id", type=int, required=True, help="要运行的 RTU 编号")
     parser.add_argument("--mode", choices=modes, default="master", help="主站或服务端模式")
@@ -130,7 +132,15 @@ def run_service(
     if args.max_cycles is not None and args.max_cycles <= 0:
         raise ProtocolServiceError("--max-cycles 必须为正整数")
 
-    store = SimulatorStore(args.db, args.schema_dir)
+    from core.workspace_paths import resolve_cli_database
+    _, db_path = resolve_cli_database(
+        "s",
+        args.db,
+        workspace_root=getattr(args, "workspace_root", None),
+        runtime_name=getattr(args, "runtime_name", None),
+        scene_name=getattr(args, "scene_name", None),
+    )
+    store = SimulatorStore(db_path, args.schema_dir)
     service = service_factory(store)
     stop_event = threading.Event()
     previous = _install_stop_handlers(stop_event)
@@ -168,6 +178,7 @@ def run_service(
         return 1
     finally:
         service.close()
+        store.close()
         _restore_stop_handlers(previous)
 
 

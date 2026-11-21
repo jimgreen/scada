@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_iec104_point_define
-Chinese name: IEC104四遥点映射表
+表名：fes_channel_iec104_point_define
+中文名：IEC104四遥点映射表
 """
 
 from dataclasses import dataclass, field
@@ -19,7 +19,7 @@ class fes_channel_iec104_point_define:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
 
     kind: Optional[str] = field(
@@ -42,7 +42,10 @@ class fes_channel_iec104_point_define:
         metadata={'chn_name': '类型标识', 'eng_name': 'type_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-    time_tag: Optional[str] = field(default='NONE', metadata={'chn_name': '时间标签', 'eng_name': 'time_tag', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'IEC104时间标签', 'allowed_values': ['NONE', 'CP24Time2a', 'CP56Time2a']})
+    time_tag: Optional[str] = field(
+        default='NONE',
+        metadata={'chn_name': '时间标签', 'eng_name': 'time_tag', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'IEC104时间标签', 'allowed_values': ['NONE', 'CP24Time2a', 'CP56Time2a'], 'default': 'NONE'},
+    )
 
     report_ms: Optional[int] = field(
         default=None,

@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from itertools import groupby
 from pathlib import Path
+import sqlite3
 import subprocess
 import threading
 import time
@@ -364,35 +365,46 @@ class TransStore:
             if not isinstance(item, dict):
                 raise ApiError(400, "批量点映射每一项必须是对象")
             prepared.append(self._point_values(cid, item, allow_missing_pnt_no=True, check_channel=False)[1])
-        explicit = [item["pnt_no"] for item in prepared if item.get("pnt_no") is not None]
+        explicit = [(item["kind"], item["pnt_no"]) for item in prepared if item.get("pnt_no") is not None]
         if len(explicit) != len(set(explicit)):
-            raise ApiError(409, "批量点映射包含重复的转发点号", code="conflict")
+            raise ApiError(409, "批量点映射包含重复的（类型，转发点号）", code="conflict")
         with self._control(cid):
             self.get_channel(cid)
             with self.store.connection() as con:
                 con.execute("BEGIN IMMEDIATE")
-                next_no = con.execute(
-                    f"SELECT COALESCE(MAX(pnt_no),0)+1 FROM {POINT_TABLE} WHERE channel_id=?", (cid,)
-                ).fetchone()[0]
+                next_by_kind = {
+                    row[0]: int(row[1] or 0) + 1
+                    for row in con.execute(
+                        f"SELECT kind, COALESCE(MAX(pnt_no),0) FROM {POINT_TABLE} "
+                        "WHERE channel_id=? GROUP BY kind",
+                        (cid,),
+                    )
+                }
                 used = set(explicit)
                 inserts = []
                 columns = self.store.schema(POINT_TABLE)["columns"]
                 for values in prepared:
+                    kind = values["kind"]
                     if values.get("pnt_no") is None:
-                        while next_no in used:
+                        next_no = next_by_kind.get(kind, 1)
+                        while (kind, next_no) in used:
                             next_no += 1
                         values["pnt_no"] = next_no
-                        used.add(next_no)
-                        next_no += 1
+                        used.add((kind, next_no))
+                        next_by_kind[kind] = next_no + 1
                     normalised = self.store._normalise(POINT_TABLE, values)
                     names = tuple(column["eng_name"] for column in columns if column["eng_name"] in normalised)
                     inserts.append((names, [normalised[name] for name in names]))
-                for names, adjacent in groupby(inserts, key=lambda item:item[0]):
-                    con.executemany(
-                        f"INSERT INTO {POINT_TABLE} ({', '.join(names)}) "
-                        f"VALUES ({', '.join('?' for _ in names)})",
-                        (values for _, values in adjacent),
-                    )
+                try:
+                    for names, adjacent in groupby(inserts, key=lambda item:item[0]):
+                        con.executemany(
+                            f"INSERT INTO {POINT_TABLE} ({', '.join(names)}) "
+                            f"VALUES ({', '.join('?' for _ in names)})",
+                            (values for _, values in adjacent),
+                        )
+                except sqlite3.IntegrityError as exc:
+                    con.rollback()
+                    raise ApiError(409, f"批量点映射存在主键或唯一约束冲突: {exc}", code="conflict") from exc
                 rows = [self._point_response(row) for row in self.store._read_many(con, [
                     (POINT_TABLE, (cid, values["pnt_no"], values["kind"])) for values in prepared])]
                 con.commit()

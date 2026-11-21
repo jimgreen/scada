@@ -43,22 +43,31 @@ function renderChannels() {
   // Heartbeats and counters change on every poll. Preserve action nodes and
   // their focus while updating cells; a changed row identity rebuilds safely.
   if (body._channelMarkup !== markup) {
-    const keys=rows.map(id).join(','), next=markup.match(/<tr\b[\s\S]*?<\/tr>/g)||[];
-    const cells=text=>text.match(/<td\b[\s\S]*?<\/td>/g)||[];
-    if(rows.length && keys===body._channelKeys && body.rows.length===rows.length){
-      next.forEach((row,i)=>{
-        if(row===body._channelRows[i])return;
-        const old=cells(body._channelRows[i]);
-        cells(row).forEach((cell,j)=>{
-          if(cell===old[j])return;
-          if(j===8 && cell.replace(/ data-version="[^"]*"/g,'')===old[j].replace(/ data-version="[^"]*"/g,''))
-            body.rows[i].querySelector('[data-delete]').dataset.version=String(rows[i]._version);
-          else body.rows[i].cells[j].outerHTML=cell;
+    const keys = rows.map(id).join(',');
+    const canPatch = rows.length && keys === body._channelKeys && body.rows && body.rows.length === rows.length && typeof document.createElement === "function";
+    if (canPatch) {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = "<table><tbody>" + markup + "</tbody></table>";
+      const nextRows = Array.from(tpl.content.querySelectorAll("tr"));
+      if (nextRows.length === rows.length) {
+        nextRows.forEach((nextRow, i) => {
+          const curRow = body.rows[i];
+          if (nextRow.outerHTML === curRow.outerHTML) return;
+          const nextCells = Array.from(nextRow.cells);
+          if (nextCells.length !== curRow.cells.length) { curRow.replaceWith(nextRow); return; }
+          nextCells.forEach((nextCell, j) => {
+            if (nextCell.outerHTML === curRow.cells[j].outerHTML) return;
+            if (j === 8) {
+              const del = curRow.cells[j].querySelector('[data-delete]');
+              if (del) { del.dataset.version = String(rows[i]._version); return; }
+            }
+            curRow.cells[j].replaceWith(nextCell);
+          });
+          curRow.classList.toggle('selected', id(rows[i]) === state.selected);
         });
-        body.rows[i].classList.toggle('selected',id(rows[i])===state.selected);
-      });
-    }else body.innerHTML=markup;
-    body._channelKeys=keys;body._channelRows=next;body._channelMarkup=markup;
+      } else body.innerHTML = markup;
+    } else body.innerHTML = markup;
+    body._channelKeys = keys; body._channelMarkup = markup;
   }
   renderSelects(); renderDetail();
 }
@@ -184,13 +193,25 @@ async function fetchProcesses(){const r=(await api("/api/trans/processes")).item
 async function loadLogs(){const c=$("#log-channel")?.value||"";state.logsChannel=c;const q=new URLSearchParams({record:state.logRecord||"runtime"});if(c)q.set("channel_id",c);const v=await api(`/api/trans/logs?${q}`);state.logs=v.items||[];$("#log-count").textContent=`${v.total||0} 个文件`;$("#log-files").innerHTML=state.logs.map(x=>`<button class="log-file ${state.log===x.filename?"active":""}" data-log="${esc(x.filename)}">${esc(x.filename)}<small>${(x.size/1024).toFixed(1)} KB · ${fmt(x.mtime)}</small></button>`).join("")||'<div class="muted">暂无日志</div>';if(state.log&&!state.logs.some(x=>x.filename===state.log))state.log=null;if(!state.log&&state.logs.length)state.log=state.logs[0].filename;if(state.log)await loadLog();else {$("#log-name").textContent="请选择日志文件";$("#log-content").textContent="—"}}
 async function loadLog(){if(!state.log)return;const q=new URLSearchParams({filename:state.log,tail:"2000",record:state.logRecord||"runtime"}),v=await api(`/api/trans/log?${q}`),k=$("#log-keyword")?.value.trim().toLowerCase()||"";$("#log-name").textContent=state.log;$("#log-content").textContent=(v.lines||[]).filter(x=>!k||x.toLowerCase().includes(k)).join("\n")||"（没有匹配内容）";document.querySelectorAll(".log-file").forEach(e=>e.classList.toggle("active",e.dataset.log===state.log))}
 const channelCommonFields=[["name","名称","text"],["protocol","规约","protocol"],["bind_host","监听地址","text"],["bind_port","监听端口","number"],["scan_interval_ms","读取周期(ms)","number"],["log_retention_hours","日志保留小时","number"],["packet_recording","保存报文","bool"],["process_enable","自动运行","bool"]];
-const channelProtocolFields={"iec104":[["common_address","IEC104 公共地址","number"],["report_interval_ms","全量上送周期(ms)","number"],["k","发送窗口 k","number"],["w","接收确认窗口 w","number"],["t1","确认超时 t1(s)","float"],["t2","延迟确认 t2(s)","float"],["t3","空闲测试 t3(s)","float"],["max_asdu_length","ASDU 长度诊断阈值（非组帧限制）","number"]],"modbus-tcp":[["unit_id","Modbus 从站地址","number"]]};
-const pointCommonFields=[["pnt_no","转发点号","number"],["name","名称","text"],["kind","转发类型","kind"],["source_rtu_id","源 RTU","number"],["source_pnt_no","源点号（默认同转发点号）","number"],["enabled","启用","bool"]];
-const pointProtocolFields={"iec104":[["io_address","IEC IOA","number"],["type_id","IEC 类型号","number"],["time_tag","时间标签","time_tag"],["command_mode","命令方式（确认表示写库受理）","mode"]],"modbus-tcp":[["register_area","Modbus 数据区","area"],["address","Modbus 地址","number"],["address_base","地址基准（0/1/10001/30001/40001）","number"],["data_type","数据类型","dtype"],["byte_order","字节序","order"],["word_order","字序","order"],["scale","比例","float"],["offset","偏移","float"]]};
+const channelProtocolFields={"iec104":[["common_address","IEC104 公共地址","number"],["report_interval_ms","全量上送周期(ms)","number"],["k","发送窗口 k","number"],["w","接收确认窗口 w","number"],["t1","确认超时 t1(s)","float"],["t2","延迟确认 t2(s)","float"],["t3","空闲测试 t3(s)","float"],["max_asdu_length","ASDU 长度阈值","number"]],"modbus-tcp":[["unit_id","Modbus 从站地址","number"]]};
+const pointCommonFields=[["pnt_no","转发点号","number"],["name","名称","text"],["kind","转发类型","kind"],["source_rtu_id","源 RTU","number"],["source_pnt_no","源点号","number"],["enabled","启用","bool"]];
+const pointProtocolFields={"iec104":[["io_address","IEC IOA","number"],["type_id","IEC 类型号","iec_type"],["time_tag","时间标签","time_tag"],["command_mode","命令方式","mode"]],"modbus-tcp":[["register_area","Modbus 数据区","area"],["address","Modbus 地址","number"],["address_base","地址基准","addr_base"],["data_type","数据类型","dtype"],["byte_order","字节序","order"],["word_order","字序","order"],["scale","比例","float"],["offset","偏移","float"]]};
 const defaults={protocol:"iec104",bind_host:"0.0.0.0",bind_port:2404,common_address:1,unit_id:1,scan_interval_ms:200,report_interval_ms:1000,log_retention_hours:720,packet_recording:0,process_enable:0,kind:"yc",enabled:1,io_address:0,type_id:0,command_mode:"DIRECT",register_area:"holding",address:0,data_type:"float32",byte_order:"big",word_order:"big",scale:1,offset:0};
 Object.assign(defaults,{k:12,w:8,t1:15,t2:10,t3:20,max_asdu_length:249,time_tag:"NONE",address_base:0});
-function timeTagInput(value){const tags=["NONE","CP56Time2a"];if(value&&!tags.includes(value))tags.push(value);return `<select name="time_tag">${tags.map(tag=>`<option value="${esc(tag)}" ${value===tag?"selected":""}>${esc(tag)}${["NONE","CP56Time2a"].includes(tag)?"":"（当前驱动不支持，请重新选择）"}</option>`).join("")}</select>`}
-function input(k,t,v,disabled){const d=disabled?" disabled":"";if(t==="protocol")return `<select name="${k}"><option value="iec104" ${v==="iec104"?"selected":""}>IEC104</option><option value="modbus-tcp" ${v==="modbus-tcp"?"selected":""}>Modbus TCP</option></select>`;if(t==="kind")return `<select name="${k}"${d}>${Object.entries(kindName).map(([x,n])=>`<option value="${x}" ${v===x?"selected":""}>${n}</option>`).join("")}</select>`;if(t==="bool")return `<select name="${k}"><option value="1" ${Number(v)?"selected":""}>是</option><option value="0" ${!Number(v)?"selected":""}>否</option></select>`;if(t==="mode")return `<select name="${k}"><option value="DIRECT" ${v==="DIRECT"?"selected":""}>直接执行</option><option value="SELECT_AND_EXECUTE" ${v==="SELECT_AND_EXECUTE"?"selected":""}>选择并执行</option></select>`;if(t==="area")return `<select name="${k}">${["coil","discrete","holding","input"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="dtype")return `<select name="${k}">${["bool","uint16","int16","uint32","int32","float32","float64","uint64","int64"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="order")return `<select name="${k}"><option value="big" ${v==="big"?"selected":""}>big</option><option value="little" ${v==="little"?"selected":""}>little</option></select>`;return `<input name="${k}" type="${t==="float"?"number":t}" step="${t==="float"?"any":"1"}" value="${esc(v)}"${d}>`}
+const iecTypeOptions={
+  yc:[[0,"0 · 自动默认"],[9,"9 · 归一化测量值"],[11,"11 · 标度化测量值"],[13,"13 · 短浮点测量值"],[21,"21 · 不带品质归一化"],[34,"34 · 带 CP56 归一化"],[35,"35 · 带 CP56 标度化"],[36,"36 · 带 CP56 短浮点"]],
+  yx:[[0,"0 · 自动默认"],[1,"1 · 单点信息"],[3,"3 · 双点信息"],[5,"5 · 步位置信息"],[30,"30 · 带 CP56 单点"],[31,"31 · 带 CP56 双点"],[32,"32 · 带 CP56 步位置"]],
+  yk:[[0,"0 · 自动默认"],[45,"45 · 单点遥控"],[46,"46 · 双点遥控"],[58,"58 · 带 CP56 单点遥控"],[59,"59 · 带 CP56 双点遥控"]],
+  yt:[[0,"0 · 自动默认"],[48,"48 · 归一化设点"],[49,"49 · 标度化设点"],[50,"50 · 短浮点设点"],[61,"61 · 带 CP56 归一化设点"],[62,"62 · 带 CP56 标度化设点"],[63,"63 · 带 CP56 短浮点设点"]],
+};
+function iecTypeOptionsMarkup(kind,value){
+  const list=[...(iecTypeOptions[kind]||iecTypeOptions.yc)];
+  const num=Number(value??0);
+  if(Number.isFinite(num)&&!list.some(([v])=>v===num))list.push([num,`${num} · 自定义/历史类型`]);
+  return list.map(([v,label])=>`<option value="${v}" ${num===v?"selected":""}>${esc(label)}</option>`).join("");
+}
+function timeTagInput(value){const tags=["NONE","CP56Time2a"];if(value&&!tags.includes(value))tags.push(value);return `<select name="time_tag">${tags.map(tag=>`<option value="${esc(tag)}" ${value===tag?"selected":""}>${esc(tag)}${["NONE","CP56Time2a"].includes(tag)?"":"（不受支持）"}</option>`).join("")}</select>`}
+function input(k,t,v,disabled,pointKind="yc"){const d=disabled?" disabled":"";if(t==="protocol")return `<select name="${k}"><option value="iec104" ${v==="iec104"?"selected":""}>IEC104</option><option value="modbus-tcp" ${v==="modbus-tcp"?"selected":""}>Modbus TCP</option></select>`;if(t==="kind")return `<select name="${k}"${d}>${Object.entries(kindName).map(([x,n])=>`<option value="${x}" ${v===x?"selected":""}>${n}</option>`).join("")}</select>`;if(t==="bool")return `<select name="${k}"><option value="1" ${Number(v)?"selected":""}>是</option><option value="0" ${!Number(v)?"selected":""}>否</option></select>`;if(t==="mode")return `<select name="${k}"><option value="DIRECT" ${v==="DIRECT"?"selected":""}>直接执行</option><option value="SELECT_AND_EXECUTE" ${v==="SELECT_AND_EXECUTE"?"selected":""}>选择并执行</option></select>`;if(t==="area")return `<select name="${k}">${["coil","discrete","holding","input"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="addr_base"){const bases=[0,1,10001,30001,40001];const cur=Number(v??0);if(!bases.includes(cur))bases.push(cur);return `<select name="${k}">${bases.map(x=>`<option value="${x}" ${cur===x?"selected":""}>${x}</option>`).join("")}</select>`}if(t==="iec_type")return `<select name="${k}">${iecTypeOptionsMarkup(pointKind,v)}</select>`;if(t==="dtype")return `<select name="${k}">${["bool","uint16","int16","uint32","int32","float32","float64","uint64","int64"].map(x=>`<option value="${x}" ${v===x?"selected":""}>${x}</option>`).join("")}</select>`;if(t==="order")return `<select name="${k}"><option value="big" ${v==="big"?"selected":""}>big</option><option value="little" ${v==="little"?"selected":""}>little</option></select>`;return `<input name="${k}" type="${t==="float"?"number":t}" step="${t==="float"?"any":"1"}" value="${esc(v)}"${d}>`}
 function editorProtocol(){const select=$("#editor-fields [name=\"protocol\"]");return String(select?.value||selected()?.protocol||defaults.protocol).toLowerCase()}
 function editorFields(type){const protocol=editorProtocol();return type==="channel"?[...channelCommonFields,...channelProtocolFields.iec104,...channelProtocolFields["modbus-tcp"]]:[...pointCommonFields,...pointProtocolFields.iec104,...pointProtocolFields["modbus-tcp"]]}
 function setEditorProtocolVisibility(){const protocol=editorProtocol();if(typeof document.querySelectorAll!=="function")return;document.querySelectorAll("#editor-fields [data-protocol-field]").forEach(label=>{label.hidden=label.dataset.protocolField!==protocol})}
@@ -251,17 +272,21 @@ async function openEditor(type,item,batch=false){
     const group=type==="channel"?(channelProtocolFields.iec104.some(x=>x[0]===k)?"iec104":channelProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":""):(pointProtocolFields.iec104.some(x=>x[0]===k)?"iec104":pointProtocolFields["modbus-tcp"].some(x=>x[0]===k)?"modbus-tcp":"");
     const hidden=batch&&type==="point"&&k==="pnt_no";
     const value = k === "kind" && type === "point" ? pointKind : (item?.[k] ?? defaults[k] ?? "");
-    return `<label data-field="${k}"${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${t==="time_tag"?timeTagInput(value):input(k,t,value,Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)))}</label>`;
+    return `<label data-field="${k}"${group?` data-protocol-field="${group}"`:""}${hidden?' hidden':''}>${l}${t==="time_tag"?timeTagInput(value):input(k,t,value,Boolean(item&&type==="point"&&["pnt_no","kind"].includes(k)),pointKind)}</label>`;
   }).join("");
   if(type==="point")setPointSourceControls(batch);
   $("#editor").classList.toggle("batch-editor", Boolean(batch));
   $("#editor").showModal();
   $("#editor-fields [name=\"protocol\"]")?.addEventListener("change",setEditorProtocolVisibility);
-  $("#editor-fields [name=\"kind\"]")?.addEventListener("change",()=>loadSourceCatalog().catch(err=>$("#editor-error").textContent=err.message));
+  $("#editor-fields [name=\"kind\"]")?.addEventListener("change",()=>{
+    const typeSelect=$("#editor-fields [name=\"type_id\"]");
+    if(typeSelect&&typeSelect.tagName==="SELECT")typeSelect.innerHTML=iecTypeOptionsMarkup(sourceKind(),0);
+    loadSourceCatalog().catch(err=>$("#editor-error").textContent=err.message);
+  });
   setEditorProtocolVisibility();
   if(type==="point")try{await loadSourceCatalog()}catch(err){$("#editor-error").textContent=err.message}
 }
-function readEditorValues(fields){const values={};for(const [k,,t]of fields){const el=$("#editor-fields [name=\""+k+"\"]");if(!el||el.disabled||el.value===""||el.closest("label")?.hidden)continue;values[k]=["source_rtu_id","source_pnt_no","pnt_no"].includes(k)?el.value:["number","float","bool"].includes(t)?Number(el.value):el.value}return values}
+function readEditorValues(fields){const values={};for(const [k,,t]of fields){const el=$("#editor-fields [name=\""+k+"\"]");if(!el||el.disabled||el.value===""||el.closest("label")?.hidden)continue;values[k]=["source_rtu_id","source_pnt_no","pnt_no"].includes(k)?el.value:["number","float","bool","addr_base","iec_type"].includes(t)?Number(el.value):el.value}return values}
 async function saveEditor(e){
   e.preventDefault();
   const {type,item,channel}=state.edit,fields=editorFields(type),values=readEditorValues(fields);

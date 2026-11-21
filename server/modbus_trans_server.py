@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+import math
 import struct
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -126,7 +127,11 @@ class ModbusTcpTransServer(ModbusTcpServer):
             raise ValueError(f"重复转发点 {kind}/{point_no}")
         scale = _number(row.get("scale"), 1.0)
         offset = _number(row.get("offset"), 0.0)
-        effective_scale = scale or 1.0
+        if not math.isfinite(scale) or scale == 0.0:
+            raise ValueError(f"转发点 {kind}/{point_no} 的 scale 必须为非零有限数")
+        if not math.isfinite(offset):
+            raise ValueError(f"转发点 {kind}/{point_no} 的 offset 必须为有限数")
+        effective_scale = scale
         row.update(kind=kind, pnt_no=point_no, source_pnt_no=source_point_no, register_area=area,
                    address=address, address_base=address_base, data_type=dtype, size=size,
                    scale=scale, offset=offset,
@@ -197,12 +202,17 @@ class ModbusTcpTransServer(ModbusTcpServer):
                 dec_scale = Decimal(str(scale))
             raw_value = (Decimal(str(numeric)) - dec_offset) / dec_scale
         if dtype in {"float32", "single"}:
+            if not math.isfinite(raw_value):
+                raise ValueError(f"Modbus 浮点编码值非有限数: {engineering!r}")
             payload = _STRUCT_F32.pack(raw_value)
         elif dtype in {"float64", "double"}:
+            if not math.isfinite(raw_value):
+                raise ValueError(f"Modbus 双精度浮点编码值非有限数: {engineering!r}")
             payload = _STRUCT_F64.pack(raw_value)
         elif dtype in {"int32", "uint32", "int64", "uint64"}:
             bits = self._TYPE_SIZES[dtype] * 16
-            payload = int(raw_value).to_bytes(bits // 8, "big", signed=dtype.startswith("int"))
+            int_val = raw_value if type(raw_value) is int else int(round(raw_value))
+            payload = int_val.to_bytes(bits // 8, "big", signed=dtype.startswith("int"))
         else:
             value = raw_value if type(raw_value) is int else int(round(raw_value))
             if dtype.startswith("uint") and value < 0:
@@ -268,6 +278,8 @@ class ModbusTcpTransServer(ModbusTcpServer):
                 value = bool(values[0])
             else:
                 value = self._decode(row, values)
+                if isinstance(value, float) and not math.isfinite(value):
+                    return ExcCodes.ILLEGAL_VALUE
             decoded.append((row, value))
         self._business('Modbus转发写请求解码', rows=(dict(四遥=row['kind'].upper(), 点号=row['pnt_no'],
             工程值=value, 数据类型=row['data_type'], 字节序=row['byte_order'], 字序=row['word_order'])

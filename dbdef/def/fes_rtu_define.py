@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_rtu_define
-Chinese name: RTU定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_rtu_define
+中文名：RTU定义表
 """
 
 from dataclasses import dataclass, field
@@ -25,7 +22,6 @@ class fes_rtu_define:
         metadata={'chn_name': 'rtu编号', 'eng_name': 'rtu_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
@@ -35,7 +31,6 @@ class fes_rtu_define:
         default=None,
         metadata={'chn_name': '状态', 'eng_name': 'status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
-
 
     refresh_time: Optional[int] = field(
         default=None,
@@ -54,50 +49,47 @@ class fes_rtu_define:
 
     packet_recording: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '保存报文', 'eng_name': 'packet_recording', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
+        metadata={'chn_name': '保存报文', 'eng_name': 'packet_recording', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 0},
     )
 
     process_enable: Optional[int] = field(
         default=1,
-        metadata={'chn_name': '通信线程启用', 'eng_name': 'process_enable', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断'},
+        metadata={'chn_name': '通信线程启用', 'eng_name': 'process_enable', 'primary_key': False, 'data_type': 'int', 'disp_type': '单选菜单', 'disp_menu': '二值判断', 'default': 1},
     )
-
 
     process_status: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程状态', 'eng_name': 'process_status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程状态', 'eng_name': 'process_status', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
 
     process_pid: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程号', 'eng_name': 'process_pid', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
 
     process_start_time: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程启动时间', 'eng_name': 'process_start_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程启动时间', 'eng_name': 'process_start_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0},
     )
 
     process_stop_time: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程停止时间', 'eng_name': 'process_stop_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程停止时间', 'eng_name': 'process_stop_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0},
     )
-
 
     process_heartbeat_time: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程心跳时间', 'eng_name': 'process_heartbeat_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程心跳时间', 'eng_name': 'process_heartbeat_time', 'primary_key': False, 'data_type': 'int', 'disp_type': '带毫秒的DATETIME', 'disp_menu': '', 'default': 0},
     )
 
     process_exit_code: Optional[int] = field(
         default=0,
-        metadata={'chn_name': '通信线程退出结果', 'eng_name': 'process_exit_code', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程退出结果', 'eng_name': 'process_exit_code', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
-
 
     process_error: Optional[str] = field(
         default='',
-        metadata={'chn_name': '通信线程错误信息', 'eng_name': 'process_error', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+        metadata={'chn_name': '通信线程错误信息', 'eng_name': 'process_error', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': '', 'default': ''},
     )
 
 __all__ = ['fes_rtu_define']

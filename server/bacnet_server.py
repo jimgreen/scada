@@ -13,10 +13,10 @@ try:
     from bacpypes3.pdu import IPv4Address
     from bacpypes3.ipv4.app import NormalApplication
     from bacpypes3.local.analog import AnalogValueObject, AnalogOutputObject
-    from bacpypes3.local.binary import BinaryValueObject, BinaryOutputObject
+    from bacpypes3.local.binary import BinaryInputObject, BinaryValueObject, BinaryOutputObject
 except Exception as exc:  # pragma: no cover
     DeviceObject = IPv4Address = NormalApplication = None
-    AnalogValueObject = AnalogOutputObject = BinaryValueObject = BinaryOutputObject = None
+    AnalogValueObject = AnalogOutputObject = BinaryInputObject = BinaryValueObject = BinaryOutputObject = None
     _BACNET_IMPORT_ERROR = exc
 else:
     _BACNET_IMPORT_ERROR = None
@@ -72,7 +72,7 @@ class BacnetServer(PacketTrace):
     def _object_class(kind):
         return {
             "yc": ("analog-value", AnalogValueObject),
-            "yx": ("binary-value", BinaryValueObject),
+            "yx": ("binary-input", BinaryInputObject),
             "yk": ("binary-output", BinaryOutputObject),
             "yt": ("analog-output", AnalogOutputObject),
         }[kind]
@@ -106,8 +106,10 @@ class BacnetServer(PacketTrace):
         await asyncio.sleep(0.05)
 
     async def _wait_async(self):
-        while not self._stop.is_set():
-            await asyncio.sleep(0.05)
+        self._async_stop = asyncio.Event()
+        if self._stop.is_set():
+            return
+        await self._async_stop.wait()
 
     async def _stop_async(self):
         if self._app is not None:
@@ -181,9 +183,17 @@ class BacnetServer(PacketTrace):
 
     def close(self):
         self._stop.set()
+        loop = self._loop
+        async_stop = getattr(self, "_async_stop", None)
+        if loop is not None and async_stop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(async_stop.set)
+            except RuntimeError:
+                pass
         if self._thread is not None:
             self._thread.join(timeout=10)
             self._thread = None
+        self._async_stop = None
         self._ready.clear()
         self._log("INFO", "BACnet/IP 服务端已停止")
 

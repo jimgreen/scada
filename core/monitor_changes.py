@@ -13,16 +13,31 @@ TABLES = {'_scada_monitor_change'}
 
 
 def ensure_monitor_changes(connection: sqlite3.Connection, *, track_refresh=False) -> None:
-    """Install idempotent triggers without committing the caller's transaction."""
+    """幂等安装监控变化触发器：非事务态用 BEGIN IMMEDIATE 避免 DEFERRED 锁升级直报 BUSY。"""
+    if not connection.in_transaction:
+        connection.execute('BEGIN IMMEDIATE')
+        try:
+            created = not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_scada_monitor_change'"
+            ).fetchone()
+            _ensure_monitor_changes(connection, track_refresh=track_refresh)
+            if created:
+                sync_embedded_schema(connection)
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        return
     connection.execute('SAVEPOINT monitor_schema')
     try:
         created = not connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_scada_monitor_change'"
         ).fetchone()
-        _ensure_monitor_changes(connection,track_refresh=track_refresh)
+        _ensure_monitor_changes(connection, track_refresh=track_refresh)
         if created:
             sync_embedded_schema(connection)
-    except Exception:
+    except BaseException:
         connection.execute('ROLLBACK TO monitor_schema')
         raise
     finally:

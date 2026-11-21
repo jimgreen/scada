@@ -12,9 +12,21 @@ from uuid import uuid4
 
 from scdfe_c.web.service import ApiError, ScadaStore
 from core.database_validation import validate_database
+from core.workspace_paths import (
+    DEFAULT_RUNTIME_NAME,
+    DEFAULT_SCENE_NAME,
+    DEFAULT_WORKSPACE_ROOT,
+    ROLE_DB_FILENAMES,
+    default_database_path,
+    infer_workspace_context,
+    list_runtimes,
+    list_scenes,
+    resolve_runtime_name,
+    resolve_scene_name,
+    resolve_workspace_root,
+)
 
 LOG = logging.getLogger(__name__)
-DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / 'workspace'
 SERVICE_NAMES = ('iec104_service', 'modbus_tcp_service', 'modbus_tcp_server_service',
                  'modbus_rtu_service', 'modbus_rtu_server_service', 'can_service',
                  'can_server_service', 'opc_server_service', 'bacnet_server_service')
@@ -55,18 +67,26 @@ def database_request(method):
     @wraps(method)
     def wrapped(handler, *args, **kwargs):
         route = unquote(urlsplit(handler.path).path).strip('/')
-        exclusive = (handler.command, route) in {('POST', 'api/database'), ('PUT', 'api/database/directory')}
+        exclusive = (handler.command, route) == ('POST', 'api/database')
         with handler.server._database_gate.hold(exclusive):
             return method(handler, *args, **kwargs)
     return wrapped
 
 
-def selection_file(role, host, port):
-    key = hashlib.sha256(f'{host}:{port}'.encode()).hexdigest()[:12]
-    return Path(__file__).resolve().parents[1] / 'db' / f'web_database_{role}_{key}.json'
+def selection_file(role, host, port, *, workspace_root=None, runtime_name=None, scene_name=None):
+    """返回 Web 选库偏好文件路径，统一存放在 `<workspace_root>/.scdfe/` 内。"""
+    root = resolve_workspace_root(workspace_root)
+    if runtime_name is not None or scene_name is not None:
+        rt = resolve_runtime_name(runtime_name)
+        sc = resolve_scene_name(scene_name)
+        raw_key = f'{host}:{port}:{rt}:{sc}'
+    else:
+        raw_key = f'{host}:{port}'
+    key = hashlib.sha256(raw_key.encode()).hexdigest()[:12]
+    return root / '.scdfe' / f'web_database_{role}_{key}.json'
 
 
-def selected_database(path, explicit, default, *, base_directory=None, workspace_root=None):
+def selected_database(path, explicit, default, *, base_directory=None, workspace_root=None, prefer_default=False):
     root = Path(workspace_root).resolve() if workspace_root is not None else None
 
     def contained(value):
@@ -79,13 +99,13 @@ def selected_database(path, explicit, default, *, base_directory=None, workspace
         explicit = Path(explicit)
         base = root or base_directory
         return contained(Path(base) / explicit if base and not explicit.is_absolute() else explicit)
-    data = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    if prefer_default and default is not None:
+        return contained(default)
+    data = json.loads(path.read_text(encoding='utf-8')) if path is not None and Path(path).is_file() else {}
     if 'database' in data:
-        # A broken remembered selection must be visible, not silently open a different DB.
+        # 已记住的数据库路径失效时必须显式报错，不能静默打开其他数据库。
         saved = Path(data['database'])
         if not saved.is_absolute():
-            # Read the saved base first so legacy Web-relative preferences still
-            # resolve to the same file, then enforce the new configured boundary.
             saved = Path(data.get('workspace_root') or data.get('base_directory')
                          or root or base_directory) / saved
         saved = contained(saved)
@@ -93,6 +113,31 @@ def selected_database(path, explicit, default, *, base_directory=None, workspace
             raise ValueError(f'已选数据库不存在：{saved}；请用 --db 指定数据库')
         return saved.resolve()
     return contained(default)
+
+
+def resolve_web_database_args(role, args):
+    """根据三参数（workspace_root/runtime_name/scene_name）与 --db/偏好解析 Web 启动库。"""
+    root = resolve_workspace_root(getattr(args, 'workspace_root', None))
+    runtime_name = getattr(args, 'runtime_name', None)
+    scene_name = getattr(args, 'scene_name', None)
+    explicit_context = runtime_name is not None or scene_name is not None
+    default_db = default_database_path(role, root, runtime_name, scene_name)
+    preference = selection_file(
+        role,
+        args.host,
+        args.port,
+        workspace_root=root,
+        runtime_name=runtime_name,
+        scene_name=scene_name,
+    )
+    database = selected_database(
+        preference,
+        args.db,
+        default_db,
+        workspace_root=root,
+        prefer_default=explicit_context,
+    )
+    return root, preference, database
 
 
 def prepare_database(role, path, schema_dir, workspace_root=None):
@@ -164,6 +209,7 @@ class DatabaseSelectionMixin:
             raise ValueError('工作区根目录不存在')
         self.database_role = role
         self._database_gate = RequestGate()
+        self._preferences_lock = threading.Lock()
         self._database_token = uuid4().hex
         self._database_selection_path = selection_path
         self._database_base_directory = root
@@ -188,10 +234,39 @@ class DatabaseSelectionMixin:
         current = self.database_store().db_path
         relative = self.relative_database_path(current)
         directory = Path(relative).parent.as_posix() if relative else '.'
-        return dict(database=relative, role=self.database_role, token=self._database_token,
-                    relative_database=relative, workspace_root=str(self._database_base_directory),
-                    directory=directory, browse_directory=self._browse_directory(directory),
-                    remembered=self._database_selection_path is not None)
+        ctx = infer_workspace_context(current, self._database_base_directory)
+        runtimes = list_runtimes(self._database_base_directory)
+        active_runtime = ctx['runtime_name'] or (runtimes[0] if runtimes else DEFAULT_RUNTIME_NAME)
+        scenes = list_scenes(self._database_base_directory, active_runtime) if active_runtime else []
+        return dict(
+            database=relative,
+            role=self.database_role,
+            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.sqlite3'),
+            token=self._database_token,
+            relative_database=relative,
+            workspace_root=str(self._database_base_directory),
+            runtime_name=ctx['runtime_name'],
+            scene_name=ctx['scene_name'],
+            sqldb_directory=ctx['sqldb_directory'],
+            runtimes=runtimes,
+            scenes=scenes,
+            directory=directory,
+            browse_directory=self._browse_directory(directory),
+            remembered=self._database_selection_path is not None,
+        )
+
+    def database_contexts(self, runtime_name=None):
+        """返回工作区下可供下拉选择的运行态列表及指定运行态对应的场景列表。"""
+        runtimes = list_runtimes(self._database_base_directory)
+        selected_runtime = runtime_name or (runtimes[0] if runtimes else None)
+        scenes = list_scenes(self._database_base_directory, selected_runtime) if selected_runtime else []
+        return dict(
+            workspace_root=str(self._database_base_directory),
+            runtime_name=selected_runtime,
+            runtimes=runtimes,
+            scenes=scenes,
+            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.sqlite3'),
+        )
 
     def _browse_directory(self, fallback):
         preferences = self._database_preferences
@@ -275,6 +350,13 @@ class DatabaseSelectionMixin:
         # Check it read-only before selecting the database or starting a writer.
         if self.database_role == 'c' and path.is_file():
             try:
+                current_store = getattr(self, 'store', None)
+                if current_store is not None and Path(current_store.db_path).resolve() == path:
+                    with current_store.connection() as con:
+                        row = con.execute('SELECT log_dir FROM fes_scdfe_c_define WHERE id=1').fetchone()
+                        if row and row[0]:
+                            self.check_log_paths(path.parent / row[0])
+                    return
                 with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as con:
                     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fes_scdfe_c_define'").fetchone():
                         row = con.execute('SELECT log_dir FROM fes_scdfe_c_define WHERE id=1').fetchone()
@@ -333,6 +415,8 @@ class DatabaseSelectionMixin:
         finally:
             if created and 'validation' not in locals():
                 target.unlink(missing_ok=True)
+                for suffix in ('-wal', '-shm'):
+                    Path(str(target) + suffix).unlink(missing_ok=True)
 
     def require_valid_database(self, path):
         result = self.check_database(path)
@@ -407,17 +491,19 @@ class DatabaseSelectionMixin:
         folder = self.resolve_database_path(body['directory'])
         if not folder.is_dir():
             raise ApiError(400, '目录不存在或不可访问')
-        data = dict(self._database_preferences, browse_directory=self.relative_database_path(folder),
-                    browse_workspace_root=str(self._database_base_directory))
-        self._save_database_preferences(data)
+        with self._preferences_lock:
+            data = dict(self._database_preferences, browse_directory=self.relative_database_path(folder),
+                        browse_workspace_root=str(self._database_base_directory))
+            self._save_database_preferences(data)
         return self.database_info()
 
     def _remember_database(self, target):
         root = str(self._database_base_directory)
-        data = dict(self._database_preferences, database=self.relative_database_path(target),
-                    workspace_root=root, browse_directory=self.relative_database_path(target.parent),
-                    browse_workspace_root=root)
-        self._save_database_preferences(data)
+        with self._preferences_lock:
+            data = dict(self._database_preferences, database=self.relative_database_path(target),
+                        workspace_root=root, browse_directory=self.relative_database_path(target.parent),
+                        browse_workspace_root=root)
+            self._save_database_preferences(data)
 
     def _save_database_preferences(self, data):
         if data == self._database_preferences:
@@ -450,10 +536,17 @@ def handle_database(handler, parts, query, method):
     if parts in (['point-trends'], ['point-trends.html']):
         if method != 'GET':
             raise ApiError(405, '采样管理页面只支持 GET', code='method_not_allowed')
+        from core.web_http import send_static
         from core.web_workbench import ASSET_DIR, render_workbench
         name = 'point-trends.html'
-        page = render_workbench((ASSET_DIR / name).read_bytes(), server.database_role, name)
-        return handler._send(200, 'text/html; charset=utf-8', page)
+        role = server.database_role
+        return send_static(
+            handler,
+            ASSET_DIR / name,
+            'text/html; charset=utf-8',
+            transform=lambda raw: render_workbench(raw, role, name),
+            cache_key=f'workbench:{role}:{name}',
+        )
     if trend_history:
         history = server._point_trend_history
         if method == 'GET':
@@ -478,6 +571,10 @@ def handle_database(handler, parts, query, method):
         if query:
             raise ApiError(400, '创建接口不接受查询参数')
         return handler._json(201, server.create_database_entry(handler._body(), directory=parts[-1] == 'mkdir'))
+    if parts == ['api', 'database', 'contexts'] and method == 'GET':
+        if set(query) - {'runtime'}:
+            raise ApiError(400, '未知上下文查询参数')
+        return handler._json(200, server.database_contexts(query.get('runtime')))
     if parts == ['api', 'database', 'tree'] and method == 'GET':
         if set(query) - {'directory'}:
             raise ApiError(400, '未知目录查询参数')
@@ -504,9 +601,10 @@ def handle_database(handler, parts, query, method):
     if (method == 'GET' and len(parts) == 2 and parts[0] == 'static' and parts[1] in
             {'database-selector.js', 'database-selector.css', 'point-trend.js', 'point-trend.css',
              'point-trends-page.js', 'point-trends-page.css'}):
+        from core.web_http import send_static
         path = Path(__file__).with_name('web_static') / parts[-1]
         content_type = 'text/css' if path.suffix == '.css' else 'application/javascript'
-        return handler._send(200, content_type + '; charset=utf-8', path.read_bytes())
+        return send_static(handler, path, content_type + '; charset=utf-8')
     if parts[:1] == ['api'] and any(part in {'logs', 'log', 'log-files'} for part in parts):
         server.check_database_paths(server.database_store().db_path)
     if parts == ['api', 'scdfe_c', 'control'] and method == 'PATCH':

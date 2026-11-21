@@ -139,7 +139,6 @@
     const needle = $("file-query")?.value.trim().toLowerCase() || "";
     const channel = $("channel")?.value || "";
     return files.filter((file) => (!process || file.process === process)
-      && (module !== "s" || file.channel_id != null)
       && (!channel || String(file.channel_id || "") === String(channel))
       && file.name.split("/").pop().toLowerCase().includes(needle));
   }
@@ -149,10 +148,12 @@
     const select = $("channel");
     if (!select || select.tagName !== "SELECT") return;
     const value = select.value;
-    const options = '<option value="">全部通信通道</option>'
+    const options = '<option value="">全部通道</option>'
       + [...channelCatalog.values()].sort((a, b) => Number(a.channel_id) - Number(b.channel_id))
         .map((row) => '<option value="' + esc(row.channel_id) + '">' + esc(
-          `RTU ${row.rtu_id ?? "—"} · ${row.name || row.code || "未命名"} · 通道 ${row.channel_id}`) + '</option>').join("");
+          module === "t"
+            ? `通道 ${row.channel_id}${row.name ? " · " + row.name : ""}${row.protocol ? " · " + row.protocol : ""}`
+            : `RTU ${row.rtu_id ?? "—"} · ${row.name || row.code || "未命名"} · 通道 ${row.channel_id}`) + '</option>').join("");
     if (options !== channelOptions) { select.innerHTML = options; channelOptions = options; }
     if ([...select.options].some((option) => option.value === value)) select.value = value;
   }
@@ -298,10 +299,15 @@
     for (const key of ["start", "end"]) {
       if (!$(key).validity.valid) throw new Error("请输入有效的开始和结束时间");
       if (!$(key).value) continue;
-      if (!selectedDate) throw new Error("请先选择日志文件");
       const value = $(key).value;
-      const date = selectedDate.slice(0, 4) + "-" + selectedDate.slice(4, 6) + "-" + selectedDate.slice(6, 8);
-      const parsed = new Date(date + "T" + value);
+      let parsed;
+      if (value.includes("T")) {
+        parsed = new Date(value);
+      } else {
+        if (!selectedDate) throw new Error("请先选择日志文件或输入完整日期时间");
+        const date = selectedDate.slice(0, 4) + "-" + selectedDate.slice(4, 6) + "-" + selectedDate.slice(6, 8);
+        parsed = new Date(date + "T" + value);
+      }
       if (!Number.isFinite(parsed.valueOf())) throw new Error("请输入有效的开始和结束时间");
       params.set(key, parsed.toISOString());
     }
@@ -388,9 +394,14 @@
     refreshing = true;
     status("正在读取文件目录…");
     try {
+      const channelApi = module === "s"
+        ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc", signal)
+        : module === "t"
+          ? api("/api/trans/channels?view=selector", signal)
+          : Promise.resolve(null);
       const [result, channels] = await Promise.all([
         api("/api/log-files?record=" + encodeURIComponent(activeRecord), signal),
-        module === "s" ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc", signal) : Promise.resolve(null),
+        channelApi.catch(() => null),
       ]);
       if (version !== listVersion) return;
       files = result.items;
@@ -401,7 +412,7 @@
       $("directory").textContent = (activeRecord === "packet" ? "报文目录：" : "运行日志目录：") + result.directory;
       status("目录已更新 · " + new Date().toLocaleTimeString());
       if (selected !== previous) resetSearch();
-      else if (!follow || batch === 0) await search(true);
+      else if (!follow || ($("follow").checked && batch === 0)) await search(true);
     } catch (error) {
       if (version === listVersion) status(error.message + "，可点击刷新重试", true);
     } finally {
@@ -482,12 +493,21 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
-  if (module === "t") {
-    const channel = new URLSearchParams(location.search).get("channel_id");
-    if (/^[1-9]\d*$/.test(channel || "")) {
-      const option = new Option("转发通道 " + channel, "scdfe_t-channel-" + channel);
+  const initialParams = new URLSearchParams(location.search);
+  const initialQuery = initialParams.get("q");
+  if (initialQuery && $("keyword")) {
+    $("keyword").value = initialQuery;
+    if ($("scope")) $("scope").value = "all";
+  }
+  const initialChannel = initialParams.get("channel_id");
+  if (/^[1-9]\d*$/.test(initialChannel || "")) {
+    if (module === "t") {
+      const option = new Option("转发通道 " + initialChannel, "scdfe_t-channel-" + initialChannel);
       $("process")?.add(option);
       if ($("process")) $("process").value = option.value;
+    } else if (module === "s") {
+      requestedChannel = initialChannel;
+      requestedProcess = "scdfe_s-channel-" + initialChannel;
     }
   }
   // Unified S communication-test pages switch the selected protocol without

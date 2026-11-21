@@ -126,7 +126,8 @@ class CanFrameSchedule:
             with self._condition:
                 self._sent += 1
                 if not self._stopped and (repeat == 0 or repeat > 1):
-                    self._enqueue(row,max(due+row['period'],time.monotonic()+row['period']),
+                    # 按固定相位网格推进，避免叠加驱动发送耗时导致持续正向漂移；严重落后时防追赶风暴。
+                    self._enqueue(row, max(due + row['period'], time.monotonic()),
                                   repeat-1 if repeat else 0)
 
     def _event(self, action, row, due, started, **extra):

@@ -131,6 +131,10 @@ class ConnectionJournal:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             con = sqlite3.connect(self.path, timeout=5)
+            con.execute('PRAGMA busy_timeout=5000')
+            con.execute('PRAGMA temp_store=MEMORY')
+            if con.execute('PRAGMA page_count').fetchone()[0] == 0:
+                con.execute('PRAGMA auto_vacuum=INCREMENTAL')
             con.execute('PRAGMA journal_mode=WAL')
             con.execute('PRAGMA synchronous=NORMAL')
             con.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
@@ -154,41 +158,58 @@ class ConnectionJournal:
                         break
                 flushed = []
                 try:
-                    touched = set()
-                    for operation, args in batch:
-                        if operation == 'flush':
-                            flushed.append(args[0])
-                        else:
-                            self._apply(con, operation, args)
-                            touched.add(args[0])
-                    pending_prune.update(touched)
-                    # Index scans for retention run once per second (or on a
-                    # flush), rather than once per packet at low traffic rates.
-                    prune = time.time()-getattr(self, '_last_prune', 0) >= 1 or bool(flushed)
-                    for ident in pending_prune if prune else ():
-                        # Each session keeps its latest 10k events. Expose the
-                        # removed count; never imply that retained history is complete.
-                        cutoff = con.execute('SELECT id FROM connection_event WHERE session_id=? '
-                                             'ORDER BY id DESC LIMIT 1 OFFSET ?', (ident, MAX_EVENTS)).fetchone()
-                        if cutoff:
-                            removed = con.execute('DELETE FROM connection_event WHERE session_id=? AND id<=?',
-                                                  (ident, cutoff[0])).rowcount
-                            con.execute('UPDATE connection_session SET removed=removed+? WHERE id=?', (removed, ident))
-                    if prune:
-                        pending_prune.clear()
-                        self._last_prune = time.time()
-                    now = time.time()
-                    if now - last_beat >= 5 or flushed:
-                        con.execute('UPDATE connection_session SET heartbeat=? WHERE owner=? AND closed IS NULL',
-                                    (now, self.owner))
-                        con.execute('INSERT OR REPLACE INTO connection_writer VALUES(?,?,?,?)',
-                                    (self.owner, now, self.dropped, self.error))
-                        expired = now - 7*86400
-                        con.execute('DELETE FROM connection_event WHERE session_id IN '
-                                    '(SELECT id FROM connection_session WHERE closed<? OR heartbeat<?)', (expired, expired))
-                        con.execute('DELETE FROM connection_session WHERE closed<? OR heartbeat<?', (expired, expired))
-                        last_beat = now
-                    con.commit()
+                    for attempt in range(3):
+                        try:
+                            touched = set()
+                            for operation, args in batch:
+                                if operation == 'flush':
+                                    if attempt == 0:
+                                        flushed.append(args[0])
+                                else:
+                                    self._apply(con, operation, args)
+                                    touched.add(args[0])
+                            pending_prune.update(touched)
+                            prune = time.time()-getattr(self, '_last_prune', 0) >= 1 or bool(flushed)
+                            pruned_rows = 0
+                            for ident in pending_prune if prune else ():
+                                cutoff = con.execute('SELECT id FROM connection_event WHERE session_id=? '
+                                                     'ORDER BY id DESC LIMIT 1 OFFSET ?', (ident, MAX_EVENTS)).fetchone()
+                                if cutoff:
+                                    removed = con.execute('DELETE FROM connection_event WHERE session_id=? AND id<=?',
+                                                          (ident, cutoff[0])).rowcount
+                                    pruned_rows += max(0, removed)
+                                    con.execute('UPDATE connection_session SET removed=removed+? WHERE id=?', (removed, ident))
+                            if prune:
+                                pending_prune.clear()
+                                self._last_prune = time.time()
+                            now = time.time()
+                            if now - last_beat >= 5 or flushed:
+                                con.execute('UPDATE connection_session SET heartbeat=? WHERE owner=? AND closed IS NULL',
+                                            (now, self.owner))
+                                con.execute('INSERT OR REPLACE INTO connection_writer VALUES(?,?,?,?)',
+                                            (self.owner, now, self.dropped, self.error))
+                                expired = now - 7*86400
+                                pruned_rows += max(0, con.execute(
+                                    'DELETE FROM connection_event WHERE session_id IN '
+                                    '(SELECT id FROM connection_session WHERE closed<? OR heartbeat<?)',
+                                    (expired, expired)).rowcount)
+                                con.execute('DELETE FROM connection_session WHERE closed<? OR heartbeat<?',
+                                            (expired, expired))
+                                last_beat = now
+                            con.commit()
+                            if pruned_rows > 0:
+                                try:
+                                    con.execute('PRAGMA incremental_vacuum(200)')
+                                except sqlite3.Error:
+                                    pass
+                            break
+                        except sqlite3.OperationalError as op_exc:
+                            con.rollback()
+                            msg = str(op_exc).lower()
+                            if attempt < 2 and ('locked' in msg or 'busy' in msg):
+                                time.sleep(0.05 * (attempt + 1))
+                                continue
+                            raise
                 except Exception as exc:
                     con.rollback()
                     self.dropped += sum(op != 'flush' for op, _ in batch)

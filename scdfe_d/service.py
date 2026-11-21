@@ -212,6 +212,8 @@ class DeviceStore:
             if not result["valid"]:
                 raise ValueError(result["message"])
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._open_connection()) as init_con:
+            init_con.execute("PRAGMA journal_mode=WAL")
         with self.connection() as con:
             con.executescript(
                 "BEGIN IMMEDIATE;\n"
@@ -291,6 +293,18 @@ class DeviceStore:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS d_measurement_active_device ON device_measurement(catalog_active,device_id)"
             )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_measurement_value_valid ON measurement_value(valid)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_device_category ON device(category)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_mapping_source_db ON scada_point_mapping(source_database)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS d_measurement_qty_device ON device_measurement(quantity_table,device_id)"
+            )
             self._tables(con, sync_schema=True)
 
     def _open_connection(self):
@@ -298,6 +312,7 @@ class DeviceStore:
         try:
             con.row_factory = sqlite3.Row
             con.execute("PRAGMA foreign_keys=ON")
+            con.execute("PRAGMA busy_timeout=10000")
             con.execute("PRAGMA synchronous=NORMAL")
             con.execute("PRAGMA temp_store=MEMORY")
             con.execute("PRAGMA cache_size=-16384")
@@ -308,28 +323,35 @@ class DeviceStore:
 
     @contextmanager
     def connection(self, *, _writer=None):
+        if _writer is not None:
+            with _writer:
+                yield _writer
+            return
         with self._mutex:
-            if _writer is not None:
-                with _writer:
-                    yield _writer
-                return
-            if self.connection_pool_size <= 0 or self._pool_closed:
-                with closing(self._open_connection()) as con, con:
-                    yield con
-                return
-            con = self._connection_pool.pop() if self._connection_pool else self._open_connection()
-            healthy = True
-            try:
-                with con:
-                    yield con
-            except BaseException:
-                healthy = False
-                raise
-            finally:
-                if healthy and not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
-                    self._connection_pool.append(con)
-                else:
-                    con.close()
+            use_pool = self.connection_pool_size > 0 and not self._pool_closed
+            con = self._connection_pool.pop() if (use_pool and self._connection_pool) else None
+        if not use_pool:
+            with closing(self._open_connection()) as fresh, fresh:
+                yield fresh
+            return
+        if con is None:
+            con = self._open_connection()
+        healthy = True
+        try:
+            with con:
+                yield con
+        except BaseException:
+            healthy = False
+            raise
+        finally:
+            reused = False
+            if healthy:
+                with self._mutex:
+                    if not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
+                        self._connection_pool.append(con)
+                        reused = True
+            if not reused:
+                con.close()
 
     def close(self):
         with self._mutex:
@@ -637,7 +659,7 @@ class DeviceStore:
                 for item in items:
                     con.execute(
                         """INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)
-                        ON CONFLICT(model_table,model_idx) DO UPDATE SET name=excluded.name,model_json=excluded.model_json""",
+                        ON CONFLICT(model_table,model_idx) DO UPDATE SET name=excluded.name,model_json=excluded.model_json,category=excluded.category""",
                         (
                             table,
                             int(item["idx"]),
@@ -1122,41 +1144,50 @@ class DeviceStore:
             raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
 
     def collect_once(self, *, _writer=None, _source_cache=None):
-        started, now_ms = utc_now(), int(time.time() * 1000)
-        with self.connection(_writer=_writer) as con:
-            # Take the write lock before loading mappings so no editor can
-            # change a binding while this snapshot is being applied.
-            con.execute("BEGIN IMMEDIATE")
-            mappings = con.execute("""SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,
-                m.max_age_seconds,m.se_enabled,m.notuse,d.active,
-                s.source_database,s.rtu_id,s.pnt_no,s.enabled,s.scale,s.offset,
-                v.measurement_id old_id,v.source_value,v.value,v.quality,v.source_time_ms,v.previous_value,v.valid,v.reason
+        started = utc_now()
+        mapping_sql = """SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,
+            m.max_age_seconds,m.se_enabled,m.notuse,d.active,
+            s.source_database,s.rtu_id,s.pnt_no,s.enabled,s.scale,s.offset,
+            v.measurement_id old_id,v.source_value,v.value,v.quality,v.source_time_ms,v.previous_value,v.valid,v.reason
+            FROM device_measurement m JOIN device d USING(device_id)
+            LEFT JOIN scada_point_mapping s USING(measurement_id)
+            LEFT JOIN measurement_value v USING(measurement_id)
+            WHERE m.catalog_active=1"""
+        # 第一阶段：短读事务获取待采源点列表，立即释放本地库连接，严禁持写锁执行外部源库 I/O。
+        with self.connection(_writer=_writer) as read_con:
+            requested_rows = read_con.execute(
+                """SELECT m.kind, d.active, s.source_database, s.rtu_id, s.pnt_no, s.enabled
                 FROM device_measurement m JOIN device d USING(device_id)
-                LEFT JOIN scada_point_mapping s USING(measurement_id)
-                LEFT JOIN measurement_value v USING(measurement_id)
-                WHERE m.catalog_active=1""").fetchall()
-            requested = defaultdict(lambda: defaultdict(set))
-            for row in mappings:
-                if row["source_database"] and row["enabled"] and row["active"]:
-                    requested[row["source_database"]][row["kind"]].add(
-                        (row["rtu_id"], row["pnt_no"])
-                    )
-            if _source_cache is not None:
-                for stale in [key for key in _source_cache if key not in requested]:
-                    _source_cache.pop(stale)[0].close()
-            sources, errors = {}, {}
-            for source, kinds in sorted(requested.items()):
-                try:
-                    if _source_cache is not None:
-                        sources[source] = self._read_cached_source(source, kinds, _source_cache)
-                    else:
-                        with self.source(source) as src:
-                            sources[source] = {
-                                kind: self._source_values(src, kind, keys)
-                                for kind, keys in kinds.items()
-                            }
-                except (ApiError, OSError, ValueError) as exc:
-                    errors[source] = str(exc)
+                JOIN scada_point_mapping s USING(measurement_id)
+                WHERE m.catalog_active=1 AND d.active=1 AND s.enabled=1 AND s.source_database<>''"""
+            ).fetchall()
+        requested = defaultdict(lambda: defaultdict(set))
+        for row in requested_rows:
+            requested[row["source_database"]][row["kind"]].add(
+                (row["rtu_id"], row["pnt_no"])
+            )
+        if _source_cache is not None:
+            for stale in [key for key in _source_cache if key not in requested]:
+                _source_cache.pop(stale)[0].close()
+        # 第二阶段：无本地写锁状态下读取各外部源库快照，读完后刷新当前时间基准防止误判 future_time。
+        sources, errors = {}, {}
+        for source, kinds in sorted(requested.items()):
+            try:
+                if _source_cache is not None:
+                    sources[source] = self._read_cached_source(source, kinds, _source_cache)
+                else:
+                    with self.source(source) as src:
+                        sources[source] = {
+                            kind: self._source_values(src, kind, keys)
+                            for kind, keys in kinds.items()
+                        }
+            except (ApiError, OSError, ValueError) as exc:
+                errors[source] = str(exc)
+        now_ms = int(time.time() * 1000)
+        # 第三阶段：进入 BEGIN IMMEDIATE 写事务，重新读取最新映射快照并原子落盘。
+        with self.connection(_writer=_writer) as con:
+            con.execute("BEGIN IMMEDIATE")
+            mappings = con.execute(mapping_sql).fetchall()
             refresh = con.execute(
                 "INSERT INTO measurement_refresh(started_at,source_database,error) VALUES(?,?,?)",
                 (

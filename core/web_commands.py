@@ -72,13 +72,20 @@ def handle_commands(handler,parts,query,method,store,component):
                         (integer(query,'rtu_id'),keyword,keyword))]
             return handler._json(200,dict(items=items[:1000],has_more=len(items)>1000,component=component))
         assets=Path(__file__).with_name('web_static')
-        if parts[0]=='static':return handler._send(200,'application/javascript; charset=utf-8',(assets/'command-traces.js').read_bytes())
+        from core.web_http import send_static
+        if parts[0]=='static':
+            return send_static(handler,assets/'command-traces.js','application/javascript; charset=utf-8')
         if parts==['command-traces']:
-            data=(assets/'command-traces.html').read_bytes()
             if component in ('s','c','t'):
                 from core.web_workbench import render_workbench
-                data=render_workbench(data,component,'command-traces.html')
-            return handler._send(200,'text/html; charset=utf-8',data)
+                return send_static(
+                    handler,
+                    assets/'command-traces.html',
+                    'text/html; charset=utf-8',
+                    transform=lambda raw: render_workbench(raw,component,'command-traces.html'),
+                    cache_key=f'workbench:{component}:command-traces.html',
+                )
+            return send_static(handler,assets/'command-traces.html','text/html; charset=utf-8')
         return history(handler,query,store,component)
     except ValueError as exc:
         raise ApiError(400,str(exc)) from exc

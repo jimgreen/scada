@@ -725,7 +725,8 @@ class TransRuntime:
                     self.logger.error(f"IEC 初值无效 {p.kind}/{p.pnt_no}: {exc}")
                     value, quality = 0, quality | 128
                     server.add_point(p.kind, p.pnt_no, data_type=p.type_id, value=0,
-                                     io_address=p.io_address, command_mode=p.command_mode,
+                                     io_address=p.io_address, time_tag=p.time_tag,
+                                     command_mode=p.command_mode,
                                      command_handler=handler)
                 if p.kind in {"yc", "yx"}:
                     server.set_value(p.kind, p.pnt_no, value, quality=quality)
@@ -807,7 +808,8 @@ class TransRuntime:
                     (point.source_rtu_id,point.source_pnt_no)).fetchone()
                 if row is None: continue
                 typ = int(row['type_id'] or 0)
-                if row['time_tag'] == 'CP56Time2a' and typ in (1,3): typ = {1:30,3:31}[typ]
+                if row['time_tag'] == 'CP56Time2a' and typ in (1, 2, 3):
+                    typ = {1: 30, 2: 31, 3: 31}[typ]
                 if typ not in (30,31): continue
                 if server._points[key].type.value != typ:
                     raise ValueError(f'SOE 转发需保持源点单双点类型: {key}')
@@ -1010,6 +1012,8 @@ class TransRuntime:
             except Exception as exc:
                 self._runtime_error(exc)
                 self.logger.error(f"转发点更新失败: {exc}")
+            finally:
+                self._source_dirty.discard(key)
         self._flush_point_runtime()
 
     def _enabled(self):
@@ -1024,18 +1028,15 @@ class TransRuntime:
         now = time.monotonic()
         if hours == self._log_retention and now < self._next_cleanup:
             return
-        from scdfe_c.web.log_query import LOG_PATTERNS, _iter_log_files
+        from core.log_retention import cleanup_log_tree
         self._log_retention, self._next_cleanup = hours, now + 3600
-        root = self.logger.directory.resolve()
-        prefix = f"scdfe_t-channel-{self.channel_id}-"
-        cutoff = time.time() - hours * 3600
-        for path, _, _, _, _ in _iter_log_files(root, None, LOG_PATTERNS['t'], prefix):
-            try:
-                info = os.stat(path, follow_symlinks=False)
-                if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff and Path(path).resolve().is_relative_to(root):
-                    os.unlink(path)
-            except OSError:
-                continue  # rotation or an open reader may win; retry next hour
+        cleanup_log_tree(
+            self.logger.directory,
+            packet_dir=self.logger.packet_directory,
+            retention_hours=hours,
+            prefix=f"scdfe_t-channel-{self.channel_id}-",
+            hourly_only=True,
+        )
 
     def run(self, max_cycles=None):
         # The running loop owns the store until its finally block below. Keep
@@ -1066,33 +1067,45 @@ class TransRuntime:
             self._next_definition_check = time.monotonic() + self.definition_check_interval
             last_scan = None
             next_control = 0.0
+            transient_db_errors = 0
             while not self.stop_event.is_set():
-                monotonic_now = time.monotonic()
-                if monotonic_now >= next_control:
-                    if not self._enabled():
-                        break
-                    next_control = monotonic_now + .2
-                if monotonic_now >= self._next_definition_check:
-                    current_spec, current_points, current_sig = self.load()
-                    self._next_definition_check = time.monotonic() + self.definition_check_interval
-                    if current_sig != self.signature:
-                        self.logger.process("检测到转发定义变化，重新加载")
-                        self.rebuild(current_spec, current_points, signature=current_sig)
-                        last_scan = None
-                    elif current_spec.protocol == "iec104" and current_spec.report_interval_ms != spec.report_interval_ms:
-                        self.server.set_monitor_report_interval(current_spec.report_interval_ms)
-                    spec = current_spec  # interval edits affect scheduling, not the socket
-                self._cleanup_logs(spec.log_retention_hours)
-                if last_scan is None or time.monotonic() >= last_scan + spec.scan_interval:
-                    self.refresh()
-                    last_scan = time.monotonic()
-                    cycles += 1
-                    self._cycles = cycles
-                self._heartbeat()
-                self._pump_soe()
-                if time.monotonic() >= self._next_runtime_flush:
-                    self._flush_point_runtime()
-                    self._next_runtime_flush = time.monotonic()+0.1
+                try:
+                    monotonic_now = time.monotonic()
+                    if monotonic_now >= next_control:
+                        if not self._enabled():
+                            break
+                        next_control = monotonic_now + .2
+                    if monotonic_now >= self._next_definition_check:
+                        current_spec, current_points, current_sig = self.load()
+                        self._next_definition_check = time.monotonic() + self.definition_check_interval
+                        if current_sig != self.signature:
+                            self.logger.process("检测到转发定义变化，重新加载")
+                            self.rebuild(current_spec, current_points, signature=current_sig)
+                            last_scan = None
+                        elif current_spec.protocol == "iec104" and current_spec.report_interval_ms != spec.report_interval_ms:
+                            self.server.set_monitor_report_interval(current_spec.report_interval_ms)
+                        spec = current_spec  # interval edits affect scheduling, not the socket
+                    self._cleanup_logs(spec.log_retention_hours)
+                    if last_scan is None or time.monotonic() >= last_scan + spec.scan_interval:
+                        self.refresh()
+                        last_scan = time.monotonic()
+                        cycles += 1
+                        self._cycles = cycles
+                    self._heartbeat()
+                    self._pump_soe()
+                    if time.monotonic() >= self._next_runtime_flush:
+                        self._flush_point_runtime()
+                        self._next_runtime_flush = time.monotonic()+0.1
+                    transient_db_errors = 0
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    if ("locked" in msg or "busy" in msg) and transient_db_errors < 30:
+                        transient_db_errors += 1
+                        self._runtime_error(exc)
+                        self.logger.error(f"数据库瞬态锁冲突，第 {transient_db_errors} 次退避重试: {exc}")
+                        self.stop_event.wait(0.2)
+                        continue
+                    raise
                 if max_cycles is not None and cycles >= max_cycles:
                     break
                 # Definition polling and cooperative stop/heartbeat continue
@@ -1130,14 +1143,26 @@ class TransRuntime:
 
 
 def main(argv=None):
+    from core.workspace_paths import add_workspace_arguments, resolve_cli_database
     parser = argparse.ArgumentParser(description="scdfe_t 四遥转发通道")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None)
+    add_workspace_arguments(parser)
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     parser.add_argument("--log-dir", type=Path, default=None)
     parser.add_argument("--channel-id", dest="channel_id", type=int, required=True)
     parser.add_argument("--max-cycles", type=int, default=None)
     parser.add_argument("--managed-start", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    try:
+        _, args.db = resolve_cli_database(
+            "t",
+            args.db,
+            workspace_root=args.workspace_root,
+            runtime_name=args.runtime_name,
+            scene_name=args.scene_name,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.channel_id <= 0 or args.max_cycles is not None and args.max_cycles <= 0:
         parser.error("channel-id/max-cycles 必须为正整数")
     event = threading.Event()

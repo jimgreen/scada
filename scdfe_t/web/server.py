@@ -18,9 +18,25 @@ from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR
 from scdfe_t.web.service import CHANNEL_TABLE, POINT_TABLE, TransStore
 from core.network_limits import LISTEN_BACKLOG
 from core.web_request import RequestBodyMixin
-from core.web_database import DEFAULT_WORKSPACE_ROOT, DatabaseSelectionMixin, database_request, handle_database, selection_file, selected_database
+from core.web_database import (
+    DEFAULT_WORKSPACE_ROOT,
+    DatabaseSelectionMixin,
+    database_request,
+    handle_database,
+    resolve_web_database_args,
+    selected_database,
+    selection_file,
+)
+from core.workspace_paths import add_workspace_arguments
 from core import operation_audit as audit
-from core.web_http import encode_json, prepare_response, send_static
+from core.web_http import (
+    BaseScadaHandlerMixin,
+    browser_safe as _safe,
+    encode_json,
+    handle_packet_recording,
+    parse_request_path,
+    send_static,
+)
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.web_logs import log_browser
 
@@ -28,47 +44,15 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG = logging.getLogger("scdfe_t.web")
 
 
-def _safe(value):
-    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53 - 1:
-        return str(value)
-    if isinstance(value, dict):
-        return {k: _safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_safe(v) for v in value]
-    return value
-
-
-class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
-    # Every response is length-delimited by ``_send``. Reuse the browser
-    # connection for status, log and mapping refreshes.
-    protocol_version = "HTTP/1.1"
+class TransHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
     server_version = "ScdfeTWeb/1.0"
 
     @property
     def service(self):
         return self.server.trans_store
 
-    def setup(self):
-        super().setup()
-        self.connection.settimeout(30)
-
     def log_message(self, message, *args):
         LOG.debug(message, *args)
-
-    def _send(self, status, content_type, data, headers=None):
-        data, extra = prepare_response(self, status, content_type, data, headers)
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        if "cache-control" not in {key.lower() for key in extra}:
-            self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        for key, value in extra.items():
-            self.send_header(key, value)
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
-        self._audit_delivered = True
 
     def _json(self, status, payload):
         if status < 400:
@@ -81,24 +65,8 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         data = encode_json(_safe(payload))
         self._send(status, "application/json; charset=utf-8", data, headers)
 
-    def _if_match(self):
-        value = self.headers.get("If-Match")
-        if value is None:
-            return None
-        value = value.strip()
-        if re.fullmatch(r'"[1-9][0-9]*"', value):
-            value = value[1:-1]
-        if not re.fullmatch(r"[1-9][0-9]*", value):
-            raise ApiError(400, "If-Match 必须是正整数版本号")
-        return int(value)
-
     def _parts(self):
-        split = urlsplit(self.path)
-        parts = [unquote(item) for item in split.path.strip("/").split("/") if item]
-        raw = parse_qs(split.query, keep_blank_values=True, max_num_fields=40)
-        if any(len(values) != 1 for values in raw.values()):
-            raise ApiError(400, "同一查询参数只能出现一次")
-        return parts, {key: values[0] for key, values in raw.items()}
+        return parse_request_path(self, max_num_fields=40)
 
     @staticmethod
     def _id(raw):
@@ -114,52 +82,7 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         return {"item": self.service.store.catalog.public(table)}
 
     def _packet_recording(self, parts, query, method):
-        if parts[:2] != ["api", "packet-recording"]:
-            return False
-        if query:
-            raise ApiError(400, "报文记录策略接口不接受查询参数")
-        from core.packet_logging import packet_log_switch, packet_recording_state
-        switch = packet_log_switch(self.service.db_path, "t")
-        if len(parts) == 2:
-            if method == "GET":
-                return self._json(200, packet_recording_state(self.service.db_path, "t"))
-            if method != "PUT":
-                raise ApiError(405, "报文记录策略只支持 GET/PUT")
-            body = self._body()
-            if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
-                raise ApiError(400, "enabled 必须是布尔值，且不能包含其他字段")
-            switch.set_enabled(body["enabled"])
-            return self._json(200, packet_recording_state(self.service.db_path, "t"))
-        if len(parts) == 3:
-            raw_channel = parts[2]
-        elif len(parts) == 4 and parts[2] == "channels":
-            raw_channel = parts[3]
-        else:
-            raise ApiError(404, "路径不存在", code="not_found")
-        try:
-            channel_id = int(raw_channel)
-        except ValueError as exc:
-            raise ApiError(400, "channel_id 必须是整数") from exc
-        if channel_id <= 0:
-            raise ApiError(400, "channel_id 必须是正整数")
-        if method == "GET":
-            try:
-                item = switch.channel_snapshot(channel_id)
-            except KeyError as exc:
-                raise ApiError(404, str(exc), code="not_found") from exc
-            return self._json(200, item)
-        if method != "PUT":
-            raise ApiError(405, "通道报文记录策略只支持 GET/PUT")
-        body = self._body()
-        if set(body) != {"enabled"} or (body["enabled"] is not None and type(body["enabled"]) is not bool):
-            raise ApiError(400, "enabled 必须是布尔值或 null，且不能包含其他字段")
-        try:
-            switch.channel_snapshot(channel_id)
-            switch.set_channel(channel_id, body["enabled"])
-            item = switch.channel_snapshot(channel_id)
-        except KeyError as exc:
-            raise ApiError(404, str(exc), code="not_found") from exc
-        return self._json(200, item)
+        return handle_packet_recording(self, parts, query, method, self.service.db_path, "t")
 
     def _api(self, method, parts, query):
         if parts == ["api", "protocol-capabilities"]:
@@ -286,9 +209,12 @@ class TransHandler(RequestBodyMixin, BaseHTTPRequestHandler):
         raise ApiError(405, "点映射只支持 PATCH/DELETE")
 
     def _static(self, parts):
-        name = "index.html" if not parts else "/".join(parts)
+        # 默认首页统一渲染 communication.html，消除旧 index.html 8/10 列错位。
+        name = "communication.html" if (not parts or parts == ["index.html"]) else "/".join(parts)
         if parts and parts[0] == "static":
             name = "/".join(parts[1:])
+            if name == "index.html":
+                name = "communication.html"
         if name in ASSETS:
             return send_static(self, ASSET_DIR / name, ASSETS[name])
         allowed = {
@@ -388,9 +314,9 @@ class TransHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
 
     def server_close(self):
         try:
-            self._resources.close()
-        finally:
             super().server_close()
+        finally:
+            self._resources.close()
 
 
 def make_server(host="127.0.0.1", port=8879, *, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, selection_path=None, workspace_root=None):
@@ -401,14 +327,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="scdfe_t four-remote transmission WEB service")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8879)
-    parser.add_argument("--db", type=Path, default=None, help="数据库路径；省略时沿用Web选择")
+    parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数或Web选择定位")
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
-    parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE_ROOT, help="Web 文件访问根目录；相对路径均以此为基准")
+    add_workspace_arguments(parser)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
-    preference = selection_file('t', args.host, args.port)
-    database = selected_database(preference, args.db, args.workspace_root / DEFAULT_DB.name, workspace_root=args.workspace_root)
-    httpd = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference, workspace_root=args.workspace_root)
+    workspace_root, preference, database = resolve_web_database_args('t', args)
+    httpd = make_server(args.host, args.port, db_path=database, schema_dir=args.schema_dir, selection_path=preference, workspace_root=workspace_root)
     print(f"scdfe_t WEB: http://{args.host}:{args.port}/", flush=True)
     try:
         httpd.serve_forever()

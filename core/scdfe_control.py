@@ -145,13 +145,21 @@ class InstanceLock:
         return True
 
     def release(self):
-        if self.stream is not None:
-            if os.name == "nt":
-                import msvcrt
-                self.stream.seek(0)
-                msvcrt.locking(self.stream.fileno(), msvcrt.LK_UNLCK, 1)
-            self.stream.close()
-            self.stream = None
+        stream = self.stream
+        self.stream = None
+        if stream is not None:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
     @classmethod
     def held(cls, db_path, role="main"):

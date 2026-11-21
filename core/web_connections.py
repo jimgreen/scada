@@ -78,8 +78,14 @@ def handle_connections(handler, parts, query, method, store, component):
     if method != 'GET':
         raise ApiError(405,'连接历史只支持 GET 查询')
     if page:
-        return handler._send(200,'text/html; charset=utf-8',
-                             render_workbench((ASSET_DIR/'connections.html').read_bytes(),component,'connections.html'))
+        from core.web_http import send_static
+        return send_static(
+            handler,
+            ASSET_DIR / 'connections.html',
+            'text/html; charset=utf-8',
+            transform=lambda raw: render_workbench(raw, component, 'connections.html'),
+            cache_key=f'workbench:{component}:connections.html',
+        )
     if parts == ['api','connections','options']:
         if query:
             raise ApiError(400,'名称选项接口不接受查询参数')

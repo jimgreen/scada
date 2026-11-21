@@ -117,7 +117,14 @@ class DatabaseCommandWriter:
                     receipts=submit_commands(connection,commands,timings=timings)
                     return receipts
                 finally:
-                    with phase(timings,'cleanup_ms'):connection.execute(f'PRAGMA busy_timeout={previous}')
+                    with phase(timings, 'cleanup_ms'):
+                        try:
+                            connection.execute(f'PRAGMA busy_timeout={previous}')
+                        except Exception:
+                            try:
+                                connection.close()
+                            except Exception:
+                                pass
         except BaseException as exc:
             error=exc
             raise

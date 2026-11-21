@@ -48,8 +48,8 @@ def ensure_schema(connection, *, simulator=False):
                  type_id,raw_state,quality,cot,event_time_ms,received_time_ms)
               SELECT 'S',r.channel_id,NEW.rtu_id,NEW.pnt_no,COALESCE(d.rtu_addr,1),
                 COALESCE(m.io_address,COALESCE(NULLIF(d.yxbegin_addr,0),1)+NEW.pnt_no-1),
-                CASE WHEN m.type_id IN (3,31) THEN 31 ELSE 30 END,
-                CASE WHEN m.type_id IN (3,31) THEN CASE WHEN NEW.value THEN 2 ELSE 1 END
+                CASE WHEN m.type_id IN (2,3,31) THEN 31 ELSE 30 END,
+                CASE WHEN m.type_id IN (2,3,31) THEN CASE WHEN NEW.value THEN 2 ELSE 1 END
                      ELSE CASE WHEN NEW.value THEN 1 ELSE 0 END END,
                 COALESCE(NEW.status,0)&240,3,{stamp},{stamp}
               FROM fes_rtu_define r
@@ -58,7 +58,7 @@ def ensure_schema(connection, *, simulator=False):
                 ON m.channel_id=r.channel_id AND m.kind='yx' AND m.pnt_no=NEW.pnt_no
               WHERE r.rtu_id=NEW.rtu_id AND r.channel_type='iec104'
                 AND (m.type_id IN (30,31) OR
-                     (m.type_id IN (1,3) AND m.time_tag='CP56Time2a'));
+                     (m.type_id IN (1,2,3) AND m.time_tag='CP56Time2a'));
             END''')
 
 

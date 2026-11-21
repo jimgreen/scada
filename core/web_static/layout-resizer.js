@@ -34,9 +34,13 @@
       if (Number.isFinite(value)) element.style.setProperty(config.property, `${clampFor(config, element, value)}px`);
     } catch (_) { /* private browsing or disabled storage */ }
   };
-  const setSize = (config, element, value, index) => {
+  const applySize = (config, element, value) => {
     const size = clampFor(config, element, value);
     element.style.setProperty(config.property, `${size}px`);
+    return size;
+  };
+  const setSize = (config, element, value, index) => {
+    const size = applySize(config, element, value);
     try { localStorage.setItem(storageKey(config, index), String(Math.round(size))); } catch (_) { /* ignore */ }
   };
   function install(config, element, index) {
@@ -80,6 +84,7 @@
       handle.setPointerCapture?.(event.pointerId);
       event.preventDefault();
     };
+    let pendingSize = null;
     const move = (event) => {
       if (!start) return;
       const current = config.axis === "x" ? event.clientX : event.clientY;
@@ -90,7 +95,7 @@
         if (delta > 8) {
           hidden = false;
           applyHidden(false);
-          setSize(config, element, Math.max(lastSize, Math.min(config.min, raw)), index);
+          pendingSize = applySize(config, element, Math.max(lastSize, Math.min(config.min, raw)));
         }
         event.preventDefault();
         return;
@@ -98,19 +103,40 @@
       if (raw <= 24) {
         lastSize = clampFor(config, element, start.size);
         hidden = true;
+        pendingSize = null;
         try { localStorage.setItem(`${storageKey(config, index)}:last`, String(Math.round(lastSize))); } catch (_) { /* ignore */ }
         applyHidden(true);
         event.preventDefault();
         return;
       }
-      setSize(config, element, raw, index);
+      pendingSize = applySize(config, element, raw);
       event.preventDefault();
     };
     const end = () => {
       if (!start) return;
+      const wasMoved = moved;
+      const startSize = start.size;
       start = null;
       handle.classList.remove("is-dragging");
       document.body.classList.remove("layout-resizing");
+      if (!wasMoved) {
+        // 单击手柄快速折叠/展开侧边栏或上方区域
+        if (hidden) {
+          hidden = false;
+          applyHidden(false);
+          setSize(config, element, lastSize || config.min, index);
+        } else {
+          lastSize = clampFor(config, element, startSize);
+          hidden = true;
+          try { localStorage.setItem(`${storageKey(config, index)}:last`, String(Math.round(lastSize))); } catch (_) { /* ignore */ }
+          applyHidden(true);
+        }
+        return;
+      }
+      if (pendingSize !== null) {
+        try { localStorage.setItem(storageKey(config, index), String(Math.round(pendingSize))); } catch (_) { /* ignore */ }
+        pendingSize = null;
+      }
     };
     handle.addEventListener("pointerdown", begin);
     handle.addEventListener("pointermove", move);
@@ -127,9 +153,17 @@
       if (event.key === "End") { setSize(config, element, config.max, index); event.preventDefault(); }
     });
   }
+  let scanScheduled = false;
   function scan() {
+    scanScheduled = false;
     for (const config of configs) document.querySelectorAll(config.selector).forEach((element, index) => install(config, element, index));
   }
+  function scheduleScan() {
+    if (scanScheduled) return;
+    scanScheduled = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(scan);
+    else setTimeout(scan, 16);
+  }
   scan();
-  new MutationObserver(scan).observe(document.body, {childList: true, subtree: true});
+  new MutationObserver(scheduleScan).observe(document.body, {childList: true, subtree: true});
 })();

@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition from dbdef/json/fes_channel_can_uds_define.json."""
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
+
+表名：fes_channel_can_uds_define
+中文名：UDS诊断服务定义表
+"""
+
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
+
 
 @dataclass
 class fes_channel_can_uds_define:
@@ -20,7 +26,6 @@ class fes_channel_can_uds_define:
         default=None,
         metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
-
 
     name: Optional[str] = field(
         default=None,
@@ -44,7 +49,7 @@ class fes_channel_can_uds_define:
 
     session_type: Optional[str] = field(
         default='default',
-        metadata={'chn_name': '诊断会话', 'eng_name': 'session_type', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'UDS诊断会话', 'allowed_values': ['default', 'programming', 'extended'], 'default': 'default'},
+        metadata={'chn_name': '诊断会话', 'eng_name': 'session_type', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'UDS诊断会话', 'default': 'default', 'allowed_values': ['default', 'programming', 'extended']},
     )
 
     service_type: Optional[str] = field(

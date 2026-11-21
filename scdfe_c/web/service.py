@@ -19,11 +19,13 @@ import time
 from typing import Any, Iterator
 from core import operation_audit as audit
 from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
+from core.workspace_paths import default_database_path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "dbdef" / "json"
-DEFAULT_DB = ROOT / "db" / "scada.sqlite3"
+SCHEMA_USER_VERSION = 1
+DEFAULT_DB = default_database_path("c")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 KIND_TABLES = {
     "yc": "fes_yc_define",
@@ -278,7 +280,6 @@ class ScadaStore:
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute("PRAGMA busy_timeout=30000")
             connection.execute("PRAGMA mmap_size=1073741824")
@@ -367,12 +368,86 @@ class ScadaStore:
             part += f" DEFAULT {cls._sql_literal(column['default'])}"
         return part
 
+    def _fast_schema_ready(self, connection: sqlite3.Connection) -> bool:
+        """只读快速校验现有库是否已与当前 schema/元数据完全一致，避免每次构造强抢写锁。"""
+        if not self.db_path.is_file() or self.db_path.stat().st_size == 0:
+            return False
+        try:
+            journal = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if journal != "wal":
+                return False
+            self._check_database_role(connection)
+            if self.application_id and connection.execute("PRAGMA application_id").fetchone()[0] != self.application_id:
+                return False
+            actual_tables = {
+                row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            expected_tables = set(self.catalog.names())
+            from core.iec104_soe import TABLES as SOE_TABLES
+            from core.monitor_changes import TABLES as MONITOR_TABLES
+            from core.command_trace import TABLES as COMMAND_TRACE_TABLES
+            required_internal = {'_scada_schema', '_scada_rtu_version'} | SOE_TABLES | COMMAND_TRACE_TABLES | RTDB_METADATA_TABLES
+            if not (expected_tables | required_internal) <= actual_tables:
+                return False
+            allowed = (
+                expected_tables
+                | required_internal
+                | MONITOR_TABLES
+                | getattr(self, "extra_metadata_tables", frozenset())
+            )
+            if actual_tables - allowed:
+                return False
+            stored = dict(connection.execute("SELECT table_name, fingerprint FROM _scada_schema"))
+            if set(stored) != expected_tables:
+                return False
+            for name in expected_tables:
+                payload = self.catalog.get(name)
+                fingerprint = hashlib.sha256(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                ).hexdigest()
+                if stored.get(name) != fingerprint:
+                    return False
+            # 确认内置触发器存在且已迁移至当前版本（无废弃版本表引用、含 WHEN 条件、S 端含双点 SOE 映射）
+            triggers = dict(connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE '_scada_%'"
+            ))
+            if len(triggers) < 6:
+                return False
+            if ("_scada_point_refresh_fes_yc_define" not in triggers
+                    or "_scada_point_refresh_fes_yx_define" not in triggers):
+                return False
+            for trig_name, trig_sql in triggers.items():
+                text = str(trig_sql or "")
+                if "_scada_definition_version" in text or "_scada_command_version" in text:
+                    return False
+                if trig_name.startswith("_scada_defver_") and trig_name.endswith("_upd") and " WHEN " not in text:
+                    return False
+            if self.application_id == int.from_bytes(b'SDFS', 'big'):
+                soe_sql = str(triggers.get("_scada_s_iec104_soe") or "")
+                if "WHEN 2 THEN 31" not in soe_sql:
+                    return False
+            # 若存在尚未补齐 _scada_rtu_version 的 RTU 则走写路径补齐
+            missing_ver = connection.execute(
+                "SELECT 1 FROM fes_rtu_define r LEFT JOIN _scada_rtu_version v ON v.rtu_id=r.rtu_id "
+                "WHERE v.rtu_id IS NULL LIMIT 1"
+            ).fetchone()
+            return missing_ver is None
+        except sqlite3.Error:
+            return False
+
     def _initialise(self) -> None:
+        # 优先只读快路径：已初始化且指纹完全匹配的库无需抢占 BEGIN IMMEDIATE 写锁。
+        if self.db_path.is_file() and self.db_path.stat().st_size > 0:
+            with self.connection() as connection:
+                if self._fast_schema_ready(connection):
+                    return
         # Retry only the initial lock acquisition; no application callback is
         # repeated after it has started.
         for attempt in range(8):
             try:
                 with self.connection() as connection:
+                    if str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                        connection.execute("PRAGMA journal_mode=WAL")
                     connection.execute("BEGIN IMMEDIATE")
                     self._check_database_role(connection)
                     if self.application_id and connection.execute("PRAGMA application_id").fetchone()[0] == 0:
@@ -394,7 +469,8 @@ class ScadaStore:
                     from core.command_trace import TABLES as COMMAND_TRACE_TABLES, ensure_schema as ensure_command_trace
                     unexpected_tables = (actual_tables - expected_tables -
                                          {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES - MONITOR_TABLES
-                                         - COMMAND_TRACE_TABLES - RTDB_METADATA_TABLES)
+                                         - COMMAND_TRACE_TABLES - RTDB_METADATA_TABLES
+                                         - getattr(self, "extra_metadata_tables", frozenset()))
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
@@ -465,6 +541,8 @@ class ScadaStore:
                             '请重新初始化数据库'
                         )
                     sync_embedded_schema(connection, self.catalog)
+                    if int(connection.execute("PRAGMA user_version").fetchone()[0] or 0) < SCHEMA_USER_VERSION:
+                        connection.execute(f"PRAGMA user_version={SCHEMA_USER_VERSION}")
                     connection.commit()
                 return
             except sqlite3.OperationalError as exc:
@@ -774,6 +852,9 @@ class ScadaStore:
                 raise ApiError(400, f'字段 {name} 必须在 0 到 3 之间')
             if name == 'special_yk_yccnt' and number < 0:
                 raise ApiError(400, '字段 special_yk_yccnt 不能为负数')
+            allowed_values = column.get('allowed_values')
+            if allowed_values is not None and name != 'inum' and number not in allowed_values:
+                raise ApiError(400, f"字段 {name} 的值不在允许范围内")
             return number
         if kind == "float":
             if isinstance(value, bool):
@@ -786,11 +867,18 @@ class ScadaStore:
                 raise ApiError(400, f"字段 {name} 必须是有限数字")
             if name in {'connect_timeout', 'response_timeout', 't1', 't2', 't3'} and number <= 0:
                 raise ApiError(400, f"字段 {name} 必须是正数")
+            allowed_values = column.get('allowed_values')
+            if allowed_values is not None and number not in allowed_values:
+                raise ApiError(400, f"字段 {name} 的值不在允许范围内")
             return number
         if kind == "bool":
             if not isinstance(value, bool):
                 raise ApiError(400, f"字段 {name} 必须是布尔值")
-            return int(value)
+            result_bool = int(value)
+            allowed_values = column.get('allowed_values')
+            if allowed_values is not None and result_bool not in allowed_values and value not in allowed_values:
+                raise ApiError(400, f"字段 {name} 的值不在允许范围内")
+            return result_bool
         if not isinstance(value, str):
             raise ApiError(400, f"字段 {name} 必须是字符串")
         if name in {'remote_host', 'serial_port'} and not value.strip():
@@ -1115,25 +1203,45 @@ class ScadaStore:
             self._validate_iec104_row(canonical, result, partial=partial)
         return result
 
-    def _key_values(self, table: str, raw: str | list[Any] | tuple[Any, ...]) -> dict[str, Any]:
+    def _key_values(
+        self,
+        table: str,
+        raw: str | list[Any] | tuple[Any, ...],
+        *,
+        connection: sqlite3.Connection | None = None,
+        allow_rtu_fallback: bool = True,
+    ) -> dict[str, Any]:
         canonical, columns, primary_keys, by_name, _ = self._table_metadata(table)
         values = raw if isinstance(raw, (list, tuple)) else raw.split(",")
         if len(values) != len(primary_keys):
             raise ApiError(400, f"主键需要 {len(primary_keys)} 个值: {','.join(primary_keys)}")
         coerced = [self._coerce(values[index], by_name[name], required=True)
                    for index, name in enumerate(primary_keys)]
-        # Existing RTU-scoped URLs used the RTU number as the first key.  If
-        # that key is not an actual channel key, resolve it through the owning
-        # RTU while keeping channel_id as the persisted/public key.
-        if self._is_channel_table(canonical) and primary_keys and primary_keys[0] == 'channel_id':
-            with self.connection() as connection:
+        # 兼容历史按 rtu_id 作为通道首键的 URL：仅在允许回退时查找，且优先复用当前事务连接，
+        # 避免写事务未提交前另开连接查不到刚插入的新行而误改主键。
+        if allow_rtu_fallback and self._is_channel_table(canonical) and primary_keys and primary_keys[0] == 'channel_id':
+            if connection is not None:
                 exists = connection.execute(
                     f'SELECT 1 FROM {quote_identifier(canonical)} WHERE channel_id=? LIMIT 1',
                     (coerced[0],),
                 ).fetchone()
+            else:
+                with self.connection() as conn:
+                    exists = conn.execute(
+                        f'SELECT 1 FROM {quote_identifier(canonical)} WHERE channel_id=? LIMIT 1',
+                        (coerced[0],),
+                    ).fetchone()
             if exists is None:
                 try:
-                    coerced[0] = self.channel_id_for_rtu(coerced[0])
+                    if connection is not None:
+                        row = connection.execute(
+                            'SELECT channel_id FROM fes_rtu_define WHERE rtu_id=?',
+                            (coerced[0],),
+                        ).fetchone()
+                        if row is not None and row['channel_id'] is not None:
+                            coerced[0] = int(row['channel_id'])
+                    else:
+                        coerced[0] = self.channel_id_for_rtu(coerced[0])
                 except ApiError:
                     pass
         return {name: coerced[index] for index, name in enumerate(primary_keys)}
@@ -1289,7 +1397,12 @@ class ScadaStore:
                 cursor = connection.execute(sql, [normalised[n] for n in insert_names])
                 if generated:
                     normalised[generated] = cursor.lastrowid
-                row = self._read(connection, table, [normalised[n] for n in primary_keys])
+                row = self._read(
+                    connection,
+                    table,
+                    [normalised[n] for n in primary_keys],
+                    allow_rtu_fallback=False,
+                )
                 connection.commit()
                 audit.change(canonical, [normalised[n] for n in primary_keys], None, row)
                 return row
@@ -1298,9 +1411,14 @@ class ScadaStore:
                 raise ApiError(409, "引用的 RTU 不存在", code="conflict") from exc
             raise ApiError(409, "主键已存在或数据违反约束", code="conflict") from exc
 
-    def _read(self, connection, table, key):
+    def _read(self, connection, table, key, *, allow_rtu_fallback: bool = True):
         canonical, columns, primary_keys = self._table_parts(table)
-        keys = self._key_values(table, key)
+        keys = self._key_values(
+            table,
+            key,
+            connection=connection,
+            allow_rtu_fallback=allow_rtu_fallback,
+        )
         predicate = ' AND '.join(f'{quote_identifier(k)}=?' for k in keys)
         row = connection.execute(f'SELECT * FROM {quote_identifier(canonical)} WHERE {predicate}', list(keys.values())).fetchone()
         if row is None:
@@ -1539,11 +1657,19 @@ class ScadaStore:
         sql = f"UPDATE {quote_identifier(canonical)} SET {assignments}, _version=_version+1 WHERE {predicate}"
         return canonical, key, normalised, sql, params
 
+    @staticmethod
+    def _needs_merge_validation(table: str) -> bool:
+        """需要合并旧行执行完整跨字段规约校验的表集合。"""
+        return (
+            table.startswith('fes_channel_modbus_')
+            or table.startswith('fes_channel_iec104_')
+            or table.startswith('fes_channel_can')
+            or table in {'fes_scdfe_t_define', 'fes_scdfe_t_point_define'}
+        )
+
     def _apply_update(self, connection, change, if_match=None):
         table, key, values, sql, params = change
-        # Only the Modbus/trans validators merge changed fields with the old
-        # row. Other schemas can enforce existence/version in the UPDATE.
-        if not table.startswith('fes_channel_modbus_') and table not in {'fes_scdfe_t_define', 'fes_scdfe_t_point_define'}:
+        if not self._needs_merge_validation(table):
             if if_match is not None:
                 sql += ' AND _version=?'
                 params = [*params, if_match]
@@ -1553,9 +1679,11 @@ class ScadaStore:
             return
         current = self._read(connection, table, key)
         self._check_version(current, if_match)
-        # Validate partial edits against the full row under the write lock.
+        # 在写锁保护下合并旧行与变更字段，执行全部规约级跨字段校验。
         merged = {**current, **values}
         self._validate_modbus_row(table, merged, partial=False)
+        self._validate_iec104_row(table, merged, partial=False)
+        self._validate_can_row(table, merged, partial=False)
         self._validate_trans_row(table, merged, partial=False)
         connection.execute(sql, params)
 
@@ -1574,8 +1702,7 @@ class ScadaStore:
                 for sql, adjacent in groupby(changes, key=lambda change: change[3]):
                     group = list(adjacent)
                     table = group[0][0]
-                    merge_validation = table.startswith('fes_channel_modbus_') or table in {
-                        'fes_scdfe_t_define', 'fes_scdfe_t_point_define'}
+                    merge_validation = self._needs_merge_validation(table)
                     if len(group) == 1 or merge_validation:
                         for change in group:
                             self._apply_update(connection, change)

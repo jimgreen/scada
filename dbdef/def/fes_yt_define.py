@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_yt_define
-Chinese name: 遥调定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_yt_define
+中文名：遥调定义表
 """
 
 from dataclasses import dataclass, field
@@ -30,12 +27,10 @@ class fes_yt_define:
         metadata={'chn_name': '点号', 'eng_name': 'pnt_no', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
-
 
     raw_base: Optional[float] = field(
         default=None,

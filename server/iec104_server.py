@@ -390,6 +390,7 @@ class IEC104Server(PacketTrace):
         }
         with self._lock:
             self._unexpected_messages.append(item)
+            del self._unexpected_messages[:-1000]
 
     def set_packet_handler(self, handler):
         super().set_packet_handler(handler)
@@ -616,6 +617,7 @@ class IEC104Server(PacketTrace):
             except Exception as exc:  # callback must not escape into the c104 thread
                 with self._lock:
                     self._errors.append(exc)
+                    del self._errors[:-1000]
                 return c104.ResponseState.FAILURE
         return callback
 

@@ -142,64 +142,57 @@ class ProcessController:
         control = ensure_control_row(self.store)
         command = self.command_config()
         command_enable = int(command.get("process_enable") or 0)
+        system_rows = (
+            ("main", "main", 0, 1, 1),
+            ("writer", "writer", 0, 1, 1),
+            ("command-server", "command-server", 0, command_enable, 1),
+        )
         with self.store.connection() as connection:
-            # The monitor always needs these two system rows. Insert them in
-            # the same connection as the snapshot so the normal refresh path
-            # does not perform two extra get-row connections.
-            connection.executemany(
-                f"INSERT OR IGNORE INTO {PROCESS_TABLE} "
-                "(process_key, kind, target_rtu, process_enable, include_in_all) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (("main", "main", 0, 1, 1),
-                 ("writer", "writer", 0, 1, 1),
-                 ("command-server", "command-server", 0, command_enable, 1)),
-            )
-            connection.execute(
-                f"UPDATE {PROCESS_TABLE} SET process_enable=? "
-                "WHERE process_key='command-server'",
-                (command_enable,),
-            )
+            # 优先纯只读查询，仅在缺失系统行、启用值变化或存在僵死 PID 时才获取写锁。
             rows = [dict(row) for row in connection.execute(
                 f"SELECT * FROM {PROCESS_TABLE} "
                 "ORDER BY CASE kind WHEN 'main' THEN 0 WHEN 'writer' THEN 1 "
                 "WHEN 'command-server' THEN 2 ELSE 3 END, target_rtu"
             )]
-            changed = False
-            for row in rows:
-                pid = int(row["process_pid"] or 0)
-                if not pid or process_is_alive(pid):
-                    continue
-                stopped_at = now_ms()
-                error = str(row.get("process_error") or "进程已退出，未收到正常退出状态")
-                result = connection.execute(
-                    f"UPDATE {PROCESS_TABLE} SET process_pid=0, process_status=5, "
-                    "process_stop_time=?, process_error=?, process_exit_code=-1, _version=_version+1 "
-                    "WHERE process_key=? AND owner_token=? AND process_pid=?",
-                    (stopped_at, error, row["process_key"], row["owner_token"], pid),
-                )
-                if result.rowcount:
-                    row.update(
-                        process_pid=0,
-                        process_status=5,
-                        process_stop_time=stopped_at,
-                        process_error=error,
-                        process_exit_code=-1,
-                        _version=int(row["_version"]) + 1,
+            by_key = {row["process_key"]: row for row in rows}
+            missing_system = [item for item in system_rows if item[0] not in by_key]
+            cmd_row = by_key.get("command-server")
+            need_cmd_sync = cmd_row is not None and int(cmd_row.get("process_enable") or 0) != command_enable
+            stale_rows = [
+                row for row in rows
+                if int(row["process_pid"] or 0) and not process_is_alive(int(row["process_pid"]))
+            ]
+            if missing_system or need_cmd_sync or stale_rows:
+                connection.execute("BEGIN IMMEDIATE")
+                if missing_system:
+                    connection.executemany(
+                        f"INSERT OR IGNORE INTO {PROCESS_TABLE} "
+                        "(process_key, kind, target_rtu, process_enable, include_in_all) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        missing_system,
                     )
-                    changed = True
-                else:
-                    # A concurrent process may have claimed this key between
-                    # the snapshot and the conditional repair. Keep the
-                    # response tied to the current owner identity.
-                    current = connection.execute(
-                        f"SELECT * FROM {PROCESS_TABLE} WHERE process_key=?",
-                        (row["process_key"],),
-                    ).fetchone()
-                    if current is not None:
-                        row.clear()
-                        row.update(dict(current))
-            if changed:
+                if need_cmd_sync or missing_system:
+                    connection.execute(
+                        f"UPDATE {PROCESS_TABLE} SET process_enable=? "
+                        "WHERE process_key='command-server' AND COALESCE(process_enable, -1)!=?",
+                        (command_enable, command_enable),
+                    )
+                for row in stale_rows:
+                    pid = int(row["process_pid"] or 0)
+                    stopped_at = now_ms()
+                    error = str(row.get("process_error") or "进程已退出，未收到正常退出状态")
+                    connection.execute(
+                        f"UPDATE {PROCESS_TABLE} SET process_pid=0, process_status=5, "
+                        "process_stop_time=?, process_error=?, process_exit_code=-1, _version=_version+1 "
+                        "WHERE process_key=? AND owner_token=? AND process_pid=?",
+                        (stopped_at, error, row["process_key"], row["owner_token"], pid),
+                    )
                 connection.commit()
+                rows = [dict(row) for row in connection.execute(
+                    f"SELECT * FROM {PROCESS_TABLE} "
+                    "ORDER BY CASE kind WHEN 'main' THEN 0 WHEN 'writer' THEN 1 "
+                    "WHEN 'command-server' THEN 2 ELSE 3 END, target_rtu"
+                )]
         items = []
         for row in rows:
             key = row["process_key"]
@@ -318,13 +311,13 @@ class ProcessController:
             # owns endpoint-specific retention, while the control row owns
             # the shared log root.
             control = ensure_control_row(self.store)
+            # 令牌由子进程直接从数据库读取，严禁通过命令行明文 --token 暴露在进程列表中。
             command = [runtime_python(), "-m", "scdfe_c.command_server",
                        "--db", str(self.store.db_path),
                        "--schema-dir", str(self.store.catalog.directory),
                        "--log-dir", str(log_directory(self.store, control)),
                        "--host", str(config.get("bind_host") or "127.0.0.1"),
-                       "--port", str(int(config.get("bind_port") or 8890)),
-                       "--token", str(config.get("auth_token") or "")]
+                       "--port", str(int(config.get("bind_port") or 8890))]
         else:
             command = [runtime_python(), "-m", "scdfe_c", "--db", str(self.store.db_path),
                        "--schema-dir", str(self.store.catalog.directory), "--launch-token", token]

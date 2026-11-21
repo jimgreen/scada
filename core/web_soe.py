@@ -6,15 +6,20 @@ def handle_soe(handler, parts, query, method, store, component):
     from scdfe_c.web.service import ApiError
     if parts not in (['soe'],['api','soe'],['static','soe.css'],['static','soe.js']): return False
     if method != 'GET': raise ApiError(405,'SOE 历史只支持 GET 查询')
+    from core.web_http import send_static
     if parts[0]=='static':
         kind='text/css' if parts[1].endswith('.css') else 'application/javascript'
-        return handler._send(200,kind+'; charset=utf-8',
-                             Path(__file__).with_name('web_static').joinpath(parts[1]).read_bytes())
+        return send_static(handler,Path(__file__).with_name('web_static')/parts[1],kind+'; charset=utf-8')
     if parts == ['soe']:
         if query: raise ApiError(400,'页面不接受查询参数')
         from core.web_workbench import ASSET_DIR, render_workbench
-        return handler._send(200,'text/html; charset=utf-8',
-                             render_workbench((ASSET_DIR/'soe.html').read_bytes(),component,'soe.html'))
+        return send_static(
+            handler,
+            ASSET_DIR/'soe.html',
+            'text/html; charset=utf-8',
+            transform=lambda raw: render_workbench(raw,component,'soe.html'),
+            cache_key=f'workbench:{component}:soe.html',
+        )
     if set(query)-{'rtu_id','after_id','limit','tail'}:
         raise ApiError(400,'未知 SOE 查询参数')
     values={}

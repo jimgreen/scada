@@ -20,8 +20,10 @@ from scdfe_s.database import DEFAULT_DB, SimulatorStore
 
 
 def main() -> None:
+    from core.workspace_paths import add_workspace_arguments, resolve_cli_database
     parser = argparse.ArgumentParser(description="IEC 60870-5-104 SCADA test server")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None)
+    add_workspace_arguments(parser)
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     parser.add_argument("--rtu-id", type=int, required=True)
     parser.add_argument("--bind-ip", default="127.0.0.1")
@@ -29,7 +31,14 @@ def main() -> None:
     parser.add_argument("--tick-rate-ms", type=int, default=100)
     parser.add_argument("--max-connections", type=int, default=0)
     args = parser.parse_args()
-    store = SimulatorStore(args.db, args.schema_dir)
+    _, db_path = resolve_cli_database(
+        "s",
+        args.db,
+        workspace_root=args.workspace_root,
+        runtime_name=args.runtime_name,
+        scene_name=args.scene_name,
+    )
+    store = SimulatorStore(db_path, args.schema_dir)
     config_directory = tempfile.TemporaryDirectory(prefix='scdfe-s-iec104-cli-')
     service = IEC104Service(store, config_path=Path(config_directory.name) / 'service.json')
     stopped = threading.Event()

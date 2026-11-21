@@ -9,7 +9,7 @@ SQLite 写锁。
 
 默认启动方式：
 
-    python -m scdfe_c --db D:\\codex\\scada\\db\\scada.sqlite3
+    python -m scdfe_c --workspace-root D:\\codex\\workspace --runtime-name realtime --scene-name qinling
 
 每个通信线程独占自己的协议主站和 SQLite 连接。自动通信交给独立写库进程提交；
 单 RTU 调试复用线程连接执行短事务。SQLite 保持 WAL 和 busy_timeout，连接不跨线程共享。
@@ -52,6 +52,8 @@ from core.process_registry import PROCESS_TABLE, ProcessLease, ensure_process
 from core.runtime_status import RuntimeStatusStore, now_ms, state_for
 from .web.service import CHANNEL_PARAMETER_TABLES, DEFAULT_DB, SCHEMA_DIR, ScadaStore, quote_identifier
 from .log_context import channel_context, channel_identity
+from ._logger import LOG_CATEGORIES, ScdfeLogger
+from ._models import ChannelKey, ChannelSpec, WorkerStats, _field, _jsonable
 from .writer_ipc import (
     WriterClient, WriterIpcServer, WriterRequest, WriterRequestError, WriterUnavailable,
 )
@@ -86,7 +88,6 @@ SUPPORTED_CHANNEL_TYPES = frozenset(CHANNEL_PARAMETER_TABLES)
 RTU_AUTO_COMMUNICATION_FIELD = "process_enable"
 RTU_AUTO_COMMUNICATION_ON = 1
 RTU_AUTO_COMMUNICATION_OFF = 0
-LOG_CATEGORIES = ("normal", "alarm", "error", "process")
 BATCH_WRITER_STOP = "__scdfe_c_batch_writer_stop__"
 BATCH_WRITER_DRAIN = "__scdfe_c_batch_writer_drain__"
 BATCH_WRITER_INTERVAL = 0.1
@@ -165,409 +166,6 @@ RUNTIME_FIELDS = {
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def _field(row: Mapping[str, Any] | Any, name: str, default: Any = None) -> Any:
-    if isinstance(row, sqlite3.Row):
-        try:
-            value = row[name]
-        except (IndexError, KeyError):
-            value = None
-        return default if value is None else value
-    value = row.get(name) if isinstance(row, Mapping) else getattr(row, name, None)
-    return default if value is None else value
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return repr(value)
-
-
-@dataclass(frozen=True, order=True)
-class ChannelKey:
-    """唯一通道标识。RTU 表已合并了通道信息，但仍保留 channel_id。"""
-
-    rtu_id: int
-    channel_id: int
-
-
-@dataclass(frozen=True)
-class ChannelSpec:
-    """从 RTU 行提取出的、可安全传给通信线程的通道配置。"""
-
-    rtu_id: int
-    channel_id: int
-    channel_type: str
-    name: str | None = None
-    process_enable: bool = True
-
-    @property
-    def key(self) -> ChannelKey:
-        return ChannelKey(self.rtu_id, self.channel_id)
-
-    @classmethod
-    def from_row(cls, row: Mapping[str, Any]) -> "ChannelSpec":
-        rtu_id = int(_field(row, "rtu_id"))
-        channel_id = int(_field(row, "channel_id"))
-        channel_type = _field(row, "channel_type", "")
-        if not isinstance(channel_type, str):
-            raise ValueError(f"RTU {rtu_id} 的 channel_type 必须是字符串")
-        if not channel_type:
-            raise ValueError(f"RTU {rtu_id} 缺少 channel_type")
-        process_enable = int(_field(row, "process_enable", 1))
-        if process_enable not in (0, 1):
-            raise ValueError(f"RTU {rtu_id} 的 process_enable 必须是 0 或 1")
-        return cls(
-            rtu_id=rtu_id,
-            channel_id=channel_id,
-            channel_type=channel_type,
-            name=_field(row, "name"),
-            process_enable=bool(process_enable),
-        )
-
-
-@dataclass
-class WorkerStats:
-    cycles: int = 0
-    updated_yc: int = 0
-    updated_yx: int = 0
-    sent_yk: int = 0
-    sent_yt: int = 0
-    errors: int = 0
-    alarms: int = 0
-
-
-class ScdfeLogger:
-    """多线程/多进程安全的轻量日志写入器。
-
-    每个逻辑进程独立使用一个按小时轮转的运行日志文件，例如
-    ``2026/10/29/18/scdfe_c-main-20261029-18.log``。通信线程日志文件只使用
-    RTU 编号，例如 ``2026/10/29/18/scdfe_c-rtu-7-20261029-18.log``。RTU 和通道编号
-    由文件名与数据库定义关联；启停、连接、异常记录另外保留当时的通道上下文。
-    日志类型使用中文标签，且不再
-    按 normal/alarm/error/process 拆分文件。正文时间只写本地 ``HH:MM:SS``，
-    日期和小时由文件名提供。普通调用追加后关闭文件；通信线程在 session 中复用
-    本线程日志文件，每条记录仍立即 flush，退出时关闭。文件不在进程间共享。
-    报文通过 ``packet_directory`` 写入同样的时间树和文件名，运行日志报文目录
-    完全分离；未指定该参数的直接调用保留原目录行为。主调度线程按小时数定期清理旧文件。
-    """
-
-    def __init__(self, directory: Path | str, *, process_name: str, console: bool = False,
-                 packet_switch=None, packet_directory: Path | str | None = None,
-                 runtime_packet_compat: bool = False):
-        self.directory = Path(directory).resolve()
-        self.directory.mkdir(parents=True, exist_ok=True)
-        # ``packet_directory`` is explicit for managed C/S/T runtimes.  Keep
-        # the historical same-directory fallback for small direct callers and
-        # older integrations that instantiate ScdfeLogger themselves.
-        self.packet_directory = (self.directory if packet_directory is None
-                                 else Path(packet_directory).resolve())
-        self.packet_directory.mkdir(parents=True, exist_ok=True)
-        self.console = console
-        self.process_name = process_name
-        self.packet_switch = packet_switch
-        self.runtime_packet_compat = bool(runtime_packet_compat)
-        self._write_lock = threading.Lock()
-        self._hour_keys = {"runtime": None, "packet": None}
-        self._paths = {"runtime": None, "packet": None}
-        self._streams = {"runtime": None, "packet": None}
-        self._stream_identities = {"runtime": None, "packet": None}
-        self._sessions = 0
-        # Compact references are unique across logger/process restarts. Context
-        # definitions live in each hourly file, never in a sidecar database.
-        self._context_seed = os.urandom(6).hex()
-        self._context_serial = 0
-        self._business_contexts = {}
-        self._context_file = None
-
-    @property
-    def _stream(self):
-        """Compatibility alias for the pre packet/runtime split logger."""
-        return self._streams["runtime"]
-
-    def _close_stream(self, kind=None):
-        kinds = ("runtime", "packet") if kind is None else (kind,)
-        for stream_kind in kinds:
-            stream, self._streams[stream_kind] = self._streams[stream_kind], None
-            self._stream_identities[stream_kind] = None
-            if stream is None:
-                continue
-            stream.close()
-
-    @contextmanager
-    def session(self):
-        """Reuse the handle while a worker runs; every write remains visible."""
-        with self._write_lock:
-            self._sessions += 1
-        try:
-            yield self
-        finally:
-            with self._write_lock:
-                self._sessions -= 1
-                if not self._sessions:
-                    self._close_stream()
-
-    def emit(self, category: str, message: str, *, level: str = "INFO") -> None:
-        self._emit_lines(category, (message,), level=level)
-
-    def _emit_lines(self, category, messages, *, level="INFO", context=None, capture=False):
-        if category not in LOG_CATEGORIES:
-            raise ValueError(f"未知日志类别: {category}")
-        label = LOG_LEVEL_LABELS.get(level)
-        if label is None:
-            raise ValueError(f"未知日志级别: {level}")
-        kind = "packet" if level == "PACKET" else "runtime"
-        root = self.packet_directory if kind == "packet" else self.directory
-        with self._write_lock:
-            # Only the local wall clock is persisted. Sample under the lock so
-            # a queued callback cannot reopen the previous hour after rotation.
-            now = datetime.now()
-            stamp = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
-            hour_key = (now.year, now.month, now.day, now.hour)
-            if hour_key != self._hour_keys[kind]:
-                self._close_stream(kind)
-                directory = root / now.strftime("%Y/%m/%d/%H")
-                if not directory.resolve().is_relative_to(root):
-                    raise OSError("日志文件超出日志目录")
-                directory.mkdir(parents=True, exist_ok=True)
-                self._paths[kind] = directory / f"{self.process_name}-{now:%Y%m%d-%H}.log"
-                self._hour_keys[kind] = hour_key
-            path = self._paths[kind]
-            stream = self._streams[kind]
-            if stream is not None and os.name != 'nt':
-                # Preserve external rotation/removal semantics, including on
-                # POSIX where an open file can be unlinked or replaced. Windows
-                # append handles deny deletion/rename until closed: checking
-                # their path identity for every packet adds expensive I/O.
-                try:
-                    stat = path.stat()
-                    identity = (stat.st_dev, stat.st_ino)
-                except FileNotFoundError:
-                    identity = None
-                if identity != self._stream_identities[kind]:
-                    self._close_stream(kind)
-            try:
-                if self._streams[kind] is None:
-                    if not path.resolve().is_relative_to(root):
-                        raise OSError("日志文件超出日志目录")
-                    try:
-                        self._streams[kind] = path.open("a", encoding="utf-8", newline="")
-                    except FileNotFoundError:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        self._streams[kind] = path.open("a", encoding="utf-8", newline="")
-                    stat = os.fstat(self._streams[kind].fileno())
-                    self._stream_identities[kind] = (stat.st_dev, stat.st_ino)
-                context_id = None
-                definitions = []
-                if context is not None:
-                    context_file = (path, self._stream_identities[kind])
-                    if context_file != self._context_file:
-                        self._business_contexts.clear()
-                        self._context_file = context_file
-                    key = tuple((name, log_message_text(value)) for name, value in context.items())
-                    context_id = self._business_contexts.get(key)
-                    if context_id is None:
-                        self._context_serial += 1
-                        context_id = f'{self._context_seed}.{self._context_serial:x}'
-                        definitions.append('日志上下文 @' + context_id + ' ' +
-                                           ' '.join(f'{name}={value}' for name, value in key))
-                pending, displayed = [], [] if capture else None
-                try:
-                    original = ((f'@{context_id} ' + log_message_text(message)) for message in messages) if context_id else messages
-                    for message in chain(definitions, original):
-                        message = log_message_text(message)
-                        if displayed is not None:
-                            displayed.append(message)
-                        line = f"{stamp} [{label}] {message}\n"
-                        pending.append(line)
-                        if self.console:
-                            print(line, end="", flush=True)
-                        # Bound memory even for an unbounded iterable caller.
-                        if len(pending) >= 128:
-                            block = ''.join(pending)
-                            pending.clear()
-                            self._streams[kind].write(block)
-                finally:
-                    # Retain already formatted records if the source iterator
-                    # fails. The outer handler closes/flushes before rethrowing.
-                    if pending:
-                        self._streams[kind].write(''.join(pending))
-                self._streams[kind].flush()
-                if context_id is not None and definitions:
-                    # Publish the cache only after the definition was flushed.
-                    # A failed sink retries with a new definition, never an
-                    # orphan reference. Bound uncommon thread/config churn.
-                    if len(self._business_contexts) >= 128:
-                        self._business_contexts.pop(next(iter(self._business_contexts)))
-                    self._business_contexts[key] = context_id
-                return displayed
-            except Exception:
-                self._close_stream()
-                raise
-            finally:
-                if not self._sessions:
-                    self._close_stream()
-
-    def normal(self, message: str) -> None:
-        self.emit("normal", message)
-
-    def business_lines(self, lines):
-        """Flush a frame/change batch once while retaining every point record."""
-        self._emit_lines('normal', lines)
-
-    def business_context_lines(self, lines, *, context, capture=False):
-        """Define shared identities once per file and return exact preview text."""
-        return self._emit_lines('normal', lines, context=context, capture=capture)
-
-    def packet(self, direction, data, detail="") -> None:
-        if self.packet_switch is not None and not self.packet_switch.enabled():
-            return
-        from core.packet_trace import packet_lines
-        lines = tuple(packet_lines(direction, data, detail))
-        self._emit_lines("normal", lines, level="PACKET")
-        if self.runtime_packet_compat:
-            # Managed C/T processes historically exposed packet lines under
-            # their runtime log filename. Keep that read path available while
-            # the authoritative packet copy remains in ``packets/``.
-            self._emit_lines("normal", lines, level="INFO")
-
-    def packet_text(self, message: str) -> None:
-        """Write an already formatted packet record to the packet stream."""
-        self._emit_lines("normal", (message,), level="PACKET")
-
-    def alarm(self, message: str) -> None:
-        self.emit("alarm", message, level="WARNING")
-
-    def error(self, message: str) -> None:
-        self.emit("error", message, level="ERROR")
-
-    def process(self, message: str) -> None:
-        self.emit("process", message, level="PROCESS")
-
-    @classmethod
-    def cleanup(cls, directory: Path | str, *, retention_hours: int = 720,
-                now: float | None = None, process_name: str | None = None,
-                packet_directory: Path | str | None = None) -> list[Path]:
-        """清理超过保留小时数的按进程小时日志文件。"""
-        if isinstance(retention_hours, bool) or retention_hours < 1:
-            raise ValueError("retention_hours 必须是正整数")
-        cutoff = (time.time() if now is None else now) - retention_hours * 3600
-        removed: list[Path] = []
-        roots = [Path(directory).resolve()]
-        if packet_directory is not None:
-            packet_root = Path(packet_directory).resolve()
-            if packet_root != roots[0]:
-                roots.append(packet_root)
-        for root in roots:
-            if not root.is_dir():
-                continue
-            for entry, _ in log_entries(root, "scdfe_c-"):
-                path = Path(entry.path)
-                match = LOG_FILE_RE.fullmatch(entry.name)
-                if not match or (process_name is not None and match.group("process") != process_name):
-                    continue
-                try:
-                    if entry.stat(follow_symlinks=False).st_mtime < cutoff and path.resolve().is_relative_to(root):
-                        path.unlink()
-                        removed.append(path)
-                except OSError:
-                    # 日志清理失败不能终止采集进程；下次清理继续尝试。
-                    continue
-        return removed
-
-    @classmethod
-    def list_files(cls, directory: Path | str, *, record: str = "runtime",
-                   packet_directory: Path | str | None = None) -> list[dict[str, Any]]:
-        if record not in {"runtime", "packet"}:
-            raise ValueError("记录类型无效")
-        if record == "packet" and packet_directory is not None:
-            directory = packet_directory
-        root = Path(directory).resolve()
-        items = []
-        if not root.is_dir():
-            return items
-        # ``Path.rglob`` plus ``Path.is_file``/``Path.stat`` performs several
-        # pathlib and Win32 path calls for every file.  The log tree is read
-        # frequently by the Web monitor, so walk it with ``os.scandir`` and
-        # reuse each directory entry's cached metadata.  ``follow_symlinks``
-        # stays disabled to preserve the endpoint's symlink boundary.
-        for entry, relative_name in log_entries(root, "scdfe_c-"):
-            match = LOG_FILE_RE.fullmatch(entry.name)
-            if match is None:
-                continue
-            try:
-                stat = entry.stat(follow_symlinks=False)
-            except OSError:
-                continue
-            item = {"name": relative_name, "process": match.group("process"),
-                    "hour": match.group("hour"), "size": stat.st_size,
-                    "modified_at": int(stat.st_mtime * 1000)}
-            process_match = re.fullmatch(r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)", match.group("process"))
-            if process_match is not None:
-                item["rtu_id"] = int(process_match.group("rtu_id"))
-            items.append(item)
-        return sorted(items, key=lambda item: (item["modified_at"], item["name"]), reverse=True)
-
-    @classmethod
-    def read_file(cls, directory: Path | str, filename: str, *, tail: int = 200,
-                  record: str = "runtime", packet_directory: Path | str | None = None) -> dict[str, Any]:
-        if record not in {"runtime", "packet"}:
-            raise ValueError("记录类型无效")
-        if record == "packet" and packet_directory is not None:
-            directory = packet_directory
-        if not isinstance(filename, str) or not filename.strip():
-            raise ValueError("日志文件名无效")
-        if not 1 <= tail <= 5000:
-            raise ValueError("tail 必须在 1 到 5000 之间")
-        root = Path(directory).resolve()
-        candidate = Path(filename)
-        if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
-            raise ValueError("日志文件名无效")
-        path = (root / candidate).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("日志文件名无效") from exc
-        if path.is_symlink() or not path.is_file():
-            raise FileNotFoundError(filename)
-        match = LOG_FILE_RE.fullmatch(path.name)
-        if not match:
-            raise ValueError("日志文件名无效")
-        # Read only the bounded tail; refreshing a large hourly file must not
-        # allocate/read its entire contents on each Web request.
-        with path.open("rb") as stream:
-            stat = os.fstat(stream.fileno())
-            start = stat.st_size
-            floor = max(0, start - 2_000_000)
-            chunks = []
-            newline_count = 0
-            while start > floor and newline_count <= tail:
-                length = min(16_384, start - floor)
-                start -= length
-                stream.seek(start)
-                chunk = stream.read(length)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
-            data = b"".join(reversed(chunks))
-        if start:
-            # The first chunk can start inside a UTF-8 code point/log line.
-            data = data.partition(b"\n")[2]
-        all_lines = data.decode("utf-8", "replace").splitlines()
-        lines = all_lines[-tail:]
-        item = {"name": path.relative_to(root).as_posix(), "process": match.group("process"),
-                "hour": match.group("hour"), "size": stat.st_size,
-                "modified_at": int(stat.st_mtime * 1000), "content": "\n".join(lines),
-                "line_count": len(lines), "truncated": bool(start or len(all_lines) > tail)}
-        process_match = re.fullmatch(
-            r"scdfe_c-(?:debug-)?rtu-(?P<rtu_id>\d+)",
-            match.group("process"),
-        )
-        if process_match is not None:
-            item["rtu_id"] = int(process_match.group("rtu_id"))
-        return item
 
 
 def _worker_process_name(rtu_id: int, *, debug: bool = False) -> str:
@@ -1080,19 +678,22 @@ def _batch_writer_entry(
                         ipc_request = ipc_requests.get_nowait()
                     except Empty:
                         break
+                    if not ipc_request.try_claim():
+                        # 该请求已因客户端超时而原子取消，严禁继续落库引发误控。
+                        continue
                     try:
                         ipc_request.response = {"ok": True, "item": _writer_submit_command(
                             store, connection, ipc_request.payload,
                         )}
+                    except sqlite3.OperationalError as exc:
+                        ipc_request.response = {
+                            "ok": False, "error": str(exc), "code": "writer_locked", "status": 503,
+                        }
                     except Exception as exc:  # noqa: BLE001 - return protocol error
                         ipc_request.response = {
                             "ok": False, "error": str(exc), "code": "command_rejected", "status": 409,
                         }
                     finally:
-                        # Keep the bounded request-id cache in the loopback
-                        # server.  A caller may explicitly repeat a timed-out
-                        # request and receive the original committed result;
-                        # no automatic retry is performed by the client.
                         if ipc_server is not None:
                             ipc_server.complete(ipc_request)
                         ipc_request.done.set()
@@ -1112,18 +713,16 @@ def _batch_writer_entry(
                 continue
             if (isinstance(message, tuple) and len(message) == 2
                     and message[0] == BATCH_WRITER_DRAIN):
-                # A barrier travels through the same FIFO as producer writes.
-                # Acknowledge only after every preceding batch has committed.
-                # The shared generation lets timed-out callers distinguish a
-                # late acknowledgement from the next drain request.
                 try:
                     flush_ok = flush_pending()
+                    drain_deadline = time.monotonic() + 15.0
+                    while flush_ok is None and time.monotonic() < drain_deadline:
+                        if lease is not None:
+                            lease.heartbeat()
+                        time.sleep(BATCH_WRITER_LOCK_BACKOFF)
+                        flush_ok = flush_pending()
                     if flush_ok is None:
-                        # A drain is a FIFO barrier. Leave it in the queue by
-                        # retrying the flush before acknowledging the barrier.
-                        while flush_ok is None:
-                            time.sleep(BATCH_WRITER_LOCK_BACKOFF)
-                            flush_ok = flush_pending()
+                        flush_ok = False
                     if flush_ok and drain_ack is not None:
                         drain_ack.value = message[1]
                 finally:
@@ -1134,9 +733,14 @@ def _batch_writer_entry(
             if message == BATCH_WRITER_STOP:
                 try:
                     flush_ok = flush_pending()
-                    while flush_ok is None:
+                    stop_deadline = time.monotonic() + 15.0
+                    while flush_ok is None and time.monotonic() < stop_deadline:
+                        if lease is not None:
+                            lease.heartbeat()
                         time.sleep(BATCH_WRITER_LOCK_BACKOFF)
                         flush_ok = flush_pending()
+                    if flush_ok is None:
+                        flush_ok = False
                 finally:
                     queue.task_done()
                 if not flush_ok:
@@ -1158,19 +762,27 @@ def _batch_writer_entry(
         raise
     finally:
         if ipc_server is not None:
-            ipc_server.close()
+            ipc_server.stop_accepting()
+        drained_ipc = 0
         if ipc_requests is not None:
-            # Do not leave socket handlers waiting for an ACK when the writer
-            # is stopping (for example after a normal supervisor shutdown).
             while True:
                 try:
                     request = ipc_requests.get_nowait()
                 except Empty:
                     break
-                request.response = {
-                    "ok": False, "error": "写库进程正在停止", "code": "writer_stopping", "status": 503,
-                }
-                request.done.set()
+                if request.try_claim():
+                    request.response = {
+                        "ok": False, "error": "写库进程正在停止", "code": "writer_stopping", "status": 503,
+                    }
+                    if ipc_server is not None:
+                        ipc_server.complete(request)
+                    request.done.set()
+                    drained_ipc += 1
+        if drained_ipc:
+            # 给活跃的 handler 线程短暂时间写出 503 响应后再关闭底层 socket。
+            time.sleep(0.05)
+        if ipc_server is not None:
+            ipc_server.close()
         if pending:
             # A fatal initialization error can happen before a store exists;
             # account for queue items so a stopping supervisor cannot deadlock.
@@ -1458,6 +1070,7 @@ class ChannelWorker:
             RTU编号=spec.rtu_id, 通道编号=spec.channel_id, 规约=spec.channel_type)
         self._command_seen: dict[tuple[str, int], tuple[Any, Any]] | None = None
         self._command_version: int | None = None
+        self._pending_command_acks: dict[tuple[str, int], tuple[str, int, dict[str, Any]]] = {}
         from core.command_feedback import FeedbackTracker
         self._feedback_tracker = FeedbackTracker(store, self.spec.rtu_id)
         self._feedback_next_check = 0.0
@@ -1926,7 +1539,19 @@ class ChannelWorker:
             )
         return self._master.send_yt_point(point_no, float(row.get("value", 0.0)))
 
+    def _flush_pending_command_acks(self) -> None:
+        """幂等补写曾因写库/队列瞬态异常未落盘的指令终态回执，防止测点槽位永久卡死。"""
+        if not self._pending_command_acks:
+            return
+        for key, (table, point_no, values) in list(self._pending_command_acks.items()):
+            try:
+                self._write_row(table, self.spec.rtu_id, point_no, values)
+                self._pending_command_acks.pop(key, None)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error(f"补写指令状态失败 {key}: {exc}")
+
     def _sync_commands(self) -> tuple[int, int]:
+        self._flush_pending_command_acks()
         if time.monotonic() >= self._feedback_next_check:
             from core.command_feedback import evaluate_feedback
             try:
@@ -1937,41 +1562,43 @@ class ChannelWorker:
         rows = self._command_rows()
         if rows is None:
             return 0, 0
-        state = {(kind, int(row["pnt_no"])): (row.get("cmd_time"), row.get("value"))
-                 for kind, row in rows}
         first_sync = self._command_seen is None
         if first_sync:
-            self._command_seen = state
+            # 首次同步仅把已处理/历史静态初值记为已见；待处理命令须逐条完成后再登记，
+            # 避免某条命令异常中断后同批剩余命令被永久跳过。
+            self._command_seen = {
+                (kind, int(row["pnt_no"])): (row.get("cmd_time"), row.get("value"))
+                for kind, row in rows
+                if int(row.get("cmd_time") or 0) <= int(row.get("cmd_handle_time") or 0)
+            }
         sent_yk = sent_yt = 0
         for kind, row in rows:
-            key = (kind, int(row["pnt_no"]))
+            point_no = int(row["pnt_no"])
+            key = (kind, point_no)
             current = (row.get("cmd_time"), row.get("value"))
-            pending = False
             if first_sync:
                 command_time = int(row.get("cmd_time") or 0)
                 handled_time = int(row.get("cmd_handle_time") or 0)
-                # 重启后只恢复明确标记为未处理的命令；数据库中的初始值不会
-                # 被误当成首次下发，避免守护进程启动就操作现场设备。
-                pending = command_time > handled_time
-            if (first_sync and not pending) or (
-                    not first_sync and self._command_seen.get(key) == current):
+                if command_time <= handled_time:
+                    continue
+            elif self._command_seen.get(key) == current:
                 continue
-            self._command_seen[key] = current
             from core.command_trace import claim, advance
             try:
-                command_id = claim(self.store,self.spec.rtu_id,kind,int(row['pnt_no']),
+                command_id = claim(self.store,self.spec.rtu_id,kind,point_no,
                                    int(row.get('cmd_time') or 0),row.get('value'))
             except Exception:
-                self._command_seen.pop(key,None)
                 self._command_version = None
                 raise
+            self._command_seen[key] = current
             if command_id is None:
                 continue  # Already dispatched or superseded; never replay uncertain I/O.
-            command_key = (f'RTU编号={self.spec.rtu_id} 类型={kind} 点号={row["pnt_no"]} '
+            command_key = (f'RTU编号={self.spec.rtu_id} 类型={kind} 点号={point_no} '
                            f'命令时标={int(row.get("cmd_time") or 0)}')
-            self.business.event('指令开始下发', 四遥=kind.upper(), 点号=row['pnt_no'],
+            self.business.event('指令开始下发', 四遥=kind.upper(), 点号=point_no,
                                 值=row.get('value'), 命令时标=row.get('cmd_time'))
             completed = False
+            table = "fes_yk_define" if kind == "yk" else "fes_yt_define"
             observer = getattr(self._master,'set_command_progress',None)
             try:
                 if observer:
@@ -1985,14 +1612,16 @@ class ChannelWorker:
                 scope = ('iec104_activation_confirmation' if self.spec.channel_type=='iec104' else
                          'modbus_response' if self.spec.channel_type in {'modbus-tcp','modbus-rtu'} else 'driver_return')
                 advance(self.store,command_id,'driver_completed' if scope=='driver_return' else 'protocol_confirmed',scope=scope)
-                self.business.event('指令驱动调用完成', 四遥=kind.upper(), 点号=row['pnt_no'],
+                self.business.event('指令驱动调用完成', 四遥=kind.upper(), 点号=point_no,
                                     值=row.get('value'), 命令时标=row.get('cmd_time'), 驱动返回=result)
                 now = max(_now_ms(), int(row.get("cmd_time") or 0))
-                stored = self._write_row(
-                    "fes_yk_define" if kind == "yk" else "fes_yt_define",
-                    self.spec.rtu_id, int(row["pnt_no"]),
-                    {"status": 1, "cmd_handle_time": now, "refresh_time": now},
-                )
+                ack_values = {"status": 1, "cmd_handle_time": now, "refresh_time": now}
+                try:
+                    stored = self._write_row(table, self.spec.rtu_id, point_no, ack_values)
+                    self._pending_command_acks.pop(key, None)
+                except Exception:
+                    self._pending_command_acks[key] = (table, point_no, ack_values)
+                    raise
                 if kind == "yk":
                     sent_yk += 1
                 else:
@@ -2003,14 +1632,24 @@ class ChannelWorker:
             except Exception as exc:  # noqa: BLE001 - 通道必须继续服务其他点
                 self.stats.errors += 1
                 if completed:
-                    self.business.event('指令驱动已完成但结果保存失败，禁止自动重发',命令=command_key,错误=str(exc))
+                    now = max(_now_ms(), int(row.get("cmd_time") or 0))
+                    self._pending_command_acks.setdefault(
+                        key, (table, point_no, {"status": 1, "cmd_handle_time": now, "refresh_time": now})
+                    )
+                    self.business.event('指令驱动已完成但结果保存失败，已加入补写队列并禁止重发',命令=command_key,错误=str(exc))
                     continue
-                advance(self.store,command_id,'failed',scope='unconfirmed',error=exc)
-                self._write_row(
-                    "fes_yk_define" if kind == "yk" else "fes_yt_define",
-                    self.spec.rtu_id, int(row["pnt_no"]),
-                    {"status": 3, "cmd_handle_time": max(_now_ms(), int(row.get("cmd_time") or 0))},
-                )
+                fail_now = max(_now_ms(), int(row.get("cmd_time") or 0))
+                fail_values = {"status": 3, "cmd_handle_time": fail_now}
+                try:
+                    advance(self.store,command_id,'failed',scope='unconfirmed',error=exc)
+                except Exception as trace_exc:  # noqa: BLE001
+                    self.logger.error(f"写入指令失败轨迹异常 {command_key}: {trace_exc}")
+                try:
+                    self._write_row(table, self.spec.rtu_id, point_no, fail_values)
+                    self._pending_command_acks.pop(key, None)
+                except Exception as ack_exc:  # noqa: BLE001
+                    self._pending_command_acks[key] = (table, point_no, fail_values)
+                    self.logger.error(f"写入指令失败状态异常，已加入补写队列 {command_key}: {ack_exc}")
                 self.business.event('指令下发或结果写入失败', 命令=command_key, 错误=str(exc), 状态=3)
             finally:
                 if observer:
@@ -2198,6 +1837,7 @@ class ChannelWorker:
                             return self.stats
                         self.stop_event.wait(self.poll_interval)
                 except Exception as exc:  # noqa: BLE001 - 线程应隔离并重试
+                    self._command_version = None
                     self.stats.errors += 1
                     failures += 1
                     try:
@@ -2544,9 +2184,37 @@ class ScdfeSupervisor:
                     detail = row.get("process_error") or f"退出码 {process.exitcode}"
                 except Exception:
                     detail = f"退出码 {process.exitcode}"
+                self._cleanup_failed_writer(process, queue)
                 raise RuntimeError(f"写库进程未能就绪：{detail}；暂停启动通信线程")
             if time.monotonic() >= deadline:
+                self._cleanup_failed_writer(process, queue)
                 raise RuntimeError("写库进程未能就绪，暂停启动通信线程")
+
+    def _cleanup_failed_writer(self, process, queue) -> None:
+        """终止未能就绪的写库子进程并释放句柄，避免残留孤儿进程。"""
+        if self._writer_process is process:
+            self._writer_process = None
+        if self._writer_queue is queue:
+            self._writer_queue = None
+            self._writer_drain_ack = None
+        try:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2.0)
+            if process.is_alive() and hasattr(process, "kill"):
+                process.kill()
+                process.join(timeout=1.0)
+        except Exception:
+            pass
+        try:
+            process.close()
+        except (ValueError, OSError):
+            pass
+        try:
+            queue.cancel_join_thread()
+            queue.close()
+        except (AttributeError, OSError):
+            pass
 
     def _recover_writer_failure(self) -> bool:
         process = self._writer_process
@@ -3015,14 +2683,28 @@ class ScdfeSupervisor:
             failure = str(exc)
             raise
         finally:
+            stop_deadline = time.monotonic() + 30.0
             while not self.stop():
+                if time.monotonic() >= stop_deadline:
+                    self.logger.error("停机等待超过 30s，强制中断残余通信与写库进程以释放锁")
+                    for managed in list(self._workers.values()):
+                        managed.stop_event.set()
+                        try:
+                            managed.worker._close_master()
+                        except Exception:
+                            pass
+                    if self._writer_process is not None:
+                        self._cleanup_failed_writer(self._writer_process, self._writer_queue)
+                    break
                 time.sleep(0.2)
             self._process_lease.finish(failure)
 
 
 def _parser() -> argparse.ArgumentParser:
+    from core.workspace_paths import add_workspace_arguments
     parser = argparse.ArgumentParser(description="SCADA scdfe_c RTU-通道守护采集程序")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
+    parser.add_argument("--db", type=Path, default=None, help="SQLite 数据库路径；省略时按三参数默认定位")
+    add_workspace_arguments(parser)
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR, help="JSON 表定义目录")
     parser.add_argument("--log-dir", type=Path, default=None, help="日志目录，默认 db/logs")
     parser.add_argument("--poll-interval", type=float, default=1.0, help="采集周期（秒）")
@@ -3041,8 +2723,19 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from core.workspace_paths import resolve_cli_database
     parser = _parser()
     args = parser.parse_args(argv)
+    try:
+        _, args.db = resolve_cli_database(
+            "c",
+            args.db,
+            workspace_root=args.workspace_root,
+            runtime_name=args.runtime_name,
+            scene_name=args.scene_name,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     debug = args.rtu_id is not None
     if debug and args.max_scans is not None:
         parser.error("独立调试请用 --max-cycles，不能使用 --max-scans")

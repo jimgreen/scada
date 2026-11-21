@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition from dbdef/json/fes_channel_can_j1939_define.json."""
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
+
+表名：fes_channel_can_j1939_define
+中文名：J1939报文定义表
+"""
+
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
+
 
 @dataclass
 class fes_channel_can_j1939_define:
@@ -20,7 +26,6 @@ class fes_channel_can_j1939_define:
         default=None,
         metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
-
 
     name: Optional[str] = field(
         default=None,
@@ -59,12 +64,12 @@ class fes_channel_can_j1939_define:
 
     direction: Optional[str] = field(
         default='rx',
-        metadata={'chn_name': '方向', 'eng_name': 'direction', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN方向', 'allowed_values': ['rx', 'tx', 'both'], 'default': 'rx'},
+        metadata={'chn_name': '方向', 'eng_name': 'direction', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN方向', 'default': 'rx', 'allowed_values': ['rx', 'tx', 'both']},
     )
 
     message_type: Optional[str] = field(
         default='normal',
-        metadata={'chn_name': '报文类型', 'eng_name': 'message_type', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'J1939报文类型', 'allowed_values': ['normal', 'dm', 'tp'], 'default': 'normal'},
+        metadata={'chn_name': '报文类型', 'eng_name': 'message_type', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'J1939报文类型', 'default': 'normal', 'allowed_values': ['normal', 'dm', 'tp']},
     )
 
     dm_number: Optional[int] = field(
@@ -74,7 +79,7 @@ class fes_channel_can_j1939_define:
 
     transport_protocol: Optional[str] = field(
         default='none',
-        metadata={'chn_name': '传输协议', 'eng_name': 'transport_protocol', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'J1939传输协议', 'allowed_values': ['none', 'bam', 'dt', 'cmdt', 'etp'], 'default': 'none'},
+        metadata={'chn_name': '传输协议', 'eng_name': 'transport_protocol', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'J1939传输协议', 'default': 'none', 'allowed_values': ['none', 'bam', 'dt', 'cmdt', 'etp']},
     )
 
     multi_packet: Optional[int] = field(

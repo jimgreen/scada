@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_modbus_define_ytyk
-Chinese name: MODBUS遥调遥控定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_channel_modbus_define_ytyk
+中文名：MODBUS遥调遥控定义表
 """
 
 from dataclasses import dataclass, field
@@ -25,12 +22,10 @@ class fes_channel_modbus_define_ytyk:
         metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
-
 
     ifyk: Optional[int] = field(
         default=None,
@@ -39,7 +34,7 @@ class fes_channel_modbus_define_ytyk:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'required': True},
     )
 
     cnt: Optional[int] = field(
@@ -79,12 +74,12 @@ class fes_channel_modbus_define_ytyk:
 
     twobytedata_byteseq: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '两字节数据字节顺序', 'eng_name': 'twobytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
+        metadata={'chn_name': '两字节数据字节顺序', 'eng_name': 'twobytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': '', 'allowed_values': [0, 1]},
     )
 
     fourbytedata_byteseq: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '四字节数据字节顺序', 'eng_name': 'fourbytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': ''},
+        metadata={'chn_name': '四字节数据字节顺序', 'eng_name': 'fourbytedata_byteseq', 'primary_key': False, 'data_type': 'int', 'disp_type': 'UCHAR', 'disp_menu': '', 'allowed_values': [0, 1, 2, 3]},
     )
 
     multi_para: Optional[float] = field(

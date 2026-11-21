@@ -138,21 +138,29 @@
     node.textContent = text;
     node.className = `refresh-status${active ? " is-active" : ""}${error ? " is-error" : ""}`;
   }
-  function loadRtu(id, {fresh = false} = {}) {
+  function activeTestSection() {
+    const requested = location.hash.slice(1);
+    return ["channel", "points", "connection", "logs"].includes(requested) ? requested : "channel";
+  }
+  function activePointTab() {
+    return document.querySelector("[data-point-tab][aria-selected='true']")?.dataset.pointTab || "yc";
+  }
+  function loadRtu(id, {fresh = false, background = false} = {}) {
     const nameFilter = pointNameFilter();
     if (pendingRtu && String(pendingRtu.id) === String(id) && pendingRtu.nameFilter === nameFilter && pendingRtu.request === state.request) {
       return fresh ? pendingRtu.promise.then(() => String($("#rtu-select").value) === String(id) ? loadRtu(id) : undefined) : pendingRtu.promise;
     }
     const pending = {id, nameFilter};
-    pending.promise = performLoadRtu(id).finally(() => { if (pendingRtu === pending) pendingRtu = null; });
+    pending.promise = performLoadRtu(id, {background}).finally(() => { if (pendingRtu === pending) pendingRtu = null; });
     pending.request = state.request;
     pendingRtu = pending;
     return pending.promise;
   }
-  async function performLoadRtu(id) {
+  async function performLoadRtu(id, {background = false} = {}) {
     const request = ++state.request;
     const nameFilter = pointNameFilter();
-    if (String(state.rtu?.rtu_id) !== String(id)) {
+    const switchedRtu = String(state.rtu?.rtu_id) !== String(id);
+    if (switchedRtu) {
       state.pages = {yc:0,yx:0,yk:0,yt:0}; state.points = {yc:[],yx:[],yk:[],yt:[]};
       state.totals = {yc:0,yx:0,yk:0,yt:0}; state.channel = null;
       state.unfilteredTotals = {yc:0,yx:0,yk:0,yt:0};
@@ -165,11 +173,20 @@
     state.protocol = protocol; state.service = protocol.service;
     refreshStatus("正在刷新…", true);
     try {
-      const pointRequests = Object.fromEntries(Object.keys(state.points).map(kind => [kind, ++state.pointRequests[kind]]));
+      const section = activeTestSection();
+      // 后台轮询仅刷新当前激活 Tab 所需数据，避免在日志/通道/连接 Tab 下重复拉取全部四遥点表。
+      const kindsToFetch = (!background || switchedRtu)
+        ? Object.keys(state.points)
+        : (section === "points" ? [activePointTab()] : []);
+      const pointRequests = Object.fromEntries(kindsToFetch.map(kind => [kind, ++state.pointRequests[kind]]));
       const [channel, points, communications] = await Promise.all([
-        api(`/api/rtus/${encodeURIComponent(id)}/channel`),
-        Promise.all(Object.keys(state.points).map(async kind => [kind, await fetchPointPage(id, kind, state.pages[kind], nameFilter)])),
-        api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`)
+        (!background || switchedRtu || section === "channel" || !state.channel)
+          ? api(`/api/rtus/${encodeURIComponent(id)}/channel`)
+          : Promise.resolve(state.channel),
+        kindsToFetch.length
+          ? Promise.all(kindsToFetch.map(async kind => [kind, await fetchPointPage(id, kind, state.pages[kind], nameFilter)]))
+          : Promise.resolve([]),
+        api(`/api/monitor/communications?rtu_id=${encodeURIComponent(id)}`),
       ]);
       if (request !== state.request) return;
       state.channel = channel;
@@ -270,10 +287,11 @@
     }
     try {
       const path = commandKinds.has(kind) ? `/api/rtus/${rtuId}/commands/${kind}/${encodeURIComponent(pointNo)}` : `/api/rtus/${rtuId}/points/${kind}/${encodeURIComponent(pointNo)}`;
-      await api(path, {method:commandKinds.has(kind) ? "POST" : "PATCH", body:JSON.stringify(commandKinds.has(kind) ? {value} : {value, status})});
+      const result = await api(path, {method:commandKinds.has(kind) ? "POST" : "PATCH", body:JSON.stringify(commandKinds.has(kind) ? {value} : {value, status})});
       if (String(state.rtu?.rtu_id) === String(rtuId)) {
         closePointUpdate();
-        await loadRtu(rtuId, {fresh:true}); message(kind === "yk" || kind === "yt" ? "指令已提交" : "点值已更新");
+        await loadRtu(rtuId, {fresh:true});
+        message(commandKinds.has(kind) ? (result.command_status === "applied" ? "仿真模型已接受指令" : "指令已提交") : "点值已更新");
       }
     } catch (error) { message(error.message, true); }
   }
@@ -287,9 +305,16 @@
       });
       $$("[data-tab-panel]").forEach(panel => { panel.hidden = panel.dataset.tabPanel !== section; });
     };
-    window.addEventListener("hashchange", showSection);
+    window.addEventListener("hashchange", () => {
+      showSection();
+      if (state.rtu && !state.loading && activeTestSection() === "points") loadRtu(state.rtu.rtu_id, {background:true});
+    });
     showSection();
-    $$("[data-point-tab]").forEach(tab => tab.addEventListener("click", () => { $$("[data-point-tab]").forEach(node => node.setAttribute("aria-selected", String(node === tab))); $$("[data-point-panel]").forEach(panel => panel.hidden = panel.dataset.pointPanel !== tab.dataset.pointTab); }));
+    $$("[data-point-tab]").forEach(tab => tab.addEventListener("click", () => {
+      $$("[data-point-tab]").forEach(node => node.setAttribute("aria-selected", String(node === tab)));
+      $$("[data-point-panel]").forEach(panel => panel.hidden = panel.dataset.pointPanel !== tab.dataset.pointTab);
+      if (state.rtu && !state.loading) loadRtu(state.rtu.rtu_id, {background:true});
+    }));
   }
   $("#rtu-select").addEventListener("change", event => loadRtu(event.target.value));
   $("#test-refresh").addEventListener("click", () => loadRtu($("#rtu-select").value));
@@ -311,5 +336,9 @@
   $("#point-update-close").addEventListener("click", closePointUpdate);
   $("#point-update-cancel").addEventListener("click", closePointUpdate);
   $("#point-update-dialog").addEventListener("cancel", () => { state.editingPoint = null; });
-  initTabs(); loadRtus(); setInterval(() => { if (!document.hidden && state.rtu && !state.loading) loadRtu(state.rtu.rtu_id); }, 10000);
+  initTabs(); loadRtus(); setInterval(() => {
+    if (!document.hidden && state.rtu && !state.loading && activeTestSection() !== "logs") {
+      loadRtu(state.rtu.rtu_id, {background:true});
+    }
+  }, 10000);
 })();

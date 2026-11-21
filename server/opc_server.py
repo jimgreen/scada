@@ -96,8 +96,10 @@ class OpcUaServer(PacketTrace):
             self._server = None
 
     async def _wait_async(self):
-        while not self._stop.is_set():
-            await asyncio.sleep(0.05)
+        self._async_stop = asyncio.Event()
+        if self._stop.is_set():
+            return
+        await self._async_stop.wait()
 
     def _run(self):
         try:
@@ -171,9 +173,17 @@ class OpcUaServer(PacketTrace):
 
     def close(self):
         self._stop.set()
+        loop = self._loop
+        async_stop = getattr(self, "_async_stop", None)
+        if loop is not None and async_stop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(async_stop.set)
+            except RuntimeError:
+                pass
         if self._thread is not None:
             self._thread.join(timeout=10)
             self._thread = None
+        self._async_stop = None
         self._ready.clear()
         self._log("INFO", "OPC UA 服务端已停止")
 

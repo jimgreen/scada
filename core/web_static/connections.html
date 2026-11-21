@@ -4,9 +4,9 @@
 <script defer src="/static/connections.js"></script></head><body>
 <header></header><main>
 <section class="conn-panel">
-  <div class="conn-toolbar"><a id="back" href="/connections" hidden>← 连接列表</a><h2 id="title">客户端连接</h2>
+  <div class="conn-toolbar"><a id="back" href="/connections" hidden>← 连接列表</a><h2 id="title" title="记录 TCP 客户端入站连接会话（串口/CAN/UDP 无连接会话）">客户端连接</h2>
     <label><input id="auto" type="checkbox" checked> 5 秒刷新</label><button id="refresh">刷新</button></div>
-  <p id="notice" class="conn-muted">记录从升级后新接入的连接开始。串口、CAN 总线及本地模拟服务不产生 TCP 客户端连接；BACnet 使用 UDP，无连接会话。</p>
+  <p id="notice" class="conn-muted" hidden></p>
   <p id="message" role="status"></p><p id="warnings" class="conn-warning"></p>
   <form id="filters" class="conn-toolbar">
     <label><span id="target-label">通道 / RTU</span> <select id="target" aria-label="通道 / RTU 名称" disabled><option value="">正在加载名称…</option></select></label>
@@ -17,9 +17,8 @@
   <div id="pages" class="conn-toolbar"><button id="prev">上一页</button><span id="total"></span><button id="next">下一页</button></div>
   <div id="detail" hidden>
     <dl id="summary" class="conn-summary"></dl>
-    <p class="conn-muted">RX = 服务接收，TX = 服务发送。交互内容从本连接实际报文解析；TX 表示交给传输层，不代表对端业务处理成功。原始报文保存遵循通道的“报文保存”开关；关闭后仍保留交互摘要。OPC UA 只记录 TCP 片段，不解密业务内容。</p>
-    <div class="conn-toolbar"><label>内容 <select id="kind"><option value="">全部</option><option value="interaction">交互内容</option><option value="log">连接日志</option><option value="packet">原始报文</option></select></label>
-      <button id="latest">回到最新</button><button id="export">导出当前显示</button><span id="event-count"></span></div>
+    <div class="conn-toolbar"><label>内容 <select id="kind" title="RX=服务接收，TX=服务发送"><option value="">全部</option><option value="interaction">交互内容</option><option value="log">连接日志</option><option value="packet">原始报文</option></select></label>
+      <button id="latest">回到最新</button><button id="export">导出当前显示</button><a id="open-logs" href="/logs" hidden>关联日志 ↗</a><span id="event-count"></span></div>
     <div id="events" class="conn-events" aria-live="polite"></div>
     <button id="older">加载更早记录</button>
   </div>

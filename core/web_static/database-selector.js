@@ -32,8 +32,12 @@
     const dialog = document.createElement('dialog');
     dialog.className = 'database-selector'; dialog.setAttribute('aria-labelledby', 'database-selector-title');
     dialog.innerHTML = '<form id="database-selector-form">' +
-      '<h2 id="database-selector-title">启动数据库 · scdfe_' + current.role + '</h2>' +
+      '<h2 id="database-selector-title"></h2>' +
       '<code class="database-current" aria-label="当前数据库"></code>' +
+      '<div class="database-context-grid" hidden>' +
+      '<label class="database-context-field"><span>运行态</span><select id="database-runtime" aria-label="运行态名称"></select></label>' +
+      '<label class="database-context-field"><span>场景</span><select id="database-scene" aria-label="场景名称"></select></label>' +
+      '</div>' +
       '<div class="database-chooser"><div class="database-path-row">' +
       '<input id="database-input" aria-label="数据库相对路径" autocomplete="off" required spellcheck="false" role="combobox" aria-expanded="false" aria-controls="database-tree" aria-haspopup="tree">' +
       '<button type="button" id="database-browse" aria-label="展开数据库目录">▾</button></div>' +
@@ -51,11 +55,14 @@
       '<button type="submit" id="database-apply" disabled>使用此数据库</button></div></form>';
     document.body.append(dialog);
     const $ = selector => dialog.querySelector(selector);
+    $('#database-selector-title').textContent = '启动数据库 · scdfe_' + current.role;
     const form = $('#database-selector-form'), input = $('#database-input'), apply = $('#database-apply');
+    const contextGrid = $('.database-context-grid'), runtimeSelect = $('#database-runtime'), sceneSelect = $('#database-scene');
     const error = form.querySelector(':scope > .database-error'), folderError = $('.database-folder-error');
     const popup = $('.database-popup'), tree = $('#database-tree'), status = $('.database-validation');
     const createPanel = $('.database-create'), createError = $('.database-create-error');
-    let validatedPath = '', validationSequence = 0, treeSequence = 0, timer;
+    const defaultRoleFile = current.role_db_filename || ('scdfe_' + (current.role === 't' ? 'c' : current.role) + '.sqlite3');
+    let validatedPath = '', validationSequence = 0, treeSequence = 0, contextSequence = 0, timer;
     const databaseFolder = current.directory || '.';
     const remembersFolders = typeof current.browse_directory === 'string';
     let selectedFolder = current.browse_directory || databaseFolder, parent = null, createKind = '';
@@ -64,7 +71,64 @@
     $('.database-current').textContent = current.relative_database || current.database;
     $('.database-current').title = '当前数据库';
     input.title = '相对于工作区根目录，使用 / 分隔';
-    input.placeholder = 'realtime/qinling/sqldb/scada/scdfe_' + current.role + '.sqlite3';
+    input.placeholder = 'realtime/qinling/sqldb/scada/' + defaultRoleFile;
+
+    function fillSelect(select, values, selected, emptyLabel) {
+      select.replaceChildren();
+      if (!values.length) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = emptyLabel;
+        select.append(opt); select.disabled = true;
+        return '';
+      }
+      select.disabled = false;
+      for (const value of values) {
+        const opt = document.createElement('option');
+        opt.value = value; opt.textContent = value;
+        select.append(opt);
+      }
+      const chosen = values.includes(selected) ? selected : values[0];
+      select.value = chosen;
+      return chosen;
+    }
+
+    function applyContextSelection() {
+      const rt = runtimeSelect.value, sc = sceneSelect.value;
+      if (!rt || !sc) return;
+      const folder = rt + '/' + sc + '/sqldb/scada';
+      selectFolder(folder);
+      input.value = folder + '/' + defaultRoleFile;
+      setPopup(false);
+      validate();
+    }
+
+    async function refreshContexts(preferredRuntime, preferredScene, {applyPath = false} = {}) {
+      const seq = ++contextSequence;
+      try {
+        const query = preferredRuntime ? '?runtime=' + encodeURIComponent(preferredRuntime) : '';
+        const ctx = await api('/api/database/contexts' + query);
+        if (seq !== contextSequence) return;
+        const runtimes = Array.isArray(ctx.runtimes) ? ctx.runtimes : [];
+        contextGrid.hidden = runtimes.length === 0;
+        if (!runtimes.length) return;
+        const rt = fillSelect(runtimeSelect, runtimes, preferredRuntime || current.runtime_name || ctx.runtime_name, '无运行态');
+        let scenes = Array.isArray(ctx.scenes) ? ctx.scenes : [];
+        if (rt && rt !== ctx.runtime_name) {
+          const next = await api('/api/database/contexts?runtime=' + encodeURIComponent(rt));
+          if (seq !== contextSequence) return;
+          scenes = Array.isArray(next.scenes) ? next.scenes : [];
+        }
+        fillSelect(sceneSelect, scenes, preferredScene || current.scene_name, '无场景');
+        if (applyPath && runtimeSelect.value && sceneSelect.value) applyContextSelection();
+      } catch (_) {
+        contextGrid.hidden = true;
+      }
+    }
+
+    runtimeSelect.addEventListener('change', () => {
+      refreshContexts(runtimeSelect.value, '', {applyPath: true});
+    });
+    sceneSelect.addEventListener('change', applyContextSelection);
     function showError(message) { error.textContent = message; error.hidden = !message; }
     function showFolderError() {
       folderError.textContent = folderReadError || folderSaveError;
@@ -220,7 +284,7 @@
         createKind = kind; createPanel.hidden = false; createError.hidden = true;
         $('.database-create-directory').textContent = '创建位置：' + selectedFolder;
         $('label[for="database-new-name"]').textContent = kind === 'mkdir' ? '新目录名称' : '新数据库文件名';
-        $('#database-new-name').value = kind === 'mkdir' ? '' : 'scdfe_' + current.role + '.sqlite3';
+        $('#database-new-name').value = kind === 'mkdir' ? '' : defaultRoleFile;
         $('#database-new-name').focus(); createPanel.scrollIntoView({block: 'nearest'});
       });
     }
@@ -251,7 +315,9 @@
     button.addEventListener('click', () => {
       clearTimeout(timer);
       input.value = current.relative_database || current.database;
-      setPopup(false); dialog.showModal(); validate();
+      setPopup(false); dialog.showModal();
+      refreshContexts(current.runtime_name, current.scene_name, {applyPath: false});
+      validate();
     });
     $('#database-cancel').addEventListener('click', () => dialog.close());
     form.addEventListener('submit', async event => {

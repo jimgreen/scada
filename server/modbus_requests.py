@@ -87,16 +87,23 @@ class OwnedRequestHandler(ServerRequestHandler):
             try:
                 used = TransactionManager.callback_data(self, packet, addr)
             except ModbusIOException as exc:
-                function = packet[7] if self.dispatch.owner.tcp else (exc.fcode or 0)
-                code = (ExcCodes.ILLEGAL_VALUE if function in self.server.decoder.pdu_table
-                        else ExcCodes.ILLEGAL_FUNCTION)
-                response = ExceptionResponse(function, code,
-                                             device_id=exc.dev_id, transaction=exc.transaction_id)
-                self.server_send(response, addr)
-                consumed += len(packet)
+                if self.dispatch.owner.tcp:
+                    function = packet[7] if len(packet) > 7 else (exc.fcode or 0)
+                    code = (ExcCodes.ILLEGAL_VALUE if function in self.server.decoder.pdu_table
+                            else ExcCodes.ILLEGAL_FUNCTION)
+                    response = ExceptionResponse(function, code,
+                                                 device_id=exc.dev_id, transaction=exc.transaction_id)
+                    self.server_send(response, addr)
+                    consumed += len(packet)
+                else:
+                    # Modbus RTU 规范禁止对 CRC/帧格式错误的报文回复异常，逐字节滑窗跳过噪声防吞后续合法帧。
+                    self.last_pdu = None
+                    consumed += 1
                 continue
             if self.last_pdu is not None:
-                self._enqueue(self.last_pdu, self.last_addr)
+                pdu, pdu_addr = self.last_pdu, self.last_addr
+                self.last_pdu = None
+                self._enqueue(pdu, pdu_addr)
             if not used:
                 break
             consumed += used

@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition from dbdef/json/fes_channel_can_diagnostic.json."""
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
+
+表名：fes_channel_can_diagnostic
+中文名：CAN运行诊断快照表
+"""
+
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
+
 
 @dataclass
 class fes_channel_can_diagnostic:
@@ -13,12 +19,12 @@ class fes_channel_can_diagnostic:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
 
     bus_state: Optional[str] = field(
         default='unknown',
-        metadata={'chn_name': '总线状态', 'eng_name': 'bus_state', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN总线状态', 'allowed_values': ['unknown', 'error_active', 'error_passive', 'bus_off'], 'default': 'unknown'},
+        metadata={'chn_name': '总线状态', 'eng_name': 'bus_state', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN总线状态', 'default': 'unknown', 'allowed_values': ['unknown', 'error_active', 'error_passive', 'bus_off']},
     )
 
     error_state: Optional[str] = field(

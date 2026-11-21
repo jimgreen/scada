@@ -64,5 +64,21 @@ def protocol_capabilities(component):
             'physical_diagnostics': 'hardware_dependent',
             'fault_injection': 'hardware_dependent',
         }
+        protocols['bacnet'] = {
+            'transport': 'udp',
+            'object_types': ['analog-input', 'analog-output', 'binary-input', 'binary-output'],
+            'read_property': True,
+            'write_property': True,
+            'simulation_mode': component == 'scdfe_s',
+            'confirmation_scope': 'simulator_database' if component == 'scdfe_s' else 'remote_response',
+        }
+        protocols['opc'] = {
+            'transport': 'opc-ua-tcp',
+            'batch_read': True,
+            'write_value': True,
+            'node_id_mapping': True,
+            'simulation_mode': component == 'scdfe_s',
+            'confirmation_scope': 'simulator_database' if component == 'scdfe_s' else 'remote_response',
+        }
     return {'component': component, 'protocols': protocols,
             'scope': 'implementation_capabilities_not_device_certification'}

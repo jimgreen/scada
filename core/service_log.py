@@ -12,6 +12,48 @@ from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES
 
 _HEADER = re.compile(r"^(\d{2}:\d{2}:\d{2}) \[([^]]+)\] (.*)$")
+_SHARED_LOGGERS_LOCK = threading.Lock()
+_SHARED_LOGGERS = {}
+_CLEANUP_INFLIGHT_LOCK = threading.Lock()
+_CLEANUP_INFLIGHT = set()
+
+
+def _shared_logger(directory: Path, process_name: str, packet_directory: Path):
+    """同进程内按 (目录, 进程/通道名) 共享唯一 ScdfeLogger，防止多线程/多实例跨锁写同文件。"""
+    key = (str(directory.resolve()), str(process_name), str(packet_directory.resolve()))
+    with _SHARED_LOGGERS_LOCK:
+        logger = _SHARED_LOGGERS.get(key)
+        if logger is None:
+            from scdfe_c import ScdfeLogger
+            logger = ScdfeLogger(directory, process_name=process_name, packet_directory=packet_directory)
+            _SHARED_LOGGERS[key] = logger
+        return logger
+
+
+def _schedule_async_cleanup(directory: Path, packet_directory: Path, retention_hours: float = 720) -> None:
+    """将过期日志与空目录清理放到后台轻量线程执行，避免阻塞报文收发回调热路径。"""
+    key = str(directory.resolve())
+    with _CLEANUP_INFLIGHT_LOCK:
+        if key in _CLEANUP_INFLIGHT:
+            return
+        _CLEANUP_INFLIGHT.add(key)
+
+    def _worker():
+        try:
+            from core.log_retention import cleanup_log_tree
+            cleanup_log_tree(
+                directory,
+                packet_dir=packet_directory,
+                retention_hours=retention_hours,
+                prefix="scdfe_s-",
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("异步清理 S 服务日志失败", exc_info=True)
+        finally:
+            with _CLEANUP_INFLIGHT_LOCK:
+                _CLEANUP_INFLIGHT.discard(key)
+
+    threading.Thread(target=_worker, name="scdfe-s-log-cleanup", daemon=True).start()
 
 
 class ServiceFileLog:
@@ -44,18 +86,14 @@ class ServiceFileLog:
         self._startup_files = None if startup_catalog is None else startup_catalog.get(self.name, ())
 
     def _logger_for(self, channel_id):
-        """Return the logger whose file identity is one communication channel."""
-        if channel_id is None:
-            name = self.name
-        else:
-            name = f"scdfe_s-channel-{int(channel_id)}"
-        logger = self._loggers.get(name)
-        if logger is None:
-            from scdfe_c import ScdfeLogger
-            logger = ScdfeLogger(self.directory, process_name=name,
-                                 packet_directory=self.packet_directory)
-            self._loggers[name] = logger
-        return logger
+        """返回对应通道或服务的共享日志记录器（由 self._lock 保护）。"""
+        with self._lock:
+            name = self.name if channel_id is None else f"scdfe_s-channel-{int(channel_id)}"
+            logger = self._loggers.get(name)
+            if logger is None:
+                logger = _shared_logger(self.directory, name, self.packet_directory)
+                self._loggers[name] = logger
+            return logger
 
     def bind_channel(self, channel_id):
         """Bind subsequent runtime and packet records to one channel file."""
@@ -108,51 +146,42 @@ class ServiceFileLog:
 
     def write(self, level, message, *, channel_id=None):
         try:
-            policy_channel = self._channel_id if channel_id is None else channel_id
-            target_channel = policy_channel
-            if self.channel_required and self._channel_id is not None and target_channel is None:
-                return
-            # A generated packet line carries a frame identity and is safe to
-            # route to the channel file even when a delayed callback arrives
-            # before the lifecycle has bound the service.  Older callers may
-            # pass free-form packet text with a channel mentioned in its
-            # payload; keep that legacy text on the service file so the text
-            # cannot masquerade as a channel-attributed frame in searches.
-            if level == "PACKET" and " frame=" not in str(message):
-                target_channel = self._channel_id
-            logger = self._logger_for(target_channel)
+            with self._lock:
+                bound_channel = self._channel_id
+                policy_channel = bound_channel if channel_id is None else channel_id
+                target_channel = policy_channel
+                if self.channel_required and bound_channel is not None and target_channel is None:
+                    return
+                if level == "PACKET" and " frame=" not in str(message):
+                    target_channel = bound_channel
+                logger = self._logger_for(target_channel)
+                compat_logger = self._logger_for(None) if bound_channel is not None else None
             if level == 'PACKET':
                 if self.packet_switch.enabled(policy_channel):
                     logger.packet_text(message)
-                    if self._channel_id is not None and " frame=" in str(message):
-                        # Keep the historical protocol-service process view
-                        # available to existing operators and tools.  The
-                        # channel file remains the authoritative per-channel
-                        # record used by the HMI and channel filters.
-                        self._logger_for(None).packet_text(message)
-                        self._logger_for(None).emit("normal", message)
-                    # Preserve the historical service-file view for direct,
-                    # unframed packet writes while generated transport frames
-                    # remain channel-exclusive.  This keeps old diagnostics
-                    # readable without duplicating high-rate wire traffic.
-                    if self._channel_id is not None and " frame=" not in str(message):
-                        compatibility_logger = self._logger_for(None)
-                        compatibility_logger.packet_text(message)
-                        # Very old integrations also inspected the service's
-                        # runtime directory directly.  Mirror only this
-                        # low-rate, free-form compatibility record there;
-                        # generated frames keep the packet directory split.
-                        compatibility_logger.emit("normal", message)
+                    if bound_channel is not None and compat_logger is not None:
+                        if " frame=" in str(message):
+                            compat_logger.packet_text(message)
+                            compat_logger.emit("normal", message)
+                        else:
+                            compat_logger.packet_text(message)
+                            compat_logger.emit("normal", message)
             else:
                 logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
             now = time.monotonic()
-            if now >= self._next_cleanup:
-                self._next_cleanup = now + 3600
+            should_cleanup = False
+            startup_files = None
+            with self._lock:
+                if now >= self._next_cleanup:
+                    self._next_cleanup = now + 3600
+                    startup_files = self._startup_files
+                    self._startup_files = None
+                    should_cleanup = True
+            if should_cleanup:
                 cutoff = time.time() - 720 * 3600
                 files = [(path, self.directory) for path in
-                         (self._files("runtime") if self._startup_files is None else self._startup_files)]
+                         (self._files("runtime") if startup_files is None else startup_files)]
                 files.extend((path, self.packet_directory) for path in self._files("packet"))
-                self._startup_files = None  # later retention checks must visit the live directory
                 for path, root in files:
                     try:
                         if (path.stat().st_mtime < cutoff and path.resolve().is_relative_to(root)
@@ -160,10 +189,16 @@ class ServiceFileLog:
                             path.unlink()
                     except OSError:
                         pass
+                from core.log_retention import _prune_empty_dirs
+                _prune_empty_dirs(self.directory)
+                _prune_empty_dirs(self.packet_directory)
         except OSError:
             now = time.monotonic()
-            if now >= self._next_error:
-                self._next_error = now + 60
+            with self._lock:
+                log_err = now >= self._next_error
+                if log_err:
+                    self._next_error = now + 60
+            if log_err:
                 logging.getLogger(__name__).exception("服务日志写入失败: %s", self.name)
 
     def recent(self, limit=500, *, record="runtime"):

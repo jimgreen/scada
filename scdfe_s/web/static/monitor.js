@@ -57,23 +57,29 @@
     return data ? data[0] : null;
   }
   function show(selector, markup) {
-    // Each standalone monitor has one list. Keep focused buttons and text
-    // selections when the next poll returns the same displayed values.
+    // 使用原生 DOM 模板解析按单元格增量更新，保留焦点与文本选区，避免脆弱正则误切。
     if (lastMarkup === markup) return;
     const body = $(selector);
-    const cells = html => html?.match(/<td\b[\s\S]*?<\/td>/g) || [];
-    const oldRows = lastMarkup?.match(/<tr\b[\s\S]*?<\/tr>/g) || [];
-    const rows = markup.match(/<tr\b[\s\S]*?<\/tr>/g) || [];
-    if (body.tagName === 'TBODY' && rows.length && rows.length === oldRows.length &&
-        rows.every((row, i) => cells(row).length === cells(oldRows[i]).length)) {
-      rows.forEach((row, i) => {
-        if (row === oldRows[i]) return;
-        const previous = cells(oldRows[i]);
-        cells(row).forEach((cell, column) => {
-          if (cell !== previous[column]) body.rows[i].cells[column].outerHTML = cell;
+    if (body && body.tagName === "TBODY" && body.rows && typeof document.createElement === "function") {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = "<table><tbody>" + markup + "</tbody></table>";
+      const nextRows = Array.from(tpl.content.querySelectorAll("tr"));
+      if (nextRows.length && nextRows.length === body.rows.length
+          && nextRows.every((row, i) => row.cells.length === body.rows[i].cells.length)) {
+        nextRows.forEach((nextRow, i) => {
+          const curRow = body.rows[i];
+          if (nextRow.outerHTML === curRow.outerHTML) return;
+          Array.from(nextRow.cells).forEach((nextCell, column) => {
+            if (nextCell.outerHTML !== curRow.cells[column].outerHTML) {
+              curRow.cells[column].replaceWith(nextCell);
+            }
+          });
         });
-      });
-    } else body.innerHTML = markup;
+        lastMarkup = markup;
+        return;
+      }
+    }
+    if (body) body.innerHTML = markup;
     lastMarkup = markup;
   }
   function fmt(value, timeOnly = false) {
@@ -120,7 +126,6 @@
       }).join("");
       show("#rows", rows || `<tr><td colspan="9">暂无通信通道</td></tr>`);
       msg(`共 ${(channels.items || []).length} 个通信通道`);
-      msg("");
     } catch (e) { msg(e.message, true); }
   }
   async function loadCommunications({fresh = false} = {}) {

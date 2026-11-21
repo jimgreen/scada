@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_bacnet_point_define
-Chinese name: BACnet四遥点映射表
+表名：fes_channel_bacnet_point_define
+中文名：BACnet四遥点映射表
 """
 
 from dataclasses import dataclass, field
@@ -19,7 +19,7 @@ class fes_channel_bacnet_point_define:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
 
     kind: Optional[str] = field(

@@ -1,19 +1,17 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>运行诊断 · SCADA</title><link rel="stylesheet" href="/static/diagnostics.css"><script defer src="/static/diagnostics.js"></script></head>
 <body><header><strong>SCADA · 运行诊断</strong><a href="/">返回工作台</a></header><main>
-<section class="diag-panel"><div class="diag-toolbar"><h2 id="diag-title">分段耗时与配置检查</h2><label><input id="auto" type="checkbox" checked> 5 秒刷新耗时</label><button id="refresh">刷新并检查配置</button></div>
-<p id="message" role="status">正在读取…</p><p id="note" class="muted"></p>
+<section class="diag-panel"><div class="diag-toolbar"><h2 id="diag-title">分段耗时与配置检查</h2><label><input id="auto" type="checkbox" checked> 5 秒刷新</label><button id="refresh">刷新并检查配置</button></div>
+<p id="message" role="status">正在读取…</p><p id="note" class="muted" hidden></p>
 <div class="diag-scroll"><table><thead><tr><th>服务 / 通道</th><th>阶段</th><th>累计样本 / 窗口</th><th>最新 ms</th><th>P50 ms</th><th>P95 ms</th><th>P99 ms</th><th>快照</th></tr></thead><tbody id="timings"></tbody></table></div>
-<p id="delta" class="muted"></p><h2>数据库等待与 WAL</h2><div id="database-wait" class="muted"></div><p class="muted">提交耗时可能包含自动检查点；WAL 大小不等于未提交数据量。本页不触发检查点，也不据此认定延迟原因。</p><h2>SOE 连接进度</h2><div id="soe-progress" class="muted"></div><h2>配置检查</h2><p class="muted">按当前定义检查端口与运行模式；不主动连接对端，不发送通信指令。真实绑定结果以启动时操作系统返回为准。</p>
+<p id="delta" class="muted"></p><h2 title="提交耗时可能包含自动检查点；WAL 大小不等于未提交数据量">数据库等待与 WAL</h2><div id="database-wait" class="muted"></div><h2>SOE 连接进度</h2><div id="soe-progress" class="muted"></div><h2 title="按当前定义静态检查端口与运行模式，不主动连接对端">配置检查</h2>
 <p id="checked-at" class="muted"></p><div id="checks"></div>
-<h2>转发指令入库诊断</h2><p id="command-summary" class="muted"></p>
-<p class="muted">每个转发服务保留最近 16 次慢入库或失败请求。已提交表示已保存待处理指令，不代表设备执行，也不代表客户端收到响应。连接、写锁、校验、更新、提交分别计时；总耗时还包含清理连接等开销。仅展示前 8 个关联点，不记录指令值。</p>
+<h2 title="每通道保留最近 16 次慢入库或失败请求，仅展示前 8 个关联点">转发指令入库诊断</h2><p id="command-summary" class="muted"></p>
 <div class="diag-scroll"><table><thead><tr><th>时间 / 通道 / 点</th><th>结果 / 失败阶段</th><th>连接 ms</th><th>写锁 ms</th><th>校验 / 更新 ms</th><th>提交 ms</th><th>总耗时 ms</th></tr></thead><tbody id="command-writes"></tbody></table></div>
-<h2>转发显示状态写库</h2><p class="muted">指令成功应答以源库 FULL 提交为准；四遥页面显示状态由扫描或约 100 ms 定时任务合并保存。写锁繁忙时保留最新状态重试，实际延迟受提交耗时和线程调度影响。此处为显示快照，不合并 SOE 事件或指令执行记录。未确认日志可能部分写入，不自动重写。</p>
+<h2 title="四遥显示快照由扫描或 100ms 定时合并写库，锁忙时保留最新状态重试">转发显示状态写库</h2>
 <div class="diag-scroll"><table><thead><tr><th>通道 / 快照</th><th>待保存点 / 等待 ms</th><th>已保存批次 / 点次</th><th>失败 / 锁冲突</th><th>未确认日志条数</th><th>最近错误</th></tr></thead><tbody id="point-runtime"></tbody></table></div>
-<h2>Modbus 请求调度</h2><p id="modbus-summary" class="muted"></p>
-<p class="muted">同一连接按接收顺序处理；各连接的读请求可在慢写提交期间继续读取旧的已提交值。每服务最多保留 256 个请求，每连接最多 32 个，满载返回异常码 06。写指令成功应答仍在数据库接受后发送。最近 16 条写请求或异常记录中的“响应提交”仅表示提交本地发送，不代表客户端已经收到。</p>
+<h2 title="每服务最多 256 请求、每连接最多 32 请求，满载返回异常码 06">Modbus 请求调度</h2><p id="modbus-summary" class="muted"></p>
 <div class="diag-scroll"><table><thead><tr><th>通道 / 快照</th><th>事务号 / 站号 / 功能码</th><th>异常 / 连接</th><th>排队 ms</th><th>执行 ms</th><th>响应提交 ms</th><th>总耗时 ms</th></tr></thead><tbody id="modbus-requests"></tbody></table></div>
-<h2>慢写库批次</h2><p class="muted">保留最近 16 个入队至提交不少于 100 ms 的批次；各列来自同一批次，非分位数相减。队列等待含批次合并、进程调度等因素；提交可能含检查点，不能单凭此表归因。</p>
+<h2 title="最近 16 个入队至提交 >= 100ms 的写库批次">慢写库批次</h2>
 <div class="diag-scroll"><table><thead><tr><th>时间 / RTU</th><th>消息 / 更新</th><th>排队 ms</th><th>写锁 / 退避 ms</th><th>SQL / 提交 ms</th><th>入队至提交 ms</th><th>回执日志 ms</th></tr></thead><tbody id="slow-batches"></tbody></table></div>
 </section></main></body></html>

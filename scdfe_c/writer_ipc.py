@@ -61,12 +61,31 @@ def endpoint_path(db_path: str | Path) -> Path:
 
 @dataclass
 class WriterRequest:
-    """A request handed from the socket thread to the writer loop."""
+    """从 IPC Socket 线程递交到写库主循环的单条指令请求。"""
 
     payload: dict[str, Any]
     done: threading.Event = field(default_factory=threading.Event)
     response: dict[str, Any] | None = None
     fingerprint: bytes = b""
+    _state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    claimed: bool = False
+    cancelled: bool = False
+
+    def try_claim(self) -> bool:
+        """原子认领请求；若已被超时取消则返回 False。"""
+        with self._state_lock:
+            if self.cancelled:
+                return False
+            self.claimed = True
+            return True
+
+    def try_cancel(self) -> bool:
+        """原子取消尚未被写库循环认领的超时请求，杜绝返回 504 后仍执行。"""
+        with self._state_lock:
+            if self.claimed:
+                return False
+            self.cancelled = True
+            return True
 
 
 def _command_json(raw):
@@ -139,8 +158,13 @@ class _RequestHandler(socketserver.StreamRequestHandler):
                 except queue.Full:
                     self.server.reject_busy(request_id, request)
             if not request.done.wait(self.server.request_timeout):
-                self._send({"ok": False, "error": "写库进程响应超时", "code": "writer_timeout", "status": 504})
-                return
+                if self.server.cancel_timeout(request_id, request):
+                    self._send({"ok": False, "error": "写库进程响应超时", "code": "writer_timeout", "status": 504})
+                    return
+                # 写库主循环已认领并正在提交，短等其提交收尾以返回真实终态。
+                if not request.done.wait(1.5):
+                    self._send({"ok": False, "error": "写库进程响应超时", "code": "writer_timeout", "status": 504})
+                    return
             self._send(request.response or {
                 "ok": False, "error": "写库进程未返回结果", "code": "writer_error", "status": 500,
             })
@@ -191,15 +215,32 @@ class _WriterTCPServer(_ThreadingTCPServer):
             request.response = {"ok": False, "error": "写库请求队列已满", "code": "writer_busy", "status": 503}
             request.done.set()  # also release identical requests that were waiting
 
+    def cancel_timeout(self, request_id: str, request: WriterRequest) -> bool:
+        """若请求尚未被写库主循环认领，则原子取消并移出 _inflight。"""
+        if not request.try_cancel():
+            return False
+        with self._cache_lock:
+            if self._inflight.get(request_id) is request:
+                self._inflight.pop(request_id, None)
+            request.response = {"ok": False, "error": "写库进程响应超时", "code": "writer_timeout", "status": 504}
+            request.done.set()
+        return True
+
     def complete(self, request: WriterRequest) -> None:
         request_id = str(request.payload.get("request_id", ""))
         if not request_id or request.response is None:
             return
+        status = int(request.response.get("status", 200) or 200)
+        code = str(request.response.get("code", ""))
+        transient = (not request.response.get("ok")) and (
+            status >= 500 or code in {"writer_busy", "writer_stopping", "writer_timeout", "writer_locked"}
+        )
         with self._cache_lock:
             self._inflight.pop(request_id, None)
-            self._cache[request_id] = (request.fingerprint, dict(request.response))
-            while len(self._cache) > 2048:
-                self._cache.pop(next(iter(self._cache)))
+            if not transient:
+                self._cache[request_id] = (request.fingerprint, dict(request.response))
+                while len(self._cache) > 2048:
+                    self._cache.pop(next(iter(self._cache)))
 
 
 class WriterIpcServer:
@@ -246,7 +287,19 @@ class WriterIpcServer:
         }
         temporary = self.endpoint.with_name(self.endpoint.name + f".{secrets.token_hex(4)}.tmp")
         try:
-            temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+            os_mod = __import__("os")
+            flags = os_mod.O_WRONLY | os_mod.O_CREAT | os_mod.O_EXCL
+            fd = os_mod.open(str(temporary), flags, 0o600)
+            try:
+                with os_mod.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record, ensure_ascii=False))
+            except BaseException:
+                raise
+            if os_mod.name != "nt":
+                try:
+                    os_mod.chmod(temporary, 0o600)
+                except OSError:
+                    pass
             temporary.replace(self.endpoint)
         except Exception:
             server.server_close()
@@ -259,6 +312,19 @@ class WriterIpcServer:
         self._thread = threading.Thread(target=server.serve_forever, name="scdfe-c-writer-ipc", daemon=True)
         self._thread.start()
         return self
+
+    def stop_accepting(self) -> None:
+        """停机前先移除端点文件并停止接收新连接，保留活跃 handler 写出排空响应。"""
+        try:
+            self.endpoint.unlink(missing_ok=True)
+        except OSError:
+            pass
+        server = self._server
+        if server is not None:
+            try:
+                server.shutdown()
+            except Exception:
+                pass
 
     def close(self) -> None:
         server, thread = self._server, self._thread

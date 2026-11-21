@@ -46,16 +46,23 @@
 return `<tr><td>${esc(x.channel_id)} · ${esc(x.name)}</td><td>${esc(x.protocol)}</td><td>${esc(x.bind_host)}:${esc(x.bind_port)}</td><td><span class="status-badge ${isRunning ? "running" : isError ? "error" : ""}">${esc(state)}</span></td><td>${esc(runtime.connection_state || "未知")}</td><td>${esc(x.scan_interval_ms)} ms</td><td class="mono">${esc(counts)}</td><td>${esc(clock(runtime.process_heartbeat_time || x.process_heartbeat_time))}</td><td title="${esc(JSON.stringify(diagnostic))}"><span>${esc(diagnosticText)}</span><small class="cell-sub">${esc(error)}</small></td><td><a href="/connections?channel_id=${cid}">客户端连接</a> · <a href="/points.html?channel_id=${cid}">四遥数据</a> · <a href="/processes.html">进程</a> · <a href="/logs.html?channel_id=${cid}">日志报文</a></td></tr>`;
       }).join("") || '<tr><td colspan="10" class="muted">暂无转发通道，可前往“通道数据”新建。</td></tr>';
       if (lastMarkup !== markup) {
-        const body=$("#communication-rows"),keys=rows.map(x=>String(x.channel_id)).join(',');
-        const next=markup.match(/<tr\b[\s\S]*?<\/tr>/g)||[],cells=text=>text.match(/<td\b[\s\S]*?<\/td>/g)||[];
-        if(rows.length && keys===lastKeys && body.rows.length===rows.length){
-          next.forEach((row,i)=>{
-            if(row===lastRows[i])return;
-            const old=cells(lastRows[i]);
-            cells(row).forEach((cell,j)=>{if(cell!==old[j])body.rows[i].cells[j].outerHTML=cell});
-          });
-        }else body.innerHTML=markup;
-        lastKeys=keys;lastRows=next;
+        const body = $("#communication-rows"), keys = rows.map(x => String(x.channel_id)).join(',');
+        if (rows.length && keys === lastKeys && body.rows && body.rows.length === rows.length && typeof document.createElement === "function") {
+          const tpl = document.createElement("template");
+          tpl.innerHTML = "<table><tbody>" + markup + "</tbody></table>";
+          const nextRows = Array.from(tpl.content.querySelectorAll("tr"));
+          if (nextRows.length === rows.length) {
+            nextRows.forEach((nextRow, i) => {
+              const curRow = body.rows[i];
+              if (nextRow.outerHTML === curRow.outerHTML) return;
+              if (nextRow.cells.length !== curRow.cells.length) { curRow.replaceWith(nextRow); return; }
+              Array.from(nextRow.cells).forEach((nextCell, j) => {
+                if (nextCell.outerHTML !== curRow.cells[j].outerHTML) curRow.cells[j].replaceWith(nextCell);
+              });
+            });
+          } else body.innerHTML = markup;
+        } else body.innerHTML = markup;
+        lastKeys = keys;
         lastMarkup = markup;
       }
       $("#message").textContent = "";

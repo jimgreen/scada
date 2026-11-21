@@ -2,15 +2,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import threading
 from typing import Any, Iterable, Mapping
 
 
+def _parse_bool(value: Any) -> bool:
+    """安全解析布尔值，防止 'false'/'0' 等非空字符串被误判为 True。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if math.isfinite(float(value)):
+            return bool(value)
+        raise ValueError(f"布尔值不能为非有限数: {value!r}")
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on", "active"}:
+            return True
+        if text in {"0", "false", "no", "off", "inactive", ""}:
+            return False
+        raise ValueError(f"无效的布尔值字符串: {value!r}")
+    return bool(value)
+
+
 def coerce_value(kind: str, value: Any) -> Any:
     if kind in {"yx", "yk"}:
-        return bool(value)
+        return _parse_bool(value)
     if kind in {"yc", "yt"}:
-        return float(value)
+        if isinstance(value, bool):
+            return float(int(value))
+        num = float(value)
+        if not math.isfinite(num):
+            raise ValueError(f"{kind} 数值必须为有限浮点数: {value!r}")
+        return num
     raise ValueError("kind 必须是 yc、yx、yk 或 yt")
 
 

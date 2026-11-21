@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_modbus_rtu_define
-Chinese name: MODBUS-RTU通道参数定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_channel_modbus_rtu_define
+中文名：MODBUS-RTU通道参数定义表
 """
 
 from dataclasses import dataclass, field
@@ -22,15 +19,13 @@ class fes_channel_modbus_rtu_define:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
-
 
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
-
 
     serial_port: Optional[str] = field(
         default=None,
@@ -38,37 +33,37 @@ class fes_channel_modbus_rtu_define:
     )
 
     baudrate: Optional[int] = field(
-        default=None,
+        default=9600,
         metadata={'chn_name': '波特率', 'eng_name': 'baudrate', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 9600},
     )
 
     bytesize: Optional[int] = field(
-        default=None,
+        default=8,
         metadata={'chn_name': '数据位', 'eng_name': 'bytesize', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 8},
     )
 
     parity: Optional[str] = field(
-        default=None,
+        default='E',
         metadata={'chn_name': '校验方式', 'eng_name': 'parity', 'primary_key': False, 'data_type': 'str', 'disp_type': '单选菜单', 'disp_menu': 'MODBUS校验方式', 'default': 'E', 'allowed_values': ['N', 'E', 'O']},
     )
 
     stopbits: Optional[int] = field(
-        default=None,
+        default=1,
         metadata={'chn_name': '停止位', 'eng_name': 'stopbits', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 1},
     )
 
     unit_id: Optional[int] = field(
-        default=None,
+        default=1,
         metadata={'chn_name': '默认从站地址', 'eng_name': 'unit_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 1},
     )
 
     response_timeout: Optional[float] = field(
-        default=None,
+        default=3.0,
         metadata={'chn_name': '响应超时（秒）', 'eng_name': 'response_timeout', 'primary_key': False, 'data_type': 'float', 'disp_type': 'FLOAT', 'disp_menu': '', 'default': 3.0},
     )
 
     retry_count: Optional[int] = field(
-        default=None,
+        default=0,
         metadata={'chn_name': '重试次数', 'eng_name': 'retry_count', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 0},
     )
 

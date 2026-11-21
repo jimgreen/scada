@@ -975,6 +975,13 @@ function visibleColumns() {
 // visible HTML before reconcileBody compares it. The cache is invalidated by
 // visible-column changes and is never used as an API data cache.
 const tableRender = { head: null, rows: [], entries: [], columnsKey: null };
+function _parseRowCells(trMarkup) {
+  if (typeof document.createElement !== "function") return null;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = "<table><tbody>" + trMarkup + "</tbody></table>";
+  const tr = tpl.content?.querySelector("tr");
+  return tr ? Array.from(tr.cells) : null;
+}
 function reconcileBody(body, rows, cache, patchCells = false) {
   const changed = [];
   if (rows.length === cache.rows.length) {
@@ -983,25 +990,28 @@ function reconcileBody(body, rows, cache, patchCells = false) {
     });
   }
   let cells = null;
-  if (patchCells && changed.length && rows.length === cache.rows.length) {
-    // Monitoring rows have fixed <tr> markup and escaped cell text. Many rows
-    // may change only their heartbeat; avoid rebuilding all their controls.
+  if (patchCells && changed.length && rows.length === cache.rows.length && body.rows && body.rows.length === rows.length) {
+    // 使用原生 DOM 解析替换变化单元格，避免脆弱正则在嵌套内容下误切。
     const updates = [];
     let count = 0;
+    let valid = true;
     for (const index of changed) {
-      const previous = cache.rows[index].match(/<td\b[\s\S]*?<\/td>/g) || [];
-      const current = rows[index].match(/<td\b[\s\S]*?<\/td>/g) || [];
-      if (!current.length || current.length !== previous.length) break;
-      count += current.length;
-      current.forEach((markup, column) => {
-        if (markup !== previous[column]) updates.push([index, column, markup]);
+      const existingCells = Array.from(body.rows[index]?.cells || []);
+      const nextCells = _parseRowCells(rows[index]);
+      if (!nextCells || !nextCells.length || nextCells.length !== existingCells.length) {
+        valid = false;
+        break;
+      }
+      count += nextCells.length;
+      nextCells.forEach((cell, column) => {
+        const nextHtml = cell.outerHTML;
+        if (nextHtml !== existingCells[column].outerHTML) updates.push([index, column, cell]);
       });
-      if (index === changed[changed.length - 1] && updates.length <= count / 4)
-        cells = updates;
     }
+    if (valid && count > 0 && updates.length <= count / 4) cells = updates;
   }
   if (cells) {
-    for (const [row, column, markup] of cells) body.rows[row].cells[column].outerHTML = markup;
+    for (const [row, column, cell] of cells) body.rows[row].cells[column].replaceWith(cell);
   } else if (rows.length !== cache.rows.length || changed.length > rows.length / 4) {
     body.innerHTML = rows.join("");
   } else {
@@ -1265,7 +1275,9 @@ $("#table-body").ondblclick = (event) => {
   if (row && !event.target.closest("button")) openDetails(state.items[Number(row.dataset.row)]);
 };
 
+let editorRequest = 0;
 async function openEditor(row = null, options = {}) {
+  const req = ++editorRequest;
   const base = context();
   const ctx = {
     ...base,
@@ -1279,7 +1291,7 @@ async function openEditor(row = null, options = {}) {
   try {
     // Always edit the latest record. A later concurrent edit is protected by If-Match.
     if (row) row = (await api(ctx.fetchPath || pathFor(ctx, row))).item;
-    if (tableScope(base) !== tableScope(context())) return;
+    if (req !== editorRequest || tableScope(base) !== tableScope(context())) return;
     const columns =
       ctx.resource === "rtus" ? rtuEditorColumns(ctx.columns) : ctx.columns;
     state.editing = { ...ctx, columns, row };
@@ -1288,6 +1300,7 @@ async function openEditor(row = null, options = {}) {
       ctx.resource === "rtus" && CHANNEL_TYPE_OPTIONS.includes(initialChannelType)
         ? (await fetchChannelOptions(initialChannelType)) || []
         : [];
+    if (req !== editorRequest || tableScope(base) !== tableScope(context())) return;
     if (
       ctx.resource === "rtus" &&
       row?.channel_id != null &&
@@ -2141,11 +2154,13 @@ async function controlProcess(target, action, extra = {}) {
 }
 function openProcessLogs(name) {
   const select = $("#log-process");
-  // The compact C log page does not expose the process/file toolbar.  A
-  // process-row "日志" action therefore opens the complete runtime index;
-  // otherwise a hidden process value would make the page appear to contain
-  // only that process's files.
-  if (select) select.value = "";
+  const target = String(name || "").trim();
+  if (select) {
+    if (target && !Array.from(select.options).some((opt) => opt.value === target)) {
+      select.add(new Option(target, target));
+    }
+    select.value = target;
+  }
   logs.offset = 0;
   logs.selected = "";
   return changeResource("logs");
@@ -2622,10 +2637,19 @@ function logSearchParams(filename) {
   const start = $("#log-start"), end = $("#log-end");
   if (!start.validity.valid || !end.validity.valid) throw new Error("请输入完整且有效的起止时间");
   const date = /-(\d{4})(\d{2})(\d{2})-\d{2}\.log$/.exec(filename || "");
-  if ((start.value || end.value) && !date) throw new Error("请先选择日志文件");
-  const day = date ? `${date[1]}-${date[2]}-${date[3]}` : "";
-  const from = start.value ? new Date(day + "T" + start.value).getTime() : null;
-  const to = end.value ? new Date(day + "T" + end.value).getTime() + 999 : null;
+  const parseTime = (val, isEnd) => {
+    if (!val) return null;
+    if (val.includes("T")) {
+      const ms = new Date(val).getTime();
+      return Number.isFinite(ms) ? ms + (isEnd ? 999 : 0) : NaN;
+    }
+    if (!date) throw new Error("请先选择日志文件或输入完整日期时间");
+    const day = `${date[1]}-${date[2]}-${date[3]}`;
+    const ms = new Date(day + "T" + val).getTime();
+    return Number.isFinite(ms) ? ms + (isEnd ? 999 : 0) : NaN;
+  };
+  const from = parseTime(start.value, false);
+  const to = parseTime(end.value, true);
   if ((from !== null && !Number.isFinite(from)) || (to !== null && !Number.isFinite(to)))
     throw new Error("请输入有效的起止时间");
   if (from !== null && to !== null && from > to) throw new Error("开始时间不能晚于结束时间");
@@ -2764,10 +2788,13 @@ async function boot() {
   try {
     const commandContext = new URLSearchParams(location.search);
     const logRtu = commandContext.get("log_rtu");
+    const logChannel = commandContext.get("log_channel");
     if (location.hash === "#logs" && /^[1-9]\d*$/.test(logRtu || "")) {
       $("#log-process").add(new Option("RTU " + logRtu, "rtu:" + logRtu));
       $("#log-process").value = "rtu:" + logRtu;
       $("#log-search").value = (commandContext.get("log_query") || "").slice(0, 120);
+    } else if (location.hash === "#logs" && /^[1-9]\d*$/.test(logChannel || "")) {
+      if ($("#log-channel")) $("#log-channel").value = logChannel;
     }
     const [, { items }] = await Promise.all([api("/api/health"), api("/api/schemas")]);
     items.forEach((schema) => state.schemas.set(schema.head.eng_name, schema));

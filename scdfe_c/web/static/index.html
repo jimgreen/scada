@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="minimalist-light">
   <head>
     <script src="/static/audit-client.js"></script>
     <meta charset="utf-8" />
@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/static/app.css" />
     <link rel="stylesheet" href="/static/log-browser.css" />
     <link rel="stylesheet" href="/static/point-trend.css" />
+    <link rel="stylesheet" href="/static/ui-theme.css" />
+    <script defer src="/static/ui-i18n.js"></script>
     <script defer src="/static/layout-resizer.js"></script>
   </head>
   <body>
@@ -31,21 +33,21 @@
       <aside class="sidebar">
         <div class="side-title">运行管理</div>
         <button class="nav" data-resource="processes">
-          <span>▤</span><b>进程监控</b>
+          <span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r=".8"/><circle cx="7" cy="17" r=".8"/></svg></span><b>进程监控</b>
         </button>
         <button class="nav" data-resource="scdfe">
-          <span>◉</span><b>通信监控</b>
+          <span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8m12.8 0a9 9 0 0 1 0 12.8M8.5 15.5a5 5 0 0 1 0-7m7 0a5 5 0 0 1 0 7"/></svg></span><b>通信监控</b>
         </button>
         <button class="nav" data-resource="logs">
-          <span>≡</span><b>运行日志</b>
+          <span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><b>运行日志</b>
         </button>
-        <a class="nav" href="/soe"><span aria-hidden="true">◷</span><b>SOE 事件</b></a>
-        <a class="nav" href="/diagnostics"><span aria-hidden="true">◴</span><b>运行诊断</b></a>
-        <a class="nav" href="/command-traces"><span aria-hidden="true">↗</span><b>指令追踪</b></a>
-        <a class="nav" href="/point-trends"><span aria-hidden="true">∿</span><b>采样管理</b></a>
+        <a class="nav" href="/soe"><span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><b>SOE 事件</b></a>
+        <a class="nav" href="/diagnostics"><span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></span><b>运行诊断</b></a>
+        <a class="nav" href="/command-traces"><span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></svg></span><b>指令追踪</b></a>
+        <a class="nav" href="/point-trends"><span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M3 17 8 11l4 4 5-7 4 4"/></svg></span><b>采样管理</b></a>
         <div class="side-title">数据与定义</div>
         <details class="nav-branch" id="data-directory">
-          <summary class="nav"><span aria-hidden="true">▦</span><b>数据与定义</b></summary>
+          <summary class="nav"><span aria-hidden="true"><svg class="ui-nav-icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span><b>数据与定义</b></summary>
           <nav class="nav-children" id="data-tabs" aria-label="数据与定义子目录">
             <button class="nav" type="button" data-tab-resource="channels">通道定义</button>
             <button class="nav" type="button" data-tab-resource="rtus">RTU 定义</button>
@@ -265,7 +267,7 @@
                   <option value="file">当前文件</option>
                   <option value="all">全部匹配文件</option>
                 </select></label>
-                <label>当前目录<select id="log-record" aria-label="当前日志目录">
+                <label hidden>当前目录<select id="log-record" aria-label="当前日志目录">
                   <option value="runtime">运行日志</option>
                   <option value="packet">报文日志</option>
                 </select></label>
@@ -284,8 +286,8 @@
                 <label class="lb-keyword">关键字<input id="log-search" type="search" placeholder="协议、HEX 或日志内容" maxlength="256" aria-label="日志关键词"></label>
               </div>
               <div class="lb-reader-tools lb-time-tools" id="log-filter-tools-2">
-                <label for="log-start">开始 <input id="log-start" type="time" step="1" /></label>
-                <label for="log-end">结束 <input id="log-end" type="time" step="1" /></label>
+                <label for="log-start">开始 <input id="log-start" type="datetime-local" step="1" /></label>
+                <label for="log-end">结束 <input id="log-end" type="datetime-local" step="1" /></label>
                 <button id="log-apply">筛选</button>
                 <button id="log-content-clear">清除筛选</button>
                 <label>每批<select id="log-tail" aria-label="读取日志行数">

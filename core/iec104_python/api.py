@@ -3,6 +3,7 @@ from collections import deque
 from datetime import datetime, timezone
 import errno
 import logging
+import math
 import socket
 import threading
 import time
@@ -57,6 +58,18 @@ class Point:
     @info.setter
     def info(self, value):
         if not isinstance(value,Information): raise TypeError('info 必须是 Information')
+        base=self._base_type
+        val=value.value
+        if base in (1, 45) and not isinstance(val, bool):
+            raise TypeError(f'IEC104 单点类型 {base} 要求 bool 值，实际收到 {type(val).__name__}')
+        if base==3 and not isinstance(val, Double):
+            raise TypeError(f'IEC104 双点遥信要求 Double 值，实际收到 {type(val).__name__}')
+        if base==46:
+            if not isinstance(val, Double) or val not in (Double.OFF, Double.ON):
+                raise ValueError(f'IEC104 双点遥控仅允许 Double.OFF/Double.ON，实际收到 {val!r}')
+        if base in (13, 50):
+            if isinstance(val, bool) or not math.isfinite(float(val)):
+                raise ValueError(f'IEC104 短浮点类型 {base} 要求有限数值')
         if not self._is_timed:
             value=Information(value.value,value.quality,None,value.qualifier,value.transient)
         with self._lock: self._info=value
@@ -400,7 +413,7 @@ class Server:
                 self._reply(link,asdu,7);return
             if point.command_mode==CommandMode.SELECT_AND_EXECUTE and (not selected or selected[0]!=signature):
                 self._reply(link,asdu,7 if cot==6 else 9,negative=True);return
-            if message.is_select_command:
+            if message.is_select_command and cot!=8:
                 self._reply(link,asdu,9,negative=True);return
             old=point.info
             try: success=point._received(info,message)
@@ -417,7 +430,14 @@ class Server:
                 if point.related_io_autoreturn and point.related_io_address is not None:
                     related=station.get_point(point.related_io_address)
                     if related:
-                        related.value=point.value;related.transmit(Cot.SPONTANEOUS)
+                        src_val=point.value
+                        if related._base_type in (1, 3):
+                            from core.iec104_values import binary_command_value
+                            bit=bool(binary_command_value(src_val))
+                            related.value=(Double.ON if bit else Double.OFF) if related._base_type==3 else bit
+                        else:
+                            related.value=src_val
+                        related.transmit(Cot.SPONTANEOUS)
         else:
             self._reply(link,asdu,45)
 
@@ -451,6 +471,7 @@ class Connection:
         self._receive_raw=self._send_raw=self._state_callback=self._unexpected=None
         self._command_lock=threading.RLock();self._pending=None;self._pending_lock=threading.Lock()
         self.last_error=None;self._initial_generation=None
+        self._link_seq=0
         self._address_index=0
 
     @property
@@ -485,7 +506,9 @@ class Connection:
             pending={0,errno.EINPROGRESS,errno.EWOULDBLOCK,errno.EALREADY,10035}
             if code not in pending: raise OSError(code,'TCP 连接失败')
             self._state(ConnectionState.CLOSED_AWAIT_OPEN)
+            self._link_seq+=1
             self._link=Link(self.client._reactor,sock,self,connecting=code!=0)
+            self._link._seq=self._link_seq
             self.client._reactor.add(self._link)
         except OSError as exc:
             if sock: sock.close()
@@ -497,8 +520,9 @@ class Connection:
 
     def _active(self, link, active):
         self._state(ConnectionState.OPEN if active else ConnectionState.OPEN_MUTED)
-        if active and self.init not in (Init.NONE,Init.MUTED) and self._initial_generation!=id(link):
-            self._initial_generation=id(link)
+        link_token=getattr(link,'_seq',id(link))
+        if active and self.init not in (Init.NONE,Init.MUTED) and self._initial_generation!=link_token:
+            self._initial_generation=link_token
             threading.Thread(target=self._initialize,args=(link,),name='iec104-init',daemon=True).start()
 
     def _initialize(self, link):
@@ -518,8 +542,30 @@ class Connection:
         try: invoke(self._receive_raw if direction=='RX' else self._send_raw,self,frame)
         except Exception: LOG.exception('IEC104 client raw observer failed')
 
+    @staticmethod
+    def _pending_matches(frame, pending_asdu):
+        """匹配主站控制/对时/总召确认帧；对时(103)和测试(107)允许 RTU 回填实际时钟。"""
+        if len(frame) < 15 or len(pending_asdu) < 9:
+            return False
+        if frame[6:8] != pending_asdu[:2]:
+            return False
+        typ = pending_asdu[0]
+        if typ in (103, 107):
+            # 比对公共地址 CA 与信息体地址 IOA（跳过可能被 RTU 校准的时间戳与 OA 差异）
+            return frame[10:15] == pending_asdu[4:9]
+        return frame[9:] == pending_asdu[3:]
+
     def _asdu(self, link, frame):
-        message,rows=decode_asdu(frame[6:],frame)
+        asdu = frame[6:]
+        if len(asdu) >= 6 and asdu[0] not in Type._value2member_map_:
+            # 未支持的合法标准 ASDU 类型仅触发异常回调，不抛出异常导致断链重连死循环。
+            unknown_msg = IncomingMessage(
+                asdu[0], asdu[2] & 63, int.from_bytes(asdu[4:6], 'little'),
+                asdu[3], bool(asdu[2] & 64), False, frame,
+            )
+            invoke(self._unexpected, self, unknown_msg, Umc.UNKNOWN_TYPE_ID)
+            return
+        message,rows=decode_asdu(asdu,frame)
         station=self.get_station(message.common_address)
         if station is None:
             invoke(self._unexpected,self,message,Umc.UNKNOWN_CA);return
@@ -540,7 +586,7 @@ class Connection:
                 if not point._received(info,message,received_at=received_at): return False
         with self._pending_lock:
             pending=self._pending
-            if pending and frame[6:8]==pending['asdu'][:2] and frame[9:]==pending['asdu'][3:]:
+            if pending and self._pending_matches(frame, pending['asdu']):
                 if int(message.cot)==pending['expected'] or message.is_negative or int(message.cot) in (44,45,46,47):
                     pending['ok']=int(message.cot)==pending['expected'] and not message.is_negative
                     pending['event'].set()

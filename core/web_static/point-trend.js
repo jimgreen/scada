@@ -4,13 +4,19 @@
 
   const LIMIT = 24;
   const SAMPLE_LIMIT = 7200;
+  const DAY = 86400000;
   const HISTORY_URL = '/api/point-trend/history';
-  const COLORS = ['#057f8c', '#9e4831', '#4754af', '#7d53a2', '#2b754d', '#a96314', '#b04470', '#416b90'];
+  // scientific-dashboard.md 色盲友好序列配色（浅色 / 暗黑）
+  const LIGHT_COLORS = ['#2563EB', '#D97706', '#0D9488', '#DC2626', '#7C3AED', '#64748B', '#0891B2', '#DB2777'];
+  const DARK_COLORS = ['#38BDF8', '#FBBF24', '#34D399', '#FB7185', '#A78BFA', '#94A3B8', '#22D3EE', '#F472B6'];
+  const COLORS = LIGHT_COLORS;
   const TIME_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400];
   const FULL_TIME = new Intl.DateTimeFormat(undefined, {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const TIME = new Intl.DateTimeFormat(undefined, {hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const AXIS_NAMES = {left:'左轴', right:'右轴'};
-  const AXIS_COLORS = {left:'#226270', right:'#87503a'};
+  const isDarkTheme = () => document.documentElement.dataset.theme === 'precision-dark';
+  const themeAxisColors = () => isDarkTheme() ? {left:'#38BDF8', right:'#FBBF24'} : {left:'#2563EB', right:'#D97706'};
+  const AXIS_COLORS = {left:'#2563EB', right:'#D97706'};
   let nextMount = 0;
 
   function make(tag, attributes = {}) {
@@ -169,9 +175,17 @@
     const fromLabel = label('开始', from);
     const untilLabel = label('结束', until);
     fromLabel.hidden = untilLabel.hidden = true;
+    const zoomInBtn = make('button', {type:'button', title:'放大时间窗口'});
+    zoomInBtn.textContent = '放大';
+    const zoomOutBtn = make('button', {type:'button', title:'缩小时间窗口'});
+    zoomOutBtn.textContent = '缩小';
+    const resetZoomBtn = make('button', {type:'button', title:'重置为跟随当前 10 分钟窗口'});
+    resetZoomBtn.textContent = '重置';
+    const exportCsvBtn = make('button', {type:'button', title:'导出当前时段采样数据为 CSV'});
+    exportCsvBtn.textContent = '导出 CSV';
     toolbar.append(label('刷新周期（秒）', interval));
     if (!management) toolbar.append(label('后台保留（分钟）', retention));
-    toolbar.append(label('时间区间', mode), span, alignmentLabel, fromLabel, untilLabel);
+    toolbar.append(label('时间区间', mode), span, alignmentLabel, fromLabel, untilLabel, zoomInBtn, zoomOutBtn, resetZoomBtn, exportCsvBtn);
     const axes = {left:makeAxis('left'), right:makeAxis('right')};
     axesPanel.querySelector('div').append(axes.left.section, axes.right.section);
 
@@ -251,7 +265,12 @@
       }
       context.setTransform(scale, 0, 0, scale, 0, 0);
       context.clearRect(0, 0, width, height);
-      context.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+      const dark = isDarkTheme();
+      const gridColor = dark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0';
+      const axisLineColor = dark ? 'rgba(148, 163, 184, 0.35)' : '#CBD5E1';
+      const tickTextColor = dark ? '#94A3B8' : '#64748B';
+      const axisPalette = themeAxisColors();
+      context.font = '11px "JetBrains Mono", "Segoe UI", "Roboto", "Microsoft YaHei", sans-serif';
       const domains = {}, units = {}, errors = [];
       for (const [side, control] of Object.entries(axes)) {
         let low = Infinity, high = -Infinity;
@@ -277,39 +296,41 @@
       const x = time => left + (right - left) * (time - start) / (end - start);
       const y = (value, domain) => bottom - (bottom - top) * (value - domain.low) / (domain.high - domain.low);
       const gridSide = axes.left.show.checked ? 'left' : 'right';
-      const tickTarget = (end - start) / Math.max(2, Math.floor((right - left) / 108));
-      const tickStep = (TIME_STEPS.find(seconds => seconds * 1000 >= tickTarget)
-        || Math.ceil(tickTarget / DAY) * DAY / 1000) * 1000;
+      const tickTarget = Math.max(1000, (end - start) / Math.max(2, Math.floor((right - left) / 108)));
+      const tickStep = Math.max(1000, (TIME_STEPS.find(seconds => seconds * 1000 >= tickTarget)
+        || Math.max(1, Math.ceil(tickTarget / DAY)) * DAY / 1000) * 1000);
       const clock = end - start >= 3600000 || new Date(start).toDateString() !== new Date(end).toDateString() ? FULL_TIME : TIME;
-      const grid = (x1, y1, x2, y2, color = '#e1e9ef') => {
+      const grid = (x1, y1, x2, y2, color = gridColor, dashed = false) => {
         context.strokeStyle = color;
         context.lineWidth = 1;
+        context.setLineDash(dashed ? [3, 3] : []);
         context.beginPath();
         context.moveTo(x1, y1);
         context.lineTo(x2, y2);
         context.stroke();
+        if (dashed) context.setLineDash([]);
       };
       context.textBaseline = 'middle';
       context.textAlign = 'center';
       for (let time = Math.ceil(start / tickStep) * tickStep; time <= end; time += tickStep) {
         const tickX = x(time);
-        grid(tickX, top, tickX, bottom);
-        context.fillStyle = '#546b7c';
+        grid(tickX, bottom, tickX, bottom + 4, axisLineColor);
+        context.fillStyle = tickTextColor;
         const maxTickLabel = Math.min(110, 2 * Math.min(tickX - 2, width - tickX - 2));
-        context.fillText(clock.format(time), tickX, bottom + 13, maxTickLabel);
+        context.fillText(clock.format(time), tickX, bottom + 14, maxTickLabel);
       }
-      grid(left, bottom, right, bottom, '#a2b5c3');
+      grid(left, bottom, right, bottom, axisLineColor);
       for (const [side, control] of Object.entries(axes)) {
         if (!control.show.checked) continue;
         const isLeft = side === 'left', edge = isLeft ? left : right;
-        const color = AXIS_COLORS[side];
+        const color = axisPalette[side];
         grid(edge, top, edge, bottom, color);
         context.fillStyle = color;
         context.textAlign = isLeft ? 'right' : 'left';
         let lastLabelY = Infinity;
         for (const tick of domains[side].ticks) {
           const tickY = y(tick, domains[side]);
-          if (side === gridSide) grid(left, tickY, right, tickY);
+          if (side === gridSide) grid(left, tickY, right, tickY, gridColor, true);
           grid(edge, tickY, edge + (isLeft ? -4 : 4), tickY, color);
           if (lastLabelY - tickY >= 13) {
             context.fillText(formatValue(tick), edge + (isLeft ? -8 : 8), tickY, margin(side) - 11);
@@ -317,7 +338,8 @@
           }
         }
         context.textAlign = isLeft ? 'left' : 'right';
-        context.fillText(AXIS_NAMES[side] + (units[side] ? ' · ' + units[side] : ''), isLeft ? 7 : width - 7, 10, width / 2 - 8);
+        const axisLabel = window.scadaI18n?.t(AXIS_NAMES[side], AXIS_NAMES[side]) || AXIS_NAMES[side];
+        context.fillText(axisLabel + (units[side] ? ' (' + units[side] + ')' : ''), isLeft ? 7 : width - 7, 10, width / 2 - 8);
       }
       context.save();
       context.beginPath();
@@ -325,7 +347,12 @@
       context.clip();
       for (const {item, data} of datasets) {
         const domain = domains[item.axis.value];
+        const expectedStep = data.length > 2
+          ? Math.max(refreshMs, (end - start) / Math.max(1, data.length - 1))
+          : refreshMs;
+        const gapMs = Math.max(refreshMs * 3, expectedStep * 3, 5000);
         context.strokeStyle = item.color.value;
+        context.fillStyle = item.color.value;
         context.lineWidth = item.thickness;
         context.lineJoin = 'round';
         context.lineCap = 'round';
@@ -333,7 +360,13 @@
           let previous = null, connected = false;
           context.setLineDash(invalid ? [5, 4] : []);
           context.beginPath();
-          for (const point of data) {
+          for (let i = 0; i < data.length; i++) {
+            const point = data[i];
+            const gapped = previous !== null && (point.time - previous.time > gapMs);
+            if (gapped) {
+              previous = null;
+              connected = false;
+            }
             const drawSegment = point.value !== null && (point.invalid || !!previous?.invalid) === invalid;
             if (drawSegment) {
               const pointX = x(point.time), pointY = y(point.value, domain);
@@ -346,6 +379,21 @@
             previous = point.value === null ? null : point;
           }
           context.stroke();
+        }
+        // 为孤立单点绘制清晰圆点，避免 0.1px 线段不可见。
+        context.setLineDash([]);
+        for (let i = 0; i < data.length; i++) {
+          const point = data[i];
+          if (point.value === null) continue;
+          const prev = i > 0 ? data[i - 1] : null;
+          const next = i + 1 < data.length ? data[i + 1] : null;
+          const leftDisconnected = !prev || prev.value === null || (point.time - prev.time > gapMs);
+          const rightDisconnected = !next || next.value === null || (next.time - point.time > gapMs);
+          if (leftDisconnected && rightDisconnected) {
+            context.beginPath();
+            context.arc(x(point.time), y(point.value, domain), Math.max(2.5, item.thickness), 0, Math.PI * 2);
+            context.fill();
+          }
         }
       }
       context.restore();
@@ -402,7 +450,8 @@
 
     function appendSample(item, time, value, quality, sourceTime) {
       if (item.samples.at(-1)?.time >= time) return;
-      item.samples.push({time, value, quality, sourceTime, invalid:!!((quality ?? 0) & 128)});
+      const badQuality = quality !== null && quality !== undefined && Number(quality) !== 0;
+      item.samples.push({time, value, quality, sourceTime, invalid: badQuality});
       const firstRetained = item.samples.findIndex(point => point.time >= time - retentionMs);
       const discard = Math.max(item.samples.length - SAMPLE_LIMIT, firstRetained);
       if (discard > 0) item.samples.splice(0, discard);
@@ -473,6 +522,15 @@
       }
     }
 
+    function dataSignature(settings) {
+      if (!settings) return '';
+      return JSON.stringify({
+        interval: settings.interval_seconds,
+        retention: settings.retention_seconds,
+        points: (settings.series || []).map(entry => pointKey(entry.point)),
+      });
+    }
+
     function confirmSettings({settings, revision}) {
       serverSettings = JSON.stringify(settings);
       serverRevision = typeof revision === 'string' ? revision : '';
@@ -509,7 +567,10 @@
       try {
         const result = await historyApi('?after_ms=' + after, {signal:AbortSignal.timeout(12000)});
         if (version !== settingsVersion) { nextDelay = 0; return; }
+        const prevDataSig = serverSettings ? dataSignature(JSON.parse(serverSettings)) : '';
+        const nextDataSig = dataSignature(result.settings);
         const settingsChangedOnServer = JSON.stringify(result.settings) !== serverSettings;
+        const dataChangedOnServer = nextDataSig !== prevDataSig;
         if (settingsChangedOnServer) {
           restoreSettings(result.settings);
           queuedSettings = JSON.stringify(currentSettings());
@@ -518,7 +579,8 @@
         fetchError = '';
         ready = true;
         syncCheckboxes();
-        if (settingsChangedOnServer && after) {
+        // 仅当采样周期、留存时长或测点集合真正变更时才重载全量样本，折叠/改颜色等纯视图变化不重拉。
+        if (dataChangedOnServer && after) {
           lastSample = 0;
           nextDelay = 0;
           return;
@@ -820,6 +882,60 @@
     }
 
     toolbar.addEventListener('change', event => toolbarChanged(event.target));
+    function zoomWindow(factor) {
+      if (mode.value === 'fixed') {
+        const cur = timeRange();
+        const mid = (cur.start + cur.end) / 2;
+        const nextSpan = Math.min(1440 * 60000, Math.max(10000, (cur.end - cur.start) * factor));
+        const nextStart = Math.round(mid - nextSpan / 2);
+        const nextEnd = Math.round(mid + nextSpan / 2);
+        fixed = {start:nextStart, end:nextEnd};
+        from.value = localTime(nextStart);
+        until.value = localTime(nextEnd);
+      } else {
+        const curMin = Math.max(1, Math.min(1440, Math.round((duration / 60000) * factor)));
+        length.value = curMin;
+      }
+      toolbarChanged(length);
+    }
+    zoomInBtn.addEventListener('click', () => zoomWindow(0.5));
+    zoomOutBtn.addEventListener('click', () => zoomWindow(2));
+    resetZoomBtn.addEventListener('click', () => {
+      mode.value = 'rolling';
+      length.value = 10;
+      fixed = null;
+      toolbarChanged(mode);
+    });
+    chart.addEventListener('wheel', event => {
+      if (!canDraw() || !series.size) return;
+      event.preventDefault();
+      zoomWindow(event.deltaY < 0 ? 0.8 : 1.25);
+    }, {passive:false});
+    exportCsvBtn.addEventListener('click', () => {
+      const {start, end} = timeRange();
+      const visible = [...series.values()].filter(item => item.visible.checked);
+      const csvEscape = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+      const lines = ['时间,毫秒时间戳,测点,数值,品质'];
+      for (const item of visible) {
+        for (const pt of item.samples) {
+          if (pt.time < start || pt.time > end) continue;
+          lines.push([
+            csvEscape(new Date(pt.time).toISOString()),
+            pt.time,
+            csvEscape(item.name),
+            pt.value ?? '',
+            pt.quality ?? '',
+          ].join(','));
+        }
+      }
+      const blob = new Blob(['\ufeff', lines.join('\r\n') + '\r\n'], {type:'text/csv;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `scada-trend-${Date.now()}.csv`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     for (const control of Object.values(axes)) {
       control.section.addEventListener('change', () => {
         control.min.disabled = control.max.disabled = control.mode.value !== 'manual';
@@ -847,6 +963,8 @@
     panel.addEventListener('toggle', () => { updateActivity(); if (!management) saveSettings(); });
     if (!management) axesPanel.addEventListener('toggle', saveSettings);
     document.addEventListener('visibilitychange', refreshAfterResume);
+    document.addEventListener('scada:theme-change', scheduleDraw);
+    document.addEventListener('scada:lang-change', scheduleDraw);
     window.addEventListener('pagehide', () => { pageHidden = true; updateActivity(); });
     window.addEventListener('pageshow', () => { pageHidden = false; refreshAfterResume(); });
     const resizeObserver = new ResizeObserver(updateActivity);

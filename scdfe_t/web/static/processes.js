@@ -8,11 +8,24 @@ function badge(x){const s=Number(x.process_status||0);return `<span class="statu
 let pending=null,previousHtml=null;
 function renderProcessTable(html){
   if(html===previousHtml)return;
-  const body=$("#processes"),cells=text=>text?.match(/<td\b[\s\S]*?<\/td>/g)||[];
-  const previous=previousHtml?.match(/<tr\b[\s\S]*?<\/tr>/g)||[],rows=html.match(/<tr\b[\s\S]*?<\/tr>/g)||[];
-  if(rows.length&&rows.length===previous.length&&rows.every((row,i)=>cells(row).length===cells(previous[i]).length)){
-    rows.forEach((row,i)=>{if(row===previous[i])return;const old=cells(previous[i]);cells(row).forEach((cell,column)=>{if(cell!==old[column])body.rows[i].cells[column].outerHTML=cell})});
-  }else body.innerHTML=html;
+  const body=$("#processes");
+  if(body && body.rows && typeof document.createElement==="function"){
+    const tpl=document.createElement("template");
+    tpl.innerHTML="<table><tbody>"+html+"</tbody></table>";
+    const nextRows=Array.from(tpl.content.querySelectorAll("tr"));
+    if(nextRows.length && nextRows.length===body.rows.length && nextRows.every((r,i)=>r.cells.length===body.rows[i].cells.length)){
+      nextRows.forEach((nextRow,i)=>{
+        const curRow=body.rows[i];
+        if(nextRow.outerHTML===curRow.outerHTML)return;
+        Array.from(nextRow.cells).forEach((nextCell,column)=>{
+          if(nextCell.outerHTML!==curRow.cells[column].outerHTML)curRow.cells[column].replaceWith(nextCell);
+        });
+      });
+      previousHtml=html;
+      return;
+    }
+  }
+  if(body)body.innerHTML=html;
   previousHtml=html;
 }
 function load({fresh=false}={}){

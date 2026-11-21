@@ -478,24 +478,31 @@ class ProtocolService:
     @traced_lifecycle
     def stop(self):
         from .lifecycle import stop_cause
+        stop_error = None
         with self._lock:
             engine = self._engine
-            if engine is not None:
-                detail = (f'停止原因={stop_cause()}；RTU编号={self._bound_rtu_id} '
-                          f'通道编号={self._file_log.channel_id}')
-                self._record('INFO', f'{self.LABEL} 服务开始停止 {detail}')
-                try:
-                    self._stop_engine(engine)
-                except Exception as exc:
-                    self._last_error = str(exc)
-                    self._record("ERROR", f"{self.LABEL} 服务停止失败: {exc}；{detail}", alert=True)
-                    raise ProtocolServiceError(str(exc)) from exc
-                self._record("INFO", f"{self.LABEL} 服务已停止 {detail}")
-            self._engine = None
-            self._binding_active = False
-            self._stopped_at = _now_ms()
-            self._file_log.end_session()
-            return self.status()
+            try:
+                if engine is not None:
+                    detail = (f'停止原因={stop_cause()}；RTU编号={self._bound_rtu_id} '
+                              f'通道编号={self._file_log.channel_id}')
+                    self._record('INFO', f'{self.LABEL} 服务开始停止 {detail}')
+                    try:
+                        self._stop_engine(engine)
+                    except Exception as exc:
+                        self._last_error = str(exc)
+                        self._record("ERROR", f"{self.LABEL} 服务停止失败: {exc}；{detail}", alert=True)
+                        stop_error = ProtocolServiceError(str(exc))
+                    else:
+                        self._record("INFO", f"{self.LABEL} 服务已停止 {detail}")
+            finally:
+                self._engine = None
+                self._binding_active = False
+                self._stopped_at = _now_ms()
+                self._file_log.end_session()
+            status = self.status()
+        if stop_error is not None:
+            raise stop_error
+        return status
 
     def _stop_engine(self, engine):
         engine.close()
@@ -1212,10 +1219,11 @@ class CanServerService(StandaloneServerService):
                    frame_definitions=load_frame_definitions(self.store, self._configured_rtu()))
 
     def send_frame(self, arbitration_id, data, *, extended=None):
-        if not self.running:
-            raise ProtocolServiceError("CAN 服务端未启动")
-        return self._engine.send_frame(arbitration_id, data, is_extended_id=extended,
-                                       bitrate_switch=bool(self.config().get("bitrate_switch", 0)))
+        with self._lock:
+            if not self.running or self._engine is None:
+                raise ProtocolServiceError("CAN 服务端未启动")
+            return self._engine.send_frame(arbitration_id, data, is_extended_id=extended,
+                                           bitrate_switch=bool(self.config().get("bitrate_switch", 0)))
 
 
 class OpcServerService(StandaloneServerService):

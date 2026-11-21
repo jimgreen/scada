@@ -107,6 +107,12 @@
     if(version!==epoch) return;
     const row=result.item;
     warnings(result);
+    const logLink=$('open-logs');
+    if(logLink && row.channel_id!=null) {
+      const base=result.component==='t'?'/logs.html':'/logs';
+      logLink.href=`${base}?channel_id=${encodeURIComponent(row.channel_id)}`;
+      logLink.hidden=false;
+    }
     const fields={'连接编号':row.id,'通道 / RTU 名称':row.display_name,'关联编号':`通道 ${row.channel_id??'—'}${row.rtu_id!=null?` / RTU ${row.rtu_id}`:''}`,'服务 / 规约':`${row.service} / ${row.protocol}`,'客户端 IP：源端口':row.peer,'服务监听地址':row.local,'状态':state(row),'接入时间':stamp(row.opened),'断开时间':stamp(row.closed),'最近交互':stamp(row.updated),'收 / 发报文':`${row.rx_count} / ${row.tx_count}`,'收 / 发字节':`${row.rx_bytes} / ${row.tx_bytes} B`,'保留范围':result.retention};
     const markup=Object.entries(fields).map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
     if(markup!==summaryMarkup) { $('summary').innerHTML=markup;summaryMarkup=markup; }

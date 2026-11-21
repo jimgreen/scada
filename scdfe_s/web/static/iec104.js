@@ -14,12 +14,36 @@
     $("#message").textContent = text || "";
     $("#message").className = "message" + (error ? " error" : "");
   }
+  const PAGE_SIZE = 200;
   let allPoints = [], pointByKey = new Map(), editingPoint = null;
+  let pointPage = 0, renderedKeys = [], renderedSnapshot = [];
   let activeKind = document.querySelector("[data-iec-point-tab][aria-selected='true']")?.dataset.iecPointTab || "yc";
   function pointBody() { return document.querySelector(`[data-iec-point-panel="${activeKind}"] tbody`) || $("#points"); }
   const pointKey = (kind, pointNo) => `${kind}:${String(pointNo)}`;
+  function ensurePager(body) {
+    const table = body?.closest("table");
+    if (!table || !table.parentElement) return null;
+    let pager = table.parentElement.querySelector(".iec104-pager");
+    if (!pager) {
+      pager = document.createElement("div");
+      pager.className = "iec104-pager";
+      pager.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;";
+      pager.innerHTML = '<button type="button" data-iec-page="prev">上一页</button><span data-iec-page-info></span><button type="button" data-iec-page="next">下一页</button>';
+      pager.addEventListener("click", ev => {
+        const btn = ev.target.closest("button[data-iec-page]");
+        if (!btn || btn.disabled) return;
+        pointPage = Math.max(0, pointPage + (btn.dataset.iecPage === "next" ? 1 : -1));
+        renderedKeys = [];
+        renderPoints(allPoints);
+      });
+      table.parentElement.append(pager);
+    }
+    return pager;
+  }
   function setPointTab(kind) {
     activeKind = ["yc", "yx", "yk", "yt"].includes(kind) ? kind : "yc";
+    pointPage = 0;
+    renderedKeys = [];
     document.querySelectorAll("[data-iec-point-tab]").forEach(tab => {
       const active = tab.dataset.iecPointTab === activeKind;
       tab.setAttribute("aria-selected", active ? "true" : "false");
@@ -34,27 +58,56 @@
     const body = pointBody();
     if (!body) return;
     const points = allPoints.filter(point => point.kind === activeKind);
-    if (!points.length) {
+    const totalPages = Math.max(1, Math.ceil(points.length / PAGE_SIZE));
+    if (pointPage >= totalPages) pointPage = totalPages - 1;
+    const slice = points.slice(pointPage * PAGE_SIZE, (pointPage + 1) * PAGE_SIZE);
+    const pager = ensurePager(body);
+    if (pager) {
+      pager.hidden = points.length <= PAGE_SIZE;
+      pager.querySelector("[data-iec-page='prev']").disabled = pointPage <= 0;
+      pager.querySelector("[data-iec-page='next']").disabled = pointPage + 1 >= totalPages;
+      pager.querySelector("[data-iec-page-info]").textContent = `第 ${pointPage + 1} / ${totalPages} 页 · 共 ${points.length} 点`;
+    }
+    if (!slice.length) {
+      renderedKeys = [];
+      renderedSnapshot = [];
       body.innerHTML = '<tr><td colspan="7">暂无点</td></tr>';
       return;
     }
+    const keys = slice.map(p => pointKey(p.kind, p.pnt_no));
+    const snap = slice.map(p => [p.kind, p.pnt_no, p.io_address ?? "—", p.type_id ?? "—", p.value, p.status].map(v => String(v ?? "")));
+    const stable = keys.length === renderedKeys.length && body.rows && body.rows.length === keys.length
+      && keys.every((k, i) => k === renderedKeys[i]);
+    if (stable) {
+      for (let i = 0; i < snap.length; i++) {
+        const prev = renderedSnapshot[i] || [];
+        for (let c = 0; c < 6; c++) {
+          if (snap[i][c] !== prev[c]) body.rows[i].cells[c].textContent = snap[i][c];
+        }
+      }
+      renderedSnapshot = snap;
+      return;
+    }
     const fragment = document.createDocumentFragment();
-    for (const point of points) {
+    for (let i = 0; i < slice.length; i++) {
+      const point = slice[i];
       const tr = document.createElement("tr");
       tr.dataset.pointKind = point.kind;
       tr.dataset.pointNo = String(point.pnt_no);
-      for (const value of [point.kind, point.pnt_no, point.io_address ?? "—", point.type_id ?? "—", point.value, point.status]) {
-        tr.insertCell().textContent = String(value ?? "");
+      for (const value of snap[i]) {
+        tr.insertCell().textContent = value;
       }
       const action = tr.insertCell();
       const button = document.createElement("button");
       button.type = "button";
-      button.dataset.pointEdit = pointKey(point.kind, point.pnt_no);
+      button.dataset.pointEdit = keys[i];
       button.textContent = "编辑";
       action.append(button);
       fragment.append(tr);
     }
     body.replaceChildren(fragment);
+    renderedKeys = keys;
+    renderedSnapshot = snap;
   }
   function openPointEditor(point) {
     if (!point) return;

@@ -7,10 +7,12 @@ records packets, and operators change the policy through the channel editor.
 from functools import lru_cache
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 import threading
 import time
+from uuid import uuid4
 
 _COMPAT_LOCK_GUARD = threading.Lock()
 _COMPAT_LOCKS = {}
@@ -83,9 +85,24 @@ class DatabasePacketLogSwitch:
 
     def _write_legacy_policy(self, payload):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(self.path.name + ".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.{uuid4().hex[:8]}.tmp")
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+        try:
+            temporary.write_text(content, encoding="utf-8")
+            # Windows 上其他进程同时读文件时 replace 可能瞬态触发 PermissionError，做短暂退避重试。
+            for attempt in range(5):
+                try:
+                    temporary.replace(self.path)
+                    return
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def _channel_key(channel_id):
@@ -124,11 +141,17 @@ class DatabasePacketLogSwitch:
     def _refresh_bulk_locked(self, now):
         db_rows = self._read_all()
         legacy = self._safe_legacy_policy()
-        self._db_rows = db_rows if db_rows is not None else {}
+        if db_rows is not None:
+            self._db_rows = db_rows
+            self._bulk_next_check = now + 1.0
+        else:
+            # SQLite 瞬态锁冲突时保留上次成功缓存，严禁清空为 {} 导致静默丢报文。
+            if self._db_rows is None:
+                self._db_rows = {}
+            self._bulk_next_check = now + 0.5
         self._legacy_cache = legacy
         self._cache.clear()
         self._next_check.clear()
-        self._bulk_next_check = now + 1.0
 
     def _resolve_locked(self, key):
         if key is not None and self._db_rows is not None:
@@ -166,9 +189,10 @@ class DatabasePacketLogSwitch:
                 ).fetchall()
         except (OSError, sqlite3.Error):
             rows = []
-        values = {str(int(channel_id)): bool(value) for channel_id, value in rows if value is not None}
         legacy = self._safe_legacy_policy()
-        values.update(legacy["channels"])
+        # 与 _resolve_locked 保持一致：数据库非空配置优先覆盖兼容 sidecar 中的旧值。
+        values = dict(legacy["channels"])
+        values.update({str(int(channel_id)): bool(value) for channel_id, value in rows if value is not None})
         return {"enabled": bool(legacy["enabled"]), "channels": values,
                 "source": "channel_parameter"}
 
@@ -243,7 +267,11 @@ class DatabasePacketLogSwitch:
                     legacy["channels"][str(key)] = enabled
                 self._write_legacy_policy(legacy)
             else:
-                legacy["channels"].pop(str(key), None)
+                if legacy["channels"].pop(str(key), None) is not None and self.path.is_file():
+                    try:
+                        self._write_legacy_policy(legacy)
+                    except OSError:
+                        pass
             if self._db_rows is not None:
                 if persisted:
                     self._db_rows[key] = enabled
@@ -272,7 +300,7 @@ class PacketLogSwitch(DatabasePacketLogSwitch):
             if enabled is not None and type(enabled) is not bool:
                 raise ValueError("enabled 必须为布尔值或 null")
             key = self._channel_key(channel_id)
-            with self._lock:
+            with _compat_lock(self.path), self._lock:
                 payload = self._legacy_policy()
                 if enabled is None:
                     payload["channels"].pop(str(key), None)

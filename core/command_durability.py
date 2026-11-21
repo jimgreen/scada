@@ -13,10 +13,17 @@ def full_sync(connection, timings=None):
     try:
         yield connection
     finally:
-        with phase(timings,'cleanup_ms'):
-            if connection.in_transaction:
-                connection.rollback()
-            connection.execute(f'PRAGMA synchronous={int(previous)}')
+        with phase(timings, 'cleanup_ms'):
+            try:
+                if connection.in_transaction:
+                    connection.rollback()
+                connection.execute(f'PRAGMA synchronous={int(previous)}')
+            except Exception:
+                # 恢复 PRAGMA 失败时关闭损坏连接防止污染连接池，但不覆盖业务原始异常。
+                try:
+                    connection.close()
+                except Exception:
+                    pass
 
 
 @contextmanager

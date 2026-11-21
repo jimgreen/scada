@@ -302,7 +302,7 @@ class CanMaster(_CanTransport):
         self.rtu_id = rtu_id
         self._receive_lock = threading.RLock()
         self._send_lock = threading.RLock()
-        self._pending = deque()
+        self._pending = deque(maxlen=4096)
         self._frame_schedule = None
         self._points: list[dict] = []
         self._point_index: dict[tuple[str, int], dict] = {}
@@ -586,13 +586,19 @@ class CanMaster(_CanTransport):
             return result
 
     def close(self):
+        stop_error = None
         if self._frame_schedule is not None:
-            self._frame_schedule.stop()
+            try:
+                self._frame_schedule.stop()
+            except Exception as exc:
+                stop_error = exc
         with self._receive_lock, self._send_lock:
             try:
                 super().close()
             finally:
                 self._pending.clear()
+        if stop_error is not None:
+            raise stop_error
 
     def schedule_frames(self, **selection):
         if self._frame_schedule is None:
@@ -808,17 +814,34 @@ class CanMaster(_CanTransport):
             )
 
         if row['value_type'] == 'float' and not offset and bits in (32, 64):
+            raw_float = (float(value) - row['offset']) / row['scale']
+            if not math.isfinite(raw_float):
+                raise ValueError(f"CAN 浮点命令值非法（非有限数）: {value!r}")
             width = bits // 8
             encoded_bytes = struct.pack(
                 ('>' if order == 'big' else '<') + ('f' if bits == 32 else 'd'),
-                float(value),
+                raw_float,
             )
             payload[start:start + width] = encoded_bytes
             return send_payload(payload)
         if row['kind'] == 'yk':
             encoded = 1 if bool(value) else 0
         else:
-            encoded = int(round((float(value) - row['offset']) / row['scale']))
+            raw_num = float(value)
+            if not math.isfinite(raw_num):
+                raise ValueError(f"CAN 命令值非法（非有限数）: {value!r}")
+            scaled = (raw_num - row['offset']) / row['scale']
+            if not math.isfinite(scaled):
+                raise ValueError(f"CAN 命令换算值溢出: {value!r}")
+            encoded = int(round(scaled))
+            if row['value_type'] == 'int':
+                min_v, max_v = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+            else:
+                min_v, max_v = 0, (1 << bits) - 1
+            if not min_v <= encoded <= max_v:
+                raise ValueError(
+                    f"CAN 命令原始值 {encoded} 超出 {row['value_type']}[{bits}bit] 允许范围 [{min_v}, {max_v}]"
+                )
             if encoded < 0:
                 encoded &= (1 << bits) - 1
         current = int.from_bytes(payload[start:start + needed], order)

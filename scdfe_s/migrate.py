@@ -29,8 +29,19 @@ def copy_definitions(source, destination):
             with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as src, store.connection() as dst:
                 src.execute("BEGIN")
                 dst.execute("BEGIN IMMEDIATE")
-                tables = ["fes_rtu_define", *KIND_TABLES.values(),
-                          *(n for n in store.catalog.names() if n.startswith("fes_channel_"))]
+                _RUNTIME_ONLY_TABLES = frozenset({
+                    "fes_channel_runtime_status",
+                    "fes_channel_can_diagnostic",
+                })
+                tables = [
+                    "fes_rtu_define",
+                    *KIND_TABLES.values(),
+                    *(
+                        n
+                        for n in store.catalog.names()
+                        if n.startswith("fes_channel_") and n not in _RUNTIME_ONLY_TABLES
+                    ),
+                ]
                 if not {"rtu_id", "channel_id", "channel_type"} <= {
                         r[1] for r in src.execute("PRAGMA table_info(fes_rtu_define)")}:
                     raise ValueError("源库缺少当前 RTU 通道定义")
@@ -62,7 +73,13 @@ def copy_definitions(source, destination):
                 dst.commit()
         finally:
             store.close()
-        os.link(staged, destination)
+        try:
+            os.link(staged, destination)
+        except PermissionError:
+            # 受限环境禁止硬链接时，确认目标仍不存在后执行同目录原子替换。
+            if destination.exists():
+                raise FileExistsError(f"目标库已存在，不会覆盖：{destination}")
+            staged.replace(destination)
     return {"tables": counts, "skipped_unbound_rtus": unbound}
 
 

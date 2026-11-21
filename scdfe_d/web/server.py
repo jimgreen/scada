@@ -11,10 +11,14 @@ from core.web_database import (
     DEFAULT_WORKSPACE_ROOT,
     database_request,
     handle_database,
+    resolve_web_database_args,
     selected_database,
     selection_file,
 )
-from core.web_http import encode_json, prepare_response, send_static
+from core.workspace_paths import add_workspace_arguments
+from core import operation_audit as audit
+from core.service_log import ServiceFileLog
+from core.web_http import BaseScadaHandlerMixin, encode_json, send_static
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from scdfe_c.web.service import ApiError
@@ -24,35 +28,22 @@ STATIC = Path(__file__).with_name("static")
 LOG = logging.getLogger("scdfe_d.web")
 
 
-class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
+class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
+    security_csp = (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "object-src 'none'; frame-ancestors 'self'; base-uri 'self'"
+    )
+    security_frame_options = "SAMEORIGIN"
 
-    def setup(self):
-        super().setup()
-        self.connection.settimeout(30)
+    @property
+    def store(self):
+        return self.server.store
 
     def log_message(self, fmt, *args):
         LOG.debug(fmt, *args)
 
-    def _send(self, status, content_type, data, headers=None):
-        data, extra = prepare_response(self, status, content_type, data, headers)
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        if "cache-control" not in {key.lower() for key in extra}:
-            self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'self'; base-uri 'self'",
-        )
-        for key, value in extra.items():
-            self.send_header(key, value)
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
-
     def _json(self, status, payload):
+        audit.response(self, status, payload)
         self._send(
             status,
             "application/json; charset=utf-8",
@@ -142,6 +133,7 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
         raise ApiError(404, "接口不存在")
 
     @database_request
+    @audit.audit_request("d")
     def _handle(self):
         try:
             self._prepare_request()
@@ -197,17 +189,29 @@ class Handler(RequestBodyMixin, BaseHTTPRequestHandler):
         ):
             return
         except ApiError as exc:
+            audit.exception()
             self._json(exc.status, dict(error=dict(message=exc.message, code=exc.code)))
         except (ValueError, TypeError, KeyError) as exc:
+            audit.exception()
             self._json(400, dict(error=dict(message="参数无效：" + str(exc))))
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            audit.exception()
             LOG.exception("database error")
+            self._log_file_error(f"database error: {exc}")
             self._json(
                 503, dict(error=dict(message="数据库暂不可用，请重试或检查服务日志"))
             )
-        except Exception:
+        except Exception as exc:
+            audit.exception()
             LOG.exception("request failed")
+            self._log_file_error(f"request failed: {exc}")
             self._json(500, dict(error=dict(message="服务器内部错误，请检查服务日志")))
+
+    def _log_file_error(self, message: str) -> None:
+        try:
+            ServiceFileLog(self.store.db_path.parent / "logs", "scdfe_d-web").write("ERROR", message)
+        except Exception:
+            pass
 
     do_GET = do_HEAD = do_POST = do_PUT = do_DELETE = _handle
 
@@ -226,9 +230,9 @@ class DeviceHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
 
     def server_close(self):
         try:
-            self._resources.close()
-        finally:
             super().server_close()
+        finally:
+            self._resources.close()
 
 
 def make_server(host="127.0.0.1", port=8980, **kwargs):
@@ -239,8 +243,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="scdfe_d 设备量测 Web 服务")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8980)
-    parser.add_argument("--db", type=Path)
-    parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE_ROOT)
+    parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数或Web选择定位")
+    add_workspace_arguments(parser)
     parser.add_argument(
         "--collect", action="store_true", help="启动 Web 时同时启动采集"
     )
@@ -248,19 +252,13 @@ def main(argv=None):
         "--model", help="导入设备模型（根目录相对路径）；只导入标识，保留已有映射"
     )
     args = parser.parse_args(argv)
-    preference = selection_file("d", args.host, args.port)
-    database = selected_database(
-        preference,
-        args.db,
-        args.workspace_root / "scdfe_d.sqlite3",
-        workspace_root=args.workspace_root,
-    )
+    workspace_root, preference, database = resolve_web_database_args("d", args)
     logging.basicConfig(level=logging.INFO)
     server = make_server(
         args.host,
         args.port,
         db_path=database,
-        workspace_root=args.workspace_root,
+        workspace_root=workspace_root,
         selection_path=preference,
     )
     try:

@@ -37,6 +37,7 @@
   let sourceSequence = 0;
   let historyMode = 'refreshes';
   let parentFolder = null;
+  let browserMode = 'source';
   let ready = false;
   let polling = false;
   let saving = false;
@@ -647,7 +648,7 @@
     $('#edit-notuse').checked = Boolean(editing?.notuse);
     $('#source-rows').replaceChildren();
     $('#source-page').textContent = '';
-    $('#source-message').textContent = '选择测点后自动填写 RTU 和点号。';
+    $('#source-message').textContent = '';
     $('#source-prev').disabled = true;
     $('#source-next').disabled = true;
     sourcePage = 1;
@@ -686,6 +687,30 @@
     }
   }
 
+  function confirmDanger(title, message, confirmText = '确认') {
+    const dialog = $('#confirm-dialog');
+    if (!dialog || typeof dialog.showModal !== 'function') {
+      return Promise.resolve(confirm(message));
+    }
+    $('#confirm-title').textContent = title;
+    $('#confirm-message').textContent = message;
+    $('#confirm-ok').textContent = confirmText;
+    return new Promise(resolve => {
+      let settled = false;
+      const done = value => {
+        if (settled) return;
+        settled = true;
+        if (dialog.open) dialog.close();
+        resolve(value);
+      };
+      $('#confirm-cancel').onclick = () => done(false);
+      $('#confirm-ok').onclick = () => done(true);
+      dialog.oncancel = () => done(false);
+      dialog.showModal();
+      $('#confirm-cancel').focus();
+    });
+  }
+
   async function browse(folder) {
     error('#browser-error', '');
     try {
@@ -697,16 +722,28 @@
         + '">' + (row.directory ? '▸ 📁 ' : '▤ ') + html(row.name) + '</button>').join('')
         || '<p class="muted">目录为空</p>';
       for (const button of $('#source-files').querySelectorAll('button')) {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', run(async () => {
           const row = data.entries[Number(button.dataset.file)];
-          if (row.directory) browse(row.path);
-          else {
+          if (row.directory) {
+            await browse(row.path);
+          } else if (browserMode === 'import') {
+            $('#source-browser').close();
+            const ok = await confirmDanger(
+              '确认导入设备模型',
+              '将从 ' + row.path + ' 导入设备模型，可能覆盖当前同名设备与表结构。确认继续？',
+              '确认导入',
+            );
+            if (!ok) return;
+            await api('/api/model/import', 'POST', { path: row.path });
+            await loadDevices();
+            await refresh();
+          } else {
             $('#edit-source').value = row.path;
             $('#source-browser').close();
             sourcePage = 1;
             findSource();
           }
-        });
+        }));
       }
     } catch (exception) {
       error('#browser-error', exception.message);
@@ -837,7 +874,11 @@
     if (edit) openEditor(rows[Number(edit.dataset.edit)]);
     if (remove) {
       const row = rows[Number(remove.dataset.delete)];
-      if (row && confirm('删除 ' + (row.device_name || detail?.device.name) + ' 的 ' + row.metric + ' 属性及映射？')) {
+      if (row && await confirmDanger(
+        '确认删除量测映射',
+        '删除 ' + (row.device_name || detail?.device.name) + ' 的 ' + row.metric + ' 属性及映射后不可恢复，确认删除？',
+        '确认删除',
+      )) {
         await api('/api/measurements/' + row.measurement_id, 'DELETE', { version: row.version });
         await refresh();
       }
@@ -847,14 +888,12 @@
     if (!devices.length) error('#alert', '请先新增设备');
     else openEditor();
   });
-  $('#import-model').addEventListener('click', run(async () => {
-    const path = prompt('设备模型库相对路径（相对于工作区根目录）');
-    if (path?.trim()) {
-      await api('/api/model/import', 'POST', { path: path.trim() });
-      await loadDevices();
-      await refresh();
-    }
-  }));
+  $('#import-model').addEventListener('click', () => {
+    browserMode = 'import';
+    if ($('#source-browser-title')) $('#source-browser-title').textContent = '选择设备模型数据库';
+    $('#source-browser').showModal();
+    browse('.');
+  });
   for (const id of ['editor-cancel', 'editor-close']) {
     $('#' + id).addEventListener('click', () => $('#mapping-editor').close());
   }
@@ -908,6 +947,8 @@
   $('#source-prev').addEventListener('click', () => { sourcePage -= 1; findSource(); });
   $('#source-next').addEventListener('click', () => { sourcePage += 1; findSource(); });
   $('#browse-source').addEventListener('click', () => {
+    browserMode = 'source';
+    if ($('#source-browser-title')) $('#source-browser-title').textContent = '选择源数据库';
     $('#source-browser').showModal();
     const path = $('#edit-source').value;
     const slash = path.lastIndexOf('/');

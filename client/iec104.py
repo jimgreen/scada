@@ -539,7 +539,21 @@ class IEC104Master(PacketTrace):
         return self
 
     def _point(self, kind, point_no, data_type=None):
-        return self._points.get((kind, point_no)) or self.add_point(kind, point_no, data_type=data_type)
+        existing = self._points.get((kind, point_no))
+        if existing is not None:
+            if data_type is not None:
+                definition = self._point_definitions.get((kind, int(point_no)), {})
+                expected = self._type(
+                    kind,
+                    data_type,
+                    field(definition, 'time_tag', 'NONE'),
+                )
+                if existing.type != expected:
+                    raise IEC104Error(
+                        f'IEC104 点 {kind}/{point_no} 已注册类型 {existing.type} 与请求类型 {expected} 不一致'
+                    )
+            return existing
+        return self.add_point(kind, point_no, data_type=data_type)
 
     def general_interrogation(self, *, qualifier='STATION', wait_for_response=True):
         q = getattr(c104.Qoi, qualifier.upper()) if isinstance(qualifier, str) else qualifier
@@ -562,7 +576,9 @@ class IEC104Master(PacketTrace):
                           qualifier=None, recorded_at=None):
         value = binary_command_value(value)
         definition = self._point_definitions.get(('yk', int(point_no)), {})
-        type_id = int(field(definition, 'data_type', field(definition, 'type_id', 1)) or 1)
+        default_yk_type = 2 if self.yk_execute_type == 2 else 1
+        raw_type = field(definition, 'data_type', field(definition, 'type_id', default_yk_type))
+        type_id = int(default_yk_type if raw_type is None else raw_type)
         canonical_type = self._canonical_type_id('yk', type_id, field(definition, 'time_tag'))
         if double is None:
             double = canonical_type in {46, 59}
@@ -572,6 +588,10 @@ class IEC104Master(PacketTrace):
         if qualifier is None:
             qualifier = field(definition, 'qualifier')
         wire_type = canonical_type if canonical_type in {45, 46, 58, 59} else (46 if double else 45)
+        if double and wire_type in {45, 58}:
+            wire_type = 59 if wire_type == 58 else 46
+        elif not double and wire_type in {46, 59}:
+            wire_type = 58 if wire_type == 59 else 45
         point = self._point('yk', point_no, data_type=wire_type)
         mode = c104.CommandMode.SELECT_AND_EXECUTE if select_execute else c104.CommandMode.DIRECT
         point.command_mode = mode

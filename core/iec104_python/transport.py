@@ -83,10 +83,12 @@ class Link:
         self.first_unacked = None
 
     def set_active(self, active):
-        if self.active == active: return
-        self.active = active
-        self.generation += 1
-        self.owner._active(self,active)
+        with self.lock:
+            if self.active == active:
+                return
+            self.active = active
+            self.generation += 1
+        self.owner._active(self, active)
 
     def _ack(self, sequence):
         delta = (sequence-self.ack_sequence)&32767
@@ -147,7 +149,8 @@ class Link:
                         self.u(11)
                         self.set_active(True)
                     elif code == 11:
-                        self.pending_u.pop(7, None)
+                        with self.lock:
+                            self.pending_u.pop(7, None)
                         self.set_active(True)
                     elif code == 19:
                         with self.lock:
@@ -156,7 +159,8 @@ class Link:
                         self.u(35)
                         self.set_active(False)
                     elif code == 35:
-                        self.pending_u.pop(19, None)
+                        with self.lock:
+                            self.pending_u.pop(19, None)
                         self.set_active(False)
                     elif code == 67:
                         self.u(131)
@@ -285,6 +289,39 @@ class Reactor:
         self.thread=threading.Thread(target=self.run,name='iec104-python',daemon=True)
         self.thread.start()
 
+    def _next_timeout(self, now):
+        """根据活动链路定时器与宿主周期任务动态计算下一次 select 超时，避免空闲 20ms 高频空转。"""
+        next_deadline = now + 0.25
+        next_periodic = getattr(self.owner, '_next_periodic', 0)
+        if next_periodic and next_periodic > 0:
+            next_deadline = min(next_deadline, next_periodic)
+        connections = getattr(self.owner, 'connections', None)
+        if connections:
+            for conn in tuple(connections):
+                link = getattr(conn, '_link', None)
+                if link is None or link.closed:
+                    retry_at = getattr(conn, '_next_retry', 0)
+                    if retry_at:
+                        next_deadline = min(next_deadline, retry_at)
+        for link in tuple(self.links):
+            if link.closed:
+                continue
+            p = link.parameters
+            if link.connecting:
+                next_deadline = min(next_deadline, link.connect_started + p.message_timeout)
+                continue
+            if link.active and link.pending and len(link.outstanding) < p.send_window_size:
+                return 0.005
+            if link.outstanding:
+                next_deadline = min(next_deadline, link.outstanding[0][1] + p.message_timeout)
+            if link.pending_u:
+                next_deadline = min(next_deadline, min(link.pending_u.values()) + p.message_timeout)
+            if link.received_unacked and link.first_unacked is not None:
+                next_deadline = min(next_deadline, link.first_unacked + p.confirm_interval)
+            if 67 not in link.pending_u:
+                next_deadline = min(next_deadline, link.last_activity + p.keep_alive_interval)
+        return max(0.005, min(0.25, next_deadline - now))
+
     def run(self):
         try:
             while not self.stopped.is_set():
@@ -301,7 +338,8 @@ class Reactor:
                             link._selector_events=events
                     except (OSError,ValueError,TimeoutError) as exc:
                         link.close(str(exc))
-                for key,mask in self.selector.select(.02):
+                timeout = self._next_timeout(time.monotonic())
+                for key,mask in self.selector.select(timeout):
                     if key.data=='wake':
                         try:
                             while self.reader.recv(4096): pass

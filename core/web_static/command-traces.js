@@ -26,8 +26,16 @@ function parameters(){
 }
 function logLink(x){
  if(component==='c')return '/?'+new URLSearchParams({log_rtu:x.rtu_id,log_query:x.cmd_time})+'#logs';
- if(component==='s')return '/logs?'+new URLSearchParams({process:'scdfe_s-channel-'+x.channel_id});
- return '/logs.html';
+ if(component==='s'){
+  const q=new URLSearchParams();
+  if(x.channel_id)q.set('channel_id',String(x.channel_id));
+  if(x.cmd_time)q.set('q',String(x.cmd_time));
+  return '/logs'+(q.size?'?'+q:'');
+ }
+ const tq=new URLSearchParams();
+ if(x.channel_id)tq.set('channel_id',String(x.channel_id));
+ if(x.cmd_time)tq.set('q',String(x.cmd_time));
+ return '/logs.html'+(tq.size?'?'+tq:'');
 }
 async function load(){
  if(busy)return;busy=true;controls.forEach(id=>$(id).disabled=true);

@@ -204,25 +204,43 @@ class _CommandRequestHandler(socketserver.StreamRequestHandler):
                 else:
                     self._send(cached)
                 return
+            response: dict[str, Any] | None = None
             try:
-                item = owner.submit(request_id, rtu_id, kind, point_no, value)
-                response = {"ok": True, "item": item, "command_status": "pending", "request_id": request_id}
-            except WriterRequestError as exc:
-                owner.logger.error(f"TCP 指令处理失败 request_id={request_id}: {exc}")
-                response = owner.error_response(exc.code, str(exc), int(exc.status), request_id=request_id)
-            except WriterUnavailable as exc:
-                owner.logger.error(f"TCP 指令写库不可用 request_id={request_id}: {exc}")
-                response = owner.error_response("writer_unavailable", str(exc), 503, request_id=request_id)
-            except Exception as exc:  # noqa: BLE001 - isolate one client request
-                owner.logger.error(f"TCP 指令处理失败: {exc}")
-                response = owner.error_response("command_error", str(exc), 500, request_id=request_id)
-            else:
-                owner.logger.process(
-                    f"TCP 指令已受理 request_id={request_id} RTU {rtu_id} "
-                    f"{kind.upper()} 点号 {point_no}"
+                try:
+                    item = owner.submit(request_id, rtu_id, kind, point_no, value)
+                    response = {"ok": True, "item": item, "command_status": "pending", "request_id": request_id}
+                except WriterRequestError as exc:
+                    response = owner.error_response(exc.code, str(exc), int(exc.status), request_id=request_id)
+                    try:
+                        owner.logger.error(f"TCP 指令处理失败 request_id={request_id}: {exc}")
+                    except OSError:
+                        pass
+                except WriterUnavailable as exc:
+                    response = owner.error_response("writer_unavailable", str(exc), 503, request_id=request_id)
+                    try:
+                        owner.logger.error(f"TCP 指令写库不可用 request_id={request_id}: {exc}")
+                    except OSError:
+                        pass
+                except Exception as exc:  # noqa: BLE001 - isolate one client request
+                    response = owner.error_response("command_error", str(exc), 500, request_id=request_id)
+                    try:
+                        owner.logger.error(f"TCP 指令处理失败: {exc}")
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        owner.logger.process(
+                            f"TCP 指令已受理 request_id={request_id} RTU {rtu_id} "
+                            f"{kind.upper()} 点号 {point_no}"
+                        )
+                    except OSError:
+                        pass
+            finally:
+                final_response = response or owner.error_response(
+                    "command_error", "指令处理中断", 500, request_id=request_id
                 )
-            owner.complete_request(request_id, response, fingerprint)
-            self._send(response)
+                owner.complete_request(request_id, final_response, fingerprint)
+            self._send(final_response)
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
@@ -427,16 +445,21 @@ class CommandServer:
 
     def complete_request(self, request_id: str, response: dict[str, Any],
                          fingerprint: tuple[Any, ...] | None = None) -> None:
-        """Publish a request result and release concurrent duplicate callers."""
+        """发布请求终态并释放并发等待者；瞬态 5xx 错误不写入永久幂等缓存。"""
+        status = int(response.get("status", 200) or 200)
+        transient = (not response.get("ok")) and status >= 500
         with self._cache_lock:
-            self._cache[request_id] = dict(response)
-            if fingerprint is not None:
-                self._request_fingerprints[request_id] = fingerprint
+            if transient:
+                self._request_fingerprints.pop(request_id, None)
+            else:
+                self._cache[request_id] = dict(response)
+                if fingerprint is not None:
+                    self._request_fingerprints[request_id] = fingerprint
+                while len(self._cache) > 2048:
+                    expired = next(iter(self._cache))
+                    self._cache.pop(expired)
+                    self._request_fingerprints.pop(expired, None)
             event = self._inflight.pop(request_id, None)
-            while len(self._cache) > 2048:
-                expired = next(iter(self._cache))
-                self._cache.pop(expired)
-                self._request_fingerprints.pop(expired, None)
             if event is not None:
                 event.set()
 
@@ -573,8 +596,11 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
         address = server.address or (host, port)
         _update_command_row(store, bind_host=address[0], bind_port=address[1], process_status=PROCESS_RUNNING,
                             process_pid=os.getpid(), process_heartbeat_time=int(time.time() * 1000))
+        next_cleanup = 0.0
         while not event.is_set():
             try:
+                if server._thread is not None and not server._thread.is_alive():
+                    raise RuntimeError("TCP 指令服务监听线程异常退出")
                 current = _command_row(store)
                 if current is not None and not bool(current.get("process_enable", 1)):
                     break
@@ -583,9 +609,14 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
                 lease.heartbeat()
                 _update_command_row(store, process_status=PROCESS_RUNNING, process_pid=os.getpid(),
                                     process_heartbeat_time=int(time.time() * 1000))
-                ScdfeLogger.cleanup(server.logger.directory, retention_hours=server.retention_hours,
-                                    process_name=server.logger.process_name,
-                                    packet_directory=server.logger.packet_directory)
+                now_mono = time.monotonic()
+                if now_mono >= next_cleanup:
+                    ScdfeLogger.cleanup(server.logger.directory, retention_hours=server.retention_hours,
+                                        process_name=server.logger.process_name,
+                                        packet_directory=server.logger.packet_directory)
+                    next_cleanup = now_mono + 300.0
+            except RuntimeError:
+                raise
             except Exception as exc:  # keep the endpoint alive while recording failure
                 try:
                     lease.heartbeat(status=PROCESS_ERROR, error=str(exc), force=True)
@@ -622,14 +653,26 @@ def run_process(db_path: str | Path = DEFAULT_DB, schema_dir: str | Path = SCHEM
 
 
 def main(argv: list[str] | None = None) -> int:
+    from core.workspace_paths import add_workspace_arguments, resolve_cli_database
     parser = argparse.ArgumentParser(description="scdfe_c TCP 遥控/遥调指令服务")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None)
+    add_workspace_arguments(parser)
     parser.add_argument("--schema-dir", type=Path, default=SCHEMA_DIR)
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--token", default=None)
     parser.add_argument("--log-dir", type=Path, default=None)
     args = parser.parse_args(argv)
+    try:
+        _, args.db = resolve_cli_database(
+            "c",
+            args.db,
+            workspace_root=args.workspace_root,
+            runtime_name=args.runtime_name,
+            scene_name=args.scene_name,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     stop_event = threading.Event()
     try:
         import signal

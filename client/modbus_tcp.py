@@ -256,9 +256,9 @@ class _ModbusOperations(PacketTrace):
         fmt = {1: 'h', 2: 'H', 3: 'i', 4: 'I', 5: 'f'}[typ]
         try:
             if typ <= 2:
-                raw = struct.pack(('<' if field(definition, 'twobytedata_byteseq', 0) > 0 else '>') + fmt, int(value))
+                raw = struct.pack(('<' if field(definition, 'twobytedata_byteseq', 0) > 0 else '>') + fmt, int(round(value)))
             else:
-                raw = _order4(struct.pack('<' + fmt, value if typ == 5 else int(value)),
+                raw = _order4(struct.pack('<' + fmt, value if typ == 5 else int(round(value))),
                               field(definition, 'fourbytedata_byteseq', 0))
         except (struct.error, OverflowError) as exc:
             raise ValueError('设点值超出配置的数据类型范围') from exc
@@ -419,6 +419,8 @@ class _ModbusTcpTransport(_ModbusOperations):
                 self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
                                尝试=attempt+1, 错误=str(last_error),
                                异常码=getattr(last_error, 'exception_code', None))
+                if getattr(last_error, 'exception_code', None) in {1, 2, 3}:
+                    break
                 if attempt < attempts - 1 and not self.connected:
                     self._business('Modbus断线重连', 链路=self._packet_endpoint, 错误=str(last_error))
                     if not self._open_native():

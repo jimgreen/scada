@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_modbus_define_call
-Chinese name: MODBUS召唤定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_channel_modbus_define_call
+中文名：MODBUS召唤定义表
 """
 
 from dataclasses import dataclass, field
@@ -25,16 +22,14 @@ class fes_channel_modbus_define_call:
         metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'required': True},
     )
 
     irtuaddr: Optional[int] = field(
@@ -59,7 +54,7 @@ class fes_channel_modbus_define_call:
 
     inum: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '每帧召唤的寄存器个数', 'eng_name': 'inum', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '每帧召唤的寄存器个数', 'eng_name': 'inum', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'allowed_values': [1, 2, 3, 4]},
     )
 
     icode: Optional[int] = field(

@@ -5,6 +5,8 @@ import re
 
 ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
+          "ui-theme.css": "text/css; charset=utf-8",
+          "ui-i18n.js": "application/javascript; charset=utf-8",
           "connections.css": "text/css; charset=utf-8",
           "connections.js": "application/javascript; charset=utf-8",
           "audit-client.js": "application/javascript; charset=utf-8",
@@ -12,6 +14,25 @@ ASSETS = {"workbench.css": "text/css; charset=utf-8",
           "log-browser.css": "text/css; charset=utf-8",
           "log-browser.js": "application/javascript; charset=utf-8",
           "layout-resizer.js": "application/javascript; charset=utf-8"}
+
+# 统一线宽（1.75px）的极简矢量导航图标，替代零散字符符号。
+NAV_ICONS = {
+    "↗": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></svg>',
+    "◴": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>',
+    "▤": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r=".8"/><circle cx="7" cy="17" r=".8"/></svg>',
+    "◉": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8m12.8 0a9 9 0 0 1 0 12.8M8.5 15.5a5 5 0 0 1 0-7m7 0a5 5 0 0 1 0 7"/></svg>',
+    "⇄": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="m17 3 4 4-4 4M3 7h18M7 21l-4-4 4-4m14 4H3"/></svg>',
+    "◷": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    "≡": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+    "∿": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="M3 17 8 11l4 4 5-7 4 4"/></svg>',
+    "▦": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>',
+    "▥": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
+    "▧": '<svg class="ui-nav-icon" viewBox="0 0 24 24"><path d="m14.7 6.3 3 3L8 19H5v-3l9.7-9.7z"/><path d="M12 20h9"/></svg>',
+}
+
+
+def _nav_icon(symbol: str) -> str:
+    return NAV_ICONS.get(symbol, escape(symbol))
 
 POINT_TRENDS_PAGE = ("point-trends.html", "/point-trends", "∿", "采样管理", "管理实时曲线采样与历史")
 
@@ -102,7 +123,7 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
                 )
                 links.append(
                     f'<details class="nav-branch"><summary class="nav">'
-                    f'<span aria-hidden="true">{icon}</span><b>{label}</b></summary>'
+                    f'<span aria-hidden="true">{_nav_icon(icon)}</span><b>{label}</b></summary>'
                     f'<nav class="nav-children" aria-label="数据与定义子目录">{children}</nav></details>'
                 )
                 continue
@@ -117,13 +138,13 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
                 )
                 links.append(
                     f'<details class="nav-branch{" is-active" if selected else ""}"{" open" if selected else ""}>'
-                    f'<summary class="nav"><span aria-hidden="true">{icon}</span><b>{label}</b></summary>'
+                    f'<summary class="nav"><span aria-hidden="true">{_nav_icon(icon)}</span><b>{label}</b></summary>'
                     f'<nav class="nav-children" aria-label="通信测试子目录">{children}</nav></details>'
                 )
                 continue
             current = ' aria-current="page"' if name == active else ""
             links.append(f'<a class="nav" href="{href}"{current}>'
-                         f'<span aria-hidden="true">{icon}</span><b>{label}</b></a>')
+                         f'<span aria-hidden="true">{_nav_icon(icon)}</span><b>{label}</b></a>')
     label = {"s": "协议服务", "c": "运行工作台", "t": "四遥转发", "d": "设备量测"}[module]
     api_link = '<a href="/api-docs">接口文档 ↗</a>' if module in ("s", "c") else ""
     topbar = f'''<a class="workbench-skip" href="#workbench-content">跳到页面内容</a>
@@ -135,9 +156,12 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     sidebar = f'''<aside class="workbench-sidebar" aria-label="功能目录">
 <nav aria-label="主导航">{''.join(links)}</nav></aside>'''
     html = data.decode("utf-8")
+    html = html.replace("<html ", '<html data-theme="minimalist-light" ', 1)
     html = html.replace("<head>", '<head><script src="/static/audit-client.js"></script>', 1)
     html = html.replace("</head>", '<link rel="stylesheet" href="/static/workbench.css">'
                         '<link rel="stylesheet" href="/static/database-selector.css">'
+                        '<link rel="stylesheet" href="/static/ui-theme.css">'
+                        '<script defer src="/static/ui-i18n.js"></script>'
                         '<script defer src="/static/database-selector.js"></script>'
                         '<script defer src="/static/workbench.js"></script>'
                         '<script defer src="/static/layout-resizer.js"></script></head>', 1)
@@ -145,7 +169,7 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     html = re.sub(r"<header\b[^>]*>.*?</header>", lambda _: topbar, html, count=1, flags=re.S)
     # The former horizontal menu is replaced by actual page links in the sidebar.
     html = re.sub(r'<nav class="top-nav">.*?</nav>', "", html, flags=re.S)
-    heading = f'<div class="page-heading"><h1>{escape(page[3])}</h1><p>{escape(page[4])}</p></div>'
+    heading = f'<div class="page-heading"><h1 title="{escape(page[4])}">{escape(page[3])}</h1></div>'
     html = re.sub(r"<main\b[^>]*>", lambda _: '<div class="workbench-shell">' + sidebar +
                   '<main class="workbench-content" id="workbench-content" tabindex="-1">' + heading,
                   html, count=1)

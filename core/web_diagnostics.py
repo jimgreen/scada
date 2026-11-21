@@ -11,15 +11,21 @@ def handle_diagnostics(handler, parts, query, method, store, component):
     if method != 'GET':
         raise ApiError(405,'运行诊断只支持 GET 查询')
     assets=Path(__file__).with_name('web_static')
+    from core.web_http import send_static
     if parts[0]=='static':
         mime='text/css' if parts[1].endswith('.css') else 'application/javascript'
-        return handler._send(200,mime+'; charset=utf-8',(assets/parts[1]).read_bytes())
+        return send_static(handler,assets/parts[1],mime+'; charset=utf-8')
     if parts==['diagnostics']:
-        data=(assets/'diagnostics.html').read_bytes()
         if component in ('s','c','t'):
             from core.web_workbench import render_workbench
-            data=render_workbench(data,component,'diagnostics.html')
-        return handler._send(200,'text/html; charset=utf-8',data)
+            return send_static(
+                handler,
+                assets/'diagnostics.html',
+                'text/html; charset=utf-8',
+                transform=lambda raw: render_workbench(raw,component,'diagnostics.html'),
+                cache_key=f'workbench:{component}:diagnostics.html',
+            )
+        return send_static(handler,assets/'diagnostics.html','text/html; charset=utf-8')
     if set(query)-{'checks'} or query.get('checks','0') not in ('0','1'):
         raise ApiError(400,'checks 只能为 0 或 1')
     services=None

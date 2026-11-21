@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition from dbdef/json/fes_channel_can_point_define.json."""
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
+
+表名：fes_channel_can_point_define
+中文名：CAN四遥报文解析表
+"""
+
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
+
 
 @dataclass
 class fes_channel_can_point_define:
@@ -13,7 +19,7 @@ class fes_channel_can_point_define:
 
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
 
     kind: Optional[str] = field(

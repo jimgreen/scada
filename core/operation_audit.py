@@ -94,14 +94,24 @@ def emit(phase, **details):
     try:
         _remember_secrets(details)
         now = datetime.now().astimezone()
-        record = {'time': now.isoformat(timespec='milliseconds'),
-                  'trace_id': state['trace_id'], 'component': state['component'],
-                  'phase': phase, 'pid': os.getpid(), 'thread_id': threading.get_ident(),
-                  **state['origin'], **safe(details)}
+        header = {
+            'time': now.isoformat(timespec='milliseconds'),
+            'trace_id': state['trace_id'],
+            'component': state['component'],
+            'phase': phase,
+            'pid': os.getpid(),
+            'thread_id': threading.get_ident(),
+        }
+        # 系统审计头与来源上下文置于末尾，防止业务 details 同名键覆盖审计元信息。
+        record = {**safe(details), **state['origin'], **header}
         data = json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
         if len(data.encode('utf-8')) > 60000:
-            record = {**{k: record[k] for k in ('time', 'trace_id', 'component', 'phase', 'pid', 'thread_id')},
-                      'truncated': True, 'detail_preview': data[:10000]}
+            record = {
+                **header,
+                **state['origin'],
+                'truncated': True,
+                'detail_preview': data[:10000],
+            }
             data = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
         root = state['directory']
         directory = root / now.strftime('%Y/%m/%d/%H')

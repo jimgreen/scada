@@ -148,6 +148,8 @@ class PointTrendHistory:
         con.execute('PRAGMA temp_store=MEMORY')
         con.execute('PRAGMA synchronous=NORMAL')
         if create:
+            if con.execute('PRAGMA page_count').fetchone()[0] == 0:
+                con.execute('PRAGMA auto_vacuum=INCREMENTAL')
             con.execute('PRAGMA journal_mode=WAL')
             con.execute('BEGIN IMMEDIATE')
         application_id = con.execute('PRAGMA application_id').fetchone()[0]
@@ -186,7 +188,8 @@ class PointTrendHistory:
     @staticmethod
     def _prune(con, settings):
         cutoff = _now_ms() - settings['retention_seconds'] * 1000
-        con.execute('DELETE FROM trend_sample WHERE time_ms < ?', (cutoff,))
+        removed = con.execute('DELETE FROM trend_sample WHERE time_ms < ?', (cutoff,)).rowcount
+        return max(0, removed)
 
     @staticmethod
     def _retained_rows(con, cutoff):
@@ -225,7 +228,7 @@ class PointTrendHistory:
         for stamp, raw in rows:
             values = json.loads(raw)
             samples.append(dict(time_ms=stamp, values=[values.get(key, _EMPTY) for key in keys]))
-        return dict(settings=settings, samples=samples, revision=_revision(payload))
+        return dict(settings=settings, samples=samples, revision=_revision(payload), server_time_ms=_now_ms())
 
     def put(self, body, *, expected_revision=None):
         settings, serialized = _settings(body, self.role)
@@ -257,7 +260,7 @@ class PointTrendHistory:
     def _run(self):
         lease = InstanceLock(self.path, 'point-trend')
         next_prune = 0
-        last_start = float('-inf')
+        next_scan = 0.0
         last_payload = None
         failed = False
         con = None
@@ -265,7 +268,7 @@ class PointTrendHistory:
         try:
             while not self._stop.is_set():
                 self._wake.clear()
-                delay = 3
+                delay = 2
                 try:
                     self._check_path(self.path.parent, directory=True)
                     if lease.stream is None:
@@ -299,11 +302,26 @@ class PointTrendHistory:
                         start = time.monotonic()
                         batch = None
                         interval = settings['interval_seconds']
-                        if points and start - last_start >= interval:
-                            last_start = start
-                            batch = read_point_trend(self.store, self.role, {'points': points})
-                        prune = start >= next_prune or payload != last_payload
-                        if (batch is not None or prune) and not self._stop.is_set() and con is not None:
+                        if points:
+                            if next_scan <= 0.0 or start >= next_scan:
+                                # 固定网格推进采样节拍，避免单次 I/O 抖动导致长期漂移。
+                                next_scan = max(start, (next_scan + interval) if next_scan > 0.0 else (start + interval))
+                                batch = read_point_trend(self.store, self.role, {'points': points})
+                        else:
+                            next_scan = 0.0
+                        prune_due = start >= next_prune or payload != last_payload
+                        # 空曲线配置且表内无过期样本时跳过空写事务，减少无意义磁盘写盘。
+                        if prune_due and batch is None and con is not None:
+                            cutoff_check = _now_ms() - settings['retention_seconds'] * 1000
+                            has_expired = con.execute(
+                                'SELECT 1 FROM trend_sample WHERE time_ms < ? LIMIT 1', (cutoff_check,)
+                            ).fetchone() is not None
+                            if not has_expired:
+                                prune_due = False
+                                next_prune = start + 15
+                                last_payload = payload
+                        if (batch is not None or prune_due) and not self._stop.is_set() and con is not None:
+                            pruned_count = 0
                             with con:
                                 con.execute('BEGIN IMMEDIATE')
                                 if self._load(con) == payload:
@@ -311,13 +329,18 @@ class PointTrendHistory:
                                         values = dict(zip((_key(point) for point in points), batch['values']))
                                         con.execute('INSERT INTO trend_sample VALUES(?,?) ON CONFLICT DO NOTHING',
                                                     (batch['time_ms'], json.dumps(values, separators=(',', ':'))))
-                                    if prune:
-                                        self._prune(con, settings)
+                                    if prune_due:
+                                        pruned_count = self._prune(con, settings)
                                         next_prune = start + 15
                                 else:
                                     self._wake.set()
+                            if pruned_count > 0:
+                                try:
+                                    con.execute('PRAGMA incremental_vacuum(200)')
+                                except sqlite3.Error:
+                                    pass
                             last_payload = payload
-                        delay = max(0, interval - (time.monotonic() - last_start)) if points else 15
+                        delay = max(0.0, min(2.0, next_scan - time.monotonic())) if points else 2.0
                     failed = False
                 except (ApiError, OSError, sqlite3.Error, ValueError):
                     if con is not None:

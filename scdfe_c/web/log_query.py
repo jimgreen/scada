@@ -60,8 +60,17 @@ def _local_day(stamp):
         value = datetime.fromtimestamp(stamp)
         return f'{value.year:04d}{value.month:02d}{value.day:02d}'
     except (ValueError, OverflowError, OSError):
-        # Extreme ISO timestamps can exceed platform localtime limits.
-        # Pruning is optional; the exact per-line comparison still applies.
+        return None
+
+
+def _local_hour(stamp, *, delta_hours=0):
+    """将 Unix 时间戳转为本地 YYYYMMDD-HH 小时键（可选 ±1 小时安全边界兼容夏令时）。"""
+    if stamp is None:
+        return None
+    try:
+        value = datetime.fromtimestamp(stamp + delta_hours * 3600)
+        return f'{value.year:04d}{value.month:02d}{value.day:02d}-{value.hour:02d}'
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -222,6 +231,9 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     # and timezone conversion for exact boundaries and DST behavior.
     start_day = _local_day(start)
     end_day = _local_day(end)
+    # 留 ±1 小时安全边界兼容夏令时跳变，精确边界仍由逐行时间戳校验把关。
+    start_hour = _local_hour(start, delta_hours=-1)
+    end_hour = _local_hour(end, delta_hours=1)
     # A PACKET level query is an explicit packet-log request even when a
     # caller omits the redundant record=packet parameter.  The Web UI always
     # sends both, while scripts may send only the level filter.
@@ -278,11 +290,16 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
         if ((start_day is not None and file_hour[:8] < start_day)
                 or (end_day is not None and file_hour[:8] > end_day)):
             continue
-        key = (file_hour, relative_name)
-        if cursor_key and key > cursor_key:
+        in_hour_window = 1 if (
+            (start_hour is None or file_hour >= start_hour)
+            and (end_hour is None or file_hour <= end_hour)
+        ) else 0
+        key = (in_hour_window, file_hour, relative_name) if (start_hour or end_hour) else (1, file_hour, relative_name)
+        if cursor_key and (file_hour, relative_name) > cursor_key:
             continue
-        files.append((path, relative_name, key[0]))
-    files.sort(key=lambda item: (item[2], item[1]), reverse=True)
+        files.append((path, relative_name, file_hour, key))
+    files.sort(key=lambda item: item[3], reverse=True)
+    files = [(path, relative_name, file_hour) for path, relative_name, file_hour, _ in files]
     items, scanned_files, skipped = [], 0, 0
     budget = [MAX_SCAN_BYTES]
     result_bytes = 0
@@ -294,6 +311,19 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
     # full Unicode comparison below.
     literal_needle = (needle.encode('utf-8') if needle and all(
         '\u4e00' <= char <= '\u9fff' or '0' <= char <= '9' for char in needle) else None)
+    # 仅对不含 Unicode casefold 多字符展开（如 ß->ss、ﬁ->fi 等）的纯 ASCII 关键词启用
+    # C 层 bytes.lower() 快速预过滤，兼顾 100% Unicode 正确性与检索性能。
+    _CASEFOLD_LIGATURES = ("ss", "ff", "fi", "fl", "st", "ij", "dz", "lj", "nj")
+    ascii_needle = (
+        needle.encode('ascii')
+        if (
+            literal_needle is None
+            and needle
+            and needle.isascii()
+            and not any(pair in needle for pair in _CASEFOLD_LIGATURES)
+        )
+        else None
+    )
     # These exact byte sequences are necessary (but not sufficient) for a
     # match. Keep Unicode casefold and header parsing for every candidate.
     if channel is not None and family != "s":
@@ -345,7 +375,8 @@ def search_logs(directory, query, *, family="c", packet_directory=None):
                         skipped += 1
                     line = (raw.decode("utf-8", "replace") if raw
                             and (required is None or required in raw)
-                            and (literal_needle is None or literal_needle in raw) else None)
+                            and (literal_needle is None or literal_needle in raw)
+                            and (ascii_needle is None or ascii_needle in raw.lower()) else None)
                     if line is not None and (not needle or literal_needle is not None or needle in line.casefold()):
                         prefix = line[:HEADER_PREFIX_SIZE]
                         if prefix != header_prefix:

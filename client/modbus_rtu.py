@@ -72,13 +72,30 @@ class _ModbusRtuTransport(_ModbusOperations):
                     last_error = ModbusError(f'{name} 失败: {exc}')
                     self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
                                    尝试=attempt+1, 错误=str(last_error))
+                    # 清理串口 RX 残留脏字节，防止下轮重试读到上一帧迟到/串站响应。
+                    sock = getattr(self.native, 'socket', None)
+                    if sock is not None and hasattr(sock, 'reset_input_buffer'):
+                        try:
+                            sock.reset_input_buffer()
+                        except OSError:
+                            pass
                     continue
                 if result is None or result.isError():
+                    exc_code = getattr(result, 'exception_code', None)
                     last_error = ModbusError(
                         f'{name} 失败: {result}',
-                        exception_code=getattr(result, 'exception_code', None))
+                        exception_code=exc_code)
                     self._business('Modbus通信尝试失败', 操作=name, 站号=unit_id, 地址0基=address,
                                    尝试=attempt+1, 错误=str(last_error), 异常码=last_error.exception_code)
+                    # 确定性协议异常（非法功能/地址/值）无需无谓重复重试。
+                    if exc_code in {1, 2, 3}:
+                        break
+                    sock = getattr(self.native, 'socket', None)
+                    if sock is not None and hasattr(sock, 'reset_input_buffer'):
+                        try:
+                            sock.reset_input_buffer()
+                        except OSError:
+                            pass
                     continue
                 if name in ('read_coils', 'read_discrete_inputs'):
                     return list(result.bits[:argument])

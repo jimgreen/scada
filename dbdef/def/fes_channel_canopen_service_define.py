@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition from dbdef/json/fes_channel_canopen_service_define.json."""
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
+
+表名：fes_channel_canopen_service_define
+中文名：CANopen服务定义表
+"""
+
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
+
 
 @dataclass
 class fes_channel_canopen_service_define:
@@ -33,7 +39,7 @@ class fes_channel_canopen_service_define:
 
     direction: Optional[str] = field(
         default='rx',
-        metadata={'chn_name': '方向', 'eng_name': 'direction', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN方向', 'allowed_values': ['rx', 'tx', 'both'], 'default': 'rx'},
+        metadata={'chn_name': '方向', 'eng_name': 'direction', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': 'CAN方向', 'default': 'rx', 'allowed_values': ['rx', 'tx', 'both']},
     )
 
     cob_id: Optional[int] = field(

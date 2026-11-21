@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Generated dataclass definition for the SCADA database table.
+"""SCADA 数据库表定义（由 dbdef/json 自动生成，请勿手工修改）。
 
-Table: fes_channel_bacnet_define
-Chinese name: bacnet通道定义表
-
-This file is generated from the adjacent JSON table definition.
-Do not edit generated fields manually; regenerate from the JSON schema.
+表名：fes_channel_bacnet_define
+中文名：bacnet通道定义表
 """
 
 from dataclasses import dataclass, field
@@ -25,16 +22,14 @@ class fes_channel_bacnet_define:
         metadata={'chn_name': '标识', 'eng_name': 'id', 'primary_key': True, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
     )
 
-
     name: Optional[str] = field(
         default=None,
         metadata={'chn_name': '中文名称', 'eng_name': 'name', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
     )
 
-
     channel_id: Optional[int] = field(
         default=None,
-        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': ''},
+        metadata={'chn_name': '所属通道', 'eng_name': 'channel_id', 'primary_key': False, 'data_type': 'int', 'disp_type': 'KEYID类型', 'disp_menu': '', 'required': True},
     )
 
     bind_ip: Optional[str] = field(
@@ -54,12 +49,12 @@ class fes_channel_bacnet_define:
 
     remote_host: Optional[str] = field(
         default='127.0.0.1',
-        metadata={'chn_name': '远端主机', 'eng_name': 'remote_host', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': ''},
+        metadata={'chn_name': '远端主机', 'eng_name': 'remote_host', 'primary_key': False, 'data_type': 'str', 'disp_type': 'STRING', 'disp_menu': '', 'default': '127.0.0.1'},
     )
 
     remote_port: Optional[int] = field(
         default=47808,
-        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': ''},
+        metadata={'chn_name': '远端端口', 'eng_name': 'remote_port', 'primary_key': False, 'data_type': 'int', 'disp_type': 'INT', 'disp_menu': '', 'default': 47808},
     )
 
 __all__ = ['fes_channel_bacnet_define']
