@@ -980,6 +980,7 @@
         }
         confirmSettings(result);
         fetchError = '';
+        saveError = '';
         ready = true;
         syncCheckboxes();
         nextDelay = pollDelayMs();
