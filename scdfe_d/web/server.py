@@ -87,18 +87,7 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
             and method == "GET"
         ):
             device_id = int(parts[2])
-            with store.connection() as con:
-                device = con.execute(
-                    "SELECT model_table,model_idx FROM device WHERE device_id=?",
-                    (device_id,),
-                ).fetchone()
-                if not device:
-                    raise ApiError(404, "设备不存在")
-                row = con.execute(
-                    f"SELECT * FROM {store._table_name(device['model_table'])} WHERE idx=?",
-                    (device["model_idx"],),
-                ).fetchone()
-            return self._json(200, dict(item=dict(row)))
+            return self._json(200, dict(item=store.device_values(device_id)))
         if parts == ["api", "source-points"] and method == "GET":
             return self._json(200, store.source_points(query))
         if parts == ["api", "measurements"]:
@@ -246,6 +235,9 @@ def main(argv=None):
     parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数或Web选择定位")
     add_workspace_arguments(parser)
     parser.add_argument(
+        "--source", type=str, default=None, help="源 SCADA 数据库相对路径，省略时默认同目录 scdfe_c.sqlite3"
+    )
+    parser.add_argument(
         "--collect", action="store_true", help="启动 Web 时同时启动采集"
     )
     parser.add_argument(
@@ -262,6 +254,8 @@ def main(argv=None):
         selection_path=preference,
     )
     try:
+        if args.source:
+            server.store.set_source_database(args.source)
         if args.model:
             server.store.import_model(args.model)
         if args.collect:

@@ -19,13 +19,19 @@ class CollectorWriteTests(unittest.TestCase):
 
         second = self.store.collect_once()
         self.assertGreater(second["refresh_id"], first["refresh_id"])
+        self.assertEqual(second["updated_rows"], 0)
         with self.store.connection() as connection:
-            batch = connection.execute(
-                "SELECT refresh_id FROM measurement_value"
-            ).fetchone()[0]
             writes = connection.execute("SELECT count(*) FROM write_log").fetchone()[0]
-            self.assertEqual(batch, second["refresh_id"])
             self.assertEqual(writes, 0)
+            tables = {
+                r[0]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertNotIn("measurement_value", tables)
+            self.assertNotIn("measurement_refresh", tables)
+            self.assertNotIn("scada_point_mapping", tables)
 
         with closing(sqlite3.connect(self.source)) as connection, connection:
             connection.execute(
@@ -151,16 +157,10 @@ class CollectorWriteTests(unittest.TestCase):
         second_batch = self.store.collect_once()
         self.assertGreater(second_batch["refresh_id"], first_batch["refresh_id"])
         with self.store.connection() as con:
-            rows = {
-                r["measurement_id"]: dict(r)
-                for r in con.execute("SELECT * FROM measurement_value")
-            }
-        p_row = rows[self.point["measurement_id"]]
-        q_row = rows[second_pt["measurement_id"]]
-        self.assertEqual(p_row["refresh_id"], second_batch["refresh_id"])
-        self.assertEqual((p_row["value"], p_row["previous_value"]), (15.0, 10.0))
-        self.assertEqual(q_row["refresh_id"], second_batch["refresh_id"])
-        self.assertEqual((q_row["value"], q_row["previous_value"]), (20.0, None))
+            row = con.execute(
+                "SELECT p, p_pre, p_qual, q, q_pre, q_qual FROM Manual_generator WHERE idx=1"
+            ).fetchone()
+        self.assertEqual(tuple(row), (15.0, 10.0, 0, 20.0, None, 0))
 
     def test_incremental_table_sync_and_fast_reopen_do_not_rewrite_unrelated_rows(self):
         gen2 = self.store.create_device(dict(name="发电机 2", category="generator"))
@@ -188,16 +188,19 @@ class CollectorWriteTests(unittest.TestCase):
                 WHEN NEW.idx=2 BEGIN INSERT INTO unrelated_writes VALUES('gen2'); END"""
             )
 
-        # 修改发电机 1 已有列的参数/变换，不应重写负荷表或发电机 2
+        # 修改发电机 1 已有列的参数，不应重写负荷表或发电机 2
         self.store.save_measurement(
-            dict(self.point, version=1, scale=2.0, offset=1.0),
+            dict(self.point, version=1, weight=2.5),
             self.point["measurement_id"],
         )
-        # 重新打开已有库走 _schema_ready 快路径，不应全量重写宽表
-        reopened = fixtures.DeviceStore(self.store.db_path, workspace_root=self.root)
-        reopened.close()
-
         with self.store.connection() as con:
             writes = [r[0] for r in con.execute("SELECT tag FROM unrelated_writes")]
+            con.execute("DROP TRIGGER watch_load")
+            con.execute("DROP TRIGGER watch_gen2")
+            con.execute("DROP TABLE unrelated_writes")
         self.assertEqual(writes, [])
+        # 重新打开已有库走 _schema_ready 快路径
+        reopened = fixtures.DeviceStore(self.store.db_path, workspace_root=self.root)
+        self.assertEqual(len(reopened.devices({})), 3)
+        reopened.close()
         self.assertEqual(gen2["model_idx"], 2)

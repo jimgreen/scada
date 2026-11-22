@@ -7,6 +7,7 @@ import sqlite3
 
 from core.rtdb_schema import sync_embedded_schema
 from scdfe_c.web.service import SCHEMA_DIR, SchemaCatalog
+from scdfe_d.service import APPLICATION_ID as DEVICE_APP_ID, discover_device_tables
 
 
 def sync_file(path, catalog):
@@ -17,13 +18,13 @@ def sync_file(path, catalog):
             connection.execute('BEGIN IMMEDIATE')
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             business = {'_scada_schema', 'fes_rtu_define'} <= tables
-            devices = {'device', 'device_measurement', 'scada_point_mapping'} <= tables
+            dev_tables = [t for t, _ in discover_device_tables(connection)]
+            app_id = connection.execute('PRAGMA application_id').fetchone()[0]
+            devices = bool(dev_tables) or app_id == DEVICE_APP_ID
             connections = {'connection_session', 'connection_event', 'connection_writer'} <= tables
             if not (business or devices or connections):
                 raise ValueError(f'不是 SCADA 业务库、设备库或连接记录库：{path}')
-            public_tables = None
-            if devices and 'd_device_tables' in tables:
-                public_tables = {r[0] for r in connection.execute('SELECT table_name FROM d_device_tables')}
+            public_tables = set(dev_tables) if (devices and not business) else None
             sync_embedded_schema(connection, catalog if business else None, include_tables=public_tables)
             return connection.execute('SELECT count(*) FROM rtdb_schema_tables').fetchone()[0]
 

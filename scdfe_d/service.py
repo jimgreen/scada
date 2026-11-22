@@ -1,7 +1,12 @@
-"""Transactional device measurements. Source SCADA databases are always read-only."""
+"""直接以设备宽表为唯一数据源的实时量测采集与管理服务。
 
-from collections import defaultdict
-from contextlib import contextmanager, closing
+scdfe_d 数据库中不再创建 measurement_value、measurement_refresh、scada_point_mapping、
+device_measurement、device 等冗余量测中间表；仅保留以设备类型为名的设备宽表与
+RTDB 元数据表（rtdb_schema_*）。源 SCADA 数据库（默认同目录 scdfe_c.sqlite3）始终只读。
+"""
+
+from collections import defaultdict, deque
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import json
 import math
@@ -12,8 +17,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 from core.scdfe_control import InstanceLock
-from core.rtdb_schema import sync_embedded_schema
 from scdfe_c.web.service import ApiError
 from scdfe_d.measurement_layout import (
     EXTENSION_METRICS,
@@ -24,9 +29,13 @@ from scdfe_d.measurement_layout import (
 )
 
 APPLICATION_ID = int.from_bytes(b"SDFD", "big")
+SCHEMA_USER_VERSION = 4
 DEFAULT_INTERVAL_SECONDS = 5
 MIN_INTERVAL_SECONDS = 1
 MAX_INTERVAL_SECONDS = 60
+DEFAULT_MAX_AGE_SECONDS = 120.0
+MAX_HISTORY_ITEMS = 100
+
 CATEGORIES = {
     "generator": "发电机",
     "load": "负荷",
@@ -38,14 +47,7 @@ CATEGORIES = {
     "compensator": "无功补偿",
     "other": "其他设备",
 }
-BASE_TABLES = {
-    "device",
-    "device_measurement",
-    "scada_point_mapping",
-    "measurement_refresh",
-    "measurement_value",
-    "input_change_log",
-}
+
 EXTENSIONS = {
     "ACWindGen": ("ACGenerator", "idx_acgenerator"),
     "ACPVGen": ("ACGenerator", "idx_acgenerator"),
@@ -54,65 +56,27 @@ EXTENSIONS = {
     "DCPVGen": ("DCGenerator", "idx_dcgenerator"),
     "DCStorageGen": ("DCGenerator", "idx_dcgenerator"),
 }
-REQUIRED = {
-    "device": {"device_id", "model_table", "model_idx", "name", "model_json", "active"},
-    "device_measurement": {
-        "measurement_id",
-        "device_id",
-        "metric",
-        "kind",
-        "name",
-        "unit",
-        "weight",
-        "max_age_seconds",
-        "se_enabled",
-        "se_type",
-        "origin",
-        "catalog_active",
-        "version",
-        "updated_at",
-    },
-    "scada_point_mapping": {
-        "measurement_id",
-        "source_database",
-        "rtu_id",
-        "pnt_no",
-        "enabled",
-        "scale",
-        "offset",
-        "version",
-        "updated_at",
-    },
-    "measurement_refresh": {
-        "refresh_id",
-        "started_at",
-        "finished_at",
-        "total_count",
-        "valid_count",
-        "se_valid_count",
-        "source_database",
-        "error",
-    },
-    "measurement_value": {
-        "measurement_id",
-        "refresh_id",
-        "source_value",
-        "value",
-        "quality",
-        "source_time_ms",
-        "collected_at",
-        "valid",
-        "reason",
-    },
-    "input_change_log": {
-        "change_id",
-        "changed_at",
-        "entity",
-        "entity_id",
-        "before_json",
-        "after_json",
-    },
-}
+
+# 旧版冗余辅助表：新架构中不再创建，也不再依赖，可在清理工具中直接删除。
+LEGACY_AUX_TABLES = frozenset(
+    {
+        "measurement_value",
+        "measurement_refresh",
+        "scada_point_mapping",
+        "device_measurement",
+        "device",
+        "input_change_log",
+        "d_device_members",
+        "d_device_tables",
+        "d_settings",
+    }
+)
+
+_TABLE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9_]{0,63}$")
+_METRIC_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+_INVALID_QUALITY_REASONS = frozenset(
+    {"disabled", "source_error", "missing_point", "invalid_value"}
+)
 
 
 def utc_now():
@@ -129,26 +93,22 @@ def validate_interval(value):
     return int(value)
 
 
-def stored_interval(con):
-    row = con.execute(
-        "SELECT value FROM d_settings WHERE key='interval_seconds'"
-    ).fetchone()
-    if row is None:
-        return DEFAULT_INTERVAL_SECONDS
-    try:
-        seconds = float(row[0])
-        if math.isfinite(seconds):
-            return max(MIN_INTERVAL_SECONDS, min(MAX_INTERVAL_SECONDS, int(seconds)))
-    except (TypeError, ValueError):
-        pass
+def stored_interval(con_or_store):
+    """兼容旧调用签名：优先读取内存周期，未绑定时返回默认周期。"""
+    if isinstance(con_or_store, DeviceStore):
+        return con_or_store.get_interval()
     return DEFAULT_INTERVAL_SECONDS
 
 
-def category_for(table, model):
-    kind = str(model.get("dev_type", "")).lower()
+def category_for(table, model=None):
+    kind = str((model or {}).get("dev_type", "")).lower()
     if "storage" in kind or "Storage" in table:
         return "storage"
-    for word, category in [
+    if isinstance(table, str) and table.startswith("Manual_"):
+        suffix = table.removeprefix("Manual_")
+        if suffix in CATEGORIES:
+            return suffix
+    for word, category in (
         ("Converter", "converter"),
         ("Generator", "generator"),
         ("Load", "load"),
@@ -156,47 +116,211 @@ def category_for(table, model):
         ("Branch", "line"),
         ("Node", "bus"),
         ("RealBs", "compensator"),
-    ]:
+    ):
         if word in table:
             return category
     return "other"
 
 
+def _quote_table(name):
+    if not isinstance(name, str) or not _TABLE_NAME_RE.fullmatch(name):
+        raise ValueError("模型设备表名称不合法")
+    return '"' + name + '"'
+
+
+def _quote_col(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def parse_device_table_columns(columns_info):
+    """校验并解析设备宽表列定义，返回 [(metric, kind), ...]；结构不合法返回 None。"""
+    if len(columns_info) < 2:
+        return None
+    if columns_info[0][1] != "idx" or columns_info[1][1] != "name":
+        return None
+    if not columns_info[0][5]:
+        return None
+    rest = columns_info[2:]
+    if len(rest) % len(SUFFIXES) != 0:
+        return None
+    metrics = []
+    step = len(SUFFIXES)
+    for offset in range(0, len(rest), step):
+        group = rest[offset : offset + step]
+        metric = group[0][1]
+        if (
+            not _METRIC_NAME_RE.fullmatch(metric)
+            or metric in {"idx", "name"}
+            or metric.endswith(SUFFIXES[1:])
+        ):
+            return None
+        if [row[1] for row in group] != [metric + suffix for suffix in SUFFIXES]:
+            return None
+        col_type = str(group[0][2] or "").upper()
+        kind = "yx" if col_type == "INTEGER" else "yc"
+        metrics.append((metric, kind))
+    return metrics
+
+
+def discover_device_tables(con):
+    """发现库内全部合法设备宽表，返回有序列表 [(table_name, [(metric, kind), ...]), ...]。"""
+    all_tables = [
+        row[0]
+        for row in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        )
+    ]
+    result = []
+    for table in all_tables:
+        if (
+            table.startswith("sqlite_")
+            or table in RTDB_METADATA_TABLES
+            or table in LEGACY_AUX_TABLES
+            or not _TABLE_NAME_RE.fullmatch(table)
+        ):
+            continue
+        info = con.execute(f'PRAGMA table_info("{table}")').fetchall()
+        metrics = parse_device_table_columns(info)
+        if metrics is not None:
+            result.append((table, metrics))
+    return result
+
+
 def validate_database(path):
+    """只读校验 scdfe_d 设备数据库：仅允许合法设备宽表与 RTDB 元数据表。"""
     try:
         path = Path(path).resolve()
+        if not path.is_file():
+            raise ValueError("设备数据库文件不存在")
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as con:
             if con.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("数据库完整性检查失败")
-            if con.execute("PRAGMA application_id").fetchone()[0] not in (
-                0,
-                APPLICATION_ID,
-            ):
+            app_id = con.execute("PRAGMA application_id").fetchone()[0]
+            if app_id not in (0, APPLICATION_ID):
                 raise ValueError("不是 scdfe_d 设备数据库")
-            for table, columns in REQUIRED.items():
-                found = {r[1] for r in con.execute(f'PRAGMA table_info("{table}")')}
-                if not columns <= found:
-                    raise ValueError(f"缺少设备库表或字段：{table}")
-            if con.execute("PRAGMA foreign_key_check").fetchone():
-                raise ValueError("设备库存在无效的关联关系")
+            raw_tables = [
+                r[0]
+                for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                )
+                if not r[0].startswith("sqlite_")
+            ]
+            # 拦截 scdfe_c 采集业务库、连接记录库等非设备库
+            if {"_scada_schema", "fes_rtu_define"} & set(raw_tables) or {
+                "fes_yc_define",
+                "fes_yx_define",
+            } & set(raw_tables):
+                raise ValueError("不是 scdfe_d 设备数据库")
+
+            device_tables = []
+            for table in raw_tables:
+                if table in RTDB_METADATA_TABLES or table in LEGACY_AUX_TABLES:
+                    continue
+                if not _TABLE_NAME_RE.fullmatch(table):
+                    raise ValueError(f"包含非设备表：{table}")
+                info = con.execute(f'PRAGMA table_info("{table}")').fetchall()
+                metrics = parse_device_table_columns(info)
+                if metrics is None:
+                    raise ValueError(f"设备表结构不合法：{table}")
+                device_tables.append((table, metrics))
+
+            if app_id == 0 and not device_tables:
+                raise ValueError("数据库中没有合法设备表")
+
+            device_count = 0
+            metric_slots = 0
+            bound_count = 0
+            for table, metrics in device_tables:
+                quoted = _quote_table(table)
+                cnt = con.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]
+                device_count += cnt
+                metric_slots += cnt * len(metrics)
+                if cnt and metrics:
+                    expr = " + ".join(
+                        f'(CASE WHEN {_quote_col(m + "_rtu")} IS NOT NULL AND {_quote_col(m + "_pnt")} IS NOT NULL THEN 1 ELSE 0 END)'
+                        for m, _ in metrics
+                    )
+                    bound_count += con.execute(
+                        f"SELECT coalesce(sum({expr}), 0) FROM {quoted}"
+                    ).fetchone()[0]
+
             counts = {
-                name: con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-                for name in ("device", "device_measurement", "scada_point_mapping")
+                "device_tables": len(device_tables),
+                "device": device_count,
+                "device_measurement": bound_count if bound_count else metric_slots,
+                "scada_point_mapping": bound_count,
             }
-            if con.execute(
-                "SELECT 1 FROM device_measurement WHERE kind NOT IN ('yc','yx') OR weight<=0 OR max_age_seconds<=0 LIMIT 1"
-            ).fetchone():
-                raise ValueError("设备量测定义不合法")
-            for (raw,) in con.execute("SELECT model_json FROM device"):
-                if not isinstance(json.loads(raw), dict):
-                    raise ValueError("设备模型必须是 JSON 对象")
         return dict(valid=True, message="设备数据库校验通过", counts=counts)
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         return dict(valid=False, message=f"无效的设备数据库：{exc}")
 
 
+def drop_legacy_tables(db_path, *, vacuum=True):
+    """清理旧版 scdfe_d 库中的冗余辅助表与同步触发器，仅保留设备宽表与 RTDB 元数据表。"""
+    path = Path(db_path).resolve()
+    removed_tables = []
+    removed_triggers = []
+    with closing(sqlite3.connect(path, timeout=30)) as con:
+        con.execute("PRAGMA foreign_keys=OFF")
+        with con:
+            con.execute("BEGIN IMMEDIATE")
+            triggers = [
+                r[0]
+                for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger'"
+                )
+                if r[0].startswith("d_binding_")
+            ]
+            for trig in triggers:
+                con.execute(f'DROP TRIGGER IF EXISTS "{trig.replace(chr(34), chr(34) * 2)}"')
+                removed_triggers.append(trig)
+            for category in CATEGORIES:
+                con.execute(f'DROP VIEW IF EXISTS "device_{category}"')
+            existing = {
+                r[0]
+                for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            for table in (
+                "measurement_value",
+                "measurement_refresh",
+                "scada_point_mapping",
+                "device_measurement",
+                "d_device_members",
+                "d_device_tables",
+                "device",
+                "input_change_log",
+                "d_settings",
+            ):
+                if table in existing:
+                    con.execute(f'DROP TABLE "{table}"')
+                    removed_tables.append(table)
+            dev_tables = [t for t, _ in discover_device_tables(con)]
+            sync_embedded_schema(con, include_tables=dev_tables)
+            con.execute(f"PRAGMA application_id={APPLICATION_ID}")
+            con.execute(f"PRAGMA user_version={SCHEMA_USER_VERSION}")
+        if vacuum:
+            con.execute("VACUUM")
+    return dict(
+        removed_tables=removed_tables,
+        removed_triggers=len(removed_triggers),
+        device_tables=dev_tables,
+    )
+
+
 class DeviceStore:
-    def __init__(self, db_path, schema_dir=None, *, workspace_root=None, connection_pool_size=0):
+    def __init__(
+        self,
+        db_path,
+        schema_dir=None,
+        *,
+        workspace_root=None,
+        connection_pool_size=0,
+        source_database=None,
+        interval_seconds=DEFAULT_INTERVAL_SECONDS,
+        max_age_seconds=DEFAULT_MAX_AGE_SECONDS,
+    ):
         self.db_path = Path(db_path).resolve()
         self.root = Path(workspace_root or self.db_path.parent).resolve()
         if not self.db_path.is_relative_to(self.root):
@@ -207,7 +331,26 @@ class DeviceStore:
         self._connection_pool = []
         self._pool_closed = False
         self._config_epoch = 0
-        self._table_types_cache = {}
+        self._interval_seconds = int(validate_interval(interval_seconds))
+        self._max_age_seconds = float(max_age_seconds)
+        self._source_database = (
+            str(source_database).strip() if source_database else None
+        )
+        # 确定性内存 ID 映射与运行时缓存（不写额外辅助表）
+        self._device_ids = {}
+        self._id_to_device = {}
+        self._next_device_id = 1
+        self._meas_ids = {}
+        self._id_to_meas = {}
+        self._next_meas_id = 1
+        self._versions = {}
+        self._runtime_meta = {}  # (table, idx, metric) -> {valid, reason, collected_at}
+        self._last_bound_points = {}  # (table, idx, metric) -> (rtu_id, pnt_no)
+        self._refresh_seq = 0
+        self._refresh_history = deque(maxlen=MAX_HISTORY_ITEMS)
+        self._change_history = deque(maxlen=MAX_HISTORY_ITEMS)
+        self._schema_cache = None  # (schema_version, [(table, [(metric, kind), ...])])
+
         existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
         if existing:
             result = validate_database(self.db_path)
@@ -215,193 +358,30 @@ class DeviceStore:
                 raise ValueError(result["message"])
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._open_connection()) as init_con:
-            mode = str(init_con.execute("PRAGMA journal_mode").fetchone()[0] or "").lower()
+            mode = str(
+                init_con.execute("PRAGMA journal_mode").fetchone()[0] or ""
+            ).lower()
             if mode != "wal":
                 init_con.execute("PRAGMA journal_mode=WAL")
-            if existing and self._schema_ready(init_con):
-                return
-        with self.connection() as con:
-            con.executescript(
-                "BEGIN IMMEDIATE;\n"
-                + Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
-            )
-            for table, name, definition in [
-                ("device", "category", "TEXT NOT NULL DEFAULT 'other'"),
-                ("device_measurement", "notuse", "INTEGER NOT NULL DEFAULT 0"),
-                ("device_measurement", "quantity_table", "TEXT NOT NULL DEFAULT ''"),
-                ("measurement_value", "previous_value", "REAL"),
-            ]:
-                if name not in {
-                    r[1] for r in con.execute(f"PRAGMA table_info({table})")
-                }:
-                    con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-                    if name == "category":
-                        for row in con.execute(
-                            "SELECT device_id,model_table,model_json FROM device"
-                        ).fetchall():
-                            con.execute(
-                                "UPDATE device SET category=? WHERE device_id=?",
-                                (
-                                    category_for(
-                                        row["model_table"],
-                                        json.loads(row["model_json"]),
-                                    ),
-                                    row["device_id"],
-                                ),
-                            )
-            con.execute(
-                "CREATE TABLE IF NOT EXISTS d_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL)"
-            )
-            con.execute(
-                "CREATE TABLE IF NOT EXISTS d_device_tables (table_name TEXT PRIMARY KEY)"
-            )
-            con.execute("""CREATE TABLE IF NOT EXISTS d_device_members (table_name TEXT NOT NULL REFERENCES d_device_tables(table_name),
-                idx INTEGER NOT NULL,name TEXT NOT NULL,device_id INTEGER NOT NULL REFERENCES device(device_id),PRIMARY KEY(table_name,idx))""")
-            con.execute(
-                "INSERT OR IGNORE INTO d_settings VALUES('interval_seconds',?)",
-                (str(DEFAULT_INTERVAL_SECONDS),),
-            )
-            seconds = str(stored_interval(con))
-            con.execute(
-                "UPDATE d_settings SET value=? WHERE key='interval_seconds' AND value<>?",
-                (seconds, seconds),
-            )
-            # The imported catalog used a file name relative to the device DB.
-            # Convert this legacy format once to paths relative to the Web root.
-            if not con.execute(
-                "SELECT 1 FROM d_settings WHERE key='root_paths'"
-            ).fetchone():
-                for (value,) in con.execute(
-                    "SELECT DISTINCT source_database FROM scada_point_mapping"
-                ).fetchall():
-                    path = Path(value)
-                    path = (
-                        path if path.is_absolute() else self.db_path.parent / path
-                    ).resolve()
-                    if not path.is_relative_to(self.root):
-                        raise ValueError("已有映射源数据库超出工作区根目录")
-                    con.execute(
-                        "UPDATE scada_point_mapping SET source_database=? WHERE source_database=?",
-                        (path.relative_to(self.root).as_posix(), value),
-                    )
-                con.execute("INSERT INTO d_settings VALUES('root_paths','1')")
-            con.execute(f"PRAGMA application_id={APPLICATION_ID}")
-            con.execute("PRAGMA user_version=3")
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_measurement_device ON device_measurement(device_id,metric)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_device_members_device_table ON d_device_members(device_id,table_name)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_measurement_value_refresh ON measurement_value(refresh_id)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_measurement_active_device ON device_measurement(catalog_active,device_id)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_measurement_value_valid ON measurement_value(valid)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_device_category ON device(category)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_mapping_source_db ON scada_point_mapping(source_database)"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS d_measurement_qty_device ON device_measurement(quantity_table,device_id)"
-            )
-            self._tables(con, sync_schema=True)
+            if not existing or not self._schema_ready(init_con):
+                with init_con:
+                    init_con.execute("BEGIN IMMEDIATE")
+                    dev_tables = [t for t, _ in discover_device_tables(init_con)]
+                    sync_embedded_schema(init_con, include_tables=dev_tables)
+                    init_con.execute(f"PRAGMA application_id={APPLICATION_ID}")
+                    init_con.execute(f"PRAGMA user_version={SCHEMA_USER_VERSION}")
 
     @staticmethod
     def _schema_ready(con):
-        """检查已有设备库是否已满足最新版本结构与索引，命中时跳过全量重建。"""
         if con.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
             return False
-        if con.execute("PRAGMA user_version").fetchone()[0] != 3:
+        if con.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_USER_VERSION:
             return False
-        objects = {
-            (row[0], row[1])
-            for row in con.execute(
-                "SELECT type, name FROM sqlite_master WHERE type IN ('table','index')"
-            )
+        tables = {
+            r[0]
+            for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        required_tables = {
-            "d_settings",
-            "d_device_tables",
-            "d_device_members",
-            "rtdb_schema_tables",
-            "rtdb_schema_columns",
-        }
-        if not all(("table", name) in objects for name in required_tables):
-            return False
-        required_indexes = {
-            "d_measurement_device",
-            "d_device_members_device_table",
-            "d_measurement_value_refresh",
-            "d_measurement_active_device",
-            "d_measurement_value_valid",
-            "d_device_category",
-            "d_mapping_source_db",
-            "d_measurement_qty_device",
-        }
-        if not all(("index", name) in objects for name in required_indexes):
-            return False
-        for table, column in (
-            ("device", "category"),
-            ("device_measurement", "notuse"),
-            ("device_measurement", "quantity_table"),
-            ("measurement_value", "previous_value"),
-        ):
-            if column not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
-                return False
-        settings = dict(
-            con.execute(
-                "SELECT key, value FROM d_settings WHERE key IN ('root_paths','interval_seconds')"
-            ).fetchall()
-        )
-        if settings.get("root_paths") != "1":
-            return False
-        interval_raw = settings.get("interval_seconds")
-        if interval_raw is None or interval_raw != str(stored_interval(con)):
-            return False
-        if con.execute(
-            "SELECT 1 FROM device_measurement WHERE catalog_active=1 AND quantity_table='' LIMIT 1"
-        ).fetchone():
-            return False
-        registered_tables = {
-            row[0] for row in con.execute("SELECT table_name FROM d_device_tables")
-        }
-        device_tables = {
-            row[0] for row in con.execute("SELECT DISTINCT model_table FROM device")
-        }
-        if not device_tables <= registered_tables:
-            return False
-        if not all(("table", name) in objects for name in registered_tables):
-            return False
-        return True
-
-    def bump_config_epoch(self):
-        """配置变更后递增内存版本号，使采集器的映射缓存及时失效。"""
-        with self._mutex:
-            self._config_epoch += 1
-
-    def table_column_types(self, con, table):
-        """按 schema_version 缓存设备宽表列类型，避免高频实时轮询重复执行 PRAGMA。"""
-        schema_ver = con.execute("PRAGMA schema_version").fetchone()[0]
-        cache_key = (table, schema_ver)
-        with self._mutex:
-            cached = self._table_types_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        table_sql = self._table_name(table)
-        types = {row[1]: row[2] for row in con.execute(f"PRAGMA table_info({table_sql})")}
-        with self._mutex:
-            # 清理同一表旧 schema_version 缓存，防止字典膨胀
-            for key in [k for k in self._table_types_cache if k[0] == table]:
-                self._table_types_cache.pop(key, None)
-            self._table_types_cache[cache_key] = types
-        return types
+        return RTDB_METADATA_TABLES <= tables
 
     def _open_connection(self):
         con = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
@@ -425,7 +405,11 @@ class DeviceStore:
             return
         with self._mutex:
             use_pool = self.connection_pool_size > 0 and not self._pool_closed
-            con = self._connection_pool.pop() if (use_pool and self._connection_pool) else None
+            con = (
+                self._connection_pool.pop()
+                if (use_pool and self._connection_pool)
+                else None
+            )
         if not use_pool:
             with closing(self._open_connection()) as fresh, fresh:
                 yield fresh
@@ -443,7 +427,10 @@ class DeviceStore:
             reused = False
             if healthy:
                 with self._mutex:
-                    if not self._pool_closed and len(self._connection_pool) < self.connection_pool_size:
+                    if (
+                        not self._pool_closed
+                        and len(self._connection_pool) < self.connection_pool_size
+                    ):
                         self._connection_pool.append(con)
                         reused = True
             if not reused:
@@ -457,381 +444,267 @@ class DeviceStore:
 
     @staticmethod
     def _table_name(name):
-        if not isinstance(name, str) or not re.fullmatch(
-            r"[A-Z][A-Za-z0-9_]{0,63}", name
-        ):
-            raise ValueError("模型设备表名称不合法")
-        return '"' + name + '"'
+        return _quote_table(name)
 
-    def _tables(
-        self,
-        con,
-        *,
-        sync_schema=False,
-        target_tables=None,
-        target_device_ids=None,
-    ):
-        """Reconcile device tables to their model membership and owned quantities."""
-        full_mode = target_tables is None and target_device_ids is None
-        if target_device_ids is not None:
-            dev_ids = sorted({int(did) for did in target_device_ids})
-            if dev_ids:
-                placeholders = ",".join("?" for _ in dev_ids)
-                dev_rows = con.execute(
-                    f"SELECT device_id,model_table,model_idx,name FROM device WHERE device_id IN ({placeholders})",
-                    dev_ids,
-                ).fetchall()
-            else:
-                dev_rows = []
-        else:
-            dev_rows = con.execute(
-                "SELECT device_id,model_table,model_idx,name FROM device"
-            ).fetchall()
-        table_rows = []
-        member_rows = []
-        seen_tables = set()
-        for d in dev_rows:
-            model_table = d["model_table"]
-            self._table_name(model_table)
-            if model_table not in seen_tables:
-                seen_tables.add(model_table)
-                table_rows.append((model_table,))
-            member_rows.append((model_table, d["model_idx"], d["name"], d["device_id"]))
-        if table_rows:
-            con.executemany("INSERT OR IGNORE INTO d_device_tables VALUES(?)", table_rows)
-        if member_rows:
-            con.executemany(
-                "INSERT INTO d_device_members VALUES(?,?,?,?) ON CONFLICT(table_name,idx) DO UPDATE SET name=excluded.name,device_id=excluded.device_id",
-                member_rows,
-            )
-        tables = [
-            row[0]
-            for row in con.execute(
-                "SELECT table_name FROM d_device_tables ORDER BY table_name"
-            )
-        ]
-        if full_mode:
-            scope_set = set(tables)
-        else:
-            scope_set = set(target_tables or ()) | seen_tables
-            if target_device_ids:
-                dev_ids = sorted({int(did) for did in target_device_ids})
-                placeholders = ",".join("?" for _ in dev_ids)
-                for (tbl,) in con.execute(
-                    f"SELECT DISTINCT table_name FROM d_device_members WHERE device_id IN ({placeholders})",
-                    dev_ids,
-                ):
-                    scope_set.add(tbl)
-            scope_set &= set(tables)
+    def bump_config_epoch(self):
+        with self._mutex:
+            self._config_epoch += 1
+            self._schema_cache = None
 
-        metrics_by_table = {table: {} for table in tables}
-        locations = {}
-        ext_tables = tuple(EXTENSION_METRICS)
-        ext_placeholders = ",".join("?" for _ in ext_tables)
-        for table, device_id in con.execute(
-            f"SELECT table_name,device_id FROM d_device_members WHERE table_name IN ({ext_placeholders})",
-            ext_tables,
-        ):
-            for metric in EXTENSION_METRICS[table]:
-                key = (device_id, metric)
-                if key in locations:
-                    raise ApiError(
-                        400, f"同一设备存在重复量测扩展定义：{table}.{metric}"
-                    )
-                locations[key] = table
-        for table, (analog, signals) in UNBOUND_PROFILES.items():
-            if table in metrics_by_table:
-                metrics_by_table[table].update(dict.fromkeys(analog, "yc"))
-                metrics_by_table[table].update(dict.fromkeys(signals, "yx"))
+    def get_interval(self):
+        with self._mutex:
+            return self._interval_seconds
 
-        if full_mode:
-            active = con.execute(
-                """SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,d.model_table
-                FROM device_measurement m JOIN device d USING(device_id) WHERE m.catalog_active=1"""
-            ).fetchall()
-        elif scope_set:
-            t_list = sorted(scope_set)
-            t_ph = ",".join("?" for _ in t_list)
-            conds = [
-                f"m.quantity_table IN ({t_ph})",
-                f"d.model_table IN ({t_ph})",
-                "m.quantity_table=''",
-            ]
-            params = t_list + t_list
-            if target_device_ids:
-                d_list = sorted({int(did) for did in target_device_ids})
-                d_ph = ",".join("?" for _ in d_list)
-                conds.append(f"m.device_id IN ({d_ph})")
-                params.extend(d_list)
-            active = con.execute(
-                f"""SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,d.model_table
-                FROM device_measurement m JOIN device d USING(device_id)
-                WHERE m.catalog_active=1 AND ({' OR '.join(conds)})""",
-                params,
-            ).fetchall()
-        else:
-            active = []
+    def set_interval_value(self, value):
+        interval = validate_interval(value)
+        with self._mutex:
+            previous = self._interval_seconds
+            self._interval_seconds = interval
+            if interval != previous:
+                self._record_change(
+                    "collector_interval",
+                    None,
+                    {"interval_seconds": previous},
+                    {"interval_seconds": interval},
+                )
+        return interval
 
-        qty_updates = []
-        for row in active:
-            metric, kind = row["metric"], row["kind"]
-            if (
-                not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", metric)
-                or metric in {"idx", "name"}
-                or metric.endswith(SUFFIXES[1:])
-            ):
-                raise ApiError(400, f"量测属性名无效：{metric}")
-            table = locations.get((row["device_id"], metric), row["model_table"])
-            current_kind = metrics_by_table[table].setdefault(metric, kind)
-            if current_kind != kind:
-                raise ApiError(400, f"同一设备表的量测类型必须一致：{table}.{metric}")
-            if row["quantity_table"] != table:
-                qty_updates.append((table, row["measurement_id"]))
-                if not full_mode:
-                    scope_set.add(table)
-        if qty_updates:
-            con.executemany(
-                "UPDATE device_measurement SET quantity_table=? WHERE measurement_id=?",
-                qty_updates,
+    def default_source_database(self):
+        """解析默认源 SCADA 采集库（优先显式配置，其次同目录 scdfe_c.sqlite3）。"""
+        with self._mutex:
+            explicit = self._source_database
+        if explicit:
+            return explicit
+        for candidate in ("scdfe_c.sqlite3", "c.sqlite3"):
+            path = (self.db_path.parent / candidate).resolve()
+            if path.is_file() and path.is_relative_to(self.root):
+                return path.relative_to(self.root).as_posix()
+        fallback = (self.db_path.parent / "scdfe_c.sqlite3").resolve()
+        if fallback.is_relative_to(self.root):
+            return fallback.relative_to(self.root).as_posix()
+        return "scdfe_c.sqlite3"
+
+    def set_source_database(self, relative_path):
+        if relative_path:
+            self.source_path(relative_path)
+            with self._mutex:
+                self._source_database = relative_path
+                self._config_epoch += 1
+
+    def _record_change(self, entity, entity_id, before, after):
+        with self._mutex:
+            change_id = len(self._change_history) + 1
+            if self._change_history:
+                change_id = self._change_history[0]["change_id"] + 1
+            self._change_history.appendleft(
+                dict(
+                    change_id=change_id,
+                    changed_at=utc_now(),
+                    entity=entity,
+                    entity_id=entity_id,
+                    before_json=json.dumps(before, ensure_ascii=False),
+                    after_json=json.dumps(after, ensure_ascii=False),
+                )
             )
 
-        scope_tables = [t for t in tables if t in scope_set]
-        # 一次性加载当前所有触发器定义，避免逐量测查询 sqlite_master
-        existing_triggers = {
-            row[0]: row[1]
-            for row in con.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
-            )
+    def _audit(self, _con, entity, key, before, after):
+        self._record_change(entity, key, before, after)
+
+    def _get_table_schemas(self, con):
+        """按 schema_version 缓存所有设备宽表结构 [(table, [(metric, kind), ...]), ...]。"""
+        schema_ver = con.execute("PRAGMA schema_version").fetchone()[0]
+        with self._mutex:
+            if self._schema_cache is not None and self._schema_cache[0] == schema_ver:
+                return self._schema_cache[1]
+        schemas = discover_device_tables(con)
+        with self._mutex:
+            self._schema_cache = (schema_ver, schemas)
+        return schemas
+
+    def table_metrics(self, con, table):
+        for tbl, metrics in self._get_table_schemas(con):
+            if tbl == table:
+                return metrics
+        return None
+
+    def table_column_types(self, con, table):
+        metrics = self.table_metrics(con, table)
+        if metrics is None:
+            return {}
+        return {
+            metric: ("INTEGER" if kind == "yx" else "REAL")
+            for metric, kind in metrics
         }
-        rebuilt_tables = set()
-        for table in scope_tables:
-            name = self._table_name(table)
-            metrics = sorted(metrics_by_table[table].items(), key=metric_order)
-            columns = [
-                column
-                for metric, kind in metrics
-                for column in measurement_columns(metric, kind)
-            ]
-            expected = [("idx", "INTEGER", None, 1), ("name", "TEXT", None, 0)]
-            expected.extend(
-                (column, kind, default.removeprefix(" DEFAULT ") or None, 0)
-                for column, kind, default in columns
-            )
-            actual = [
-                (row[1], row[2], row[4], row[5])
-                for row in con.execute(f"PRAGMA table_info({name})")
-            ]
-            if actual != expected:
-                if actual:
-                    con.execute(f"DROP TABLE {name}")
-                definitions = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
-                definitions.extend(
-                    f'"{column}" {kind}{default}' for column, kind, default in columns
-                )
-                con.execute(f"CREATE TABLE {name} ({', '.join(definitions)})")
-                sync_schema = True
-                rebuilt_tables.add(table)
-                # DROP TABLE 会级联删除该表触发器，需清除对应的内存缓存项
-                prefix = f"d_binding_{table}_"
-                for trig in [k for k in existing_triggers if k.startswith(prefix)]:
-                    existing_triggers.pop(trig, None)
-            for metric, _ in metrics:
-                self._ensure_binding_trigger(
-                    con, table, metric, existing_triggers=existing_triggers
-                )
-            con.execute(
-                f"DELETE FROM {name} WHERE idx NOT IN (SELECT idx FROM d_device_members WHERE table_name=?)",
-                (table,),
-            )
-            con.execute(
-                f"INSERT INTO {name}(idx,name) SELECT idx,name FROM d_device_members WHERE table_name=? ON CONFLICT(idx) DO UPDATE SET name=excluded.name WHERE name IS NOT excluded.name",
-                (table,),
-            )
-        if full_mode:
-            for category in CATEGORIES:
-                con.execute(f"DROP VIEW IF EXISTS device_{category}")
-        self._write_tables(
-            con,
-            target_tables=None if full_mode else scope_tables,
-            target_device_ids=None if full_mode else target_device_ids,
-            full_tables=rebuilt_tables,
-        )
-        if sync_schema:
-            sync_embedded_schema(con, include_tables=tables)
 
-    def _ensure_binding_trigger(self, con, table, metric, *, existing_triggers=None):
-        # Direct edits to an existing mapping are reflected in the collector's definition.
-        name = self._table_name(table)
-        mid = f"""(SELECT m.measurement_id FROM device_measurement m JOIN d_device_members b USING(device_id)
-            WHERE b.table_name='{table}' AND b.idx=NEW.idx AND m.quantity_table=b.table_name
-                AND m.metric='{metric}' AND m.catalog_active=1)"""
-        trigger_name = f"d_binding_{table}_{metric}"
-        trigger = f'"{trigger_name}"'
-        definition = f'''CREATE TRIGGER {trigger} AFTER UPDATE OF "{metric}_rtu","{metric}_pnt","{metric}_notuse","{metric}_weight" ON {name}
-                    WHEN EXISTS(SELECT 1 FROM device_measurement m JOIN scada_point_mapping s USING(measurement_id)
-                      WHERE m.measurement_id={mid} AND (s.rtu_id IS NOT NEW."{metric}_rtu" OR s.pnt_no IS NOT NEW."{metric}_pnt"
-                        OR m.notuse IS NOT NEW."{metric}_notuse" OR m.weight IS NOT NEW."{metric}_weight")) BEGIN
-                    SELECT CASE WHEN NEW."{metric}_notuse" NOT IN (0,1) OR NEW."{metric}_weight"<=0
-                      OR NEW."{metric}_notuse" IS NULL OR NEW."{metric}_weight" IS NULL
-                      THEN RAISE(ABORT,'invalid device measurement configuration') END;
-                    DELETE FROM measurement_value WHERE measurement_id={mid} AND EXISTS(SELECT 1 FROM scada_point_mapping s
-                      WHERE s.measurement_id={mid} AND (s.rtu_id IS NOT NEW."{metric}_rtu" OR s.pnt_no IS NOT NEW."{metric}_pnt"));
-                    UPDATE scada_point_mapping SET rtu_id=NEW."{metric}_rtu",pnt_no=NEW."{metric}_pnt",version=version+1,
-                      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE measurement_id={mid};
-                    UPDATE device_measurement SET notuse=NEW."{metric}_notuse",weight=NEW."{metric}_weight",version=version+1,
-                      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE measurement_id={mid};
-                    UPDATE measurement_value SET valid=0,reason='definition_changed' WHERE measurement_id={mid};
-                    END'''
-        if existing_triggers is not None:
-            current_sql = existing_triggers.get(trigger_name)
-        else:
-            row = con.execute(
-                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
-                (trigger_name,),
-            ).fetchone()
-            current_sql = row[0] if row is not None else None
-        if current_sql != definition:
-            con.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-            con.execute(definition)
-            if existing_triggers is not None:
-                existing_triggers[trigger_name] = definition
+    def device_id_for(self, table, idx, *, con=None):
+        key = (table, int(idx))
+        with self._mutex:
+            did = self._device_ids.get(key)
+            if did is not None:
+                return did
+            empty = not self._device_ids
+        if empty and con is not None:
+            self._prime_device_ids(con)
+        with self._mutex:
+            did = self._device_ids.get(key)
+            if did is None:
+                did = self._next_device_id
+                self._next_device_id += 1
+                self._device_ids[key] = did
+                self._id_to_device[did] = key
+            return did
 
-    def _write_tables(
-        self, con, *, target_tables=None, target_device_ids=None, full_tables=None
-    ):
-        if target_tables is None:
-            tables = [
-                row[0] for row in con.execute("SELECT table_name FROM d_device_tables")
-            ]
-        else:
-            tables = list(target_tables)
-        if not tables:
-            return
-        full_set = set(full_tables or ())
-        dev_filter = (
-            sorted({int(did) for did in target_device_ids})
-            if target_device_ids is not None
-            else None
-        )
-        need_all_devs_for_some = dev_filter is None or any(t in full_set for t in tables)
+    def resolve_device_id(self, con, device_id):
+        did = int(device_id)
+        with self._mutex:
+            target = self._id_to_device.get(did)
+        if target is not None:
+            return target
+        # 若尚未初始化索引（例如服务重启后直调），扫描一次表建立确定性映射
+        self._prime_device_ids(con)
+        with self._mutex:
+            return self._id_to_device.get(did)
 
-        meas_sql = """SELECT m.device_id,m.quantity_table,m.metric,m.notuse,m.weight,
-                s.rtu_id,s.pnt_no,v.value,v.previous_value,v.quality,v.source_time_ms,v.valid
-                FROM device_measurement m LEFT JOIN scada_point_mapping s USING(measurement_id)
-                LEFT JOIN measurement_value v USING(measurement_id) WHERE m.catalog_active=1"""
-        meas_params = []
-        if target_tables is not None:
-            t_ph = ",".join("?" for _ in tables)
-            meas_sql += f" AND m.quantity_table IN ({t_ph})"
-            meas_params.extend(tables)
-        if not need_all_devs_for_some and dev_filter:
-            d_ph = ",".join("?" for _ in dev_filter)
-            meas_sql += f" AND m.device_id IN ({d_ph})"
-            meas_params.extend(dev_filter)
+    def measurement_id_for(self, table, idx, metric, *, con=None):
+        key = (table, int(idx), str(metric))
+        with self._mutex:
+            mid = self._meas_ids.get(key)
+            if mid is not None:
+                return mid
+            empty = not self._meas_ids
+        if empty and con is not None:
+            self._prime_measurement_ids(con)
+        with self._mutex:
+            mid = self._meas_ids.get(key)
+            if mid is None:
+                mid = self._next_meas_id
+                self._next_meas_id += 1
+                self._meas_ids[key] = mid
+                self._id_to_meas[mid] = key
+            return mid
 
+    def resolve_measurement_id(self, con, measurement_id):
+        mid = int(measurement_id)
+        with self._mutex:
+            target = self._id_to_meas.get(mid)
+        if target is not None:
+            return target
+        self._prime_measurement_ids(con)
+        with self._mutex:
+            return self._id_to_meas.get(mid)
+
+    def version_for(self, table, idx, metric):
+        key = (table, int(idx), str(metric))
+        with self._mutex:
+            return self._versions.get(key, 1)
+
+    def bump_version(self, table, idx, metric):
+        key = (table, int(idx), str(metric))
+        with self._mutex:
+            nxt = self._versions.get(key, 1) + 1
+            self._versions[key] = nxt
+            return nxt
+
+    def runtime_meta_for(self, table, idx, metric):
+        with self._mutex:
+            return self._runtime_meta.get((table, int(idx), str(metric)))
+
+    def set_runtime_meta(self, table, idx, metric, *, valid, reason, collected_at=None):
+        with self._mutex:
+            self._runtime_meta[(table, int(idx), str(metric))] = {
+                "valid": int(bool(valid)),
+                "reason": str(reason or ""),
+                "collected_at": collected_at,
+            }
+
+    def _prime_device_ids(self, con):
         cur = con.cursor()
         cur.row_factory = None
-        measurements = {}
-        for row in cur.execute(meas_sql, meas_params):
-            measurements.setdefault((row[0], row[1]), []).append(row)
+        for table, _ in self._get_table_schemas(con):
+            for (idx,) in cur.execute(
+                f"SELECT idx FROM {_quote_table(table)} ORDER BY idx"
+            ):
+                self.device_id_for(table, idx)
 
-        for table in tables:
-            name = self._table_name(table)
-            columns = [r[1] for r in con.execute(f"PRAGMA table_info({name})")][2:]
-            if not columns:
+    def _prime_measurement_ids(self, con):
+        cur = con.cursor()
+        cur.row_factory = None
+        for table, metrics in self._get_table_schemas(con):
+            if not metrics:
                 continue
-            # Include default values so removed properties never leave stale data.
-            base = {
-                c: 128
-                if c.endswith("_qual")
-                else 1
-                if c.endswith(("_notuse", "_weight"))
-                else None
-                for c in columns
-            }
-            if dev_filter is not None and table not in full_set:
-                if not dev_filter:
-                    continue
-                d_ph = ",".join("?" for _ in dev_filter)
-                members_iter = cur.execute(
-                    f"SELECT idx,device_id FROM d_device_members WHERE table_name=? AND device_id IN ({d_ph})",
-                    [table] + dev_filter,
-                )
-            else:
-                members_iter = cur.execute(
-                    "SELECT idx,device_id FROM d_device_members WHERE table_name=?",
-                    (table,),
-                )
-            rows = []
-            for idx, device_id in members_iter:
-                values = dict(base)
-                for (
-                    _did,
-                    _qtbl,
-                    metric,
-                    notuse,
-                    weight,
-                    rtu_id,
-                    pnt_no,
-                    val,
-                    prev_val,
-                    qual,
-                    src_time,
-                    valid,
-                ) in measurements.get((device_id, table), ()):
-                    quality = (qual or 0) if valid else (qual or 0) | 128
-                    group = (
-                        val,
-                        quality,
-                        prev_val,
-                        src_time,
-                        notuse,
-                        weight,
-                        rtu_id,
-                        pnt_no,
-                    )
-                    for suffix, value in zip(SUFFIXES, group):
-                        col = metric + suffix
-                        if col in values:
-                            values[col] = value
-                rows.append(tuple(values[c] for c in columns) + (idx,))
-            if rows:
-                con.executemany(
-                    f"UPDATE {name} SET "
-                    + ",".join('"' + c + '"=?' for c in columns)
-                    + " WHERE idx=?",
-                    rows,
-                )
+            for (idx,) in cur.execute(
+                f"SELECT idx FROM {_quote_table(table)} ORDER BY idx"
+            ):
+                for metric, _ in metrics:
+                    self.measurement_id_for(table, idx, metric)
 
-    def _write_runtime_values(self, con, changes):
-        """Publish just the changed runtime fields, without invoking binding triggers."""
-        if not changes:
-            return
-        updates = defaultdict(list)
-        device_ids = sorted({device_id for _, device_id in changes})
-        if len(device_ids) <= 500:
-            placeholders = ",".join("?" for _ in device_ids)
-            rows_iter = con.execute(
-                f"SELECT table_name,device_id,idx FROM d_device_members WHERE device_id IN ({placeholders})",
-                device_ids,
+    @staticmethod
+    def _infer_status(value, qual, stamp, notuse, rtu, pnt, cached_meta=None):
+        """根据设备宽表字段与内存采集元信息推导 valid 与中文状态原因码。"""
+        if rtu is None or pnt is None:
+            return 0, "unmapped", None
+        if cached_meta is not None:
+            return (
+                cached_meta["valid"],
+                cached_meta["reason"],
+                cached_meta["collected_at"],
             )
-        else:
-            rows_iter = con.execute(
-                "SELECT table_name,device_id,idx FROM d_device_members"
+        if notuse:
+            return 0, "notuse", None
+        if value is None and (stamp is None or stamp <= 0):
+            return 0, "uncollected", None
+        if qual is not None and (int(qual) & 128) == 0 and int(qual) == 0:
+            return 1, "", None
+        return 0, "bad_quality", None
+
+    def source_path(self, value):
+        if (
+            not isinstance(value, str)
+            or not value
+            or "\\" in value
+            or ":" in value
+            or "\0" in value
+            or PureWindowsPath(value).drive
+            or PurePosixPath(value).is_absolute()
+            or any(
+                p in ("", ".", "..") or p.endswith((" ", ".")) for p in value.split("/")
             )
-        for table, device_id, idx in rows_iter:
-            fields = changes.get((table, device_id))
-            if fields:
-                updates[table, tuple(fields)].append((*fields.values(), idx))
-        for (table, columns), rows in updates.items():
-            # Column names are validated by _tables; quote them also when reading
-            # a database that another SQLite client might have changed.
-            assignment = ",".join(
-                '"' + column.replace('"', '""') + '"=?' for column in columns
-            )
-            con.executemany(
-                f"UPDATE {self._table_name(table)} SET {assignment} WHERE idx=?", rows
-            )
+        ):
+            raise ApiError(400, "源数据库必须使用工作区根目录内的相对路径")
+        path = (self.root / value).resolve()
+        if not path.is_relative_to(self.root) or path == self.db_path:
+            raise ApiError(400, "源数据库路径越界或指向设备库自身")
+        return path
+
+    @contextmanager
+    def source(self, value=None):
+        source_name = value or self.default_source_database()
+        path = self.source_path(source_name)
+        try:
+            with closing(
+                sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
+            ) as con:
+                con.row_factory = sqlite3.Row
+                if con.execute("PRAGMA application_id").fetchone()[0] != 0:
+                    raise ApiError(400, "请选择 scdfe_c 的采集业务数据库")
+                for kind in ("yc", "yx"):
+                    columns = {
+                        r[1]
+                        for r in con.execute(f"PRAGMA table_info(fes_{kind}_define)")
+                    }
+                    if not {
+                        "rtu_id",
+                        "pnt_no",
+                        "name",
+                        "value",
+                        "status",
+                        "refresh_time",
+                    } <= columns:
+                        raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
+                con.execute("BEGIN")
+                yield con
+        except sqlite3.Error as exc:
+            raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
 
     @staticmethod
     def _source_values(connection, kind, keys, *, pk_cache=None):
@@ -851,10 +724,6 @@ class DeviceStore:
             has_pk = primary_key == {"rtu_id", "pnt_no"}
             if pk_cache is not None:
                 pk_cache[table] = has_pk
-        # Small, scattered bindings can use the source table's unique point key
-        # instead of scanning every point. For denser sets on a few RTUs, filter
-        # by the leading primary-key column rtu_id to avoid scanning unrelated RTUs.
-        # Keep the full duplicate check for legacy sources without that key.
         if has_pk:
             if len(keys) <= 128:
                 wanted = ",".join("(?,?)" for _ in keys)
@@ -890,524 +759,6 @@ class DeviceStore:
                     snapshot[key] = (value, status, stamp)
         return snapshot
 
-    def import_model(self, relative_path):
-        path = self.source_path(relative_path)
-        model = {}
-        try:
-            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as src:
-                src.execute("BEGIN")
-                for (table,) in src.execute(
-                    "SELECT table_name FROM rtdb_schema_tables ORDER BY ordinal"
-                ):
-                    if table in ("Model", "basevoltage", "HydroMedium"):
-                        continue
-                    fields = src.execute(
-                        "SELECT ordinal,eng_name FROM rtdb_schema_columns WHERE table_name=? ORDER BY ordinal",
-                        (table,),
-                    ).fetchall()
-                    keys = [r[1] for r in fields]
-                    if "idx" not in keys or (
-                        "name" not in keys and table not in EXTENSIONS
-                    ):
-                        continue
-                    self._table_name(table)
-                    columns = ",".join('"c' + str(int(i)) + '"' for i, _ in fields)
-                    model[table] = [
-                        dict(zip(keys, row))
-                        for row in src.execute(
-                            f'SELECT {columns} FROM "rtdb_data_{table}"'
-                        )
-                    ]
-        except (sqlite3.Error, OSError) as exc:
-            raise ApiError(400, "源文件不是有效的设备模型库") from exc
-        if not model:
-            raise ApiError(400, "模型库没有含 idx/name 的设备定义")
-        with self.connection() as con:
-            con.executemany(
-                "INSERT OR IGNORE INTO d_device_tables VALUES(?)",
-                [(table,) for table in model],
-            )
-            device_rows = []
-            for table, items in model.items():
-                if table in EXTENSIONS:
-                    continue
-                for item in items:
-                    device_rows.append(
-                        (
-                            table,
-                            int(item["idx"]),
-                            item["name"],
-                            json.dumps(item, ensure_ascii=False),
-                            category_for(table, item),
-                        )
-                    )
-            if device_rows:
-                con.executemany(
-                    """INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)
-                    ON CONFLICT(model_table,model_idx) DO UPDATE SET name=excluded.name,model_json=excluded.model_json,category=excluded.category""",
-                    device_rows,
-                )
-            # Extension tables use their own idx and the owning generator's name.
-            # Their property values and mappings reference the same physical device.
-            ext_needed_parents = sorted(
-                {
-                    parent
-                    for table, (parent, _key) in EXTENSIONS.items()
-                    if model.get(table)
-                }
-            )
-            parent_lookup = {}
-            if ext_needed_parents:
-                ph = ",".join("?" for _ in ext_needed_parents)
-                cur = con.cursor()
-                cur.row_factory = None
-                for m_table, m_idx, d_id, d_name in cur.execute(
-                    f"SELECT model_table,model_idx,device_id,name FROM device WHERE model_table IN ({ph})",
-                    ext_needed_parents,
-                ):
-                    parent_lookup[(m_table, m_idx)] = (d_id, d_name)
-            ext_member_rows = []
-            for table, (parent, key) in EXTENSIONS.items():
-                for item in model.get(table, []):
-                    found = parent_lookup.get((parent, item[key]))
-                    if not found:
-                        raise ApiError(400, f"{table} 中的设备关联不存在")
-                    ext_member_rows.append((table, int(item["idx"]), found[1], found[0]))
-            if ext_member_rows:
-                con.executemany(
-                    """INSERT INTO d_device_members VALUES(?,?,?,?) ON CONFLICT(table_name,idx)
-                    DO UPDATE SET name=excluded.name,device_id=excluded.device_id""",
-                    ext_member_rows,
-                )
-            self._tables(con)
-            con.execute(
-                "INSERT INTO d_settings VALUES('model_database',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (relative_path,),
-            )
-            self._audit(
-                con,
-                "model_import",
-                None,
-                {},
-                dict(path=relative_path, tables=len(model)),
-            )
-        self.bump_config_epoch()
-        return dict(
-            tables=len(model),
-            devices=sum(len(v) for k, v in model.items() if k not in EXTENSIONS),
-        )
-
-    def device_tables(self):
-        with self.connection() as con:
-            return [
-                dict(table_name=r[0], count=r[1])
-                for r in con.execute(
-                    "SELECT t.table_name,count(m.idx) FROM d_device_tables t LEFT JOIN d_device_members m USING(table_name) GROUP BY t.table_name ORDER BY t.table_name"
-                )
-            ]
-
-    def source_path(self, value):
-        if (
-            not isinstance(value, str)
-            or not value
-            or "\\" in value
-            or ":" in value
-            or "\0" in value
-            or PureWindowsPath(value).drive
-            or PurePosixPath(value).is_absolute()
-            or any(
-                p in ("", ".", "..") or p.endswith((" ", ".")) for p in value.split("/")
-            )
-        ):
-            raise ApiError(400, "源数据库必须使用工作区根目录内的相对路径")
-        path = (self.root / value).resolve()
-        if not path.is_relative_to(self.root) or path == self.db_path:
-            raise ApiError(400, "源数据库路径越界或指向设备库自身")
-        return path
-
-    @contextmanager
-    def source(self, value):
-        path = self.source_path(value)
-        try:
-            with closing(
-                sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)
-            ) as con:
-                con.row_factory = sqlite3.Row
-                if con.execute("PRAGMA application_id").fetchone()[0] != 0:
-                    raise ApiError(400, "请选择 scdfe_c 的采集业务数据库")
-                for kind in ("yc", "yx"):
-                    columns = {
-                        r[1]
-                        for r in con.execute(f"PRAGMA table_info(fes_{kind}_define)")
-                    }
-                    if (
-                        not {
-                            "rtu_id",
-                            "pnt_no",
-                            "name",
-                            "value",
-                            "status",
-                            "refresh_time",
-                        }
-                        <= columns
-                    ):
-                        raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
-                con.execute("BEGIN")
-                yield con
-        except sqlite3.Error as exc:
-            raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
-
-    def source_points(self, query):
-        kind = query.get("kind", "yc")
-        if kind not in ("yc", "yx"):
-            raise ApiError(400, "仅支持遥测 YC、遥信 YX")
-        where, args = [], []
-        if query.get("rtu_id"):
-            where.append("rtu_id=?")
-            args.append(int(query["rtu_id"]))
-        if query.get("q"):
-            where.append("instr(lower(name),lower(?))>0")
-            args.append(query["q"])
-        clause = " WHERE " + " AND ".join(where) if where else ""
-        page = max(1, int(query.get("page", 1)))
-        with self.source(query.get("source_database")) as con:
-            total = con.execute(
-                f"SELECT count(*) FROM fes_{kind}_define" + clause, args
-            ).fetchone()[0]
-            rows = con.execute(
-                f"SELECT rtu_id,pnt_no,name,value,status,refresh_time FROM fes_{kind}_define"
-                + clause
-                + " ORDER BY rtu_id,pnt_no LIMIT 50 OFFSET ?",
-                args + [(page - 1) * 50],
-            ).fetchall()
-        return dict(items=[dict(r) for r in rows], total=total, page=page, limit=50)
-
-    def create_device(self, data):
-        name, category = str(data.get("name", "")).strip(), data.get("category")
-        if not name or len(name) > 200 or category not in CATEGORIES:
-            raise ApiError(400, "请填写设备名称并选择设备类型")
-        table = "Manual_" + category
-        with self.connection() as con:
-            idx = con.execute(
-                "SELECT coalesce(max(model_idx),0)+1 FROM device WHERE model_table=?",
-                (table,),
-            ).fetchone()[0]
-            cur = con.execute(
-                "INSERT INTO device(model_table,model_idx,name,model_json,category) VALUES(?,?,?,?,?)",
-                (table, idx, name, "{}", category),
-            )
-            device_id = cur.lastrowid
-            result = dict(
-                con.execute(
-                    "SELECT * FROM device WHERE device_id=?", (device_id,)
-                ).fetchone()
-            )
-            self._audit(con, "device", device_id, {}, result)
-            self._tables(
-                con, target_tables={table}, target_device_ids={device_id}
-            )
-        self.bump_config_epoch()
-        return result
-
-    @staticmethod
-    def _audit(con, entity, key, before, after):
-        con.execute(
-            "INSERT INTO input_change_log(changed_at,entity,entity_id,before_json,after_json) VALUES(?,?,?,?,?)",
-            (
-                utc_now(),
-                entity,
-                key,
-                json.dumps(before, ensure_ascii=False),
-                json.dumps(after, ensure_ascii=False),
-            ),
-        )
-
-    def devices(self, query):
-        where, args = [], []
-        if query.get("category"):
-            where.append("d.category=?")
-            args.append(query["category"])
-        if query.get("q"):
-            where.append("instr(lower(d.name),lower(?))>0")
-            args.append(query["q"])
-        clause = " WHERE " + " AND ".join(where) if where else ""
-        with self.connection() as con:
-            rows = [
-                dict(r)
-                for r in con.execute(
-                    """SELECT d.*,count(m.measurement_id) measurement_count,
-                sum(CASE WHEN v.valid=1 THEN 1 ELSE 0 END) valid_count FROM device d
-                LEFT JOIN device_measurement m ON m.device_id=d.device_id AND m.catalog_active=1
-                LEFT JOIN measurement_value v USING(measurement_id)"""
-                    + clause
-                    + " GROUP BY d.device_id ORDER BY d.device_id",
-                    args,
-                )
-            ]
-            memberships = {}
-            for b in con.execute("SELECT * FROM d_device_members"):
-                memberships.setdefault(b["device_id"], []).append(
-                    dict(table=b["table_name"], idx=b["idx"])
-                )
-            return [dict(r, tables=memberships.get(r["device_id"], [])) for r in rows]
-
-    def measurements(self, query):
-        where, args = ["m.catalog_active=1"], []
-        for field in ("device_id", "kind"):
-            if query.get(field):
-                where.append("m." + field + "=?")
-                args.append(query[field])
-        need_device = bool(query.get("category"))
-        if need_device:
-            where.append("d.category=?")
-            args.append(query["category"])
-        if query.get("table"):
-            where.append("m.quantity_table=?")
-            args.append(query["table"])
-        if query.get("q"):
-            where.append(
-                "(instr(lower(m.name),lower(?))>0 OR instr(lower(m.metric),lower(?))>0)"
-            )
-            args += [query["q"]] * 2
-        need_value = query.get("invalid") == "1"
-        if need_value:
-            where.append("coalesce(v.valid,0)=0")
-        where_clause = " WHERE " + " AND ".join(where)
-        count_from = (
-            " FROM device_measurement m"
-            + (" JOIN device d USING(device_id)" if need_device else "")
-            + " JOIN d_device_members b ON b.device_id=m.device_id AND b.table_name=m.quantity_table"
-            + (" LEFT JOIN measurement_value v USING(measurement_id)" if need_value else "")
-            + where_clause
-        )
-        joined = (
-            """ FROM device_measurement m JOIN device d USING(device_id)
-            JOIN d_device_members b ON b.device_id=m.device_id AND b.table_name=m.quantity_table
-            LEFT JOIN scada_point_mapping s USING(measurement_id) LEFT JOIN measurement_value v USING(measurement_id)"""
-            + where_clause
-        )
-        page, limit = (
-            max(1, int(query.get("page", 1))),
-            min(200, max(1, int(query.get("limit", 50)))),
-        )
-        with self.connection() as con:
-            total = con.execute("SELECT count(*)" + count_from, args).fetchone()[0]
-            rows = con.execute(
-                """SELECT m.*,d.name device_name,d.category,s.source_database,s.rtu_id,s.pnt_no,
-                b.table_name model_table,b.idx model_idx,s.enabled,s.scale,s.offset,v.value,v.source_value,v.previous_value,v.quality,v.source_time_ms,
-                v.collected_at,coalesce(v.valid,0) valid,coalesce(v.reason,'uncollected') reason"""
-                + joined
-                + " ORDER BY m.device_id,m.measurement_id LIMIT ? OFFSET ?",
-                args + [limit, (page - 1) * limit],
-            ).fetchall()
-        return dict(items=[dict(r) for r in rows], total=total, page=page, limit=limit)
-
-    def save_measurement(self, data, measurement_id=None):
-        metric, kind = data.get("metric", ""), data.get("kind", "yc")
-        if (
-            not isinstance(metric, str)
-            or not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", metric)
-            or kind not in ("yc", "yx")
-        ):
-            raise ApiError(400, "属性名须为小写英文字母/数字/下划线，点类型须为 YC/YX")
-        if metric in ("idx", "name") or metric.endswith(
-            ("_qual", "_pre", "_time", "_notuse", "_weight", "_rtu", "_pnt")
-        ):
-            raise ApiError(400, "属性名不能使用量测元数据后缀")
-        source = data.get("source_database")
-        rtu, point, device_id = (
-            int(data["rtu_id"]),
-            int(data["pnt_no"]),
-            int(data["device_id"]),
-        )
-        weight, age, scale, offset = [
-            float(data.get(k, v))
-            for k, v in [
-                ("weight", 1),
-                ("max_age_seconds", 120),
-                ("scale", 1),
-                ("offset", 0),
-            ]
-        ]
-        if (
-            not all(math.isfinite(v) for v in (weight, age, scale, offset))
-            or weight <= 0
-            or age <= 0
-        ):
-            raise ApiError(400, "权重与超时必须为正数，变换参数必须为有限数值")
-        flags = {
-            key: int(data.get(key, default))
-            for key, default in [("enabled", 1), ("notuse", 0), ("se_enabled", 0)]
-        }
-        if any(v not in (0, 1) for v in flags.values()):
-            raise ApiError(400, "启用和禁用标记只能为 0 或 1")
-        if kind == "yx" and (scale != 1 or offset != 0):
-            raise ApiError(400, "遥信保持原状态值，不允许比例/偏移变换")
-        with self.source(source) as con:
-            found = con.execute(
-                f"SELECT name FROM fes_{kind}_define WHERE rtu_id=? AND pnt_no=?",
-                (rtu, point),
-            ).fetchall()
-            if len(found) != 1:
-                raise ApiError(400, "指定的源测点不存在或主键不唯一")
-            name = str(data.get("name") or found[0]["name"]).strip()
-        if not name or len(name) > 250 or len(str(data.get("unit", ""))) > 30:
-            raise ApiError(400, "属性名称或单位过长")
-        now = utc_now()
-        with self.connection() as con:
-            if not con.execute(
-                "SELECT 1 FROM device WHERE device_id=?", (device_id,)
-            ).fetchone():
-                raise ApiError(400, "目标设备不存在")
-            before = {}
-            version = 1
-            if measurement_id is not None:
-                row = con.execute(
-                    "SELECT * FROM device_measurement WHERE measurement_id=?",
-                    (measurement_id,),
-                ).fetchone()
-                if not row:
-                    raise ApiError(404, "属性不存在")
-                before = dict(row)
-                if int(data.get("version", 0)) != row["version"]:
-                    raise ApiError(409, "定义已被修改，请刷新后重试")
-                version = row["version"] + 1
-            duplicate = con.execute(
-                "SELECT measurement_id FROM device_measurement WHERE device_id=? AND metric=? AND measurement_id!=?",
-                (device_id, metric, measurement_id or -1),
-            ).fetchone()
-            if duplicate:
-                raise ApiError(409, "该设备已定义此属性")
-            values = (
-                device_id,
-                metric,
-                kind,
-                name,
-                str(data.get("unit", "")),
-                weight,
-                age,
-                flags["notuse"],
-                flags["se_enabled"],
-                now,
-                version,
-            )
-            if measurement_id is None:
-                measurement_id = con.execute(
-                    """INSERT INTO device_measurement(device_id,metric,kind,name,unit,weight,max_age_seconds,notuse,se_enabled,updated_at,version)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                    values,
-                ).lastrowid
-            else:
-                con.execute(
-                    """UPDATE device_measurement SET device_id=?,metric=?,kind=?,name=?,unit=?,weight=?,max_age_seconds=?,notuse=?,se_enabled=?,updated_at=?,version=? WHERE measurement_id=?""",
-                    values + (measurement_id,),
-                )
-            old_mapping = con.execute(
-                "SELECT * FROM scada_point_mapping WHERE measurement_id=?",
-                (measurement_id,),
-            ).fetchone()
-            con.execute(
-                """INSERT INTO scada_point_mapping(measurement_id,source_database,rtu_id,pnt_no,enabled,scale,offset,version,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(measurement_id) DO UPDATE SET source_database=excluded.source_database,rtu_id=excluded.rtu_id,pnt_no=excluded.pnt_no,enabled=excluded.enabled,
-                scale=excluded.scale,offset=excluded.offset,version=excluded.version,updated_at=excluded.updated_at""",
-                (
-                    measurement_id,
-                    source,
-                    rtu,
-                    point,
-                    flags["enabled"],
-                    scale,
-                    offset,
-                    version,
-                    now,
-                ),
-            )
-            # Invalidating a changed binding prevents displaying the old source
-            # under a new device property before the next collection transaction.
-            identity_changed = (
-                not old_mapping
-                or any(
-                    old_mapping[k] != v
-                    for k, v in [
-                        ("source_database", source),
-                        ("rtu_id", rtu),
-                        ("pnt_no", point),
-                        ("scale", scale),
-                        ("offset", offset),
-                    ]
-                )
-                or before.get("kind") != kind
-                or before.get("device_id") != device_id
-            )
-            if identity_changed:
-                con.execute(
-                    "DELETE FROM measurement_value WHERE measurement_id=?",
-                    (measurement_id,),
-                )
-            elif (
-                before.get("notuse") != flags["notuse"]
-                or old_mapping["enabled"] != flags["enabled"]
-                or before.get("max_age_seconds") != age
-            ):
-                con.execute(
-                    "UPDATE measurement_value SET valid=0,reason='definition_changed' WHERE measurement_id=?",
-                    (measurement_id,),
-                )
-            after = dict(
-                con.execute(
-                    "SELECT m.*,s.source_database,s.rtu_id,s.pnt_no,s.enabled,s.scale,s.offset FROM device_measurement m JOIN scada_point_mapping s USING(measurement_id) WHERE measurement_id=?",
-                    (measurement_id,),
-                ).fetchone()
-            )
-            self._audit(
-                con,
-                "mapping",
-                measurement_id,
-                dict(before, mapping=dict(old_mapping) if old_mapping else None),
-                after,
-            )
-            affected_devices = {device_id}
-            if before.get("device_id") is not None:
-                affected_devices.add(before["device_id"])
-            affected_tables = set()
-            if before.get("quantity_table"):
-                affected_tables.add(before["quantity_table"])
-            self._tables(
-                con,
-                target_tables=affected_tables,
-                target_device_ids=affected_devices,
-            )
-        self.bump_config_epoch()
-        return after
-
-    def delete_measurement(self, measurement_id, version):
-        with self.connection() as con:
-            row = con.execute(
-                "SELECT * FROM device_measurement WHERE measurement_id=?",
-                (measurement_id,),
-            ).fetchone()
-            if not row or row["version"] != int(version):
-                raise ApiError(409, "属性不存在或已被修改")
-            self._audit(con, "mapping_delete", measurement_id, dict(row), {})
-            for table in (
-                "measurement_value",
-                "scada_point_mapping",
-                "device_measurement",
-            ):
-                con.execute(
-                    f"DELETE FROM {table} WHERE measurement_id=?", (measurement_id,)
-                )
-            old_table = row["quantity_table"]
-            if old_table:
-                self._tables(
-                    con,
-                    target_tables={old_table},
-                    target_device_ids={row["device_id"]},
-                )
-            else:
-                self._tables(con)
-        self.bump_config_epoch()
-
     def _read_cached_source(self, source_name, kinds, source_cache):
         path = self.source_path(source_name)
         try:
@@ -1436,17 +787,33 @@ class DeviceStore:
                         table = f"fes_{kind}_define"
                         info = con.execute(f"PRAGMA table_info({table})").fetchall()
                         columns = {r[1] for r in info}
-                        if not {"rtu_id", "pnt_no", "name", "value", "status", "refresh_time"} <= columns:
+                        if not {
+                            "rtu_id",
+                            "pnt_no",
+                            "name",
+                            "value",
+                            "status",
+                            "refresh_time",
+                        } <= columns:
                             raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
-                        pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
+                        pk_cache[table] = {r[1] for r in info if r[5]} == {
+                            "rtu_id",
+                            "pnt_no",
+                        }
                     schema_version = con.execute("PRAGMA schema_version").fetchone()[0]
-                    # entry: [con, identity, schema_version, pk_cache, data_version, snapshots]
                     entry = [con, identity, schema_version, pk_cache, None, {}]
                     source_cache[source_name] = entry
                 except BaseException:
                     con.close()
                     raise
-            con, _, schema_version, pk_cache, cached_data_version, cached_snapshots = entry
+            (
+                con,
+                _,
+                schema_version,
+                pk_cache,
+                cached_data_version,
+                cached_snapshots,
+            ) = entry
             con.execute("BEGIN")
             try:
                 current_schema = con.execute("PRAGMA schema_version").fetchone()[0]
@@ -1457,9 +824,19 @@ class DeviceStore:
                         table = f"fes_{kind}_define"
                         info = con.execute(f"PRAGMA table_info({table})").fetchall()
                         columns = {r[1] for r in info}
-                        if not {"rtu_id", "pnt_no", "name", "value", "status", "refresh_time"} <= columns:
+                        if not {
+                            "rtu_id",
+                            "pnt_no",
+                            "name",
+                            "value",
+                            "status",
+                            "refresh_time",
+                        } <= columns:
                             raise ApiError(400, "源库缺少遥测/遥信点表或必要字段")
-                        pk_cache[table] = {r[1] for r in info if r[5]} == {"rtu_id", "pnt_no"}
+                        pk_cache[table] = {r[1] for r in info if r[5]} == {
+                            "rtu_id",
+                            "pnt_no",
+                        }
                     entry[2] = current_schema
                 current_data_version = con.execute("PRAGMA data_version").fetchone()[0]
                 if current_data_version != cached_data_version:
@@ -1495,384 +872,940 @@ class DeviceStore:
                 cached[0].close()
             raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
 
+    def _scan_bindings(self, con):
+        """直接扫描全部设备宽表，提取所有已绑定 (rtu, pnt) 字段及其当前值。"""
+        schemas = self._get_table_schemas(con)
+        cur = con.cursor()
+        cur.row_factory = None
+        bindings = []
+        requested_sets = defaultdict(set)
+        step = len(SUFFIXES)
+        for table, metrics in schemas:
+            if not metrics:
+                continue
+            quoted = _quote_table(table)
+            for row in cur.execute(f"SELECT * FROM {quoted}"):
+                idx = row[0]
+                base = 2
+                for metric, kind in metrics:
+                    rtu = row[base + 6]
+                    pnt = row[base + 7]
+                    if rtu is not None and pnt is not None:
+                        rtu_i = int(rtu)
+                        pnt_i = int(pnt)
+                        bindings.append(
+                            (
+                                table,
+                                idx,
+                                metric,
+                                kind,
+                                rtu_i,
+                                pnt_i,
+                                1 if row[base + 4] else 0,
+                                row[base],
+                                row[base + 1],
+                                row[base + 2],
+                                row[base + 3],
+                            )
+                        )
+                        requested_sets[kind].add((rtu_i, pnt_i))
+                    base += step
+        requested = {k: frozenset(pts) for k, pts in requested_sets.items() if pts}
+        return bindings, requested
+
     def collect_once(self, *, _writer=None, _source_cache=None, _plan_cache=None):
+        """直接从设备宽表读取 (rtu, pnt) 映射，只读源库并将变化字段直接 UPDATE 回各设备表。"""
         started = utc_now()
-        mapping_sql = """SELECT m.measurement_id,m.device_id,m.metric,m.kind,m.quantity_table,
-            m.max_age_seconds,m.se_enabled,m.notuse,d.active,
-            s.source_database,s.rtu_id,s.pnt_no,s.enabled,s.scale,s.offset,
-            v.measurement_id,v.source_value,v.value,v.quality,v.source_time_ms,v.previous_value,v.valid,v.reason
-            FROM device_measurement m JOIN device d USING(device_id)
-            LEFT JOIN scada_point_mapping s USING(measurement_id)
-            LEFT JOIN measurement_value v USING(measurement_id)
-            WHERE m.catalog_active=1"""
-        # 第一阶段：短读事务获取待采源点列表，立即释放本地库连接，严禁持写锁执行外部源库 I/O。
-        requested = None
+        source_name = self.default_source_database()
+
+        # 第一阶段：获取各设备表绑定与当前值（命中 data_version 缓存时零 SQL 扫描）。
+        bindings = None
+        requested_kinds = None
         plan_key = None
         if _writer is not None and _plan_cache is not None:
             data_ver = _writer.execute("PRAGMA data_version").fetchone()[0]
-            plan_key = (data_ver, self._config_epoch)
+            plan_key = (data_ver, self._config_epoch, source_name)
             if _plan_cache.get("key") == plan_key:
-                requested = _plan_cache["requested"]
-        if requested is None:
+                bindings = _plan_cache["bindings"]
+                requested_kinds = _plan_cache["requested"]
+        if bindings is None:
             with self.connection(_writer=_writer) as read_con:
-                cur = read_con.cursor()
-                cur.row_factory = None
-                requested_rows = cur.execute(
-                    """SELECT m.kind, s.source_database, s.rtu_id, s.pnt_no
-                    FROM device_measurement m JOIN device d USING(device_id)
-                    JOIN scada_point_mapping s USING(measurement_id)
-                    WHERE m.catalog_active=1 AND d.active=1 AND s.enabled=1 AND s.source_database<>''"""
-                ).fetchall()
-            tmp_requested = defaultdict(lambda: defaultdict(set))
-            for kind, source_db, rtu_id, pnt_no in requested_rows:
-                tmp_requested[source_db][kind].add((rtu_id, pnt_no))
-            requested = {
-                src: {k: frozenset(pts) for k, pts in kind_map.items()}
-                for src, kind_map in tmp_requested.items()
-            }
+                bindings, requested_kinds = self._scan_bindings(read_con)
             if _plan_cache is not None and plan_key is not None:
                 _plan_cache["key"] = plan_key
-                _plan_cache["requested"] = requested
+                _plan_cache["bindings"] = bindings
+                _plan_cache["requested"] = requested_kinds
+
         if _source_cache is not None:
-            for stale in [key for key in _source_cache if key not in requested]:
+            active_sources = {source_name} if requested_kinds else set()
+            for stale in [key for key in _source_cache if key not in active_sources]:
                 _source_cache.pop(stale)[0].close()
-        # 第二阶段：无本地写锁状态下读取各外部源库快照，读完后刷新当前时间基准防止误判 future_time。
-        sources, errors = {}, {}
-        for source, kinds in sorted(requested.items()):
+
+        # 第二阶段：无本地写锁状态下读取外部源库（scdfe_c.sqlite3）快照。
+        source_points = {}
+        errors = {}
+        if requested_kinds:
             try:
                 if _source_cache is not None:
-                    sources[source] = self._read_cached_source(source, kinds, _source_cache)
+                    source_points = self._read_cached_source(
+                        source_name, requested_kinds, _source_cache
+                    )
                 else:
-                    with self.source(source) as src:
-                        sources[source] = {
+                    with self.source(source_name) as src:
+                        source_points = {
                             kind: self._source_values(src, kind, keys)
-                            for kind, keys in kinds.items()
+                            for kind, keys in requested_kinds.items()
                         }
             except (ApiError, OSError, ValueError) as exc:
-                errors[source] = str(exc)
+                errors[source_name] = str(exc)
+
         now_ms = int(time.time() * 1000)
         future_limit = now_ms + 5000
-        # 第三阶段：进入 BEGIN IMMEDIATE 写事务，重新读取最新映射快照并原子落盘。
-        next_mappings = None
-        tx_key = None
-        has_inactive = None
-        try:
-            with self.connection(_writer=_writer) as con:
-                con.execute("BEGIN IMMEDIATE")
-                cur = con.cursor()
-                cur.row_factory = None
-                mappings = None
-                if _writer is not None and _plan_cache is not None:
-                    tx_key = (
-                        cur.execute("PRAGMA data_version").fetchone()[0],
-                        self._config_epoch,
-                    )
-                    if _plan_cache.get("mappings_key") == tx_key:
-                        mappings = _plan_cache["mappings"]
-                        has_inactive = _plan_cache.get("has_inactive")
-                if mappings is None:
-                    mappings = cur.execute(mapping_sql).fetchall()
-                refresh = cur.execute(
-                    "INSERT INTO measurement_refresh(started_at,source_database,error) VALUES(?,?,?)",
-                    (
-                        started,
-                        json.dumps(list(sources), ensure_ascii=False),
-                        json.dumps(errors, ensure_ascii=False) if errors else "",
-                    ),
-                ).lastrowid
-                valid_count = 0
-                se_count = 0
-                collected_at = utc_now()
-                changed_samples = []
-                unchanged_count = 0
-                changes = defaultdict(dict)
-                isfinite = math.isfinite
-                invalid_quality_reasons = (
-                    "disabled",
-                    "source_error",
-                    "missing_point",
-                    "invalid_value",
-                )
-                track_next = _writer is not None and _plan_cache is not None
-                if track_next:
-                    next_mappings = []
-                for row in mappings:
-                    (
-                        mid,
-                        device_id,
-                        metric,
-                        kind,
-                        quantity_table,
-                        max_age_seconds,
-                        se_enabled,
-                        notuse,
-                        active,
-                        source_db,
-                        rtu_id,
-                        pnt_no,
-                        enabled,
-                        scale,
-                        offset,
-                        old_id,
-                        old_raw,
-                        old_value,
-                        old_quality,
-                        old_stamp,
-                        old_previous,
-                        old_valid,
-                        old_reason,
-                    ) = row
-                    raw = old_raw
-                    value = old_value
-                    quality = old_quality
-                    stamp = old_stamp
-                    previous = old_previous
-                    old_runtime_quality = (
-                        (old_quality or 0) if old_valid else (old_quality or 0) | 128
-                    )
-                    reason = ""
-                    src_kinds = sources.get(source_db)
-                    points = src_kinds.get(kind) if src_kinds else None
-                    point = points.get((rtu_id, pnt_no)) if points else None
-                    if not active or not enabled:
-                        reason = "disabled"
-                    elif source_db in errors:
-                        reason = "source_error"
-                    elif point is None:
+        max_age_ms = self._max_age_seconds * 1000.0
+        collected_at = utc_now()
+        source_failed = source_name in errors
+
+        def evaluate(current_bindings):
+            valid_cnt = 0
+            changes_by_row = defaultdict(dict)
+            next_bindings = []
+            runtime_updates = {}
+            isfinite = math.isfinite
+            for entry in current_bindings:
+                (
+                    table,
+                    idx,
+                    metric,
+                    kind,
+                    rtu_id,
+                    pnt_no,
+                    notuse,
+                    old_val,
+                    old_qual,
+                    old_pre,
+                    old_time,
+                ) = entry
+                cell_key = (table, idx, metric)
+                prev_binding = self._last_bound_points.get(cell_key)
+                rebound = prev_binding is not None and prev_binding != (rtu_id, pnt_no)
+                if rebound:
+                    val = None
+                    qual = 128
+                    pre = None
+                    stamp = None
+                else:
+                    val = old_val
+                    qual = old_qual
+                    pre = old_pre
+                    stamp = old_time
+                reason = ""
+                if source_failed:
+                    reason = "source_error"
+                else:
+                    pts = source_points.get(kind)
+                    point = pts.get((rtu_id, pnt_no)) if pts else None
+                    if point is None:
                         reason = "missing_point"
                     else:
                         try:
                             new_raw = float(point[0])
-                            new_quality = int(point[1])
+                            new_qual = int(point[1])
                             new_stamp = int(point[2])
-                            new_value = new_raw * scale + offset
-                            if (
-                                not isfinite(new_raw)
-                                or not isfinite(new_value)
-                                or not 0 <= new_quality <= 255
-                            ):
+                            if not isfinite(new_raw) or not 0 <= new_qual <= 255:
                                 raise ValueError("invalid sample")
-                            if kind == "yx" and new_raw not in (0, 1):
-                                raise ValueError("invalid status")
-                            if old_id is not None and (
-                                new_stamp != stamp or new_raw != raw
+                            if kind == "yx":
+                                if new_raw not in (0, 1):
+                                    raise ValueError("invalid status")
+                                new_val = int(new_raw)
+                            else:
+                                new_val = new_raw
+                            if (
+                                not rebound
+                                and (old_val is not None or old_time is not None)
+                                and (new_stamp != old_time or new_val != old_val)
                             ):
-                                previous = value
-                            raw = new_raw
-                            value = new_value
-                            quality = new_quality
+                                pre = old_val
+                            val = new_val
+                            qual = new_qual
                             stamp = new_stamp
-                            if quality:
+                            if qual:
                                 reason = "bad_quality"
                             elif stamp <= 0:
                                 reason = "missing_time"
                             elif stamp > future_limit:
                                 reason = "future_time"
-                            elif now_ms - stamp > max_age_seconds * 1000:
+                            elif now_ms - stamp > max_age_ms:
                                 reason = "stale"
                         except (ValueError, TypeError, OverflowError):
                             reason = "invalid_value"
-                    if reason in invalid_quality_reasons:
-                        quality = (quality or 0) | 128
-                    if not reason and notuse:
-                        reason = "notuse"
-                    valid = 0 if reason else 1
-                    valid_count += valid
-                    if valid and se_enabled:
-                        se_count += 1
-                    if (
-                        old_id is None
-                        or raw != old_raw
-                        or value != old_value
-                        or quality != old_quality
-                        or stamp != old_stamp
-                        or valid != old_valid
-                        or reason != old_reason
-                        or previous != old_previous
-                    ):
-                        changed_samples.append(
+                if reason in _INVALID_QUALITY_REASONS:
+                    qual = (qual or 0) | 128
+                if not reason and notuse:
+                    reason = "notuse"
+                valid = 0 if reason else 1
+                valid_cnt += valid
+                out_qual = (qual or 0) if valid else (qual or 0) | 128
+                runtime_updates[(table, idx, metric)] = {
+                    "valid": valid,
+                    "reason": reason,
+                    "collected_at": collected_at,
+                }
+                if (
+                    val != old_val
+                    or out_qual != old_qual
+                    or pre != old_pre
+                    or stamp != old_time
+                ):
+                    row_updates = changes_by_row[(table, idx)]
+                    if val != old_val:
+                        row_updates[metric] = val
+                    if out_qual != old_qual:
+                        row_updates[metric + "_qual"] = out_qual
+                    if pre != old_pre:
+                        row_updates[metric + "_pre"] = pre
+                    if stamp != old_time:
+                        row_updates[metric + "_time"] = stamp
+                    next_bindings.append(
+                        (
+                            table,
+                            idx,
+                            metric,
+                            kind,
+                            rtu_id,
+                            pnt_no,
+                            notuse,
+                            val,
+                            out_qual,
+                            pre,
+                            stamp,
+                        )
+                    )
+                else:
+                    next_bindings.append(entry)
+            return valid_cnt, changes_by_row, next_bindings, runtime_updates
+
+        valid_count, changes, next_bindings, runtime_updates = evaluate(bindings)
+
+        # 第三阶段：仅当存在设备字段变化时开启写事务，直接按设备表批量 UPDATE。
+        if changes:
+            try:
+                with self.connection(_writer=_writer) as con:
+                    con.execute("BEGIN IMMEDIATE")
+                    # 若在读源库期间有外部连接修改了设备库，重新扫描设备表后再计算差异写入。
+                    if _writer is not None and plan_key is not None:
+                        cur_ver = con.execute("PRAGMA data_version").fetchone()[0]
+                        if (cur_ver, self._config_epoch, source_name) != plan_key:
+                            bindings, requested_kinds = self._scan_bindings(con)
                             (
-                                mid,
-                                refresh,
-                                raw,
-                                value,
-                                quality,
-                                stamp,
-                                collected_at,
-                                valid,
-                                reason,
-                                previous,
-                            )
-                        )
-                        if track_next:
-                            next_mappings.append(
-                                (
-                                    mid,
-                                    device_id,
-                                    metric,
-                                    kind,
-                                    quantity_table,
-                                    max_age_seconds,
-                                    se_enabled,
-                                    notuse,
-                                    active,
-                                    source_db,
-                                    rtu_id,
-                                    pnt_no,
-                                    enabled,
-                                    scale,
-                                    offset,
-                                    mid,
-                                    raw,
-                                    value,
-                                    quality,
-                                    stamp,
-                                    previous,
-                                    valid,
-                                    reason,
-                                )
-                            )
-                    else:
-                        unchanged_count += 1
-                        if track_next:
-                            next_mappings.append(row)
-                    runtime_quality = (quality or 0) if valid else (quality or 0) | 128
-                    # A binding trigger can invalidate or remove the normalized row
-                    # before the next scan. Refresh all its physical runtime fields.
-                    reset_runtime = old_id is None or old_reason == "definition_changed"
-                    if (
-                        reset_runtime
-                        or value != old_value
-                        or runtime_quality != old_runtime_quality
-                        or previous != old_previous
-                        or stamp != old_stamp
-                    ):
-                        updates = changes[quantity_table, device_id]
-                        if reset_runtime or value != old_value:
-                            updates[metric] = value
-                        if reset_runtime or runtime_quality != old_runtime_quality:
-                            updates[metric + "_qual"] = runtime_quality
-                        if reset_runtime or previous != old_previous:
-                            updates[metric + "_pre"] = previous
-                        if reset_runtime or stamp != old_stamp:
-                            updates[metric + "_time"] = stamp
-                if changed_samples:
-                    con.executemany(
-                        """INSERT INTO measurement_value(measurement_id,refresh_id,source_value,value,quality,source_time_ms,collected_at,valid,reason,previous_value)
-                        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(measurement_id) DO UPDATE SET refresh_id=excluded.refresh_id,source_value=excluded.source_value,
-                        value=excluded.value,quality=excluded.quality,source_time_ms=excluded.source_time_ms,collected_at=excluded.collected_at,
-                        valid=excluded.valid,reason=excluded.reason,previous_value=excluded.previous_value""",
-                        changed_samples,
-                    )
-                if unchanged_count:
-                    if has_inactive is None:
-                        has_inactive = (
-                            cur.execute(
-                                "SELECT 1 FROM device_measurement WHERE catalog_active=0 LIMIT 1"
-                            ).fetchone()
-                            is not None
-                        )
-                    if not changed_samples:
-                        if not has_inactive:
-                            cur.execute(
-                                "UPDATE measurement_value SET refresh_id=?,collected_at=?",
-                                (refresh, collected_at),
-                            )
-                        else:
-                            cur.execute(
-                                """UPDATE measurement_value SET refresh_id=?,collected_at=?
-                                WHERE measurement_id IN (SELECT measurement_id FROM device_measurement WHERE catalog_active=1)""",
-                                (refresh, collected_at),
-                            )
-                    else:
-                        if not has_inactive:
-                            cur.execute(
-                                "UPDATE measurement_value SET refresh_id=?,collected_at=? WHERE refresh_id<>?",
-                                (refresh, collected_at, refresh),
-                            )
-                        else:
-                            cur.execute(
-                                """UPDATE measurement_value SET refresh_id=?,collected_at=?
-                                WHERE refresh_id<>? AND measurement_id IN (SELECT measurement_id FROM device_measurement WHERE catalog_active=1)""",
-                                (refresh, collected_at, refresh),
-                            )
-                self._write_runtime_values(con, changes)
-                cur.execute(
-                    "UPDATE measurement_refresh SET finished_at=?,total_count=?,valid_count=?,se_valid_count=? WHERE refresh_id=?",
-                    (utc_now(), len(mappings), valid_count, se_count, refresh),
+                                valid_count,
+                                changes,
+                                next_bindings,
+                                runtime_updates,
+                            ) = evaluate(bindings)
+                            plan_key = (cur_ver, self._config_epoch, source_name)
+                    if changes:
+                        self._write_device_updates(con, changes)
+            except BaseException:
+                if _plan_cache is not None:
+                    _plan_cache.clear()
+                raise
+
+        if _plan_cache is not None and plan_key is not None:
+            _plan_cache["key"] = plan_key
+            _plan_cache["bindings"] = next_bindings
+            _plan_cache["requested"] = requested_kinds
+
+        finished = utc_now()
+        with self._mutex:
+            self._runtime_meta = runtime_updates
+            self._last_bound_points = {
+                (e[0], e[1], e[2]): (e[4], e[5]) for e in next_bindings
+            }
+            self._refresh_seq += 1
+            refresh_id = self._refresh_seq
+            self._refresh_history.appendleft(
+                dict(
+                    refresh_id=refresh_id,
+                    started_at=started,
+                    finished_at=finished,
+                    total_count=len(bindings),
+                    valid_count=valid_count,
+                    se_valid_count=0,
+                    source_database=json.dumps(
+                        [source_name] if requested_kinds else [], ensure_ascii=False
+                    ),
+                    error=json.dumps(errors, ensure_ascii=False) if errors else "",
                 )
-                if _plan_cache is None or refresh % 50 == 0:
-                    cur.execute(
-                        """DELETE FROM measurement_refresh
-                        WHERE refresh_id<? AND NOT EXISTS (
-                            SELECT 1 FROM measurement_value v WHERE v.refresh_id=measurement_refresh.refresh_id
-                        )""",
-                        (refresh - 1000,),
-                    )
-        except BaseException:
-            if _plan_cache is not None:
-                _plan_cache.clear()
-            raise
-        if _plan_cache is not None and tx_key is not None and next_mappings is not None:
-            _plan_cache["mappings_key"] = tx_key
-            _plan_cache["mappings"] = next_mappings
-            _plan_cache["has_inactive"] = has_inactive
+            )
         return dict(
-            refresh_id=refresh,
-            total_count=len(mappings),
+            refresh_id=refresh_id,
+            total_count=len(bindings),
             valid_count=valid_count,
+            updated_rows=len(changes),
             errors=errors,
         )
 
-    def overview(self):
-        with self.connection() as con:
-            counts = {
-                t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                for t in ("device", "device_measurement", "scada_point_mapping")
-            }
-            counts["valid"] = con.execute(
-                "SELECT count(*) FROM measurement_value WHERE valid=1"
+    def _write_device_updates(self, con, changes):
+        """按 (设备表, 字段组合) 分组批量 UPDATE 对应设备表的字段。"""
+        grouped = defaultdict(list)
+        for (table, idx), fields in changes.items():
+            cols = tuple(fields.keys())
+            grouped[(table, cols)].append((*fields.values(), idx))
+        for (table, cols), rows in grouped.items():
+            assignment = ",".join(f"{_quote_col(col)}=?" for col in cols)
+            con.executemany(
+                f"UPDATE {_quote_table(table)} SET {assignment} WHERE idx=?",
+                rows,
+            )
+
+    def source_points(self, query):
+        kind = query.get("kind", "yc")
+        if kind not in ("yc", "yx"):
+            raise ApiError(400, "仅支持遥测 YC、遥信 YX")
+        where, args = [], []
+        if query.get("rtu_id"):
+            where.append("rtu_id=?")
+            args.append(int(query["rtu_id"]))
+        if query.get("q"):
+            where.append("instr(lower(name),lower(?))>0")
+            args.append(query["q"])
+        clause = " WHERE " + " AND ".join(where) if where else ""
+        page = max(1, int(query.get("page", 1)))
+        with self.source(query.get("source_database") or None) as con:
+            total = con.execute(
+                f"SELECT count(*) FROM fes_{kind}_define" + clause, args
             ).fetchone()[0]
-            last = con.execute(
-                "SELECT * FROM measurement_refresh ORDER BY refresh_id DESC LIMIT 1"
-            ).fetchone()
-            categories = [
-                dict(r)
-                for r in con.execute(
-                    "SELECT category,count(*) count FROM device GROUP BY category"
-                )
-            ]
-            interval = stored_interval(con)
-            sources = [
-                r[0]
-                for r in con.execute(
-                    "SELECT DISTINCT source_database FROM scada_point_mapping ORDER BY source_database"
-                )
-            ]
+            rows = con.execute(
+                f"SELECT rtu_id,pnt_no,name,value,status,refresh_time FROM fes_{kind}_define"
+                + clause
+                + " ORDER BY rtu_id,pnt_no LIMIT 50 OFFSET ?",
+                args + [(page - 1) * 50],
+            ).fetchall()
+        return dict(items=[dict(r) for r in rows], total=total, page=page, limit=50)
+
+    def _ensure_device_table(self, con, table, initial_metrics=()):
+        """确保设备宽表存在并包含指定量测列组。"""
+        quoted = _quote_table(table)
+        existing = con.execute(f"PRAGMA table_info({quoted})").fetchall()
+        schema_changed = False
+        if not existing:
+            metrics = sorted(initial_metrics, key=metric_order)
+            defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
+            for metric, kind in metrics:
+                for col, col_type, default in measurement_columns(metric, kind):
+                    defs.append(f'"{col}" {col_type}{default}')
+            con.execute(f"CREATE TABLE {quoted} ({', '.join(defs)})")
+            schema_changed = True
+        elif initial_metrics:
+            existing_cols = {r[1]: str(r[2] or "").upper() for r in existing}
+            for metric, kind in sorted(initial_metrics, key=metric_order):
+                if metric in existing_cols:
+                    expected_type = "INTEGER" if kind == "yx" else "REAL"
+                    if existing_cols[metric] != expected_type:
+                        raise ApiError(400, f"同一设备表的量测类型必须一致：{table}.{metric}")
+                    continue
+                for col, col_type, default in measurement_columns(metric, kind):
+                    con.execute(f'ALTER TABLE {quoted} ADD COLUMN "{col}" {col_type}{default}')
+                schema_changed = True
+        if schema_changed:
+            dev_tables = [t for t, _ in discover_device_tables(con)]
+            sync_embedded_schema(con, include_tables=dev_tables)
+        return schema_changed
+
+    def create_device(self, data):
+        name, category = str(data.get("name", "")).strip(), data.get("category")
+        if not name or len(name) > 200 or category not in CATEGORIES:
+            raise ApiError(400, "请填写设备名称并选择设备类型")
+        table = "Manual_" + category
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._ensure_device_table(con, table)
+            quoted = _quote_table(table)
+            idx = con.execute(
+                f"SELECT coalesce(max(idx), 0) + 1 FROM {quoted}"
+            ).fetchone()[0]
+            con.execute(f"INSERT INTO {quoted}(idx, name) VALUES(?, ?)", (idx, name))
+            device_id = self.device_id_for(table, idx)
+            result = dict(
+                device_id=device_id,
+                model_table=table,
+                model_idx=idx,
+                name=name,
+                category=category,
+                active=1,
+            )
+            self._record_change("device", device_id, {}, result)
+        self.bump_config_epoch()
+        return result
+
+    def import_model(self, relative_path):
+        """从模型库直接导入设备表及设备行，保留已有设备宽表的量测列与绑定。"""
+        path = self.source_path(relative_path)
+        model = {}
+        try:
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as src:
+                src.execute("BEGIN")
+                for (table,) in src.execute(
+                    "SELECT table_name FROM rtdb_schema_tables ORDER BY ordinal"
+                ):
+                    if table in ("Model", "basevoltage", "HydroMedium"):
+                        continue
+                    fields = src.execute(
+                        "SELECT ordinal,eng_name FROM rtdb_schema_columns WHERE table_name=? ORDER BY ordinal",
+                        (table,),
+                    ).fetchall()
+                    keys = [r[1] for r in fields]
+                    if "idx" not in keys or (
+                        "name" not in keys and table not in EXTENSIONS
+                    ):
+                        continue
+                    self._table_name(table)
+                    columns = ",".join('"c' + str(int(i)) + '"' for i, _ in fields)
+                    model[table] = [
+                        dict(zip(keys, row))
+                        for row in src.execute(
+                            f'SELECT {columns} FROM "rtdb_data_{table}"'
+                        )
+                    ]
+        except (sqlite3.Error, OSError) as exc:
+            raise ApiError(400, "源文件不是有效的设备模型库") from exc
+        if not model:
+            raise ApiError(400, "模型库没有含 idx/name 的设备定义")
+
+        parent_names = {}
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            for table, items in model.items():
+                if table in EXTENSIONS:
+                    continue
+                profile = UNBOUND_PROFILES.get(table)
+                initial = []
+                if profile:
+                    initial.extend((m, "yc") for m in profile[0])
+                    initial.extend((m, "yx") for m in profile[1])
+                self._ensure_device_table(con, table, initial)
+                quoted = _quote_table(table)
+                rows = []
+                for item in items:
+                    idx = int(item["idx"])
+                    name = str(item["name"])
+                    rows.append((idx, name))
+                    parent_names[(table, idx)] = name
+                if rows:
+                    con.executemany(
+                        f"INSERT INTO {quoted}(idx, name) VALUES(?, ?) "
+                        "ON CONFLICT(idx) DO UPDATE SET name=excluded.name WHERE name IS NOT excluded.name",
+                        rows,
+                    )
+            for table, (parent, key) in EXTENSIONS.items():
+                items = model.get(table)
+                if not items:
+                    continue
+                self._ensure_device_table(con, table)
+                quoted = _quote_table(table)
+                # 若父表在库中已有旧数据，补充查找父名称
+                parent_quoted = _quote_table(parent)
+                if con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (parent,),
+                ).fetchone():
+                    for p_idx, p_name in con.execute(
+                        f"SELECT idx, name FROM {parent_quoted}"
+                    ):
+                        parent_names.setdefault((parent, int(p_idx)), p_name)
+                rows = []
+                for item in items:
+                    owner_name = parent_names.get((parent, int(item[key])))
+                    if owner_name is None:
+                        raise ApiError(400, f"{table} 中的设备关联不存在")
+                    rows.append((int(item["idx"]), owner_name))
+                if rows:
+                    con.executemany(
+                        f"INSERT INTO {quoted}(idx, name) VALUES(?, ?) "
+                        "ON CONFLICT(idx) DO UPDATE SET name=excluded.name WHERE name IS NOT excluded.name",
+                        rows,
+                    )
+            dev_tables = [t for t, _ in discover_device_tables(con)]
+            sync_embedded_schema(con, include_tables=dev_tables)
+            self._record_change(
+                "model_import",
+                None,
+                {},
+                dict(path=relative_path, tables=len(model)),
+            )
+        self.bump_config_epoch()
         return dict(
-            counts=counts,
-            last_refresh=dict(last) if last else None,
-            categories=categories,
+            tables=len(model),
+            devices=sum(len(v) for k, v in model.items() if k not in EXTENSIONS),
+        )
+
+    def device_tables(self):
+        with self.connection() as con:
+            schemas = self._get_table_schemas(con)
+            return [
+                dict(
+                    table_name=table,
+                    count=con.execute(
+                        f"SELECT count(*) FROM {_quote_table(table)}"
+                    ).fetchone()[0],
+                )
+                for table, _ in schemas
+            ]
+
+    def device_values(self, device_id):
+        with self.connection() as con:
+            target = self.resolve_device_id(con, device_id)
+            if target is None:
+                raise ApiError(404, "设备不存在")
+            table, idx = target
+            row = con.execute(
+                f"SELECT * FROM {_quote_table(table)} WHERE idx=?", (idx,)
+            ).fetchone()
+            if row is None:
+                raise ApiError(404, "设备不存在")
+            return dict(row)
+
+    def devices(self, query):
+        cat_filter = query.get("category") or ""
+        kw = (query.get("q") or "").strip().lower()
+        items = []
+        with self.connection() as con:
+            con.execute("BEGIN")
+            cur = con.cursor()
+            cur.row_factory = None
+            step = len(SUFFIXES)
+            for table, metrics in self._get_table_schemas(con):
+                cat = category_for(table)
+                if cat_filter and cat != cat_filter:
+                    continue
+                quoted = _quote_table(table)
+                for row in cur.execute(f"SELECT * FROM {quoted} ORDER BY idx"):
+                    idx, name = row[0], row[1]
+                    if kw and kw not in str(name or "").lower():
+                        continue
+                    did = self.device_id_for(table, idx)
+                    bound_cnt = 0
+                    valid_cnt = 0
+                    base = 2
+                    for metric, _ in metrics:
+                        rtu, pnt = row[base + 6], row[base + 7]
+                        if rtu is not None and pnt is not None:
+                            bound_cnt += 1
+                            meta = self.runtime_meta_for(table, idx, metric)
+                            valid, _, _ = self._infer_status(
+                                row[base],
+                                row[base + 1],
+                                row[base + 3],
+                                row[base + 4],
+                                rtu,
+                                pnt,
+                                meta,
+                            )
+                            valid_cnt += valid
+                        base += step
+                    items.append(
+                        dict(
+                            device_id=did,
+                            model_table=table,
+                            model_idx=idx,
+                            name=name,
+                            category=cat,
+                            active=1,
+                            measurement_count=bound_cnt,
+                            valid_count=valid_cnt,
+                            tables=[dict(table=table, idx=idx)],
+                        )
+                    )
+        return items
+
+    def measurements(self, query):
+        filter_device = int(query["device_id"]) if query.get("device_id") else None
+        filter_kind = query.get("kind") or ""
+        filter_cat = query.get("category") or ""
+        filter_table = query.get("table") or ""
+        kw = (query.get("q") or "").strip().lower()
+        only_invalid = query.get("invalid") == "1"
+        page = max(1, int(query.get("page", 1)))
+        limit = min(200, max(1, int(query.get("limit", 50))))
+        source_db = self.default_source_database()
+
+        matched = []
+        with self.connection() as con:
+            con.execute("BEGIN")
+            target_dev = (
+                self.resolve_device_id(con, filter_device)
+                if filter_device is not None
+                else None
+            )
+            if filter_device is not None and target_dev is None:
+                return dict(items=[], total=0, page=page, limit=limit)
+            cur = con.cursor()
+            cur.row_factory = None
+            step = len(SUFFIXES)
+            for table, metrics in self._get_table_schemas(con):
+                if filter_table and table != filter_table:
+                    continue
+                if target_dev is not None and table != target_dev[0]:
+                    continue
+                cat = category_for(table)
+                if filter_cat and cat != filter_cat:
+                    continue
+                if not metrics:
+                    continue
+                quoted = _quote_table(table)
+                if target_dev is not None:
+                    rows_iter = cur.execute(
+                        f"SELECT * FROM {quoted} WHERE idx=?", (target_dev[1],)
+                    )
+                else:
+                    rows_iter = cur.execute(f"SELECT * FROM {quoted} ORDER BY idx")
+                for row in rows_iter:
+                    idx, dev_name = row[0], row[1]
+                    did = self.device_id_for(table, idx)
+                    base = 2
+                    for metric, kind in metrics:
+                        rtu, pnt = row[base + 6], row[base + 7]
+                        if rtu is not None and pnt is not None:
+                            if filter_kind and kind != filter_kind:
+                                base += step
+                                continue
+                            if kw and kw not in metric.lower() and kw not in str(dev_name).lower():
+                                base += step
+                                continue
+                            val = row[base]
+                            qual = row[base + 1]
+                            pre = row[base + 2]
+                            stamp = row[base + 3]
+                            notuse = 1 if row[base + 4] else 0
+                            weight = row[base + 5]
+                            meta = self.runtime_meta_for(table, idx, metric)
+                            valid, reason, collected_at = self._infer_status(
+                                val, qual, stamp, notuse, rtu, pnt, meta
+                            )
+                            if only_invalid and valid:
+                                base += step
+                                continue
+                            mid = self.measurement_id_for(table, idx, metric)
+                            matched.append(
+                                dict(
+                                    measurement_id=mid,
+                                    device_id=did,
+                                    metric=metric,
+                                    kind=kind,
+                                    name=metric,
+                                    unit="",
+                                    weight=weight if weight is not None else 1.0,
+                                    max_age_seconds=self._max_age_seconds,
+                                    notuse=notuse,
+                                    se_enabled=0,
+                                    quantity_table=table,
+                                    version=self.version_for(table, idx, metric),
+                                    device_name=dev_name,
+                                    category=cat,
+                                    source_database=source_db,
+                                    rtu_id=rtu,
+                                    pnt_no=pnt,
+                                    model_table=table,
+                                    model_idx=idx,
+                                    enabled=1,
+                                    scale=1.0,
+                                    offset=0.0,
+                                    value=val,
+                                    source_value=val,
+                                    previous_value=pre,
+                                    quality=qual,
+                                    source_time_ms=stamp,
+                                    collected_at=collected_at,
+                                    valid=valid,
+                                    reason=reason,
+                                )
+                            )
+                        base += step
+        total = len(matched)
+        start = (page - 1) * limit
+        return dict(
+            items=matched[start : start + limit],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+
+    def save_measurement(self, data, measurement_id=None):
+        """直接在对应设备宽表中新增/更新量测字段映射（不再写任何中间映射表）。"""
+        metric = data.get("metric", "")
+        kind = data.get("kind", "yc")
+        if (
+            not isinstance(metric, str)
+            or not _METRIC_NAME_RE.fullmatch(metric)
+            or kind not in ("yc", "yx")
+        ):
+            raise ApiError(400, "属性名须为小写英文字母/数字/下划线，点类型须为 YC/YX")
+        if metric in ("idx", "name") or metric.endswith(SUFFIXES[1:]):
+            raise ApiError(400, "属性名不能使用量测元数据后缀")
+
+        source = data.get("source_database") or self.default_source_database()
+        rtu = int(data["rtu_id"])
+        point = int(data["pnt_no"])
+        if rtu <= 0 or point < 0:
+            raise ApiError(400, "RTU 编号必须为正整数，点号必须为非负整数")
+        weight = float(data.get("weight", 1.0))
+        notuse = int(data.get("notuse", 0))
+        enabled = int(data.get("enabled", 1))
+        if not math.isfinite(weight) or weight <= 0:
+            raise ApiError(400, "量测权重必须为正数")
+        if notuse not in (0, 1) or enabled not in (0, 1):
+            raise ApiError(400, "启用和禁用标记只能为 0 或 1")
+        if not enabled:
+            notuse = 1
+
+        # 校验源测点在源 SCADA 库中确实存在
+        with self.source(source) as src_con:
+            found = src_con.execute(
+                f"SELECT name FROM fes_{kind}_define WHERE rtu_id=? AND pnt_no=?",
+                (rtu, point),
+            ).fetchall()
+            if len(found) != 1:
+                raise ApiError(400, "指定的源测点不存在或主键不唯一")
+        if data.get("source_database"):
+            self.set_source_database(source)
+
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            old_target = None
+            if measurement_id is not None:
+                old_target = self.resolve_measurement_id(con, measurement_id)
+                if old_target is None:
+                    raise ApiError(404, "属性不存在")
+                cur_ver = self.version_for(*old_target)
+                if "version" in data and int(data["version"]) != cur_ver:
+                    raise ApiError(409, "定义已被修改，请刷新后重试")
+
+            if data.get("table") and data.get("idx") is not None:
+                table, idx = str(data["table"]), int(data["idx"])
+                self._table_name(table)
+            elif data.get("device_id") is not None:
+                resolved = self.resolve_device_id(con, data["device_id"])
+                if resolved is None:
+                    raise ApiError(400, "目标设备不存在")
+                table, idx = resolved
+            elif old_target is not None:
+                table, idx, _ = old_target
+            else:
+                raise ApiError(400, "目标设备不存在")
+
+            quoted = _quote_table(table)
+            row = con.execute(f"SELECT * FROM {quoted} WHERE idx=?", (idx,)).fetchone()
+            if row is None:
+                raise ApiError(400, "目标设备不存在")
+
+            # 若编辑时更换了设备或属性名，先清空原属性绑定
+            if old_target is not None and old_target != (table, idx, metric):
+                old_tbl, old_idx, old_metric = old_target
+                self._clear_binding_cell(con, old_tbl, old_idx, old_metric)
+
+            # 若设备表尚无此量测列组，通过 ALTER TABLE 自动追加 8 列
+            self._ensure_device_table(con, table, [(metric, kind)])
+            # 重新读取当前行的该字段旧值
+            cur_vals = con.execute(
+                f"SELECT {_quote_col(metric + '_rtu')}, {_quote_col(metric + '_pnt')}, {_quote_col(metric + '_qual')} FROM {quoted} WHERE idx=?",
+                (idx,),
+            ).fetchone()
+            point_changed = cur_vals[0] != rtu or cur_vals[1] != point
+            if point_changed:
+                con.execute(
+                    f"""UPDATE {quoted} SET
+                        {_quote_col(metric)}=NULL,
+                        {_quote_col(metric + '_qual')}=128,
+                        {_quote_col(metric + '_pre')}=NULL,
+                        {_quote_col(metric + '_time')}=NULL,
+                        {_quote_col(metric + '_notuse')}=?,
+                        {_quote_col(metric + '_weight')}=?,
+                        {_quote_col(metric + '_rtu')}=?,
+                        {_quote_col(metric + '_pnt')}=?
+                    WHERE idx=?""",
+                    (notuse, weight, rtu, point, idx),
+                )
+            else:
+                new_qual = (cur_vals[2] or 0) | 128
+                con.execute(
+                    f"""UPDATE {quoted} SET
+                        {_quote_col(metric + '_qual')}=?,
+                        {_quote_col(metric + '_notuse')}=?,
+                        {_quote_col(metric + '_weight')}=?
+                    WHERE idx=?""",
+                    (new_qual, notuse, weight, idx),
+                )
+            mid = self.measurement_id_for(table, idx, metric)
+            did = self.device_id_for(table, idx, con=con)
+            if measurement_id is None:
+                ver = self.version_for(table, idx, metric)
+            else:
+                ver = self.bump_version(table, idx, metric)
+            self.set_runtime_meta(
+                table,
+                idx,
+                metric,
+                valid=0,
+                reason="definition_changed",
+                collected_at=None,
+            )
+            after = dict(
+                measurement_id=mid,
+                device_id=did,
+                model_table=table,
+                model_idx=idx,
+                metric=metric,
+                kind=kind,
+                name=metric,
+                unit="",
+                weight=weight,
+                max_age_seconds=self._max_age_seconds,
+                notuse=notuse,
+                se_enabled=0,
+                source_database=source,
+                rtu_id=rtu,
+                pnt_no=point,
+                enabled=1,
+                scale=1.0,
+                offset=0.0,
+                version=ver,
+            )
+            self._record_change("mapping", mid, {}, after)
+        self.bump_config_epoch()
+        return after
+
+    def _clear_binding_cell(self, con, table, idx, metric):
+        quoted = _quote_table(table)
+        con.execute(
+            f"""UPDATE {quoted} SET
+                {_quote_col(metric)}=NULL,
+                {_quote_col(metric + '_qual')}=128,
+                {_quote_col(metric + '_pre')}=NULL,
+                {_quote_col(metric + '_time')}=NULL,
+                {_quote_col(metric + '_notuse')}=1,
+                {_quote_col(metric + '_weight')}=1,
+                {_quote_col(metric + '_rtu')}=NULL,
+                {_quote_col(metric + '_pnt')}=NULL
+            WHERE idx=?""",
+            (idx,),
+        )
+        with self._mutex:
+            self._runtime_meta.pop((table, int(idx), str(metric)), None)
+
+    def _prune_unused_metric_column(self, con, table, metric):
+        """若该表所有设备均未绑定该指标且不在预设未绑定清单中，移除该 8 列并同步 RTDB 元数据。"""
+        profile = UNBOUND_PROFILES.get(table)
+        if profile and (metric in profile[0] or metric in profile[1]):
+            return
+        quoted = _quote_table(table)
+        still_used = con.execute(
+            f"SELECT 1 FROM {quoted} WHERE {_quote_col(metric + '_rtu')} IS NOT NULL OR {_quote_col(metric + '_pnt')} IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if still_used:
+            return
+        metrics = self.table_metrics(con, table) or []
+        remaining = [(m, k) for m, k in metrics if m != metric]
+        keep_cols = ["idx", "name"]
+        defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
+        for m, k in remaining:
+            for col, col_type, default in measurement_columns(m, k):
+                keep_cols.append(col)
+                defs.append(f'"{col}" {col_type}{default}')
+        tmp_name = f"__rebuild_{table}"
+        tmp_quoted = f'"{tmp_name}"'
+        cols_sql = ", ".join(_quote_col(c) for c in keep_cols)
+        con.execute(f"CREATE TABLE {tmp_quoted} ({', '.join(defs)})")
+        con.execute(f"INSERT INTO {tmp_quoted}({cols_sql}) SELECT {cols_sql} FROM {quoted}")
+        con.execute(f"DROP TABLE {quoted}")
+        con.execute(f"ALTER TABLE {tmp_quoted} RENAME TO {quoted}")
+        dev_tables = [t for t, _ in discover_device_tables(con)]
+        sync_embedded_schema(con, include_tables=dev_tables)
+
+    def delete_measurement(self, measurement_id, version=None):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            target = self.resolve_measurement_id(con, measurement_id)
+            if target is None:
+                raise ApiError(409, "属性不存在或已被修改")
+            table, idx, metric = target
+            if version is not None and int(version) != self.version_for(table, idx, metric):
+                raise ApiError(409, "属性不存在或已被修改")
+            self._clear_binding_cell(con, table, idx, metric)
+            self._prune_unused_metric_column(con, table, metric)
+            self._record_change(
+                "mapping_delete",
+                int(measurement_id),
+                dict(table=table, idx=idx, metric=metric),
+                {},
+            )
+        self.bump_config_epoch()
+
+    def overview(self):
+        categories_map = defaultdict(int)
+        device_count = 0
+        bound_count = 0
+        valid_count = 0
+        with self.connection() as con:
+            con.execute("BEGIN")
+            cur = con.cursor()
+            cur.row_factory = None
+            step = len(SUFFIXES)
+            for table, metrics in self._get_table_schemas(con):
+                quoted = _quote_table(table)
+                cat = category_for(table)
+                if not metrics:
+                    cnt = cur.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]
+                    device_count += cnt
+                    categories_map[cat] += cnt
+                    continue
+                for row in cur.execute(f"SELECT * FROM {quoted}"):
+                    idx = row[0]
+                    device_count += 1
+                    categories_map[cat] += 1
+                    base = 2
+                    for metric, _ in metrics:
+                        rtu, pnt = row[base + 6], row[base + 7]
+                        if rtu is not None and pnt is not None:
+                            bound_count += 1
+                            meta = self.runtime_meta_for(table, idx, metric)
+                            valid, _, _ = self._infer_status(
+                                row[base],
+                                row[base + 1],
+                                row[base + 3],
+                                row[base + 4],
+                                rtu,
+                                pnt,
+                                meta,
+                            )
+                            valid_cnt_inc = valid
+                            valid_count += valid_cnt_inc
+                        base += step
+        with self._mutex:
+            last = dict(self._refresh_history[0]) if self._refresh_history else None
+            interval = self._interval_seconds
+        source_db = self.default_source_database()
+        return dict(
+            counts=dict(
+                device=device_count,
+                device_measurement=bound_count,
+                scada_point_mapping=bound_count,
+                valid=valid_count,
+            ),
+            last_refresh=last,
+            categories=[
+                dict(category=cat, count=cnt)
+                for cat, cnt in sorted(categories_map.items())
+            ],
             category_labels=CATEGORIES,
             interval_seconds=interval,
-            sources=sources,
+            sources=[source_db] if source_db else [],
         )
 
     def history(self):
-        with self.connection() as con:
+        with self._mutex:
             return dict(
-                refreshes=[
-                    dict(r)
-                    for r in con.execute(
-                        "SELECT * FROM measurement_refresh ORDER BY refresh_id DESC LIMIT 100"
-                    )
-                ],
-                changes=[
-                    dict(r)
-                    for r in con.execute(
-                        "SELECT * FROM input_change_log ORDER BY change_id DESC LIMIT 100"
-                    )
-                ],
+                refreshes=[dict(r) for r in self._refresh_history],
+                changes=[dict(r) for r in self._change_history],
             )
 
 
@@ -1908,29 +1841,10 @@ class Collector:
                 self._lease.release()
 
     def set_interval(self, value):
-        interval = validate_interval(value)
+        interval = self.store.set_interval_value(value)
         with self._mutex:
-            self._persist_interval(interval)
             self._wake.set()
             return dict(self.status(), interval_seconds=interval)
-
-    def _persist_interval(self, interval):
-        with self.store.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            previous = stored_interval(con)
-            if interval == previous:
-                return
-            con.execute(
-                "UPDATE d_settings SET value=? WHERE key='interval_seconds'",
-                (str(interval),),
-            )
-            self.store._audit(
-                con,
-                "collector_interval",
-                None,
-                {"interval_seconds": previous},
-                {"interval_seconds": interval},
-            )
 
     def start(self, interval=None):
         with self._mutex:
@@ -1942,7 +1856,7 @@ class Collector:
                 raise ApiError(409, "此设备库已有采集进程")
             try:
                 if interval is not None:
-                    self._persist_interval(interval)
+                    self.store.set_interval_value(interval)
                 self._stop.clear()
                 self._wake.clear()
                 self.last_error = ""
@@ -1960,17 +1874,13 @@ class Collector:
                             sample_due = False
                             try:
                                 if writer is None:
-                                    # Keep the connection between batches without holding a transaction.
-                                    # Closing the last WAL connection per scan can trigger a checkpoint.
                                     writer = self.store._open_connection()
-                                new_period = stored_interval(writer)
+                                new_period = self.store.get_interval()
                                 now = time.monotonic()
                                 if new_period != period and last_scan is not None:
                                     next_scan = max(now, last_scan + new_period)
                                 period = new_period
                                 if now < next_scan:
-                                    # Local edits wake the thread. An external Web process
-                                    # can save through SQLite, so reread at least once a second.
                                     self._wake.wait(min(next_scan - now, 1))
                                     continue
                                 if self._stop.is_set():

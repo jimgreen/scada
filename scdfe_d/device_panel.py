@@ -1,49 +1,42 @@
-"""Read live device quantities and update their configuration as one batch."""
+"""直接基于设备宽表读取实时量测与批量更新参数。"""
 
 import math
 
 from scdfe_c.web.service import ApiError
 from scdfe_d.measurement_layout import SUFFIXES
-from scdfe_d.service import CATEGORIES, utc_now
+from scdfe_d.service import CATEGORIES, category_for
 
 
 def device_catalog(store):
-    """The device pickers need model memberships, not model JSON or runtime aggregates."""
+    """直接从设备宽表构建前端设备选择器目录（无需 device/d_device_members 表）。"""
+    tables_out = []
+    devices_out = []
     with store.connection() as con:
         con.execute("BEGIN")
-        tables = {
-            row[0]: 0
-            for row in con.execute(
-                "SELECT table_name FROM d_device_tables ORDER BY table_name"
-            )
-        }
-        devices = {}
-        for row in con.execute("""SELECT d.device_id,d.name,d.category,d.active,b.table_name,b.idx
-                FROM device d JOIN d_device_members b USING(device_id)
-                ORDER BY d.device_id,b.table_name"""):
-            device = devices.setdefault(
-                row["device_id"],
-                dict(
-                    device_id=row["device_id"],
-                    name=row["name"],
-                    category=row["category"],
-                    active=row["active"],
-                    tables=[],
-                ),
-            )
-            device["tables"].append(dict(table=row["table_name"], idx=row["idx"]))
-            tables[row["table_name"]] += 1
-        sources = [
-            row[0]
-            for row in con.execute(
-                "SELECT DISTINCT source_database FROM scada_point_mapping ORDER BY source_database"
-            )
-        ]
+        cur = con.cursor()
+        cur.row_factory = None
+        for table, _ in store._get_table_schemas(con):
+            quoted = store._table_name(table)
+            cat = category_for(table)
+            rows = cur.execute(f"SELECT idx, name FROM {quoted} ORDER BY idx").fetchall()
+            tables_out.append(dict(table_name=table, count=len(rows)))
+            for idx, name in rows:
+                did = store.device_id_for(table, idx, con=con)
+                devices_out.append(
+                    dict(
+                        device_id=did,
+                        name=name,
+                        category=cat,
+                        active=1,
+                        tables=[dict(table=table, idx=idx)],
+                    )
+                )
+    source_db = store.default_source_database()
     return dict(
-        devices=list(devices.values()),
-        tables=[dict(table_name=name, count=count) for name, count in tables.items()],
+        devices=devices_out,
+        tables=tables_out,
         category_labels=CATEGORIES,
-        sources=sources,
+        sources=[source_db] if source_db else [],
     )
 
 
@@ -63,73 +56,53 @@ def _read_device(store, con, table, idx, *, live=False):
     if not isinstance(table, str) or not table:
         raise ApiError(400, "请选择设备表")
     idx = _index(idx)
-    member = con.execute(
-        """SELECT b.table_name AS 'table',b.idx,b.name,b.device_id,d.category,d.active
-           FROM d_device_members b JOIN device d USING(device_id)
-           WHERE b.table_name=? AND b.idx=?""",
-        (table, idx),
-    ).fetchone()
-    if member is None:
-        raise ApiError(404, "所选设备在该表中不存在")
+    metrics = store.table_metrics(con, table)
+    if metrics is None:
+        raise ApiError(404, "所选设备表不存在")
     table_sql = store._table_name(table)
     wide = con.execute(f"SELECT * FROM {table_sql} WHERE idx=?", (idx,)).fetchone()
     if wide is None:
-        raise ApiError(409, "设备量测表尚未同步")
-    configuration_fields = (
-        ""
-        if live
-        else """m.version,m.se_enabled,m.max_age_seconds,
-           s.scale,s.offset,v.quality source_quality,"""
-    )
-    definitions = {
-        row["metric"]: dict(row)
-        for row in con.execute(
-            f"""SELECT m.measurement_id,m.metric,m.kind,m.name,m.unit,
-                      {configuration_fields}s.source_database,s.enabled,v.collected_at,
-                      coalesce(v.valid,0) valid,coalesce(v.reason,'uncollected') reason
-               FROM device_measurement m LEFT JOIN scada_point_mapping s USING(measurement_id)
-               LEFT JOIN measurement_value v USING(measurement_id)
-               WHERE m.device_id=? AND m.quantity_table=? AND m.catalog_active=1""",
-            (member["device_id"], table),
-        )
+        raise ApiError(404, "所选设备在该表中不存在")
+
+    did = store.device_id_for(table, idx, con=con)
+    device_info = {
+        "table": table,
+        "idx": idx,
+        "name": wide["name"],
+        "device_id": did,
+        "category": category_for(table),
+        "active": 1,
     }
-    fields = wide.keys()[2:]
-    types = None
+    source_db = store.default_source_database()
     items = []
-    for offset in range(0, len(fields), len(SUFFIXES)):
+    fields = wide.keys()[2:]
+    step = len(SUFFIXES)
+    for offset in range(0, len(fields), step):
         metric = fields[offset]
-        fields_in_group = fields[offset : offset + len(SUFFIXES)]
+        fields_in_group = fields[offset : offset + step]
         if fields_in_group != [metric + suffix for suffix in SUFFIXES]:
             raise ApiError(409, "设备量测字段分组不完整")
-        item = definitions.get(metric)
-        if item is None:
-            if types is None:
-                types = store.table_column_types(con, table)
-            item = dict(
-                measurement_id=None,
-                metric=metric,
-                kind="yx" if types[metric] == "INTEGER" else "yc",
-                name=metric,
-                unit="",
-                source_database=None,
-                enabled=None,
-                collected_at=None,
-                valid=0,
-                reason="unmapped",
-            )
-            if not live:
-                item.update(
-                    version=None,
-                    se_enabled=0,
-                    max_age_seconds=None,
-                    scale=None,
-                    offset=None,
-                    source_quality=None,
-                )
+        kind = next((k for m, k in metrics if m == metric), "yc")
         value, quality, previous, source_time, notuse, weight, rtu, point = (
             wide[field] for field in fields_in_group
         )
-        item.update(
+        mapped = rtu is not None and point is not None
+        meta = store.runtime_meta_for(table, idx, metric) if mapped else None
+        valid, reason, collected_at = store._infer_status(
+            value, quality, source_time, notuse, rtu, point, meta
+        )
+        mid = store.measurement_id_for(table, idx, metric, con=con) if mapped else None
+        item = dict(
+            measurement_id=mid,
+            metric=metric,
+            kind=kind,
+            name=metric,
+            unit="",
+            source_database=source_db if mapped else None,
+            enabled=1 if mapped else None,
+            collected_at=collected_at,
+            valid=valid,
+            reason=reason,
             value=value,
             quality=quality,
             previous_value=previous,
@@ -139,9 +112,17 @@ def _read_device(store, con, table, idx, *, live=False):
             pnt_no=point,
         )
         if not live:
-            item["weight"] = weight
+            item.update(
+                version=store.version_for(table, idx, metric) if mapped else None,
+                se_enabled=0,
+                max_age_seconds=store._max_age_seconds if mapped else None,
+                scale=1.0 if mapped else None,
+                offset=0.0 if mapped else None,
+                source_quality=(quality & 127) if (mapped and quality is not None) else None,
+                weight=weight,
+            )
         items.append(item)
-    return dict(device=dict(member), items=items)
+    return dict(device=device_info, items=items)
 
 
 def read_device(store, table, idx, *, live=False):
@@ -173,7 +154,7 @@ def _parameter_changes(changes, current):
             raise ApiError(400, "量测编号、版本无效或重复")
         seen.add(mid)
         row = current.get(mid)
-        if row is None or row["source_database"] is None:
+        if row is None or row["rtu_id"] is None or row["pnt_no"] is None:
             raise ApiError(400, "只能修改当前设备已绑定量测的参数")
         if version != row["version"]:
             raise ApiError(409, "量测定义已修改，请刷新后重试", code="version_conflict")
@@ -182,18 +163,20 @@ def _parameter_changes(changes, current):
             type(value) is not int or value not in (0, 1) for value in flags.values()
         ):
             raise ApiError(400, "启用和禁用标记必须为 0 或 1")
+        # 纯设备宽表以 notuse 控制屏蔽；若前端取消 enabled 也映射为 notuse=1
+        effective_notuse = 1 if (flags["notuse"] or not flags["enabled"]) else 0
         before = {
-            key: row[key] for key in ("enabled", "notuse", "weight", "max_age_seconds")
+            "notuse": 1 if row["notuse"] else 0,
+            "weight": float(row["weight"] if row["weight"] is not None else 1.0),
         }
-        after = dict(
-            flags,
-            weight=_positive(change["weight"], "量测权重"),
-            max_age_seconds=_positive(
-                change.get("max_age_seconds", row["max_age_seconds"]), "量测超时阈值"
-            ),
-        )
+        after = {
+            "notuse": effective_notuse,
+            "weight": _positive(change["weight"], "量测权重"),
+        }
+        if "max_age_seconds" in change:
+            _positive(change["max_age_seconds"], "量测超时阈值")
         if before != after:
-            yield mid, version, before, after
+            yield mid, before, after
 
 
 def update_parameters(store, payload):
@@ -211,53 +194,33 @@ def update_parameters(store, payload):
             if r["measurement_id"] is not None
         }
         updates = list(_parameter_changes(items, current))
-        now = utc_now()
         physical_values = {}
-        for mid, version, before, after in updates:
-            metric = current[mid]["metric"]
-            con.execute(
-                """UPDATE device_measurement SET notuse=?,weight=?,max_age_seconds=?,
-                   version=?,updated_at=? WHERE measurement_id=?""",
-                (
-                    after["notuse"],
-                    after["weight"],
-                    after["max_age_seconds"],
-                    version + 1,
-                    now,
-                    mid,
-                ),
-            )
-            con.execute(
-                "UPDATE scada_point_mapping SET enabled=?,version=?,updated_at=? WHERE measurement_id=?",
-                (after["enabled"], version + 1, now, mid),
-            )
-            for field in ("notuse", "weight"):
-                if before[field] != after[field]:
-                    physical_values[metric + "_" + field] = after[field]
-            if any(
-                before[key] != after[key]
-                for key in ("notuse", "enabled", "max_age_seconds")
-            ):
-                reason = "definition_changed"
-                if not after["enabled"]:
-                    reason = "disabled"
-                elif after["notuse"]:
-                    reason = "notuse"
-                con.execute(
-                    "UPDATE measurement_value SET valid=0,reason=? WHERE measurement_id=?",
-                    (reason, mid),
+        dev_idx = detail["device"]["idx"]
+        for mid, before, after in updates:
+            row = current[mid]
+            metric = row["metric"]
+            if before["notuse"] != after["notuse"]:
+                physical_values[metric + "_notuse"] = after["notuse"]
+                physical_values[metric + "_qual"] = (row["quality"] or 0) | 128
+                store.set_runtime_meta(
+                    table,
+                    dev_idx,
+                    metric,
+                    valid=0,
+                    reason="notuse" if after["notuse"] else "definition_changed",
+                    collected_at=row["collected_at"],
                 )
-                physical_values[metric + "_qual"] = (current[mid]["quality"] or 0) | 128
+            if before["weight"] != after["weight"]:
+                physical_values[metric + "_weight"] = after["weight"]
+            store.bump_version(table, dev_idx, metric)
             store._audit(con, "measurement_parameters", mid, before, after)
         if physical_values:
-            # The canonical parameter rows already hold the new values. Updating
-            # just this device keeps its parameter columns in sync.
             fields = ",".join(
                 '"' + key.replace('"', '""') + '"=?' for key in physical_values
             )
             con.execute(
                 f"UPDATE {store._table_name(table)} SET {fields} WHERE idx=?",
-                (*physical_values.values(), detail["device"]["idx"]),
+                (*physical_values.values(), dev_idx),
             )
         result = _read_device(store, con, table, idx)
     if updates:

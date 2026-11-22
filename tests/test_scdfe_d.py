@@ -121,16 +121,30 @@ class DeviceTests(unittest.TestCase):
             with self.assertRaises(ApiError):
                 self.store.source_path(path)
 
-    def test_custom_weight_notuse_and_scale(self):
+    def test_custom_weight_and_notuse(self):
         self.store.save_measurement(
-            dict(self.point, version=1, scale=2, offset=3, weight=4, notuse=1),
+            dict(self.point, version=1, weight=4, notuse=1),
             self.point["measurement_id"],
         )
         self.store.collect_once()
         row = self.row()
-        self.assertEqual(row["value"], 23)
+        self.assertEqual(row["value"], 10)
+        self.assertEqual(row["weight"], 4)
         self.assertEqual(row["notuse"], 1)
         self.assertEqual(row["reason"], "notuse")
+        with closing(sqlite3.connect(self.store.db_path)) as c:
+            tables = {
+                r[0]
+                for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            for legacy in (
+                "measurement_value",
+                "measurement_refresh",
+                "scada_point_mapping",
+                "device_measurement",
+                "device",
+            ):
+                self.assertNotIn(legacy, tables)
 
     def test_invalid_database_is_not_modified(self):
         path = self.root / "wrong.sqlite3"
@@ -155,7 +169,7 @@ class DeviceTests(unittest.TestCase):
         )
         result = second.once()
         self.assertEqual(result["valid_count"], 0)
-        self.assertEqual(self.row()["reason"], "disabled")
+        self.assertEqual(self.row()["reason"], "notuse")
 
     def test_unavailable_source_keeps_last_value_but_invalidates_quality(self):
         self.store.collect_once()
@@ -216,14 +230,17 @@ class DeviceTests(unittest.TestCase):
         before = path.read_bytes()
         self.assertEqual(self.store.import_model("model.sqlite3")["tables"], 3)
         self.assertEqual(before, path.read_bytes())
-        device = next(
+        gen_device = next(
             d for d in self.store.devices({}) if d["model_table"] == "ACGenerator"
         )
-        self.store.save_measurement(
-            dict(self.point, device_id=device["device_id"], metric="soc")
+        storage_device = next(
+            d for d in self.store.devices({}) if d["model_table"] == "ACStorageGen"
         )
         self.store.save_measurement(
-            dict(self.point, device_id=device["device_id"], metric="p")
+            dict(self.point, device_id=storage_device["device_id"], metric="soc")
+        )
+        self.store.save_measurement(
+            dict(self.point, device_id=gen_device["device_id"], metric="p")
         )
         self.store.collect_once()
         with self.store.connection() as c:

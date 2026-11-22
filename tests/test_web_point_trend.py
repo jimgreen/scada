@@ -146,12 +146,11 @@ class PointTrendTests(unittest.TestCase):
             measurement = store.save_measurement({
                 "device_id": device["device_id"], "metric": "p", "kind": "yc", "name": "有功功率",
                 "unit": "kW", "source_database": source.name, "rtu_id": 1, "pnt_no": 7,
-                "scale": 2, "offset": 3,
             })
             mid = measurement["measurement_id"]
             store.collect_once()
             self.assert_samples(server, [{"measurement_id": mid + 1}, {"measurement_id": mid}], [
-                MISSING, {"value": 23, "quality": 0, "time_ms": stamp},
+                MISSING, {"value": 10.0, "quality": 0, "time_ms": stamp},
             ])
             with store.connection() as connection:
                 connection.execute("UPDATE Manual_generator SET p=24, p_qual=128, p_time=?", (stamp + 1,))

@@ -20,10 +20,8 @@ class CollectionConnectionTests(unittest.TestCase):
             time.sleep(0.02)
 
     def _latest_batch(self):
-        with self.store.connection() as con:
-            return con.execute(
-                "SELECT coalesce(max(refresh_id),0) FROM measurement_refresh"
-            ).fetchone()[0]
+        last = self.store.overview()["last_refresh"]
+        return last["refresh_id"] if last else 0
 
     def test_periodic_writer_reuse_recovery_and_close(self):
         wal = Path(str(self.store.db_path) + "-wal")
@@ -46,11 +44,16 @@ class CollectionConnectionTests(unittest.TestCase):
         self.assertEqual(len(opens), 1)
         self.assertTrue(wal.is_file())
         with self.store.connection() as con:
-            con.execute("""CREATE TRIGGER fail_test_scan BEFORE UPDATE ON measurement_value
-                BEGIN SELECT RAISE(ABORT,'test rollback'); END""")
-            before = con.execute(
-                "SELECT max(refresh_id) FROM measurement_refresh"
-            ).fetchone()[0]
+            con.execute(
+                """CREATE TRIGGER fail_test_scan BEFORE UPDATE ON Manual_generator
+                BEGIN SELECT RAISE(ABORT,'test rollback'); END"""
+            )
+        before = self._latest_batch()
+        # 触发源点变化迫使设备表执行 UPDATE，从而验证事务回滚与连接重建恢复
+        with closing(sqlite3.connect(self.source)) as src, src:
+            src.execute(
+                "UPDATE fes_yc_define SET value=value+1,refresh_time=refresh_time+10"
+            )
         self._wait(lambda: "test rollback" in collector.last_error)
         self.assertEqual(self._latest_batch(), before)
         with self.store.connection() as con:
@@ -69,7 +72,12 @@ class CollectionConnectionTests(unittest.TestCase):
         with closing(self.store._open_connection()) as writer:
             page_size = writer.execute("PRAGMA page_size").fetchone()[0]
             writer.execute("PRAGMA wal_autocheckpoint=16")
-            for _ in range(16):
+            for i in range(16):
+                with closing(sqlite3.connect(self.source)) as src, src:
+                    src.execute(
+                        "UPDATE fes_yc_define SET value=?,refresh_time=refresh_time+1",
+                        (10 + i,),
+                    )
                 self.store.collect_once(_writer=writer)
                 self.assertFalse(writer.in_transaction)
             with closing(sqlite3.connect(self.store.db_path)) as other:

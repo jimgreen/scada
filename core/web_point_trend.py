@@ -45,21 +45,28 @@ def _samples_for_points(con, role, points):
 
 
 def _samples_for_devices(store, con, points):
-    ids = defaultdict(list)
-    for slot, point in enumerate(points):
-        if not isinstance(point, dict) or point.keys() != {'measurement_id'}:
-            raise ApiError(400, '每个量测需要 measurement_id')
-        ids[_identifier(point['measurement_id'], 'measurement_id')].append(slot)
-    placeholders = ', '.join(['?'] * len(ids))
     by_table = defaultdict(lambda: defaultdict(list))
-    for mid, metric, table, idx in con.execute(
-        f'''SELECT m.measurement_id, m.metric, m.quantity_table, b.idx
-            FROM device_measurement m JOIN d_device_members b
-            ON b.device_id=m.device_id AND b.table_name=m.quantity_table
-            WHERE m.catalog_active=1 AND m.measurement_id IN ({placeholders})''', tuple(ids)):
-        by_table[table][idx].append((mid, metric))
+    for slot, point in enumerate(points):
+        if not isinstance(point, dict):
+            raise ApiError(400, '每个量测需要 measurement_id 或 table/idx/metric')
+        if point.keys() == {'measurement_id'}:
+            mid = _identifier(point['measurement_id'], 'measurement_id')
+            resolved = store.resolve_measurement_id(con, mid)
+            if resolved is None:
+                continue
+            table, idx, metric = resolved
+        elif point.keys() == {'table', 'idx', 'metric'}:
+            table = str(point['table'])
+            idx = _identifier(point['idx'], 'idx', minimum=0)
+            metric = str(point['metric'])
+            metrics = store.table_metrics(con, table)
+            if metrics is None or all(m != metric for m, _ in metrics):
+                continue
+        else:
+            raise ApiError(400, '每个量测需要 measurement_id 或 table/idx/metric')
+        by_table[table][idx].append((slot, metric))
     for table, idx_map in by_table.items():
-        # 按表合并为单条 WHERE idx IN (...) 查询，消除多设备选点时的 N+1 查询。
+        # 按表合并为单条 WHERE idx IN (...) 查询，直接从设备宽表读取值、质量和时标。
         metrics = list(dict.fromkeys(metric for rows in idx_map.values() for _, metric in rows))
         metric_pos = {metric: pos for pos, metric in enumerate(metrics)}
         cols = ', '.join(quote_identifier(metric + suffix)
@@ -71,11 +78,9 @@ def _samples_for_devices(store, con, points):
             tuple(idx_list),
         ):
             row_idx = row[0]
-            for mid, metric in idx_map.get(row_idx, ()):
+            for slot, metric in idx_map.get(row_idx, ()):
                 base = 1 + 3 * metric_pos[metric]
-                sample = (row[base], row[base + 1], row[base + 2])
-                for slot in ids[mid]:
-                    yield (slot, *sample)
+                yield (slot, row[base], row[base + 1], row[base + 2])
 
 
 def read_point_trend(store, role, body):
