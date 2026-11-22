@@ -158,13 +158,17 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     html = data.decode("utf-8")
     html = html.replace("<html ", '<html data-theme="minimalist-light" ', 1)
     html = html.replace("<head>", '<head><script src="/static/audit-client.js"></script>', 1)
-    html = html.replace("</head>", '<link rel="stylesheet" href="/static/workbench.css">'
-                        '<link rel="stylesheet" href="/static/database-selector.css">'
-                        '<link rel="stylesheet" href="/static/ui-theme.css">'
-                        '<script defer src="/static/ui-i18n.js"></script>'
-                        '<script defer src="/static/database-selector.js"></script>'
-                        '<script defer src="/static/workbench.js"></script>'
-                        '<script defer src="/static/layout-resizer.js"></script></head>', 1)
+    head_extra = '<link rel="stylesheet" href="/static/workbench.css"><link rel="stylesheet" href="/static/database-selector.css">'
+    if "/static/ui-theme.css" not in html:
+        head_extra += '<link rel="stylesheet" href="/static/ui-theme.css">'
+    if "/static/ui-i18n.js" not in html:
+        head_extra += '<script defer src="/static/ui-i18n.js"></script>'
+    head_extra += (
+        '<script defer src="/static/database-selector.js"></script>'
+        '<script defer src="/static/workbench.js"></script>'
+        '<script defer src="/static/layout-resizer.js"></script>'
+    )
+    html = html.replace("</head>", head_extra + "</head>", 1)
     html = html.replace("<body", '<body class="workbench"', 1)
     html = re.sub(r"<header\b[^>]*>.*?</header>", lambda _: topbar, html, count=1, flags=re.S)
     # The former horizontal menu is replaced by actual page links in the sidebar.

@@ -1095,14 +1095,26 @@ class DeviceStore:
                     if _writer is not None and plan_key is not None:
                         cur_ver = con.execute("PRAGMA data_version").fetchone()[0]
                         if (cur_ver, self._config_epoch, source_name) != plan_key:
-                            bindings, requested_kinds = self._scan_bindings(con)
-                            (
-                                valid_count,
-                                changes,
-                                next_bindings,
-                                runtime_updates,
-                            ) = evaluate(bindings)
-                            plan_key = (cur_ver, self._config_epoch, source_name)
+                            new_bindings, new_requested = self._scan_bindings(con)
+                            # 若并发新增/改绑了本轮未读取的源点，不可复用旧源快照误写 missing_point；
+                            # 清空计划缓存，留待下一周期使用最新源库快照完整写入。
+                            unfetched = any(
+                                not new_requested[k].issubset(requested_kinds.get(k, set()))
+                                for k in new_requested
+                            )
+                            if unfetched:
+                                if _plan_cache is not None:
+                                    _plan_cache.clear()
+                                changes = {}
+                            else:
+                                bindings, requested_kinds = new_bindings, new_requested
+                                (
+                                    valid_count,
+                                    changes,
+                                    next_bindings,
+                                    runtime_updates,
+                                ) = evaluate(bindings)
+                                plan_key = (cur_ver, self._config_epoch, source_name)
                     if changes:
                         self._write_device_updates(con, changes)
             except BaseException:
@@ -1369,6 +1381,8 @@ class DeviceStore:
         cat_filter = query.get("category") or ""
         kw = (query.get("q") or "").strip().lower()
         items = []
+        with self._mutex:
+            meta_snapshot = dict(self._runtime_meta)
         with self.connection() as con:
             con.execute("BEGIN")
             cur = con.cursor()
@@ -1391,7 +1405,7 @@ class DeviceStore:
                         rtu, pnt = row[base + 6], row[base + 7]
                         if rtu is not None and pnt is not None:
                             bound_cnt += 1
-                            meta = self.runtime_meta_for(table, idx, metric)
+                            meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, _, _ = self._infer_status(
                                 row[base],
                                 row[base + 1],
@@ -1429,7 +1443,13 @@ class DeviceStore:
         limit = min(200, max(1, int(query.get("limit", 50))))
         source_db = self.default_source_database()
 
-        matched = []
+        start = (page - 1) * limit
+        end = start + limit
+        page_items = []
+        total = 0
+        with self._mutex:
+            meta_snapshot = dict(self._runtime_meta)
+            version_snapshot = dict(self._versions)
         with self.connection() as con:
             con.execute("BEGIN")
             target_dev = (
@@ -1461,7 +1481,8 @@ class DeviceStore:
                     rows_iter = cur.execute(f"SELECT * FROM {quoted} ORDER BY idx")
                 for row in rows_iter:
                     idx, dev_name = row[0], row[1]
-                    did = self.device_id_for(table, idx)
+                    dev_name_lower = str(dev_name).lower() if kw else ""
+                    did = None
                     base = 2
                     for metric, kind in metrics:
                         rtu, pnt = row[base + 6], row[base + 7]
@@ -1469,62 +1490,65 @@ class DeviceStore:
                             if filter_kind and kind != filter_kind:
                                 base += step
                                 continue
-                            if kw and kw not in metric.lower() and kw not in str(dev_name).lower():
+                            if kw and kw not in metric.lower() and kw not in dev_name_lower:
                                 base += step
                                 continue
                             val = row[base]
                             qual = row[base + 1]
-                            pre = row[base + 2]
                             stamp = row[base + 3]
                             notuse = 1 if row[base + 4] else 0
-                            weight = row[base + 5]
-                            meta = self.runtime_meta_for(table, idx, metric)
+                            meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, reason, collected_at = self._infer_status(
                                 val, qual, stamp, notuse, rtu, pnt, meta
                             )
                             if only_invalid and valid:
                                 base += step
                                 continue
-                            mid = self.measurement_id_for(table, idx, metric)
-                            matched.append(
-                                dict(
-                                    measurement_id=mid,
-                                    device_id=did,
-                                    metric=metric,
-                                    kind=kind,
-                                    name=metric,
-                                    unit="",
-                                    weight=weight if weight is not None else 1.0,
-                                    max_age_seconds=self._max_age_seconds,
-                                    notuse=notuse,
-                                    se_enabled=0,
-                                    quantity_table=table,
-                                    version=self.version_for(table, idx, metric),
-                                    device_name=dev_name,
-                                    category=cat,
-                                    source_database=source_db,
-                                    rtu_id=rtu,
-                                    pnt_no=pnt,
-                                    model_table=table,
-                                    model_idx=idx,
-                                    enabled=1,
-                                    scale=1.0,
-                                    offset=0.0,
-                                    value=val,
-                                    source_value=val,
-                                    previous_value=pre,
-                                    quality=qual,
-                                    source_time_ms=stamp,
-                                    collected_at=collected_at,
-                                    valid=valid,
-                                    reason=reason,
+                            # 仅对落入当前分页窗口的条目构造完整字典，避免全量物化数万条记录。
+                            if start <= total < end:
+                                if did is None:
+                                    did = self.device_id_for(table, idx)
+                                pre = row[base + 2]
+                                weight = row[base + 5]
+                                mid = self.measurement_id_for(table, idx, metric)
+                                page_items.append(
+                                    dict(
+                                        measurement_id=mid,
+                                        device_id=did,
+                                        metric=metric,
+                                        kind=kind,
+                                        name=metric,
+                                        unit="",
+                                        weight=weight if weight is not None else 1.0,
+                                        max_age_seconds=self._max_age_seconds,
+                                        notuse=notuse,
+                                        se_enabled=0,
+                                        quantity_table=table,
+                                        version=version_snapshot.get((table, int(idx), str(metric)), 1),
+                                        device_name=dev_name,
+                                        category=cat,
+                                        source_database=source_db,
+                                        rtu_id=rtu,
+                                        pnt_no=pnt,
+                                        model_table=table,
+                                        model_idx=idx,
+                                        enabled=1,
+                                        scale=1.0,
+                                        offset=0.0,
+                                        value=val,
+                                        source_value=val,
+                                        previous_value=pre,
+                                        quality=qual,
+                                        source_time_ms=stamp,
+                                        collected_at=collected_at,
+                                        valid=valid,
+                                        reason=reason,
+                                    )
                                 )
-                            )
+                            total += 1
                         base += step
-        total = len(matched)
-        start = (page - 1) * limit
         return dict(
-            items=matched[start : start + limit],
+            items=page_items,
             total=total,
             page=page,
             limit=limit,
@@ -1689,20 +1713,18 @@ class DeviceStore:
             WHERE idx=?""",
             (idx,),
         )
-        with self._mutex:
-            self._runtime_meta.pop((table, int(idx), str(metric)), None)
 
-    def _prune_unused_metric_column(self, con, table, metric):
+    def _prune_unused_metric_column(self, con, table, metric) -> bool:
         """若该表所有设备均未绑定该指标且不在预设未绑定清单中，移除该 8 列并同步 RTDB 元数据。"""
         profile = UNBOUND_PROFILES.get(table)
         if profile and (metric in profile[0] or metric in profile[1]):
-            return
+            return False
         quoted = _quote_table(table)
         still_used = con.execute(
             f"SELECT 1 FROM {quoted} WHERE {_quote_col(metric + '_rtu')} IS NOT NULL OR {_quote_col(metric + '_pnt')} IS NOT NULL LIMIT 1"
         ).fetchone()
         if still_used:
-            return
+            return False
         metrics = self.table_metrics(con, table) or []
         remaining = [(m, k) for m, k in metrics if m != metric]
         keep_cols = ["idx", "name"]
@@ -1720,6 +1742,7 @@ class DeviceStore:
         con.execute(f"ALTER TABLE {tmp_quoted} RENAME TO {quoted}")
         dev_tables = [t for t, _ in discover_device_tables(con)]
         sync_embedded_schema(con, include_tables=dev_tables)
+        return True
 
     def delete_measurement(self, measurement_id, version=None):
         with self.connection() as con:
@@ -1731,13 +1754,24 @@ class DeviceStore:
             if version is not None and int(version) != self.version_for(table, idx, metric):
                 raise ApiError(409, "属性不存在或已被修改")
             self._clear_binding_cell(con, table, idx, metric)
-            self._prune_unused_metric_column(con, table, metric)
-            self._record_change(
-                "mapping_delete",
-                int(measurement_id),
-                dict(table=table, idx=idx, metric=metric),
-                {},
-            )
+            pruned = self._prune_unused_metric_column(con, table, metric)
+        # 仅在 SQLite 事务成功提交后清理内存缓存并记入变更历史，避免回滚后内存脏状态
+        with self._mutex:
+            self._runtime_meta.pop((table, int(idx), str(metric)), None)
+            if pruned:
+                stale_keys = [k for k in self._meas_ids if k[0] == table and k[2] == metric]
+                for key in stale_keys:
+                    mid = self._meas_ids.pop(key, None)
+                    if mid is not None:
+                        self._id_to_meas.pop(mid, None)
+                    self._versions.pop(key, None)
+                    self._runtime_meta.pop(key, None)
+        self._record_change(
+            "mapping_delete",
+            int(measurement_id),
+            dict(table=table, idx=idx, metric=metric),
+            {},
+        )
         self.bump_config_epoch()
 
     def overview(self):
@@ -1745,6 +1779,8 @@ class DeviceStore:
         device_count = 0
         bound_count = 0
         valid_count = 0
+        with self._mutex:
+            meta_snapshot = dict(self._runtime_meta)
         with self.connection() as con:
             con.execute("BEGIN")
             cur = con.cursor()
@@ -1767,7 +1803,7 @@ class DeviceStore:
                         rtu, pnt = row[base + 6], row[base + 7]
                         if rtu is not None and pnt is not None:
                             bound_count += 1
-                            meta = self.runtime_meta_for(table, idx, metric)
+                            meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, _, _ = self._infer_status(
                                 row[base],
                                 row[base + 1],
@@ -1777,8 +1813,7 @@ class DeviceStore:
                                 pnt,
                                 meta,
                             )
-                            valid_cnt_inc = valid
-                            valid_count += valid_cnt_inc
+                            valid_count += valid
                         base += step
         with self._mutex:
             last = dict(self._refresh_history[0]) if self._refresh_history else None

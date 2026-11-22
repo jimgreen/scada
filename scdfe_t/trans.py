@@ -79,11 +79,13 @@ class TransSpec:
             raise ValueError("转发规约只能是 iec104 或 modbus-tcp")
         port = _get(row, "bind_port", 2404 if protocol == "iec104" else 1502)
         protocol_config = IEC104ProtocolConfig.from_mapping(row)
+        raw_report = int(_get(row, "report_interval_ms", 1000))
+        report_ms = 0 if raw_report <= 0 else max(50, raw_report)
         return cls(int(row["channel_id"]), protocol,
                    str(_get(row, "bind_host", "0.0.0.0")), int(port),
                    int(_get(row, "common_address", 1)), int(_get(row, "unit_id", 1)),
                    max(.05, _float(_get(row, "scan_interval_ms", 200), 200) / 1000),
-                   max(50, int(_get(row, "report_interval_ms", 1000))),
+                   report_ms,
                    max(1, int(_get(row, "log_retention_hours", 720))),
                    protocol_config)
 
@@ -205,6 +207,8 @@ class TransRuntime:
         self._last_tx_time = 0
         self._last_error_time = 0
         self._last_error = ""
+        self._last_soe_error = ""
+        self._point_error_backoff: dict[Any, tuple[float, float, str, float]] = {}
         self._command_count = 0
         self._runtime_state = {
             "process_status": 0, "process_pid": 0,
@@ -275,14 +279,16 @@ class TransRuntime:
         values = dict(updates or {})
         self._runtime_state.update(values)
         status = int(self._runtime_state.get("process_status") or 0)
-        error = str(self._runtime_state.get("process_error") or self._last_error or "")
+        process_error = str(self._runtime_state.get("process_error") or "")
+        last_error = process_error or str(self._last_error or "")
         running = status == 2
         try:
             self._runtime_status.upsert(self.channel_id, {
                 **self._runtime_state,
                 "protocol": protocol,
                 "channel_name": channel_name,
-                "state": state_for(status, running, error),
+                # 仅进程级故障才将通道标为 error，瞬态单点/通信错误保留在 last_error 供排查但不锁死状态
+                "state": state_for(status, running, process_error),
                 "running": int(running),
                 "connection_state": "listening" if running and self.server is not None else (
                     "retrying" if status == 5 else "disconnected"
@@ -294,7 +300,7 @@ class TransRuntime:
                 "last_rx_time": self._last_rx_time,
                 "last_tx_time": self._last_tx_time,
                 "last_error_time": self._last_error_time,
-                "last_error": error,
+                "last_error": last_error,
                 "diagnostic_json": self._runtime_diagnostic(),
             }, force=force, connection=connection)
         except Exception as exc:
@@ -577,12 +583,36 @@ class TransRuntime:
             if not self._point_runtime_pending:self._point_runtime_since=0.0
         return True
 
-    def _record_sample(self, key, value, quality, source_time=0):
-        sample = (value, int(quality), int(source_time or 0))
+    @staticmethod
+    def _normalize_sample(value, quality):
+        """对非有限浮点值（NaN/Inf）做安全归一化并置无效品质位 IV=128，防止每轮误判变化刷屏。"""
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0.0, int(quality) | 128
+        return value, int(quality)
+
+    def _should_retry_point(self, key) -> bool:
+        entry = self._point_error_backoff.get(key)
+        return entry is None or time.monotonic() >= entry[0]
+
+    def _mark_point_error(self, key, exc: Any) -> None:
+        now_m = time.monotonic()
+        msg = str(exc)
+        prev = self._point_error_backoff.get(key)
+        delay = min(30.0, (prev[1] * 2.0) if prev is not None else 1.0)
+        last_logged = prev[3] if (prev is not None and prev[2] == msg) else 0.0
+        should_log = (now_m - last_logged) >= 30.0
+        self._point_error_backoff[key] = (now_m + delay, delay, msg, now_m if should_log else last_logged)
+        if should_log:
+            self._runtime_error(exc)
+            self.logger.error(f"转发点 {key[0]}/{key[1]} 更新失败: {msg}")
+
+    def _record_sample(self, key, value, quality, source_time=0, *, emit_business=True):
+        value, quality = self._normalize_sample(value, quality)
+        sample = (value, quality, int(source_time or 0))
         previous = self._sample_seen.get(key)
         if previous == sample:
             return False
-        if previous is None or previous[:2] != sample[:2]:
+        if emit_business and (previous is None or previous[:2] != sample[:2]):
             point = self.points.get(key)
             self._record_business(('转发源值变化', {
                 '四遥': key[0].upper(), '转发点号': key[1],
@@ -593,7 +623,7 @@ class TransRuntime:
                 '源刷新时刻': source_time}))
         self._sample_seen[key] = sample
         self._queue_point_runtime(
-            key, value=value, status=int(quality),
+            key, value=value, status=quality,
             refresh_time=sample[2] or now_ms(),
         )
         return True
@@ -732,8 +762,8 @@ class TransRuntime:
                     server.set_value(p.kind, p.pnt_no, value, quality=quality)
                     self.values[key], self.qualities[key] = value, quality
                 self._record_sample(key, value, quality, source_time)
-            server.set_monitor_report_interval(spec.report_interval_ms)
             self._configure_soe(server)
+            server.set_monitor_report_interval(spec.report_interval_ms)
             # Keep the constructed server as the active target as well.  This
             # makes the method useful for callers that build a server for
             # diagnostics before invoking ``rebuild``.
@@ -797,33 +827,55 @@ class TransRuntime:
     def _configure_soe(self, server):
         from core.iec104_soe import SoeForwarder
         routes = {}
-        # Configuration work only: the refresh path never joins full point
-        # definitions or scans event history from the beginning.
+        soe_keys = list(server.soe_point_keys)
+        if not soe_keys:
+            return
+        # 按源 RTU 批量查询 IEC104 源点定义，消除逐点 N+1 SQLite 查询。
+        source_rtus = sorted({int(self.points[key].source_rtu_id) for key in soe_keys})
+        source_meta: dict[tuple[int, int], tuple[Any, Any]] = {}
         with self.store.connection() as con:
-            for key in server.soe_point_keys:
-                point = self.points[key]
-                row = con.execute('''SELECT m.type_id,m.time_tag FROM fes_rtu_define r
+            placeholders = ",".join("?" for _ in source_rtus)
+            for row in con.execute(
+                f'''SELECT r.rtu_id, m.pnt_no, m.type_id, m.time_tag
+                    FROM fes_rtu_define r
                     JOIN fes_channel_iec104_point_define m ON m.channel_id=r.channel_id
-                    WHERE r.rtu_id=? AND r.channel_type='iec104' AND m.kind='yx' AND m.pnt_no=?''',
-                    (point.source_rtu_id,point.source_pnt_no)).fetchone()
-                if row is None: continue
-                typ = int(row['type_id'] or 0)
-                if row['time_tag'] == 'CP56Time2a' and typ in (1, 2, 3):
-                    typ = {1: 30, 2: 31, 3: 31}[typ]
-                if typ not in (30,31): continue
-                if server._points[key].type.value != typ:
-                    raise ValueError(f'SOE 转发需保持源点单双点类型: {key}')
-                self._soe_keys.add(key)
-                routes.setdefault((point.source_rtu_id,point.source_pnt_no),[]).append(key)
+                    WHERE r.rtu_id IN ({placeholders})
+                      AND r.channel_type='iec104' AND m.kind='yx' ''',
+                source_rtus,
+            ):
+                source_meta[(int(row['rtu_id']), int(row['pnt_no']))] = (row['type_id'], row['time_tag'])
+        for key in soe_keys:
+            point = self.points[key]
+            meta = source_meta.get((int(point.source_rtu_id), int(point.source_pnt_no)))
+            if meta is None:
+                continue
+            raw_typ, time_tag = meta
+            typ = int(raw_typ or 0)
+            if time_tag == 'CP56Time2a' and typ in (0, 1, 2, 3):
+                typ = {0: 30, 1: 30, 2: 31, 3: 31}[typ]
+            if typ not in (30, 31):
+                continue
+            if server._points[key].type.value != typ:
+                raise ValueError(f'SOE 转发需保持源点单双点类型: {key}')
+            self._soe_keys.add(key)
+            routes.setdefault((point.source_rtu_id, point.source_pnt_no), []).append(key)
         if not routes: return
         server.require_soe_support()
+        mismatch_logged: dict[Any, float] = {}
         def route(row):
             if row['type_id'] not in (30,31): return []
             result = []
             for key in routes.get((row['rtu_id'],row['pnt_no']),()):
                 target = server._points[key]
                 if target.type.value != row['type_id']:
-                    raise ValueError(f'SOE 历史类型与当前转发定义不一致: {key}')
+                    # 历史 SOE 类型与当前配置不一致时记录节流错误并跳过，避免抛未捕获异常引起重启死循环
+                    now_m = time.monotonic()
+                    if now_m - mismatch_logged.get(key, 0.0) >= 60.0:
+                        mismatch_logged[key] = now_m
+                        msg = f'SOE 历史类型({row["type_id"]})与当前转发定义({target.type.value})不一致，已跳过: {key}'
+                        self._runtime_error(msg)
+                        self.logger.error(msg)
+                    continue
                 result.append(dict(row,common_address=server.common_address,io_address=target.io_address,
                                    target_pnt_no=key[1]))
             return result
@@ -840,8 +892,13 @@ class TransRuntime:
     def _pump_soe(self):
         if self._soe_forwarder is not None:
             self._soe_forwarder.tick(self.server)
-            if self._soe_forwarder.error:
-                self._runtime_error(self._soe_forwarder.error)
+            err = str(self._soe_forwarder.error or "")
+            if err:
+                if err != self._last_soe_error:
+                    self._last_soe_error = err
+                    self._runtime_error(err)
+            elif self._last_soe_error:
+                self._last_soe_error = ""
 
     def _refresh_iec104(self, current, keys=None):
         changes = []
@@ -849,13 +906,16 @@ class TransRuntime:
             point = self.points[key]
             if point.kind not in {'yc', 'yx'}:
                 continue
-            value, quality, source_time = self._sample_parts(current[key]) if key in current else (
+            raw_value, raw_quality, source_time = self._sample_parts(current[key]) if key in current else (
                 self.values.get(key, 0), self.qualities.get(key, 0) | 128, 0)
+            value, quality = self._normalize_sample(raw_value, raw_quality)
             self._record_sample(key, value, quality, source_time)
             if self.values.get(key) != value or self.qualities.get(key) != quality:
-                changes.append((*key, value, quality))
+                if self._should_retry_point(key):
+                    changes.append((*key, value, quality))
             else:
                 self._source_dirty.discard(key)
+                self._point_error_backoff.pop(key, None)
         if changes:
             soe_keys = self._soe_keys
             has_active = self.server.active_connection_count > 0
@@ -876,22 +936,30 @@ class TransRuntime:
                 errors = {(kind, no): exc for kind, no, _, _ in changes}
             stamp = now_ms()
             publish_mode = '突发传送已提交' if has_active else '仅缓存，无活动连接'
+            updated_ordinary = 0
+            updated_soe = 0
             for kind, no, value, quality in changes:
                 key = (kind, no)
                 if key in errors:
-                    self._runtime_error(errors[key])
-                    self.logger.error(f'转发点 {kind}/{no} 更新失败: {errors[key]}')
+                    self._mark_point_error(key, errors[key])
                     continue
                 self.values[key], self.qualities[key] = value, quality
                 self._source_dirty.discard(key)
+                self._point_error_backoff.pop(key, None)
                 is_soe = key in soe_keys
-                self._record_business(('转发协议缓存已更新', {
-                    '四遥': kind.upper(), '转发点号': no, '值': value, '质量': quality,
-                    '发布方式': 'SOE另行投递' if is_soe else publish_mode}))
-                if not is_soe:
+                if is_soe:
+                    updated_soe += 1
+                else:
+                    updated_ordinary += 1
+                if not is_soe and has_active:
                     self._queue_point_runtime(key, forward_time=stamp)
                     self._tx_count += 1
                     self._last_tx_time = stamp
+            if updated_ordinary or updated_soe:
+                # 源值变化已逐点记录；此处按批次汇总协议发布方式，避免同一点双倍写日志。
+                self._record_business(('转发协议缓存已更新', {
+                    '普通点数': updated_ordinary, 'SOE点数': updated_soe,
+                    '发布方式': publish_mode}))
         self._flush_point_runtime()
         self._pump_soe()
 
@@ -923,15 +991,21 @@ class TransRuntime:
             return self._refresh_iec104(current, keys)
         if getattr(type(self.server), "update_many", None) is not None:
             changes = []
+            prev_samples = {}
             for key in keys & current.keys():
                 sample = current[key]
-                value, quality, source_time = self._sample_parts(sample)
-                self._record_sample(key, value, quality, source_time)
+                raw_value, raw_quality, source_time = self._sample_parts(sample)
+                value, quality = self._normalize_sample(raw_value, raw_quality)
+                will_change = self.values.get(key) != value and self._should_retry_point(key)
+                prev_samples[key] = self._sample_seen.get(key)
+                self._record_sample(key, value, quality, source_time, emit_business=not will_change)
                 if self.values.get(key) != value:
-                    changes.append((*key, value))
+                    if will_change:
+                        changes.append((*key, value))
                 else:
                     self.qualities[key] = quality  # Modbus does not transmit quality bits.
                     self._source_dirty.discard(key)
+                    self._point_error_backoff.pop(key, None)
             for key in keys:
                 point = self.points[key]
                 if point.kind not in {"yc", "yx"} or key in current:
@@ -953,15 +1027,23 @@ class TransRuntime:
                 for kind, no, value in changes:
                     key = (kind, no)
                     if key in errors:
-                        self._runtime_error(errors[key])
-                        self.logger.error(f"转发点 {kind}/{no} 更新失败: {errors[key]}")
+                        self._mark_point_error(key, errors[key])
                     else:
-                        sample = self._sample_parts(current[key])
-                        self.values[key], self.qualities[key] = sample[0], sample[1]
+                        raw_val, raw_qual, src_t = self._sample_parts(current[key])
+                        norm_val, norm_qual = self._normalize_sample(raw_val, raw_qual)
+                        self.values[key], self.qualities[key] = norm_val, norm_qual
                         self._source_dirty.discard(key)
-                        self._record_business(('Modbus寄存器已更新，等待对端读取', {
-                            '四遥': kind.upper(), '转发点号': no, '值': sample[0],
-                            '本地质量': sample[1], '源刷新时刻': sample[2]}))
+                        self._point_error_backoff.pop(key, None)
+                        point = self.points.get(key)
+                        prev = prev_samples.get(key)
+                        # 将源值变化与 Modbus 寄存器更新合并为单条业务日志，日志量减半且保留完整追溯字段。
+                        self._record_business(('转发源值变化，Modbus寄存器已更新，等待对端读取', {
+                            '四遥': kind.upper(), '转发点号': no,
+                            '源RTU': getattr(point, 'source_rtu_id', None),
+                            '源点号': getattr(point, 'source_pnt_no', None),
+                            '旧值': prev[0] if prev else '未知', '新值': norm_val,
+                            '旧质量': prev[1] if prev else '未知', '新质量': norm_qual,
+                            '源刷新时刻': src_t}))
                         self._queue_point_runtime(key, forward_time=stamp)
                         self._tx_count += 1
                         self._last_tx_time = stamp
@@ -1112,10 +1194,15 @@ class TransRuntime:
                 # between scans. A new shorter period uses the last real scan
                 # time rather than waiting out the former period or rescanning
                 # on every configuration poll.
-                wake = min(next_control, self._next_definition_check, last_scan + spec.scan_interval,
-                           self._next_runtime_flush)
-                if self._soe_forwarder is not None:
-                    wake = min(wake,time.monotonic()+0.05)
+                wake = min(next_control, self._next_definition_check, last_scan + spec.scan_interval)
+                # 仅在存在待落库点位状态时按 100ms 调度；仅在有活动 IEC104 客户端或未确认 SOE 时按 50ms 调度。
+                if self._point_runtime_pending:
+                    wake = min(wake, self._next_runtime_flush)
+                if self._soe_forwarder is not None and (
+                    getattr(self.server, 'active_connection_count', 0) > 0
+                    or self._soe_forwarder.pending is not None
+                ):
+                    wake = min(wake, time.monotonic() + 0.05)
                 self.stop_event.wait(max(0., wake - time.monotonic()))
             return cycles
         except Exception as exc:

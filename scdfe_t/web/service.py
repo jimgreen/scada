@@ -171,8 +171,10 @@ class TransStore:
                     "dropped_count": 0, "reconnect_count": 0,
                     "last_rx_time": 0, "last_tx_time": 0,
                     "last_error_time": 0, "last_error": error,
-                    "diagnostic_json": "{}", "diagnostic": {}, "sampled_at": 0,
+                    "diagnostic": {}, "sampled_at": 0,
                 }
+            else:
+                snapshot = {k: v for k, v in snapshot.items() if k != "diagnostic_json"}
             item["runtime_status"] = snapshot
         return {"items": items, "total": len(items)}
 
@@ -240,6 +242,15 @@ class TransStore:
                     raise ApiError(409, "通道定义在停止期间发生变化，请重新加载", code="version_conflict")
                 deleted_points = con.execute(f"DELETE FROM {POINT_TABLE} WHERE channel_id=?", (cid,)).rowcount
                 con.execute(f"DELETE FROM {CHANNEL_TABLE} WHERE channel_id=?", (cid,))
+                # 同步清理已删除转发通道的孤儿运行态记录与 SOE 游标，防止旧游标阻塞 SOE 老化回收。
+                for cleanup_sql, cleanup_params in (
+                    ("DELETE FROM fes_channel_runtime_status WHERE service_name=? AND channel_id=?", ("scdfe_t", cid)),
+                    ("DELETE FROM _scada_iec104_soe_cursor WHERE consumer=?", (f"t:channel:{cid}",)),
+                ):
+                    try:
+                        con.execute(cleanup_sql, cleanup_params)
+                    except sqlite3.OperationalError:
+                        pass
                 con.commit()
                 audit.change(CHANNEL_TABLE, [cid], dict(row), None, deleted_points=deleted_points)
 

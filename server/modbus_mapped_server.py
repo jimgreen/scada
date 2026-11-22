@@ -392,11 +392,15 @@ class ModbusMappedServer(ModbusTcpTransServer):
     def _sync(self):
         with closing(sqlite3.connect(str(self.store.db_path), timeout=2, isolation_level=None)) as con:
             version = None
-            while not self._sync_stop.wait(.05):
+            backoff = 0.05
+            last_err_text = ""
+            next_err_log = 0.0
+            while not self._sync_stop.wait(backoff):
                 try:
                     generation = self._write_generation
                     current = con.execute('PRAGMA data_version').fetchone()[0]
                     if current == version:
+                        backoff = 0.05
                         continue
                     changed, details, states = [], [], {}
                     con.execute('BEGIN')
@@ -433,8 +437,16 @@ class ModbusMappedServer(ModbusTcpTransServer):
                         return True
                     if self._on_datastore(publish_if_current):
                         version = current
+                    backoff = 0.05
+                    last_err_text = ""
                 except Exception as exc:
-                    self._log('ERROR', f'Modbus 数据库同步失败: {exc}')
+                    err_text = str(exc)
+                    now_m = time.monotonic()
+                    if err_text != last_err_text or now_m >= next_err_log:
+                        last_err_text = err_text
+                        next_err_log = now_m + 30.0
+                        self._log('ERROR', f'Modbus 数据库同步失败: {exc}')
+                    backoff = min(2.0, max(0.1, backoff * 2.0))
 
     def start(self):
         super().start()

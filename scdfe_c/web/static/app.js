@@ -1775,7 +1775,7 @@ async function removeRow(row) {
         preview.total +
         " 条\n\n该操作不可恢复，确认继续？";
     }
-    if (!confirm(message)) return;
+    if (!(await window.scadaConfirm(message, { title: "确认删除", confirmText: "确认删除", danger: true }))) return;
     const result = await api(pathFor(ctx, row), {
       method: "DELETE",
       headers: { "If-Match": String(row._version) },
@@ -2133,7 +2133,11 @@ async function fetchProcesses() {
     markUpdated();
     clearTimeout(processMonitor.timer);
     // Operation progress is live even when periodic data refresh is disabled.
-    if (data.busy && state.resource === "processes") processMonitor.timer = setTimeout(loadProcesses, 1000);
+    if (data.busy && state.resource === "processes" && !document.hidden) {
+      processMonitor.timer = setTimeout(() => {
+        if (!document.hidden && state.resource === "processes") loadProcesses();
+      }, 1000);
+    }
   } catch (error) {
     if (request === processMonitor.request) showError("#process-error", error);
   } finally {
@@ -2167,7 +2171,10 @@ function openProcessLogs(name) {
 }
 $("#process-refresh").onclick = loadProcesses;
 $("#process-all-start").onclick = () => controlProcess("all", "start");
-$("#process-all-stop").onclick = () => controlProcess("all", "stop");
+$("#process-all-stop").onclick = async () => {
+  if (!(await window.scadaConfirm("确认停止全部正在运行的服务与进程？", { title: "确认停止", confirmText: "确认停止", danger: true }))) return;
+  return controlProcess("all", "stop");
+};
 $("#debug-process-form").onsubmit = (event) => {
   event.preventDefault();
   const rtu = $("#debug-rtu").value.trim();
@@ -2177,11 +2184,16 @@ $("#debug-process-form").onsubmit = (event) => {
 $("#process-search").oninput = () => { processMonitor.offset = 0; renderProcesses(); };
 $("#process-prev").onclick = () => { processMonitor.offset -= 50; renderProcesses(); };
 $("#process-next").onclick = () => { processMonitor.offset += 50; renderProcesses(); };
-$("#process-rows").onclick = (event) => {
+$("#process-rows").onclick = async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
   if (button.dataset.processLog) openProcessLogs(button.dataset.processLog);
-  else if (button.dataset.processAction) controlProcess(button.dataset.processKey, button.dataset.processAction);
+  else if (button.dataset.processAction) {
+    if (button.dataset.processAction === "stop" && (button.dataset.processKey === "main" || button.dataset.processKey === "writer")) {
+      if (!(await window.scadaConfirm("确认停止核心进程 " + button.dataset.processKey + "？", { title: "确认停止", confirmText: "确认停止", danger: true }))) return;
+    }
+    controlProcess(button.dataset.processKey, button.dataset.processAction);
+  }
 };
 $("#process-rows").onchange = (event) => {
   if (event.target.dataset.processInclude) controlProcess(event.target.dataset.processInclude, "configure", { include_in_all: event.target.checked });
@@ -2327,13 +2339,14 @@ async function loadScdfe() {
 async function controlRtu(row, action, button) {
   const values = { process_enable: row.process_enable === 1 ? 0 : 1 };
   if (
-    !confirm(
+    !(await window.scadaConfirm(
       "确认" +
         (values.process_enable ? "启用自动通信：" : "停用自动通信：") +
         " RTU " +
         row.rtu_id +
         "？",
-    )
+      { title: values.process_enable ? "确认启用" : "确认停用", confirmText: "确认", danger: !values.process_enable },
+    ))
   )
     return;
   button.disabled = true;
@@ -2508,10 +2521,14 @@ async function filterLogs(refresh = false, refreshContent = true) {
       if (item.process === selected.process && item.hour > selected.hour) selected = item;
   }
   if (!selected) selected = logs.filtered[0];
+  const prevFileKey = logs.selectedMeta || "";
+  const nextFileKey = selected ? `${selected.name}|${selected.size}|${selected.modified_at}` : "";
   const changed = logs.selected !== (selected?.name || "");
+  const fileChanged = nextFileKey !== prevFileKey;
   logs.selected = selected?.name || "";
+  logs.selectedMeta = nextFileKey;
   renderLogFiles();
-  if (!refresh || changed || refreshContent || (!logs.cursor && $("#log-follow").checked))
+  if (!refresh || changed || refreshContent || (!logs.cursor && $("#log-follow").checked && fileChanged))
     await readLog(logs.selected, changed);
 }
 function renderLogFiles() {
@@ -3152,7 +3169,7 @@ setInterval(() => {
   // live whenever the log page is open, even if the general data refresh
   // toggle is disabled; the reader preserves the current selection/filter.
   if (state.resource === "logs") {
-    if (!logs.loading && !logs.contentLoading) loadScdfeLogs(true);
+    if (!logs.loading && !logs.contentLoading) loadScdfeLogs(false);
     return;
   }
   if (!$("#auto-refresh").checked) return;

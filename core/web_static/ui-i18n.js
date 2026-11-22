@@ -75,6 +75,24 @@
 
   // 全站精确三语词条表：[简体中文, 英文, 俄文]，启动时自动注册到 I18N_DICT
   const PHRASES = [
+    // ==================== 确认对话框与高危操作 ====================
+    ["请确认操作", "Confirm Action", "Подтверждение"],
+    ["确认删除", "Confirm Delete", "Подтвердить удаление"],
+    ["确认停止", "Confirm Stop", "Подтвердить остановку"],
+    ["确认执行", "Confirm", "Подтвердить"],
+    ["取消", "Cancel", "Отмена"],
+    ["确定", "OK", "ОК"],
+    ["确认", "Confirm", "Подтвердить"],
+    ["该操作不可恢复，确认继续？", "This action cannot be undone. Continue?", "Действие необратимо. Продолжить?"],
+    ["确认停止全部正在运行的服务与进程？", "Stop all running services and processes?", "Остановить все запущенные службы и процессы?"],
+    ["确定删除当前通道的规约参数？", "Delete protocol parameters for this channel?", "Удалить параметры протокола этого канала?"],
+    ["确定删除该通道及其四遥点？", "Delete this channel and all its points?", "Удалить этот канал и все его точки?"],
+    ["确定删除该测点？", "Delete this point?", "Удалить эту точку?"],
+    ["确认停止当前服务？", "Stop the current service?", "Остановить текущую службу?"],
+    ["确认移除该实时曲线采样点？", "Remove this trend sampling point?", "Удалить эту точку из тренда?"],
+    ["接口文档", "API Docs", "Документация API"],
+    ["通道、RTU 与四遥数据 API", "Channel, RTU & Four-Remote Data API", "API каналов, RTU и точек ТМ/ТУ"],
+
     // ==================== 顶栏、标题与模块名 ====================
     ["运行工作台", "Operations Workbench", "Рабочая панель"],
     ["协议服务", "Protocol Service", "Служба протоколов"],
@@ -1417,13 +1435,15 @@
     if (el.id === "ui-lang-select" || el.id === "ui-theme-select") return;
     let map = originalAttrs.get(el);
     for (const attr of TRANSLATED_ATTRS) {
+      if (attr === "title" && el.hasAttribute("data-i18n-title")) continue;
       if (!el.hasAttribute(attr)) continue;
       const val = el.getAttribute(attr) || "";
       const trimmed = val.trim();
       if (!trimmed) continue;
       let rec = map?.[attr];
       if (!rec || (rec.lastApplied !== undefined && val !== rec.lastApplied)) {
-        if (!isTranslatableString(trimmed)) continue;
+        // 仅当新值包含中文或未曾记录过时更新原始值，避免切语时非中文 title 覆写原始中文。
+        if (!isTranslatableString(trimmed) || (rec && !/[\u4e00-\u9fff]/.test(trimmed))) continue;
         if (!map) {
           map = {};
           originalAttrs.set(el, map);
@@ -1526,8 +1546,15 @@
   }
 
   function mountGlobalControls() {
-    const tools = document.querySelector(".header-tools");
-    if (!tools || document.getElementById("ui-global-controls")) return;
+    if (document.getElementById("ui-global-controls")) return;
+    let tools = document.querySelector(".header-tools");
+    if (!tools) {
+      const header = document.querySelector("body > header");
+      if (!header) return;
+      tools = document.createElement("div");
+      tools.className = "header-tools standalone-header-tools";
+      header.append(tools);
+    }
     const box = document.createElement("div");
     box.id = "ui-global-controls";
     box.className = "ui-global-controls";
@@ -1614,10 +1641,74 @@
     boot();
   }
 
+  /**
+   * 全站共享模态确认框：用于高危/不可逆操作，默认聚焦安全“取消”按钮，确认按钮按危险程度视觉区分。
+   */
+  function scadaConfirm(message, options = {}) {
+    const title = options.title || "请确认操作";
+    const confirmText = options.confirmText || "确认";
+    const cancelText = options.cancelText || "取消";
+    const danger = options.danger !== false;
+    if (typeof document === "undefined" || !document.body || typeof document.createElement !== "function") {
+      return Promise.resolve(false);
+    }
+    let dialog = document.getElementById("scada-global-confirm");
+    if (!dialog) {
+      dialog = document.createElement("dialog");
+      dialog.id = "scada-global-confirm";
+      dialog.className = "scada-confirm-dialog";
+      dialog.innerHTML =
+        '<form method="dialog" class="scada-confirm-form">' +
+        '<h3 class="scada-confirm-title"></h3>' +
+        '<p class="scada-confirm-body"></p>' +
+        '<div class="scada-confirm-actions">' +
+        '<button type="button" class="scada-confirm-cancel"></button>' +
+        '<button type="submit" class="scada-confirm-ok"></button>' +
+        "</div></form>";
+      document.body.append(dialog);
+    }
+    if (typeof dialog.showModal !== "function") {
+      return Promise.resolve(false);
+    }
+    const titleEl = dialog.querySelector(".scada-confirm-title");
+    const bodyEl = dialog.querySelector(".scada-confirm-body");
+    const cancelBtn = dialog.querySelector(".scada-confirm-cancel");
+    const okBtn = dialog.querySelector(".scada-confirm-ok");
+    const tr = text => (currentLang === "zh-CN" ? String(text) : translateString(String(text)));
+    titleEl.textContent = tr(title);
+    bodyEl.textContent = tr(message);
+    cancelBtn.textContent = tr(cancelText);
+    okBtn.textContent = tr(confirmText);
+    okBtn.className = "scada-confirm-ok " + (danger ? "danger" : "primary");
+
+    return new Promise(resolve => {
+      let settled = false;
+      const done = value => {
+        if (settled) return;
+        settled = true;
+        if (dialog.open) dialog.close();
+        resolve(Boolean(value));
+      };
+      cancelBtn.onclick = () => done(false);
+      dialog.oncancel = ev => {
+        ev.preventDefault();
+        done(false);
+      };
+      dialog.querySelector(".scada-confirm-form").onsubmit = ev => {
+        ev.preventDefault();
+        done(true);
+      };
+      dialog.showModal();
+      cancelBtn.focus();
+    });
+  }
+
+  window.scadaConfirm = scadaConfirm;
   window.scadaI18n = {
     t,
     translateText: translateString,
     translateRoot,
+    confirm: scadaConfirm,
     themes: THEMES.slice(),
     langs: LANGS.slice(),
     isDarkTheme,

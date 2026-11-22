@@ -635,13 +635,16 @@ class IEC104Server(PacketTrace):
     def set_monitor_report_interval(self, milliseconds):
         """Change native periodic YC/YX reports without replacing the station."""
         period = int(milliseconds)
-        if period <= 0:
-            raise ValueError('周期上送间隔必须为正整数')
-        period = ((period + self.tick_rate_ms - 1) // self.tick_rate_ms) * self.tick_rate_ms
+        if period < 0:
+            raise ValueError('周期上送间隔不能为负数')
+        if period > 0:
+            period = ((period + self.tick_rate_ms - 1) // self.tick_rate_ms) * self.tick_rate_ms
+        soe_keys = self.soe_point_keys
         with self._lock:
-            for (kind, _), point in self._points.items():
-                if kind in ('yc', 'yx'):
-                    point.report_ms = period
+            for key, point in self._points.items():
+                if key[0] in ('yc', 'yx'):
+                    # SOE 点（类型 30/31）走独立 SOE 队列投递，不设周期全量推送，避免重复报文。
+                    point.report_ms = 0 if key in soe_keys else period
         return period
 
     def command(self, kind, point_no):

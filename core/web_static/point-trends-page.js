@@ -45,7 +45,10 @@
     const actions = document.createElement('div');
     actions.className = 'trend-list-actions';
     const view = action('查看曲线', item.name, () => trend.showSeries(item.key));
-    const remove = action('移除', item.name, () => trend.removeSeries(item.key), 'trend-remove');
+    const remove = action('移除', item.name, async () => {
+      if (typeof window.scadaConfirm === 'function' && !(await window.scadaConfirm('确认移除该实时曲线采样点？', { title: '确认移除', confirmText: '确认移除', danger: true }))) return;
+      trend.removeSeries(item.key);
+    }, 'trend-remove');
     actions.append(view, remove);
     element.insertCell().append(actions);
     return {element, name, type, id, value, time, visibility, view, remove};

@@ -91,9 +91,14 @@ def prepare_response(handler, status: int, content_type: str, data: bytes,
 def _etag_matches(header: str | None, etag: str) -> bool:
     if not header:
         return False
+    canonical = etag[2:] if etag.startswith("W/") else etag
     for token in header.split(","):
         candidate = token.strip()
-        if candidate == "*" or candidate == etag or candidate == f"W/{etag}":
+        if not candidate:
+            continue
+        if candidate == "*" or candidate == etag or candidate == canonical or candidate == f"W/{canonical}":
+            return True
+        if candidate.startswith("W/") and candidate[2:] == canonical:
             return True
     return False
 
@@ -286,6 +291,24 @@ class BaseScadaHandlerMixin:
         if self.command != "HEAD":
             self.wfile.write(data)
         self._audit_delivered = True
+
+    def _send_json(self, status, data, headers=None):
+        """发送 JSON 响应；对无实体版本 ETag 的 GET 200 接口自动附加弱 ETag 并支持 304 Not Modified。"""
+        extra = dict(headers) if headers else {}
+        if (
+            self.command == "GET"
+            and status == 200
+            and "etag" not in {key.lower() for key in extra}
+        ):
+            digest = hashlib.blake2b(data, digest_size=12).hexdigest()
+            etag = f'W/"{digest}"'
+            extra["ETag"] = etag
+            if "cache-control" not in {key.lower() for key in extra}:
+                extra["Cache-Control"] = "no-cache"
+            if _etag_matches(self.headers.get("If-None-Match") if self.headers else None, etag):
+                self._send(304, "application/json; charset=utf-8", b"", extra)
+                return
+        self._send(status, "application/json; charset=utf-8", data, extra)
 
     def _if_match(self):
         return parse_if_match(self)

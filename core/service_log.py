@@ -30,8 +30,8 @@ def _shared_logger(directory: Path, process_name: str, packet_directory: Path):
         return logger
 
 
-def _schedule_async_cleanup(directory: Path, packet_directory: Path, retention_hours: float = 720) -> None:
-    """将过期日志与空目录清理放到后台轻量线程执行，避免阻塞报文收发回调热路径。"""
+def _schedule_async_prune_dirs(directory: Path, packet_directory: Path) -> None:
+    """将空日期/小时目录回收放到后台线程，避免在报文/运行日志写热路径阻塞。"""
     key = str(directory.resolve())
     with _CLEANUP_INFLIGHT_LOCK:
         if key in _CLEANUP_INFLIGHT:
@@ -40,20 +40,16 @@ def _schedule_async_cleanup(directory: Path, packet_directory: Path, retention_h
 
     def _worker():
         try:
-            from core.log_retention import cleanup_log_tree
-            cleanup_log_tree(
-                directory,
-                packet_dir=packet_directory,
-                retention_hours=retention_hours,
-                prefix="scdfe_s-",
-            )
+            from core.log_retention import _prune_empty_dirs
+            _prune_empty_dirs(directory)
+            _prune_empty_dirs(packet_directory)
         except Exception:
-            logging.getLogger(__name__).debug("异步清理 S 服务日志失败", exc_info=True)
+            logging.getLogger(__name__).debug("异步清理 S 服务空日志目录失败", exc_info=True)
         finally:
             with _CLEANUP_INFLIGHT_LOCK:
                 _CLEANUP_INFLIGHT.discard(key)
 
-    threading.Thread(target=_worker, name="scdfe-s-log-cleanup", daemon=True).start()
+    threading.Thread(target=_worker, name="scdfe-s-log-prune", daemon=True).start()
 
 
 class ServiceFileLog:
@@ -160,12 +156,9 @@ class ServiceFileLog:
                 if self.packet_switch.enabled(policy_channel):
                     logger.packet_text(message)
                     if bound_channel is not None and compat_logger is not None:
-                        if " frame=" in str(message):
-                            compat_logger.packet_text(message)
-                            compat_logger.emit("normal", message)
-                        else:
-                            compat_logger.packet_text(message)
-                            compat_logger.emit("normal", message)
+                        # 显式开启报文录制时保留旧版服务级运行日志兼容视图（默认关闭时零写入）。
+                        compat_logger.packet_text(message)
+                        compat_logger.emit("normal", message)
             else:
                 logger.emit("normal", message, level="INFO" if level == "DEBUG" else level)
             now = time.monotonic()
@@ -182,16 +175,17 @@ class ServiceFileLog:
                 files = [(path, self.directory) for path in
                          (self._files("runtime") if startup_files is None else startup_files)]
                 files.extend((path, self.packet_directory) for path in self._files("packet"))
+                removed_any = False
                 for path, root in files:
                     try:
                         if (path.stat().st_mtime < cutoff and path.resolve().is_relative_to(root)
                                 and not path.is_symlink()):
                             path.unlink()
+                            removed_any = True
                     except OSError:
                         pass
-                from core.log_retention import _prune_empty_dirs
-                _prune_empty_dirs(self.directory)
-                _prune_empty_dirs(self.packet_directory)
+                if removed_any:
+                    _schedule_async_prune_dirs(self.directory, self.packet_directory)
         except OSError:
             now = time.monotonic()
             with self._lock:

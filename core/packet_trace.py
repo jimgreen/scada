@@ -56,6 +56,9 @@ def service_packet_recorder(record, rtu_id, channel_id):
     business = CommunicationLog(write_many, 组件='S', RTU编号=rtu_id, 通道编号=channel_id)
     def receive(direction, data, detail=''):
         business.packet(direction, data, detail)
+        # 报文保存开关关闭时提前短路，避免无意义的 APDU 解码与 HEX 文本构造。
+        if file_log is not None and not file_log.packet_switch.enabled(channel_id):
+            return
         for line in packet_lines(direction, data, prefix + detail + suffix):
             record('PACKET', line, channel_id=channel_id)
     receive.business = business

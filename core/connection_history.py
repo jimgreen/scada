@@ -214,7 +214,10 @@ class ConnectionJournal:
                     con.rollback()
                     self.dropped += sum(op != 'flush' for op, _ in batch)
                     self.error = str(exc)
-                    LOG.exception('连接历史写入失败，通信继续；丢失记录数=%s', self.dropped)
+                    now_m = time.monotonic()
+                    if now_m >= getattr(self, '_next_write_error_log', 0.0):
+                        self._next_write_error_log = now_m + 60.0
+                        LOG.exception('连接历史写入失败，通信继续；丢失记录数=%s', self.dropped)
                 finally:
                     for done in flushed:
                         done.set()
@@ -268,10 +271,34 @@ class ConnectionJournal:
                 side = direction.lower()
                 con.execute(f'UPDATE connection_session SET {side}_bytes={side}_bytes+?, '
                             f'{side}_count={side}_count+1,updated=? WHERE id=?', (len(data),at,ident))
-                decoded = describe_packet(summary, direction, data)
-                if decoded:
-                    con.execute('INSERT INTO connection_event(session_id,time,kind,direction,summary) VALUES(?,?,?,?,?)',
-                                (ident,at,'interaction',direction,decoded))
+                if enabled or _is_important_interaction(summary, data):
+                    decoded = describe_packet(summary, direction, data)
+                    if decoded:
+                        con.execute('INSERT INTO connection_event(session_id,time,kind,direction,summary) VALUES(?,?,?,?,?)',
+                                    (ident,at,'interaction',direction,decoded))
+
+
+def _is_important_interaction(protocol, data):
+    """报文保存关闭时仅对关键控制交互解码，跳过高频心跳/周期帧与常规读响应以降低 CPU 与写放大。"""
+    if not data:
+        return False
+    if protocol == 'IEC104' and len(data) >= 6 and data[0] == 0x68:
+        ctrl = data[2]
+        if (ctrl & 3) == 3:
+            # U 帧：保留 STARTDT/STOPDT，跳过周期保活 TESTFR(0x43/0x83)。
+            return ctrl not in (0x43, 0x83)
+        if (ctrl & 3) == 1:
+            # S 帧仅为序号确认。
+            return False
+        if len(data) >= 9:
+            # I 帧：跳过高频周期扫描帧(COT=1)，保留总召、变位与遥控/遥调指令。
+            return (data[8] & 63) != 1
+        return True
+    if protocol == 'Modbus-TCP' and len(data) >= 8:
+        fc = data[7]
+        # 保留异常响应与写入指令，跳过常规高频读请求/响应。
+        return bool(fc & 128) or fc in (5, 6, 15, 16)
+    return False
 
 
 def describe_packet(protocol, direction, data):

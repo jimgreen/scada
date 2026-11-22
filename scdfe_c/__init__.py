@@ -1330,7 +1330,8 @@ class ChannelWorker:
     def _sync_measurement_values(self, values: Any) -> tuple[int, int]:
         feedback_rows = []
         try:
-            self._feedback_tracker.refresh()
+            # 仅在 run() 生命周期已建立复用只读连接时透传，避免单测直调泄漏未关连接。
+            self._feedback_tracker.refresh(con=self._command_connection)
         except Exception as exc:
             self.logger.error(f'回采规则读取失败: {exc}')
         has_feedback = bool(self._feedback_tracker.keys)
@@ -1555,10 +1556,15 @@ class ChannelWorker:
         if time.monotonic() >= self._feedback_next_check:
             from core.command_feedback import evaluate_feedback
             try:
-                evaluate_feedback(self.store,self.spec.rtu_id)
+                read_con = self._read_connection() if self.store is not None else None
+                self._feedback_tracker.refresh(con=read_con)
+                # 仅在存在活动待核对回采任务或已到超时临界时查询评估表，避免空闲 100ms 重复查库。
+                if self._feedback_tracker.keys or getattr(self, "_feedback_force_eval", True):
+                    evaluate_feedback(self.store, self.spec.rtu_id, con=read_con)
+                    self._feedback_force_eval = bool(self._feedback_tracker.keys)
             except Exception as exc:
                 self.logger.error(f'指令回采核对失败，下轮重试: {exc}')
-            self._feedback_next_check = time.monotonic() + .1
+            self._feedback_next_check = time.monotonic() + (0.1 if self._feedback_tracker.keys else 0.5)
         rows = self._command_rows()
         if rows is None:
             return 0, 0
@@ -2037,23 +2043,31 @@ def run_channel_debug(
 
 def _worker_thread_entry(store: ScadaStore, spec_data: dict[str, Any], log_dir: str,
                          poll_interval: float, retry_interval: float, stop_event: threading.Event,
-                         writer_queue: Any | None = None) -> None:
+                         writer_queue: Any | None = None,
+                         worker_holder: list[Any] | None = None) -> None:
     """通信线程入口；任何未预期异常都在本线程内收敛。"""
     spec = ChannelSpec(**spec_data)
+    worker: ChannelWorker | None = None
     try:
-        ChannelWorker(store, spec, log_dir=log_dir, poll_interval=poll_interval,
-                      retry_interval=retry_interval, stop_event=stop_event,
-                      writer_queue=writer_queue).run()
+        worker = ChannelWorker(store, spec, log_dir=log_dir, poll_interval=poll_interval,
+                               retry_interval=retry_interval, stop_event=stop_event,
+                               writer_queue=writer_queue)
+        if worker_holder is not None:
+            worker_holder.clear()
+            worker_holder.append(worker)
+        worker.run()
     except Exception as exc:  # noqa: BLE001 - 主调度线程负责拉起并记录异常
         ScdfeLogger(log_dir, process_name=_worker_process_name(spec.rtu_id),
                     packet_directory=packet_log_directory(log_dir)).error(
             f"通信线程异常退出: {type(exc).__name__}: {exc}；{channel_identity(spec)} "
             f"主进程PID={os.getpid()} 线程ID={_current_thread_id()}"
         )
-        # Thread exceptions must not escape into the main scheduler.  The
-        # supervisor observes thread.is_alive() and will mark/restart it on
-        # the next scan; logging here preserves the traceback boundary without
-        # terminating unrelated communication threads.
+    finally:
+        if worker_holder is not None and worker is not None:
+            try:
+                worker_holder.remove(worker)
+            except ValueError:
+                pass
 
 
 @dataclass
@@ -2064,6 +2078,7 @@ class _ManagedWorker:
     channel_lock: ServerInstanceLock
     started_at: float = field(default_factory=time.time)
     log_context: str = ''
+    worker_holder: list[Any] = field(default_factory=list)
 
 
 class ScdfeSupervisor:
@@ -2479,6 +2494,7 @@ class ScdfeSupervisor:
         except Exception as exc:  # noqa: BLE001
             self.logger.error(f"写入通信线程启动状态失败: {exc}；{owner_context}")
         event = threading.Event()
+        worker_holder: list[Any] = []
         try:
             thread = self.thread_factory(
                 target=_worker_thread_entry,
@@ -2486,7 +2502,7 @@ class ScdfeSupervisor:
                     "rtu_id": spec.rtu_id, "channel_id": spec.channel_id,
                     "channel_type": spec.channel_type, "name": spec.name,
                 }, str(self.log_dir), self.poll_interval, self.retry_interval, event,
-                self._writer_queue),
+                self._writer_queue, worker_holder),
                 name=f"scdfe-c-rtu-{spec.rtu_id}-ch-{spec.channel_id}",
                 daemon=True,
             )
@@ -2504,7 +2520,9 @@ class ScdfeSupervisor:
             self.logger.error(f"启动通信线程失败: {type(exc).__name__}: {exc}；{owner_context}")
             channel_lock.release()
             return False
-        self._workers[spec.key] = _ManagedWorker(spec, thread, event, channel_lock, log_context=context)
+        self._workers[spec.key] = _ManagedWorker(
+            spec, thread, event, channel_lock, log_context=context, worker_holder=worker_holder
+        )
         thread_id = _thread_id(thread)
         if thread.is_alive():
             try:
@@ -2687,12 +2705,18 @@ class ScdfeSupervisor:
             while not self.stop():
                 if time.monotonic() >= stop_deadline:
                     self.logger.error("停机等待超过 30s，强制中断残余通信与写库进程以释放锁")
-                    for managed in list(self._workers.values()):
+                    for key, managed in list(self._workers.items()):
                         managed.stop_event.set()
+                        for worker in list(managed.worker_holder):
+                            try:
+                                worker._close_master()
+                            except Exception:
+                                pass
                         try:
-                            managed.worker._close_master()
+                            managed.channel_lock.release()
                         except Exception:
                             pass
+                        self._workers.pop(key, None)
                     if self._writer_process is not None:
                         self._cleanup_failed_writer(self._writer_process, self._writer_queue)
                     break

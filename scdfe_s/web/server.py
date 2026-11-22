@@ -107,7 +107,7 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
         data = encode_json(browser_safe(payload))
-        self._send(status, "application/json; charset=utf-8", data, headers)
+        self._send_json(status, data, headers)
 
     def _path(self):
         return parse_request_path(self, max_num_fields=80)
@@ -279,7 +279,8 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
                 channel_ids=channel_by_rtu.values() if requested_rtu_id is not None else None,
             )
             runtime_by_channel = {
-                int(row["channel_id"]): row for row in runtime_rows
+                int(row["channel_id"]): {k: v for k, v in row.items() if k != "diagnostic_json"}
+                for row in runtime_rows
             }
             items = []
             for slug, status in statuses:
@@ -767,9 +768,9 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
                 if method == "POST":
                     return self._json(201, {"item": self.store.create_channel(rtu_id, self._body())})
                 if method == "PATCH":
-                    return self._json(200, {"item": self.store.update_channel(
-                        rtu_id, self._body(), self._if_match()
-                    )})
+                    updated = self.store.update_channel(rtu_id, self._body(), self._if_match())
+                    self.server.evict_channel_services_for_rtu(rtu_id, keep_type=updated.get("channel_type"))
+                    return self._json(200, {"item": updated})
                 raise ApiError(405, "通道接口只支持 POST 或 PATCH", code="method_not_allowed")
             info = self.store.channel_for_rtu(rtu_id)
             if section == "parameters":
@@ -810,26 +811,18 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
             if table in {"fes_yc_define", "fes_yx_define"} and "value" in body and "refresh_time" not in body:
                 body = dict(body)
                 body["refresh_time"] = now_ms()
-            return self._json(200, {"item": self.store.update_row(table, key, body, self._if_match())})
+            updated = self.store.update_row(table, key, body, self._if_match())
+            if table == "fes_rtu_define" and updated.get("rtu_id") is not None:
+                self.server.evict_channel_services_for_rtu(
+                    int(updated["rtu_id"]), keep_type=updated.get("channel_type")
+                )
+            return self._json(200, {"item": updated})
         if method == "DELETE" and key is not None:
             if table == "fes_rtu_define":
                 # 删除 RTU 前先停止并注销缓存中的按 RTU 通道服务，避免孤儿服务占用端口并锁死切库。
                 rtu_key = str(key[0] if isinstance(key, (list, tuple)) else key).split(",")[0].strip()
                 if rtu_key.isdecimal():
-                    rtu_num = int(rtu_key)
-                    with self.server._channel_service_lock:
-                        stale = [
-                            (slug, svc)
-                            for slug, svc in list(self.server._channel_service_cache.items())
-                            if int(svc.config().get("rtu_id") or -1) == rtu_num
-                        ]
-                        for slug, _ in stale:
-                            self.server._channel_service_cache.pop(slug, None)
-                    for _, svc in stale:
-                        try:
-                            svc.close()
-                        except Exception:
-                            LOG.exception("删除 RTU %s 时释放缓存通道服务失败", rtu_num)
+                    self.server.evict_channel_services_for_rtu(int(rtu_key))
                 return self._json(200, self.store.delete_rtu_cascade(key, self._if_match()))
             self.store.delete_row(table, key, self._if_match())
             return self._json(200, {"deleted": True})
@@ -915,7 +908,36 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
         try:
             super().server_close()
         finally:
+            self._close_cached_channel_services()
             self._resources.close()
+
+    def _close_cached_channel_services(self):
+        with self._channel_service_lock:
+            cached = list(self._channel_service_cache.values())
+            self._channel_service_cache.clear()
+        for svc in cached:
+            try:
+                svc.close()
+            except Exception:
+                LOG.exception("释放缓存通道服务失败")
+
+    def evict_channel_services_for_rtu(self, rtu_id: int, *, keep_type: str | None = None):
+        """释放指定 RTU 不再匹配的缓存通道服务，防止修改类型或删除 RTU 后产生孤儿服务。"""
+        keep_slug = f"{keep_type}-rtu-{int(rtu_id)}" if keep_type else None
+        with self._channel_service_lock:
+            stale = [
+                (slug, svc)
+                for slug, svc in list(self._channel_service_cache.items())
+                if (slug.endswith(f"-rtu-{int(rtu_id)}") or int(svc._config.get("rtu_id") or -1) == int(rtu_id))
+                and slug != keep_slug
+            ]
+            for slug, _ in stale:
+                self._channel_service_cache.pop(slug, None)
+        for _, svc in stale:
+            try:
+                svc.close()
+            except Exception:
+                LOG.exception("释放 RTU %s 过期缓存通道服务失败", rtu_id)
 
     def channel_services(self, *, rtu_id=None):
         """Create/cache one independently controllable service per RTU.
@@ -958,7 +980,15 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
                     continue
                 slug = f"{channel_type}-rtu-{rtu_id}"
                 if slug in self._channel_service_cache:
-                    selected[slug] = self._channel_service_cache[slug]
+                    service = self._channel_service_cache[slug]
+                    # 同步未运行 IEC104 通道在参数表中更新后的监听端口
+                    if channel_type == "iec104" and row[3] and not getattr(service, "_running", False):
+                        try:
+                            if "port" not in getattr(service, "_configured_fields", set()):
+                                service._config["port"] = int(row[3])
+                        except (TypeError, ValueError):
+                            pass
+                    selected[slug] = service
                     continue
                 config_path = self.store.db_path.with_name(
                     f".scdfe_s_{channel_type.replace('-', '_')}_rtu_{rtu_id}.json"
@@ -981,7 +1011,6 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
                             pass
                 self._channel_service_cache[slug] = service
                 selected[slug] = service
-                self._resources.callback(service.close)
             return selected
 
 

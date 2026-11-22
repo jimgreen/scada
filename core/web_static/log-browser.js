@@ -99,7 +99,11 @@
     apply(collapsed);
   }
   async function api(path, signal) {
-    const response = await fetch(path, {cache: "no-store", signal});
+    const timeoutSignal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(12000) : undefined;
+    const combined = signal && timeoutSignal && typeof AbortSignal.any === "function"
+      ? AbortSignal.any([signal, timeoutSignal]) : (signal || timeoutSignal);
+    const response = await fetch(path, {cache: "no-store", signal: combined});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || data.error || data.message || "读取日志失败");
     return data;
@@ -384,6 +388,7 @@
       }
     }
   }
+  let channelsLoaded = false;
   async function refresh(follow = false) {
     if (!visible() || (refreshing && directoryRecord === activeRecord) || (follow && busy)) return;
     const version = ++listVersion;
@@ -394,18 +399,25 @@
     refreshing = true;
     status("正在读取文件目录…");
     try {
-      const channelApi = module === "s"
-        ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc", signal)
-        : module === "t"
-          ? api("/api/trans/channels?view=selector", signal)
-          : Promise.resolve(null);
+      // 通道目录仅在首屏与手动刷新时加载，避免 5 秒自动跟随重复拉取 500 条 RTU/通道列表。
+      const needChannels = !follow || !channelsLoaded;
+      const channelApi = !needChannels
+        ? Promise.resolve(null)
+        : module === "s"
+          ? api("/api/rtus?limit=500&offset=0&sort=channel_id&order=asc", signal)
+          : module === "t"
+            ? api("/api/trans/channels?view=selector", signal)
+            : Promise.resolve(null);
       const [result, channels] = await Promise.all([
         api("/api/log-files?record=" + encodeURIComponent(activeRecord), signal),
         channelApi.catch(() => null),
       ]);
       if (version !== listVersion) return;
       files = result.items;
-      if (channels) updateChannels(channels.items);
+      if (channels) {
+        updateChannels(channels.items);
+        channelsLoaded = true;
+      }
       updateProcesses();
       const previous = selected;
       reconcileSelection($("follow").checked);

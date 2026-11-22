@@ -55,6 +55,9 @@ class DatabasePacketLogSwitch:
         self._bulk_next_check = 0.0
         self._db_rows = None
         self._legacy_cache = None
+        self._refreshing = False
+        self._db_stat = None
+        self._legacy_stat = None
 
     @property
     def path(self):
@@ -138,20 +141,42 @@ class DatabasePacketLogSwitch:
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return {"enabled": False, "channels": {}}
 
-    def _refresh_bulk_locked(self, now):
-        db_rows = self._read_all()
-        legacy = self._safe_legacy_policy()
-        if db_rows is not None:
-            self._db_rows = db_rows
-            self._bulk_next_check = now + 1.0
+    def _file_stamp(self, path: Path):
+        try:
+            st = path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def _db_stamp(self):
+        wal = Path(f"{self.db_path}-wal")
+        return (self._file_stamp(self.db_path), self._file_stamp(wal))
+
+    def _refresh_outside_lock(self, now, *, force=False):
+        db_stamp = self._db_stamp()
+        legacy_stamp = self._file_stamp(self.path)
+        if not force and self._db_rows is not None and db_stamp == self._db_stat:
+            db_rows = self._db_rows
         else:
-            # SQLite 瞬态锁冲突时保留上次成功缓存，严禁清空为 {} 导致静默丢报文。
-            if self._db_rows is None:
-                self._db_rows = {}
-            self._bulk_next_check = now + 0.5
-        self._legacy_cache = legacy
-        self._cache.clear()
-        self._next_check.clear()
+            db_rows = self._read_all()
+        if not force and self._legacy_cache is not None and legacy_stamp == self._legacy_stat:
+            legacy = self._legacy_cache
+        else:
+            legacy = self._safe_legacy_policy()
+        with self._lock:
+            if db_rows is not None:
+                self._db_rows = db_rows
+                self._db_stat = db_stamp
+                self._bulk_next_check = now + 1.0
+            else:
+                # SQLite 瞬态锁冲突时保留上次成功缓存，严禁清空为 {} 导致静默丢报文。
+                if self._db_rows is None:
+                    self._db_rows = {}
+                self._bulk_next_check = now + 0.5
+            self._legacy_cache = legacy
+            self._legacy_stat = legacy_stamp
+            self._cache.clear()
+            self._next_check.clear()
 
     def _resolve_locked(self, key):
         if key is not None and self._db_rows is not None:
@@ -166,9 +191,21 @@ class DatabasePacketLogSwitch:
     def enabled(self, channel_id=None, *, refresh=False):
         key = None if channel_id is None else self._channel_key(channel_id)
         now = time.monotonic()
+        need_refresh = False
         with self._lock:
-            if refresh or now >= self._bulk_next_check:
-                self._refresh_bulk_locked(now)
+            if refresh:
+                need_refresh = True
+                self._refreshing = True
+            elif now >= self._bulk_next_check and not self._refreshing:
+                need_refresh = True
+                self._refreshing = True
+        if need_refresh:
+            try:
+                self._refresh_outside_lock(now, force=refresh)
+            finally:
+                with self._lock:
+                    self._refreshing = False
+        with self._lock:
             cached = self._cache.get(key)
             if cached is None or now >= self._next_check.get(key, 0.0):
                 cached = bool(self._resolve_locked(key))

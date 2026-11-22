@@ -41,12 +41,12 @@
     <section class="tab-panel" data-tab-panel="config" role="tabpanel">
       <section class="card">
         <h2>Modbus-RTU 通道配置</h2>
-        <p class="muted">配置串口、波特率、校验方式和从站地址后，再启动主站。</p>
         <form id="config-form">
           <label>RTU 编号<input data-field="rtu_id" type="number" min="1"></label>
           <label>串口<input data-field="serial_port" placeholder="COM3 或 socket://..."></label>
-          <label>波特率<input data-field="baudrate" type="number" min="1"></label>
-          <label>数据位<input data-field="bytesize" type="number" min="8" max="8"></label>
+          <label>波特率<input data-field="baudrate" type="number" min="1" list="rtu-baudrates"></label>
+          <datalist id="rtu-baudrates"><option value="2400"></option><option value="4800"></option><option value="9600"></option><option value="19200"></option><option value="38400"></option><option value="57600"></option><option value="115200"></option></datalist>
+          <label>数据位<select data-field="bytesize"><option value="8">8</option></select></label>
           <label>校验<select data-field="parity"><option>N</option><option>E</option><option>O</option></select></label>
           <label>停止位<select data-field="stopbits"><option>1</option><option>2</option></select></label>
           <label>从站地址<input data-field="unit_id" type="number" min="1" max="247"></label>

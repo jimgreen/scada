@@ -63,7 +63,7 @@ class TransHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
         if isinstance(item, dict) and "_version" in item:
             headers["ETag"] = '"' + str(item["_version"]) + '"'
         data = encode_json(_safe(payload))
-        self._send(status, "application/json; charset=utf-8", data, headers)
+        self._send_json(status, data, headers)
 
     def _parts(self):
         return parse_request_path(self, max_num_fields=40)

@@ -1874,13 +1874,13 @@ class ScadaStore:
             params.append(channel_type)
         cte = (
             'WITH parameter_channels AS (' + ' UNION ALL '.join(parameter_rows) + '), '
-            'rtu_owner AS ('
+            'rtu_owner_ids AS ('
+            'SELECT channel_id, channel_type, MIN(rtu_id) AS min_rtu_id '
+            'FROM fes_rtu_define WHERE channel_id IS NOT NULL '
+            'GROUP BY channel_id, channel_type'
+            '), rtu_owner AS ('
             'SELECT r.* FROM fes_rtu_define r '
-            'WHERE r.channel_id IS NOT NULL AND r.rtu_id = ('
-            'SELECT MIN(r2.rtu_id) FROM fes_rtu_define r2 '
-            'WHERE r2.channel_id = r.channel_id '
-            'AND r2.channel_type = r.channel_type'
-            ')'
+            'JOIN rtu_owner_ids m ON m.min_rtu_id = r.rtu_id'
             '), channel_rows AS ('
             'SELECT p.channel_id, p.channel_type, p.name, '
             'p.source_version, o.rtu_id, '
@@ -2010,13 +2010,57 @@ class ScadaStore:
 
     def get_channel_definition(self, channel_id: int | str,
                                channel_type: str | None = None) -> dict[str, Any]:
-        where = {'channel_id': channel_id}
         if channel_type is not None:
-            where['channel_type'] = channel_type
+            # 已知 channel_type 时直接定位单张协议参数表与归属 RTU，避免 6 表 UNION ALL CTE 全扫描。
+            ctype = str(channel_type)
+            if ctype not in CHANNEL_TYPES:
+                raise ApiError(400, '不支持的通道类型')
+            try:
+                cid = int(channel_id)
+            except (TypeError, ValueError) as exc:
+                raise ApiError(400, 'channel_id 必须是整数') from exc
+            if cid <= 0:
+                raise ApiError(400, 'channel_id 必须是正整数')
+            table = CHANNEL_PARAMETER_TABLES.get(ctype)
+            with self.connection() as connection:
+                connection.execute('BEGIN')
+                param_row = None
+                if table is not None:
+                    schema = self.schema(table)
+                    names = {column['eng_name'] for column in schema['columns']}
+                    name_col = quote_identifier('name') if 'name' in names else 'NULL'
+                    param_row = connection.execute(
+                        f'SELECT channel_id, {name_col} AS name, _version AS source_version '
+                        f'FROM {quote_identifier(table)} WHERE channel_id=? LIMIT 1',
+                        (cid,),
+                    ).fetchone()
+                rtu_row = connection.execute(
+                    'SELECT rtu_id, name, packet_recording, _version '
+                    'FROM fes_rtu_define WHERE channel_id=? AND channel_type=? '
+                    'ORDER BY rtu_id ASC LIMIT 1',
+                    (cid, ctype),
+                ).fetchone()
+            if param_row is None and rtu_row is None:
+                raise ApiError(404, '通道不存在', code='not_found')
+            item = {
+                'channel_id': cid,
+                'channel_type': ctype,
+                'name': _json_value(param_row['name'] if param_row is not None else rtu_row['name']),
+                'packet_recording': _json_value(rtu_row['packet_recording']) if rtu_row is not None else None,
+                'rtu_id': _json_value(rtu_row['rtu_id']) if rtu_row is not None else None,
+                'rtu_name': _json_value(rtu_row['name']) if rtu_row is not None else None,
+                'bound': 1 if rtu_row is not None else 0,
+                'parameter_ready': 1 if param_row is not None else 0,
+                '_version': int(param_row['source_version'] if param_row is not None else rtu_row['_version']),
+            }
+            if rtu_row is not None:
+                item['_rtu_version'] = int(rtu_row['_version'])
+            return item
+        where = {'channel_id': channel_id}
         result = self.list_channels(where=where, limit=2)
         if not result['items']:
             raise ApiError(404, '通道不存在', code='not_found')
-        if channel_type is None and len(result['items']) > 1:
+        if len(result['items']) > 1:
             raise ApiError(
                 409,
                 'channel_id 在多个规约通道表中重复，请同时提供 channel_type',

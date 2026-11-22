@@ -42,13 +42,14 @@
     <section class="tab-panel" data-tab-panel="config" role="tabpanel">
       <section class="card">
         <h2>CAN 通道配置</h2>
-        <p class="muted">配置接口、通道、仲裁段和数据段波特率后，再启动总线。</p>
         <form id="config-form">
           <label>RTU 编号<input data-field="rtu_id" type="number" min="1"></label>
-          <label>接口类型<input data-field="interface" placeholder="virtual / socketcan / pcan"></label>
+          <label>接口类型<select data-field="interface"><option value="virtual">virtual</option><option value="socketcan">socketcan</option><option value="pcan">pcan</option><option value="kvaser">kvaser</option><option value="slcan">slcan</option><option value="ixxat">ixxat</option></select></label>
           <label>通道<input data-field="channel"></label>
-          <label>仲裁段波特率<input data-field="bitrate" type="number" min="1"></label>
-          <label>数据段波特率<input data-field="data_bitrate" type="number" min="1"></label>
+          <label>仲裁段波特率<input data-field="bitrate" type="number" min="1" list="can-bitrates"></label>
+          <label>数据段波特率<input data-field="data_bitrate" type="number" min="1" list="can-data-bitrates"></label>
+          <datalist id="can-bitrates"><option value="125000"></option><option value="250000"></option><option value="500000"></option><option value="1000000"></option></datalist>
+          <datalist id="can-data-bitrates"><option value="1000000"></option><option value="2000000"></option><option value="4000000"></option><option value="5000000"></option></datalist>
           <label>CAN-FD<select data-field="fd"><option value="0">否</option><option value="1">是</option></select></label>
           <label>接收自身报文<select data-field="receive_own_messages"><option value="1">是</option><option value="0">否</option></select></label>
           <label>接收超时<input data-field="receive_timeout" type="number" min="0.001" step="0.001"></label>

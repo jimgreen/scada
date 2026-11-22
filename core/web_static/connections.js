@@ -106,6 +106,7 @@
     const [result,events]=await Promise.all([api('/api/connections/'+ident),api('/api/connections/'+ident+'/events?'+q)]);
     if(version!==epoch) return;
     const row=result.item;
+    detailClosed = Boolean(row.closed);
     warnings(result);
     const logLink=$('open-logs');
     if(logLink && row.channel_id!=null) {
@@ -166,6 +167,7 @@
     const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'})), a=document.createElement('a');
     a.href=url;a.download=`connection-${ident}.log`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
-  setInterval(()=>{if($('auto').checked&&!document.hidden&&!historyMode) load();},5000);
+  let detailClosed = false;
+  setInterval(()=>{if($('auto').checked&&!document.hidden&&!historyMode&&!(ident&&detailClosed)) load();},5000);
   load();
 })();

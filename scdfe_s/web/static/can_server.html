@@ -40,7 +40,7 @@
       </section>
     </section>
     <section class="tab-panel" data-tab-panel="frames" role="tabpanel" hidden>
-      <section class="card"><h2>报文测试</h2><form id="frame-form"><label>帧 ID<input id="frame-id" type="number" value="256"></label><label>数据<input id="frame-data" value="01 00"></label><label>扩展帧<input id="frame-ext" type="number" min="0" max="1" value="0"></label><div class="form-actions"><button class="primary">发送</button></div></form></section>
+      <section class="card"><h2>报文测试</h2><form id="frame-form"><label>帧 ID<input id="frame-id" type="number" value="256"></label><label>数据<input id="frame-data" value="01 00"></label><label>帧格式<select id="frame-ext"><option value="0">标准帧 (0)</option><option value="1">扩展帧 (1)</option></select></label><div class="form-actions"><button class="primary">发送</button></div></form></section>
     </section>
     <section class="tab-panel" data-tab-panel="runtime" role="tabpanel" hidden>
       <section class="card"><h2>运行状态</h2><pre id="status-json"></pre></section>

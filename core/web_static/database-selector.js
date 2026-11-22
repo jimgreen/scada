@@ -203,6 +203,13 @@
       $('.database-folder').textContent = '选中目录：' + path;
       for (const row of tree.querySelectorAll('button[data-directory]')) row.classList.toggle('selected', row.dataset.directory === path);
     }
+    const SVG_FOLDER_CLOSED = '<span class="tree-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5Z"/></svg></span>';
+    const SVG_FOLDER_OPEN = '<span class="tree-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v1H3.2L2 12V4.5Z"/><path d="M2 12l1.2-5h11.3l-1.2 5A1.5 1.5 0 0 1 11.8 13H3.5A1.5 1.5 0 0 1 2 12Z"/></svg></span>';
+    const SVG_DB_FILE = '<span class="tree-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.24 2 5 2s5-.9 5-2V4"/><path d="M3 8c0 1.1 2.24 2 5 2s5-.9 5-2"/></svg></span>';
+    function setTreeRowLabel(row, iconHtml, name) {
+      row.innerHTML = iconHtml;
+      row.append(document.createTextNode(name));
+    }
     function renderEntries(list, entries, directory) {
       list.replaceChildren();
       if (!entries.length) {
@@ -212,7 +219,7 @@
       for (const entry of entries) {
         const li = document.createElement('li'); li.setAttribute('role', 'none');
         const row = document.createElement('button'); row.type = 'button'; row.setAttribute('role', 'treeitem');
-        row.textContent = (entry.directory ? '▸ 📁 ' : '▤ ') + entry.name;
+        setTreeRowLabel(row, entry.directory ? SVG_FOLDER_CLOSED : SVG_DB_FILE, entry.name);
         row.title = entry.path; li.append(row); list.append(li);
         if (entry.directory) {
           row.dataset.directory = entry.path; row.setAttribute('aria-expanded', 'false');
@@ -225,7 +232,7 @@
             rememberFolder(entry.path);
             const open = row.getAttribute('aria-expanded') !== 'true';
             row.setAttribute('aria-expanded', String(open)); children.hidden = !open;
-            row.textContent = (open ? '▾ 📁 ' : '▸ 📁 ') + entry.name;
+            setTreeRowLabel(row, open ? SVG_FOLDER_OPEN : SVG_FOLDER_CLOSED, entry.name);
             if (open && !loaded) {
               try {
                 const data = await api('/api/database/tree?directory=' + encodeURIComponent(entry.path));

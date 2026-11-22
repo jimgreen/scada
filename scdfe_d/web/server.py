@@ -17,7 +17,7 @@ from core.web_database import (
 )
 from core.workspace_paths import add_workspace_arguments
 from core import operation_audit as audit
-from core.service_log import ServiceFileLog
+from scdfe_c._logger import ScdfeLogger
 from core.web_http import BaseScadaHandlerMixin, encode_json, send_static
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
@@ -44,11 +44,7 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _json(self, status, payload):
         audit.response(self, status, payload)
-        self._send(
-            status,
-            "application/json; charset=utf-8",
-            encode_json(payload),
-        )
+        self._send_json(status, encode_json(payload))
 
     def _api(self, method, parts, query):
         store, collector = self.server.store, self.server.collector
@@ -198,7 +194,12 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
 
     def _log_file_error(self, message: str) -> None:
         try:
-            ServiceFileLog(self.store.db_path.parent / "logs", "scdfe_d-web").write("ERROR", message)
+            log_dir = self.store.db_path.parent / "logs"
+            cached = getattr(self.server, "_web_error_logger", None)
+            if cached is None or cached[0] != log_dir:
+                cached = (log_dir, ScdfeLogger(log_dir, process_name="scdfe_d-web"))
+                self.server._web_error_logger = cached
+            cached[1].error(message)
         except Exception:
             pass
 

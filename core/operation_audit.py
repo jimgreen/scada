@@ -23,6 +23,7 @@ from uuid import uuid4
 
 _current = ContextVar('scada_operation_audit', default=None)
 _lock = threading.Lock()
+_created_dirs = set()
 _secret_key = re.compile(r'password|passwd|pwd|secret|token|authorization|cookie|credential|private.?key|api.?key|access.?key', re.I)
 _credential = re.compile(r'(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@')
 _assignment = re.compile(r'(?i)((?:password|passwd|pwd|secret|token|authorization|cookie)[\w-]*\s*[:=]\s*)[^\s,;]+')
@@ -115,11 +116,23 @@ def emit(phase, **details):
             data = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
         root = state['directory']
         directory = root / now.strftime('%Y/%m/%d/%H')
+        dir_key = str(directory)
+        line = f'{now:%H:%M:%S} [日志] 操作审计 {data}\n'
         with _lock:
-            directory.mkdir(parents=True, exist_ok=True)
+            if dir_key not in _created_dirs:
+                directory.mkdir(parents=True, exist_ok=True)
+                if len(_created_dirs) >= 64:
+                    _created_dirs.clear()
+                _created_dirs.add(dir_key)
             target = directory / f'scdfe_{state["component"]}-operations-{os.getpid()}-{now:%Y%m%d-%H}.log'
-            with target.open('a', encoding='utf-8', newline='\n') as stream:
-                stream.write(f'{now:%H:%M:%S} [日志] 操作审计 {data}\n')
+            try:
+                with target.open('a', encoding='utf-8', newline='\n') as stream:
+                    stream.write(line)
+            except FileNotFoundError:
+                directory.mkdir(parents=True, exist_ok=True)
+                _created_dirs.add(dir_key)
+                with target.open('a', encoding='utf-8', newline='\n') as stream:
+                    stream.write(line)
     except Exception as exc:
         # Never report a committed write as failed and provoke a duplicate retry.
         # The fallback is explicit and contains neither request data nor paths.

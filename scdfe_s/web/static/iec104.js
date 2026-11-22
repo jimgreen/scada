@@ -130,7 +130,7 @@
     $("#status-grid").innerHTML = [["运行状态",status.running ? "运行中" : "已停止"], ["RTU",status.rtu_id || "未选择"], ["连接",status.active_connections || 0], ["点数",status.point_count || 0], ["错误",status.last_error || "无"]]
       .map(([label,value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
     $("#status-json").textContent = JSON.stringify(status,null,2);
-    renderPoints(points.items || []);
+    if (points) renderPoints(points.items || []);
     $("#connections").innerHTML = (status.connections || []).map(c => `<div>[${esc(c.time)}] ${esc(c.ip)}</div>`).join("") || "暂无连接";
     $("#start").disabled = !!status.running;
     $("#stop").disabled = !status.running;
@@ -138,8 +138,18 @@
   const configForm = $("#config-form");
   const form = protocolForm(configForm);
   lockProtocolConfiguration(configForm);
+  function pointsVisible() {
+    const el = $("#points-body");
+    return Boolean(el && el.offsetParent !== null);
+  }
   function load(background = false) {
-    return form.refresh(() => Promise.all([api("/api/iec104/status"), api("/api/iec104/points?view=table")]), ([status,points]) => {
+    return form.refresh(() => {
+      const fetchPoints = !background || pointsVisible();
+      return Promise.all([
+        api("/api/iec104/status"),
+        fetchPoints ? api("/api/iec104/points?view=table") : Promise.resolve(null),
+      ]);
+    }, ([status,points]) => {
       render(status.item,points);
       const config = status.item.config || {};
       for (const [id, value] of [["bind-ip", config.bind_ip], ["port", config.port],
@@ -160,14 +170,14 @@
         rtu_id:$("#rtu-id").value ? keyValue($("#rtu-id").value) : null,
         max_connections:Number($("#max-connections").value), tick_rate_ms:Number($("#tick-rate").value),
       })}));
-      await load(true);
+      await load(false);
       message("配置已保存");
     } catch (error) { message(error.message,true); }
   };
   for (const action of ["start","stop"]) $("#" + action).onclick = async () => {
     try {
       await api("/api/iec104/" + action, {method:"POST", body:"{}"});
-      await load(true);
+      await load(false);
       message(action === "start" ? "服务已启动" : "服务已停止");
     } catch (error) { message(error.message,true); }
   };
@@ -187,7 +197,7 @@
         method:"PATCH", headers, body:JSON.stringify({value, status})
       });
       closePointEditor();
-      await load(true);
+      await load(false);
       message("点值已更新");
     } catch (error) { message(error.message,true); }
   };
@@ -195,7 +205,7 @@
   $("#full-update").onclick = async () => {
     try {
       await api("/api/iec104/update/full", {method:"POST", body:JSON.stringify({values:{}})});
-      await load(true);
+      await load(false);
       message("已执行全量更新");
     } catch (error) { message(error.message,true); }
   };

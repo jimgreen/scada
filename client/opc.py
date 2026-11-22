@@ -427,11 +427,10 @@ class _OpcUaProtocol(PacketTrace):
             return []
         if not self.connected:
             raise OpcError("未连接，请先 connect() 或使用 with")
-        # The coroutine already splits native requests and learns device
-        # limits. Submit the whole collection once instead of waking the
-        # event-loop thread and blocking this thread for every native batch.
+        # 设定有界总超时，避免点数众多时超时线性放大至数十分钟阻塞重载与停机。
+        batch_timeout = min(max(self.timeout + 1.0, self.timeout * min(len(node_ids), 6) + 1.0), max(self.timeout + 1.0, 30.0))
         return self._loop_thread.call(
-            self._read_many_backend, node_ids, timeout=self.timeout * len(node_ids) + 1.0)
+            self._read_many_backend, node_ids, timeout=batch_timeout)
 
     async def _write_backend(self, node_id, value):
         node = self._client_node(node_id)
@@ -519,7 +518,7 @@ class _OpcUaProtocol(PacketTrace):
             if data_type not in (None, ""):
                 _coerce_point_value(0, data_type)
             checked.append(row)
-            if self.rtu_id is None or _field(row, "rtu_id") == self.rtu_id:
+            if (self.rtu_id is None or _field(row, "rtu_id") == self.rtu_id) and kind in ("yc", "yx"):
                 if attr_name.lower() != "value":
                     all_value_attr = False
                 poll_entries.append((row, point_no, kind, node_id, data_type))

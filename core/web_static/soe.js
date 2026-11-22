@@ -135,16 +135,21 @@
     }
   }
 
+  let activeAbort = null;
+
   async function load(tail = initial) {
     if (busy) return;
     busy = true;
     const version = generation;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    activeAbort = controller;
+    const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
     try {
       const q = new URLSearchParams({ limit: '100' });
       if ($('rtu').value) q.set('rtu_id', $('rtu').value);
       if (tail) q.set('tail', '1');
       else q.set('after_id', String(after));
-      const response = await fetch('/api/soe?' + q, { cache: 'no-store' });
+      const response = await fetch('/api/soe?' + q, { cache: 'no-store', signal: controller?.signal });
       const data = await response.json();
       if (!response.ok) throw Error(data.error?.message || '读取失败');
       if (version !== generation) return;
@@ -167,11 +172,13 @@
       $('status').textContent = `已显示 ${rows.length} 条 · 游标 ${after}${data.has_more ? ' · 还有后续事件' : ''} · 更新于 ${new Date().toLocaleTimeString()}`;
       renderCursors(data.cursors);
     } catch (e) {
-      if (version === generation) {
+      if (version === generation && e?.name !== 'AbortError') {
         $('status').className = 'error';
         $('status').textContent = e.message;
       }
     } finally {
+      if (timer) clearTimeout(timer);
+      if (activeAbort === controller) activeAbort = null;
       busy = false;
       if (version !== generation) queueMicrotask(() => load(initial));
     }
@@ -179,6 +186,7 @@
 
   function reset(tail) {
     generation++;
+    activeAbort?.abort();
     after = 0;
     rows = [];
     initial = tail;

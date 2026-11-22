@@ -454,7 +454,11 @@ class _BacnetProtocol(PacketTrace):
         return self
 
     def _collect_once(self, points=None):
-        rows = self._points if points is None else list(points)
+        if points is None:
+            # 默认周期采集仅轮询遥测/遥信监视点，跳过只写控制点（yk/yt）以减少冗余网络读请求。
+            rows = [row for row in self._points if _field(row, "kind", "yc") in ("yc", "yx")]
+        else:
+            rows = list(points)
         selected = [row for row in rows if self.rtu_id is None or _field(row, "rtu_id") == self.rtu_id]
         if self._backend is not None:
             return [self.read_point(row) for row in selected]
@@ -462,14 +466,18 @@ class _BacnetProtocol(PacketTrace):
             return []
         if not self.connected:
             raise BacnetError("未连接，请先 connect() 或使用 with")
-        # Keep native reads sequential and individually timed out, while
-        # crossing the synchronous/async thread boundary once per collection.
+        # 设定有界总超时，避免设备断网时按点数线性放大阻塞停机与重载。
+        batch_timeout = min(max(self.timeout + 1.0, self.timeout * min(len(selected), 6) + 1.0), max(self.timeout + 1.0, 30.0))
         return self._loop_thread.call(
-            self._read_points_backend, selected, timeout=self.timeout * len(selected) + 1.0)
+            self._read_points_backend, selected, timeout=batch_timeout)
 
     async def _read_points_backend(self, rows):
         result = []
         previous_received = None
+        unsupported_quality = getattr(self, "_unsupported_quality_keys", None)
+        if unsupported_quality is None:
+            unsupported_quality = set()
+            self._unsupported_quality_keys = unsupported_quality
         for row in rows:
             object_type, instance = _field(row, "object_type"), _field(row, "instance")
             if object_type is None or instance is None:
@@ -484,16 +492,15 @@ class _BacnetProtocol(PacketTrace):
                 )
                 quality_property = _field(row, "quality_property")
                 quality = 0
-                if quality_property:
+                q_key = (str(object_id), str(quality_property)) if quality_property else None
+                if quality_property and q_key not in unsupported_quality:
                     try:
                         quality_raw = await self._read_backend(
                             object_id, quality_property, _field(row, "array_index"))
                         quality = _quality_value(quality_raw)
                     except Exception:
-                        # A quality attribute is auxiliary metadata.  A
-                        # device that does not expose it must not discard a
-                        # successfully read process value or stop the rest of
-                        # the batch.
+                        # 设备不支持该辅助质量属性时记入负缓存，避免每轮重复探测触发超时。
+                        unsupported_quality.add(q_key)
                         quality = 0
             received = datetime.now(timezone.utc)
             if previous_received is not None and received <= previous_received:

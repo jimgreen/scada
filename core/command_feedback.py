@@ -102,14 +102,18 @@ def record_samples(store,rtu,samples):
         con.commit()
 
 
-def evaluate_feedback(store,rtu,*,now=None):
+def evaluate_feedback(store, rtu, *, now=None, con=None):
     now=time.time_ns()//1000000 if now is None else now
-    with store.connection() as con:
-        rows=con.execute('''SELECT h.*,s.value AS observed_value,s.quality AS observed_quality,s.received_time AS observed_time
+    sql = '''SELECT h.*,s.value AS observed_value,s.quality AS observed_quality,s.received_time AS observed_time
             FROM _scada_command_trace h LEFT JOIN _scada_command_feedback_sample s
             ON s.rtu_id=h.feedback_rtu_id AND s.kind=h.feedback_kind AND s.pnt_no=h.feedback_pnt_no
             WHERE h.rtu_id=? AND h.feedback_state IN ('waiting','mismatch','invalid')
-            AND h.stage IN ('protocol_confirmed','driver_completed')''',(rtu,)).fetchall()
+            AND h.stage IN ('protocol_confirmed','driver_completed')'''
+    if con is not None:
+        rows = con.execute(sql, (rtu,)).fetchall()
+    else:
+        with store.connection() as own_con:
+            rows = own_con.execute(sql, (rtu,)).fetchall()
     updates=[]
     for row in rows:
         stamp=row['observed_time'];state=row['feedback_state']
@@ -139,19 +143,25 @@ class FeedbackTracker:
         self.store,self.rtu=store,rtu
         self.keys=set();self.revision=None;self.seen={};self.deadline=None
 
-    def refresh(self):
+    def refresh(self, con=None):
         now=time.time_ns()//1000000
-        with self.store.connection() as con:
-            revision=con.execute('SELECT revision FROM _scada_command_revision WHERE id=1').fetchone()[0]
-            if self.revision==revision and (self.deadline is None or now<self.deadline):return
+        def _query(conn):
+            revision=conn.execute('SELECT revision FROM _scada_command_revision WHERE id=1').fetchone()[0]
+            if self.revision==revision and (self.deadline is None or now<self.deadline):
+                return
             # Read the hint before the rows. A concurrent commit either appears
             # here or changes the next hint; it cannot hide a new subscription.
-            rows=con.execute('''SELECT feedback_kind,feedback_pnt_no,feedback_deadline FROM _scada_command_trace
+            rows=conn.execute('''SELECT feedback_kind,feedback_pnt_no,feedback_deadline FROM _scada_command_trace
                 WHERE feedback_rtu_id=? AND feedback_state IN ('armed','waiting','mismatch','invalid')
                 AND resolution_time IS NULL AND (feedback_deadline IS NULL OR feedback_deadline>?)''',(self.rtu,now)).fetchall()
             self.keys={(row[0],row[1]) for row in rows}
             self.deadline=min((row[2] for row in rows if row[2] is not None),default=None)
             self.revision=revision
+        if con is not None:
+            _query(con)
+        else:
+            with self.store.connection() as own_con:
+                _query(own_con)
         self.seen={key:value for key,value in self.seen.items() if key in self.keys}
 
     def sample(self,kind,no,value,quality,item):

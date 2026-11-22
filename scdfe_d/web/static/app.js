@@ -74,6 +74,9 @@
 
   async function api(url, method = 'GET', body) {
     const options = { method };
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      options.signal = AbortSignal.timeout(12000);
+    }
     if (body !== undefined) {
       options.headers = { 'Content-Type': 'application/json' };
       options.body = JSON.stringify(body);
@@ -716,7 +719,9 @@
   function confirmDanger(title, message, confirmText = '确认') {
     const dialog = $('#confirm-dialog');
     if (!dialog || typeof dialog.showModal !== 'function') {
-      return Promise.resolve(confirm(message));
+      return typeof window.scadaConfirm === 'function'
+        ? window.scadaConfirm(message, { title, confirmText, danger: true })
+        : Promise.resolve(false);
     }
     $('#confirm-title').textContent = title;
     $('#confirm-message').textContent = message;
@@ -744,8 +749,10 @@
       parentFolder = data.parent;
       $('#source-up').disabled = parentFolder === null;
       $('#source-folder').textContent = data.directory;
+      const ICON_DIR = '<span class="tree-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5Z"/></svg></span>';
+      const ICON_FILE = '<span class="tree-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.24 2 5 2s5-.9 5-2V4"/><path d="M3 8c0 1.1 2.24 2 5 2s5-.9 5-2"/></svg></span>';
       $('#source-files').innerHTML = data.entries.map((row, index) => '<button data-file="' + index
-        + '">' + (row.directory ? '▸ 📁 ' : '▤ ') + html(row.name) + '</button>').join('')
+        + '">' + (row.directory ? ICON_DIR : ICON_FILE) + html(row.name) + '</button>').join('')
         || '<p class="muted">目录为空</p>';
       for (const button of $('#source-files').querySelectorAll('button')) {
         button.addEventListener('click', run(async () => {

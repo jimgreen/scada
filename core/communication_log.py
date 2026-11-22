@@ -204,6 +204,16 @@ class CommunicationLog:
             common = {'方向': direction, '链路': detail,
                       '发送序号': frame.send_sequence, '接收序号': frame.receive_sequence}
             if frame.frame_type == 'U':
+                # 心跳 TESTFR 按 60 秒节流聚合，避免运行日志被高频链路保活刷屏；STARTDT/STOPDT 完整保留。
+                if str(frame.u_function or '').startswith('TESTFR'):
+                    now_m = time.monotonic()
+                    key = (direction, frame.u_function)
+                    next_map = getattr(self, '_next_testfr_log', None)
+                    if next_map is None:
+                        next_map = self._next_testfr_log = {}
+                    if now_m < next_map.get(key, 0.0):
+                        return
+                    next_map[key] = now_m + 60.0
                 self.event('链路控制', **common, 功能=frame.u_function)
             elif frame.frame_type == 'I':
                 header, rows = decode_asdu(bytes(data)[6:])
@@ -211,6 +221,10 @@ class CommunicationLog:
                 if header['类型标识'] in _TYPES:
                     kind = _TYPES[header['类型标识']][0]
                     action = '指令报文' if kind in {'yk', 'yt'} else header['原因']
+                # 周期上送（COT=1）改按单行摘要记录，消除高频全量测点逐行刷屏。
+                if action == '周期':
+                    self.event(action, **common, **header, 点数=len(rows))
+                    return
                 for row in rows:
                     key = (row.get('四遥'), row.get('IOA'))
                     if key in self.point_map:

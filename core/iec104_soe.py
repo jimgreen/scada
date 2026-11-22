@@ -287,11 +287,38 @@ class SoeForwarder:
 
     def _advance(self, target):
         if self._persist:
+            now_ms = time.time_ns() // 1_000_000
             self.connection.execute('''INSERT INTO _scada_iec104_soe_cursor(consumer,last_event_id,ack_time_ms)
             VALUES (?,?,?) ON CONFLICT(consumer) DO UPDATE SET
             last_event_id=MAX(last_event_id,excluded.last_event_id),ack_time_ms=excluded.ack_time_ms''',
-            (self.consumer,target,time.time_ns()//1_000_000))
+            (self.consumer, target, now_ms))
+            self._maybe_prune_acked(now_ms)
         self.last_event_id = target
+
+    def _maybe_prune_acked(self, now_ms: int) -> None:
+        """低频安全老化清理：仅删除所有已注册消费者均已确认且超过保留期/保留上限的旧 SOE 记录。"""
+        now_m = time.monotonic()
+        if now_m < getattr(self, '_next_prune_at', 0.0):
+            return
+        self._next_prune_at = now_m + 600.0
+        try:
+            row = self.connection.execute(
+                'SELECT MIN(last_event_id) FROM _scada_iec104_soe_cursor'
+            ).fetchone()
+            if not row or row[0] is None:
+                return
+            safe_floor = int(row[0])
+            if safe_floor <= 0:
+                return
+            # 保留 7 天内已确认记录，且至少保留最近 50,000 个 event_id 以便人工审计排障。
+            cutoff_ms = now_ms - 7 * 86400 * 1000
+            id_floor = max(0, safe_floor - 50000)
+            self.connection.execute(
+                'DELETE FROM _scada_iec104_soe WHERE event_id <= ? AND (received_time_ms < ? OR event_id <= ?)',
+                (safe_floor, cutoff_ms, id_floor),
+            )
+        except sqlite3.Error:
+            pass
 
     def _tick_peers(self,sender):
         peers={peer.key:peer for peer in sender.soe_peers()}
@@ -299,6 +326,7 @@ class SoeForwarder:
             departed=self._peers.pop(key)
             floor=departed.last_event_id
             self._orphan_floor=floor if self._orphan_floor is None else min(self._orphan_floor,floor)
+            self._orphan_floor_since=time.monotonic()
         new=False
         for key in peers.keys()-self._peers.keys():
             child=SoeForwarder(self.store,self.consumer,self.origin,self.route,rtu_id=self.rtu_id,
@@ -310,9 +338,18 @@ class SoeForwarder:
             self._peers[key]=child;new=True
         # TCP has no stable logical client ID. A new session inherits the
         # conservative durable floor, including a disconnected laggard's gap.
-        # Fast live sessions keep their own progress; duplicates after a restart
-        # are allowed, but unconfirmed history is never silently discarded.
-        if new:self._orphan_floor=None
+        # 若断连端超过 60s 仍未重连且存在在线端，释放孤儿下界避免永久锁死持久化游标。
+        if new:
+            self._orphan_floor=None
+            self._orphan_floor_since=0.0
+        elif (
+            self._orphan_floor is not None
+            and self._peers
+            and getattr(self,'_orphan_floor_since',0.0)
+            and time.monotonic()-self._orphan_floor_since>=60.0
+        ):
+            self._orphan_floor=None
+            self._orphan_floor_since=0.0
         count=0
         for key,child in self._peers.items():count+=child.tick(peers[key])
         floors=[child.last_event_id for child in self._peers.values()]

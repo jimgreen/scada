@@ -90,7 +90,7 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
         if isinstance(payload.get("item"), dict) and "_version" in payload["item"]:
             headers["ETag"] = '"' + str(payload["item"]["_version"]) + '"'
         data = encode_json(browser_safe(payload))
-        self._send(status, "application/json; charset=utf-8", data, headers)
+        self._send_json(status, data, headers)
 
     def _path(self):
         return parse_request_path(self, max_num_fields=80)

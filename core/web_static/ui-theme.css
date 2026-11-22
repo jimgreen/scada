@@ -2080,6 +2080,158 @@ html[lang="en-US"] .toolbar label {
   max-width: 100%;
 }
 
+/* 顶栏长文案弹性收缩，防止俄文/英文挤压工具区 */
+.header-tools {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.standalone-header-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+#database-entry {
+  min-width: 0;
+  max-width: 340px;
+  flex: 0 1 auto;
+}
+
+#database-entry .database-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==================== 共享高危操作模态确认框 ==================== */
+dialog.scada-confirm-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 0 !important;
+  border: var(--border) !important;
+  border-radius: var(--radius-dialog) !important;
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--shadow-dialog) !important;
+}
+
+dialog.scada-confirm-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.56);
+  backdrop-filter: blur(2px);
+}
+
+.scada-confirm-form {
+  display: flex !important;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px 18px;
+}
+
+.scada-confirm-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.scada-confirm-body {
+  margin: 0;
+  white-space: pre-line;
+  line-height: 1.6;
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.scada-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: var(--border);
+}
+
+.scada-confirm-ok.danger {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+  color: #ffffff !important;
+}
+
+.scada-confirm-ok.danger:hover {
+  filter: brightness(1.08);
+}
+
+/* ==================== 消除残留卡片套卡片 & 未接管硬编码色 ==================== */
+.point-panels > .card,
+.points-panel .point-page,
+.config-panel.config-entry {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+pre,
+#status-json {
+  background: var(--bg-surface-2) !important;
+  color: var(--text-primary) !important;
+  border: var(--border) !important;
+}
+
+.message {
+  color: var(--accent) !important;
+}
+
+.message.error {
+  color: var(--danger) !important;
+}
+
+.protocol-card nav a {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border: var(--border) !important;
+}
+
+.protocol-card nav a.primary {
+  background: var(--accent) !important;
+  color: var(--accent-contrast) !important;
+  border-color: var(--accent) !important;
+}
+
+.toast {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border: var(--border) !important;
+  box-shadow: var(--shadow-dialog) !important;
+}
+
+.toast.error {
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
+}
+
+/* 目录树线性 SVG 图标与数值列右对齐 */
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+  margin-right: 6px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.col-num,
+th.col-num,
+td.col-num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
 @media (max-width: 960px) {
   .workbench-topbar,
   .topbar {

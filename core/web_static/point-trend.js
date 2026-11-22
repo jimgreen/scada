@@ -956,7 +956,9 @@
     }
 
     toolbar.addEventListener('change', event => toolbarChanged(event.target));
+    let zoomSaveTimer = 0;
     function zoomWindow(factor) {
+      const prevStart = timeRange().start;
       if (mode.value === 'fixed') {
         const cur = timeRange();
         const mid = (cur.start + cur.end) / 2;
@@ -970,7 +972,14 @@
         const curMin = Math.max(1, Math.min(1440, Math.round((duration / 60000) * factor)));
         length.value = curMin;
       }
-      toolbarChanged(length);
+      settingsChanged();
+      // 滚轮缩放仅在时间窗向左扩展出已缓存范围时按 350ms 防抖补拉历史，避免高频滚轮触发请求风暴。
+      const nextStart = timeRange().start;
+      clearTimeout(zoomSaveTimer);
+      zoomSaveTimer = setTimeout(() => {
+        if (nextStart < prevStart) lastSample = 0;
+        saveSettings();
+      }, 350);
     }
     zoomInBtn.addEventListener('click', () => zoomWindow(0.5));
     zoomOutBtn.addEventListener('click', () => zoomWindow(2));

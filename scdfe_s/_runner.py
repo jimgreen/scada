@@ -158,6 +158,11 @@ def run_service(
             f"points={status.get('point_count', 0)}",
             flush=True,
         )
+        if getattr(args, "mode", "") == "server" and args.max_cycles is None:
+            # 服务端模式已在后台监听并由独立线程同步数据库，主线程仅静默等待退出信号，避免每秒打印空周期日志。
+            while not stop_event.wait(1.0):
+                pass
+            return 0
         cycle = 0
         while not stop_event.is_set():
             if args.max_cycles is not None and cycle >= args.max_cycles:

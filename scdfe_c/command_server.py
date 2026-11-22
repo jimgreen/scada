@@ -381,10 +381,15 @@ class CommandServer:
         return self
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:
+        """阻塞等待已启动的后台服务线程结束，避免双线程并发调用同一个 TCPServer.serve_forever()。"""
         if self._server is None:
             self.start()
-        assert self._server is not None
-        self._server.serve_forever(poll_interval=poll_interval)
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            while thread.is_alive():
+                thread.join(timeout=max(0.05, float(poll_interval)))
+        elif self._server is not None:
+            self._server.serve_forever(poll_interval=poll_interval)
 
     def close(self) -> None:
         server, thread = self._server, self._thread

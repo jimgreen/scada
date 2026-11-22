@@ -316,7 +316,7 @@
     } catch (error) { notice("#channel-message", error.message, true); }
   };
   if ($("#delete-parameters")) $("#delete-parameters").onclick = async () => {
-    if (!selected || !selectedParameter || !confirm("确定删除当前通道的规约参数？")) return;
+    if (!selected || !selectedParameter || !(await window.scadaConfirm("确定删除当前通道的规约参数？", { title: "确认删除", confirmText: "确认删除", danger: true }))) return;
     try {
       await api(`/api/channels/${encodeURIComponent(selected.rtu_id)}/parameters`, {method:"DELETE", headers:versionHeaders(selectedParameter._version), body:"{}"});
       selectedParameter = null; renderParameters({parameter_schema:parameterSchema}); closeEditor("#parameter-editor"); notice("#channel-message", "规约参数已删除");
@@ -383,9 +383,9 @@
     try {
       if (tab) { selectedPoint = null; offset = 0; setPointTab(tab.dataset.pointTab); await loadPoints(); return; }
       if (edit) fillChannel(JSON.parse(edit.dataset.edit));
-      if (del && confirm("确定删除该通道及其四遥点？")) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; renderParameters(null); await loadChannels({fresh:true}); }
+      if (del && (await window.scadaConfirm("确定删除该通道及其四遥点？", { title: "确认删除", confirmText: "确认删除", danger: true }))) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; renderParameters(null); await loadChannels({fresh:true}); }
       if (pointEdit) fillPoint(JSON.parse(pointEdit.dataset.pointEdit));
-      if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && confirm("确定删除该测点？")) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints({fresh:true}); }
+      if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && (await window.scadaConfirm("确定删除该测点？", { title: "确认删除", confirmText: "确认删除", danger: true }))) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints({fresh:true}); }
     } catch (error) { notice(pointTableBody() ? "#point-message" : "#channel-message", error.message, true); }
   });
   if ($("#new-point")) $("#new-point").onclick = prepareNewPoint;

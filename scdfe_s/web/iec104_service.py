@@ -514,22 +514,44 @@ class IEC104Service:
             connection.execute("PRAGMA busy_timeout=2000")
             connection.execute("PRAGMA temp_store=MEMORY")
             previous_data_version = None
-            while not stop_signal.wait(self.DATABASE_SYNC_INTERVAL_S):
+            backoff = self.DATABASE_SYNC_INTERVAL_S
+            last_err_text = ""
+            next_err_log = 0.0
+            next_soe_fallback = 0.0
+            while not stop_signal.wait(backoff):
                 try:
                     current_data_version = int(
                         connection.execute("PRAGMA data_version").fetchone()[0]
                     )
-                    if previous_data_version is None or current_data_version != previous_data_version:
+                    version_changed = previous_data_version is None or current_data_version != previous_data_version
+                    if version_changed:
                         self._sync_database_values(connection)
                     previous_data_version = current_data_version
+                    now_m = time.monotonic()
                     with self._lock:
-                        if self._soe_forwarder is not None and self._server is not None:
-                            self._soe_forwarder.tick(self._server)
-                            if self._soe_forwarder.error:
-                                self._last_error = self._soe_forwarder.error
+                        forwarder = self._soe_forwarder
+                        server = self._server
+                        if forwarder is not None and server is not None:
+                            has_inflight = (
+                                forwarder.pending is not None
+                                or any(p.get("pending") is not None for p in getattr(forwarder, "_peers", {}).values())
+                            )
+                            if version_changed or has_inflight or now_m >= next_soe_fallback:
+                                forwarder.tick(server)
+                                next_soe_fallback = now_m + 0.5
+                                if forwarder.error:
+                                    self._last_error = forwarder.error
+                    backoff = self.DATABASE_SYNC_INTERVAL_S
+                    last_err_text = ""
                 except Exception as exc:  # keep the transport alive if a poll fails
-                    self._last_error = str(exc)
-                    LOG.warning("IEC104 数据库值同步失败: %s", exc)
+                    err_text = str(exc)
+                    self._last_error = err_text
+                    now_m = time.monotonic()
+                    if err_text != last_err_text or now_m >= next_err_log:
+                        last_err_text = err_text
+                        next_err_log = now_m + 30.0
+                        LOG.warning("IEC104 数据库值同步失败: %s", exc)
+                    backoff = min(2.0, max(0.1, backoff * 2.0))
         except Exception as exc:
             LOG.warning("IEC104 数据库同步线程启动失败: %s", exc)
         finally:
@@ -622,8 +644,11 @@ class IEC104Service:
             try:
                 if kind in {"yc", "yx"}:
                     sent = bool(server.active_connection_count) and not (
-                        self._soe_forwarder and (kind,int(point_no)) in server.soe_point_keys)
-                    actual = server.update(kind, int(point_no), value, transmit=sent)
+                        self._soe_forwarder and (kind, int(point_no)) in server.soe_point_keys)
+                    # 显式同步质量位 0 并刷新本地样本缓存，防止 50ms 后的库同步线程二次重发突发帧。
+                    actual = server.update(kind, int(point_no), value, transmit=sent, quality=0)
+                    self._database_samples[(kind, int(point_no))] = (actual, 0)
+                    self._database_pending.discard((kind, int(point_no)))
                 else:
                     actual = server.set_value(kind, int(point_no), value)
                     sent = False
@@ -654,6 +679,14 @@ class IEC104Service:
                 raise IEC104ServiceError(str(exc)) from exc
             try:
                 result = server.transmit_full(supplied, transmit=bool(server.active_connection_count))
+                for kind, no, value in updates:
+                    if kind in {"yc", "yx"}:
+                        try:
+                            actual = server.prepare_value(kind, no, value)
+                            self._database_samples[(kind, int(no))] = (actual, 0)
+                            self._database_pending.discard((kind, int(no)))
+                        except Exception:
+                            pass
             except Exception as exc:
                 self._last_error = str(exc)
                 message = f"数据库更新已完成，IEC104 发布失败: {exc}"

@@ -914,7 +914,7 @@ class ModbusRtuService(ProtocolService):
     DEFAULT_CONFIG = {
         "rtu_id": None, "mode": "master", "serial_port": "COM1", "baudrate": 9600,
         "bytesize": 8, "parity": "E", "stopbits": 1, "unit_id": 1, "response_timeout": 3.0,
-        "retry_count": 0,
+        "retry_count": 0, "simulation": 0,
     }
 
     def _validate_config(self, values):
@@ -1324,7 +1324,9 @@ class CanService(ProtocolService):
 
     def _build_engine(self):
         config = self._transport_config("fes_channel_can_define")
-        rtu_id = self.config().get("effective_rtu_id")
+        effective = self.config()
+        self._cached_can_config = dict(effective)
+        rtu_id = effective.get("effective_rtu_id")
         options = dict(interface=config["interface"], channel=config["channel"],
                        bitrate=config["bitrate"], data_bitrate=config["data_bitrate"],
                        fd=bool(config["fd"]), receive_own_messages=bool(config["receive_own_messages"]),
@@ -1338,6 +1340,18 @@ class CanService(ProtocolService):
             return CanMaster.from_store(self.store, int(rtu_id), **options)
         return CanMaster(**options)
 
+    def _effective_can_config(self):
+        cached = getattr(self, "_cached_can_config", None)
+        if cached is None:
+            cached = dict(self.config())
+            self._cached_can_config = cached
+        return cached
+
+    def configure(self, values):
+        result = super().configure(values)
+        self._cached_can_config = None
+        return result
+
     def _engine_command(self, kind, point_no, value):
         if kind == "yk": return self._engine.send_yk_point(point_no, bool(value))
         if kind == "yt": return self._engine.send_yt_point(point_no, float(value))
@@ -1348,7 +1362,7 @@ class CanService(ProtocolService):
             if not self.running: raise ProtocolServiceError("CAN 服务未启动")
             try:
                 payload = bytes.fromhex(str(data).replace(" ", ""))
-                effective = self.config()
+                effective = self._effective_can_config()
                 send_options = {
                     "is_extended_id": bool(effective["is_extended_id"] if extended is None
                                              else _boolean(extended, "is_extended_id")),
@@ -1368,4 +1382,4 @@ class CanService(ProtocolService):
             return item
 
     def _poll_engine(self):
-        return self._engine.collect_once(timeout=self.config()["receive_timeout"])
+        return self._engine.collect_once(timeout=self._effective_can_config()["receive_timeout"])

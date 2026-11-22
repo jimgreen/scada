@@ -37,9 +37,9 @@ def handle_diagnostics(handler, parts, query, method, store, component):
     prefix='scdfe_'+component
     now=int(time.time()*1000)
     rows=[]
-    for row in runtime_status_rows(store):
-        if row['service_name'] not in {prefix,prefix+'_writer'}:
-            continue
+    # 按 service_name 走主键前缀索引查询，避免全表扫描无关组件的运行态 JSON。
+    status_rows = runtime_status_rows(store, service_name=prefix) + runtime_status_rows(store, service_name=prefix + '_writer')
+    for row in status_rows:
         timing=row['diagnostic'].get('latency',{})
         command_write=row['diagnostic'].get('command_write') or {}
         timing={**timing,**{'command_'+key:value for key,value in command_write.get('latency',{}).items()}}
