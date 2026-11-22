@@ -138,8 +138,18 @@ class Phase3WebRegressionTests(unittest.TestCase):
     def test_ui_theme_and_i18n_assets_served_with_etag_and_no_cdn(self):
         theme_css = (ROOT / "core" / "web_static" / "ui-theme.css").read_text(encoding="utf-8")
         i18n_js = (ROOT / "core" / "web_static" / "ui-i18n.js").read_text(encoding="utf-8")
-        self.assertIn('[data-theme="minimalist-light"]', theme_css)
-        self.assertIn('[data-theme="precision-dark"]', theme_css)
+        for theme_id in (
+            "minimalist-light",
+            "precision-dark",
+            "sci-fi",
+            "bento-grid",
+            "glassmorphism",
+            "editorial",
+            "neo-brutalism",
+        ):
+            self.assertIn(f'[data-theme="{theme_id}"]', theme_css)
+            self.assertIn(f'"{theme_id}"', i18n_js)
+        self.assertIn("ui-theme-select", i18n_js)
         self.assertIn("tabular-nums", theme_css)
         self.assertNotIn("https://", theme_css)
         self.assertIn('"zh-CN"', i18n_js)

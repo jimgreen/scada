@@ -215,7 +215,8 @@
     const table = $('#model-table').value;
     const matches = devices.filter(device => (!category || device.category === category)
       && (!table || device.tables.some(member => member.table === table)));
-    $('#device').innerHTML = (mappingMode ? option('', '全部设备') : '')
+    const allowAll = mappingMode || queryMode;
+    $('#device').innerHTML = (allowAll ? option('', '全部设备') : '')
       + matches.map(device => {
         const member = device.tables.find(row => row.table === table);
         const label = member ? member.idx + ' · ' + device.name : device.name;
@@ -230,7 +231,9 @@
       }
       preferredDevice = String(wanted.device_id);
     }
-    if (matches.some(device => String(device.device_id) === String(preferredDevice))) {
+    if (allowAll && (preferredDevice === '' || preferredDevice == null)) {
+      $('#device').value = '';
+    } else if (matches.some(device => String(device.device_id) === String(preferredDevice))) {
       $('#device').value = preferredDevice;
     }
   }
@@ -241,13 +244,16 @@
       .filter(device => device.category === category)
       .flatMap(device => device.tables.map(member => member.table))) : null;
     const available = tables.filter(table => !matchingTables || matchingTables.has(table.table_name));
-    $('#model-table').innerHTML = (mappingMode ? option('', '全部设备表') : '')
+    const allowAll = mappingMode || queryMode;
+    $('#model-table').innerHTML = (allowAll ? option('', '全部设备表') : '')
       + available.map(row => option(row.table_name, row.table_name + ' (' + row.count + ')')).join('');
-    if (available.some(table => table.table_name === preferredTable)) {
+    if (allowAll && (preferredTable === '' || preferredTable == null)) {
+      $('#model-table').value = '';
+    } else if (available.some(table => table.table_name === preferredTable)) {
       $('#model-table').value = preferredTable;
-    } else if (!mappingMode && available.some(table => table.table_name === 'ACGenerator' && table.count)) {
+    } else if (!allowAll && available.some(table => table.table_name === 'ACGenerator' && table.count)) {
       $('#model-table').value = 'ACGenerator';
-    } else if (!mappingMode && available.some(table => table.count)) {
+    } else if (!allowAll && available.some(table => table.count)) {
       $('#model-table').value = available.find(table => table.count).table_name;
     }
   }
@@ -340,7 +346,7 @@
 
   function liveRow(row) {
     return '<tr>' + (pointTrend ? '<td class="point-trend-cell"></td>' : '')
-      + quantityMarkup(row, false) + '<td>' + kindLabel(row.kind) + '</td>'
+      + quantityMarkup(row, !detail) + '<td>' + kindLabel(row.kind) + '</td>'
       + '<td class="quantity-value">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
       + '<td>' + html(time(row.source_time_ms)) + '</td><td>' + html(time(row.collected_at)) + '</td>'
       + '<td>' + html(number(row.quality)) + '</td><td>' + statusMarkup(row) + '</td>'
@@ -352,7 +358,8 @@
     const body = $('#measure-rows');
     if (body.rows.length !== items.length || !items.every((row, index) => {
       const prior = previous[index];
-      return ['measurement_id', 'metric', 'kind', 'name', 'unit'].every(field => row[field] === prior[field]);
+      return ['measurement_id', 'device_id', 'model_table', 'model_idx', 'metric', 'kind', 'name', 'unit']
+        .every(field => row[field] === prior[field]);
     })) return false;
     items.forEach((row, index) => {
       const prior = previous[index];
@@ -424,7 +431,8 @@
           return;
         }
         const quantity = row.name || row.metric;
-        const name = `${detail.device.name} · ${quantity}`;
+        const devName = detail?.device?.name || row.device_name || '';
+        const name = devName ? `${devName} · ${quantity}` : quantity;
         const definition = {measurement_id: row.measurement_id, kind: row.kind, name, unit: row.unit};
         cell.append(pointTrend.checkbox(definition));
         pointTrend.bindRow?.(element, definition, element.cells[liveColumnOffset]);
@@ -432,7 +440,10 @@
     }
     const count = total ?? rows.length;
     $('#table-hint').textContent = detail?.device
-      ? detail.device.name + ' · ' + detail.device.table + '[' + detail.device.idx + ']' : '';
+      ? detail.device.name + ' · ' + detail.device.table + '[' + detail.device.idx + ']'
+      : queryMode
+        ? [$('#category').selectedOptions[0]?.textContent, $('#model-table').value || '全部设备表', '全部设备'].filter(Boolean).join(' · ')
+        : '';
     $('#page-summary').textContent = limit && count
       ? '共 ' + count + ' 项 · 当前 ' + ((page - 1) * limit + 1) + '–' + Math.min(page * limit, count)
       : '共 ' + count + ' 项量测';
@@ -448,7 +459,7 @@
   async function loadRows() {
     const request = ++sequence;
     const selection = currentDevice();
-    if (!mappingMode && !selection) {
+    if (parameterMode && !selection) {
       detail = null;
       renderRows([], 0);
       return;
@@ -753,7 +764,7 @@
   async function changeScope({ changeTable = false, resetDevice = false } = {}) {
     page = 1;
     parameterNotice = '';
-    if (changeTable) updateTableOptions();
+    if (changeTable) updateTableOptions(mappingMode || queryMode ? '' : $('#model-table').value);
     if (changeTable || resetDevice) updateDeviceOptions('');
     chosen.clear();
     syncDeviceScope();

@@ -1,4 +1,5 @@
-/* SCADA 全站多语言（zh-CN / en-US / ru-RU）与双主题（minimalist-light / precision-dark）引擎。
+/* SCADA 全站多语言（zh-CN / en-US / ru-RU）与多风格主题引擎。
+ * 支持全部 7 套 Design Tokens 预设：minimalist-light / precision-dark / sci-fi / bento-grid / glassmorphism / editorial / neo-brutalism。
  * 无外部依赖、完全兼容严格 CSP（无内联脚本），支持动态 DOM 增量翻译与 localStorage 持久化。
  */
 (() => {
@@ -6,23 +7,40 @@
 
   const THEME_KEY = "scada_ui_theme";
   const LANG_KEY = "scada_ui_lang";
-  const THEMES = ["minimalist-light", "precision-dark"];
+  const THEMES = [
+    "minimalist-light",
+    "precision-dark",
+    "sci-fi",
+    "bento-grid",
+    "glassmorphism",
+    "editorial",
+    "neo-brutalism",
+  ];
+  const DARK_THEMES = new Set(["precision-dark", "sci-fi", "glassmorphism"]);
   const LANGS = ["zh-CN", "en-US", "ru-RU"];
 
   // 集中式多语言字典：以简体中文为基准键，便于对现有零散静态/动态页面无缝覆盖。
   const I18N_DICT = {
     "zh-CN": {
-      "ui.theme.light": "明亮",
-      "ui.theme.dark": "暗黑",
-      "ui.theme.toDark": "切换至精密暗黑模式",
-      "ui.theme.toLight": "切换至极简明亮模式",
+      "ui.theme.label": "界面风格",
+      "ui.theme.minimalist-light": "极简明亮",
+      "ui.theme.precision-dark": "精密暗黑",
+      "ui.theme.sci-fi": "科幻风",
+      "ui.theme.bento-grid": "便当盒网格",
+      "ui.theme.glassmorphism": "毛玻璃拟态",
+      "ui.theme.editorial": "编辑杂志",
+      "ui.theme.neo-brutalism": "新粗野主义",
       "ui.lang.label": "界面语言",
     },
     "en-US": {
-      "ui.theme.light": "Light",
-      "ui.theme.dark": "Dark",
-      "ui.theme.toDark": "Switch to Precision Dark",
-      "ui.theme.toLight": "Switch to Minimalist Light",
+      "ui.theme.label": "UI Theme",
+      "ui.theme.minimalist-light": "Minimalist Light",
+      "ui.theme.precision-dark": "Precision Dark",
+      "ui.theme.sci-fi": "Sci-Fi HUD",
+      "ui.theme.bento-grid": "Bento Grid",
+      "ui.theme.glassmorphism": "Glassmorphism",
+      "ui.theme.editorial": "Editorial",
+      "ui.theme.neo-brutalism": "Neo-Brutalism",
       "ui.lang.label": "Language",
 
       // 顶栏与模块名
@@ -143,6 +161,12 @@
       "遥调 YT": "Setpoint (YT)",
       "实时曲线": "Live Trends",
       "纵轴设置": "Y-Axis Settings",
+      "纵轴设置…": "Y-Axis Settings…",
+      "曲线设置": "Series Settings",
+      "曲线设置…": "Series Settings…",
+      "重置视图": "Reset View",
+      "全部设备": "All Devices",
+      "全部设备表": "All Tables",
       "放大": "Zoom In",
       "缩小": "Zoom Out",
       "重置": "Reset",
@@ -170,10 +194,14 @@
       "否": "No",
     },
     "ru-RU": {
-      "ui.theme.light": "Светлая",
-      "ui.theme.dark": "Тёмная",
-      "ui.theme.toDark": "Включить тёмную тему",
-      "ui.theme.toLight": "Включить светлую тему",
+      "ui.theme.label": "Стиль интерфейса",
+      "ui.theme.minimalist-light": "Светлый минимализм",
+      "ui.theme.precision-dark": "Тёмный приборный",
+      "ui.theme.sci-fi": "Научная фантастика",
+      "ui.theme.bento-grid": "Сетка Бенто",
+      "ui.theme.glassmorphism": "Стекломорфизм",
+      "ui.theme.editorial": "Журнальный",
+      "ui.theme.neo-brutalism": "Необрутализм",
       "ui.lang.label": "Язык интерфейса",
 
       // 顶栏与模块名
@@ -294,6 +322,12 @@
       "遥调 YT": "ТР (YT)",
       "实时曲线": "Графики реального времени",
       "纵轴设置": "Оси Y",
+      "纵轴设置…": "Оси Y…",
+      "曲线设置": "Настройка кривых",
+      "曲线设置…": "Настройка кривых…",
+      "重置视图": "Сбросить вид",
+      "全部设备": "Все устройства",
+      "全部设备表": "Все таблицы",
       "放大": "Увеличить",
       "缩小": "Уменьшить",
       "重置": "Сброс",
@@ -392,12 +426,8 @@
     while ((node = walker.nextNode())) translateTextNode(node);
   }
 
-  function sunSvg() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"></path></svg>';
-  }
-
-  function moonSvg() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
+  function isDarkTheme(theme = currentTheme) {
+    return DARK_THEMES.has(theme);
   }
 
   function updateControls() {
@@ -406,25 +436,28 @@
       langSelect.value = currentLang;
       langSelect.setAttribute("aria-label", t("ui.lang.label"));
     }
-    const themeBtn = document.getElementById("ui-theme-toggle");
-    if (themeBtn) {
-      const dark = currentTheme === "precision-dark";
-      themeBtn.innerHTML = (dark ? sunSvg() : moonSvg()) + "<span>" + (dark ? t("ui.theme.light") : t("ui.theme.dark")) + "</span>";
-      themeBtn.title = dark ? t("ui.theme.toLight") : t("ui.theme.toDark");
-      themeBtn.setAttribute("aria-label", themeBtn.title);
-      themeBtn.setAttribute("aria-pressed", String(dark));
+    const themeSelect = document.getElementById("ui-theme-select");
+    if (themeSelect) {
+      themeSelect.setAttribute("aria-label", t("ui.theme.label"));
+      themeSelect.title = t("ui.theme.label");
+      Array.from(themeSelect.options).forEach(opt => {
+        opt.textContent = t(`ui.theme.${opt.value}`, opt.value);
+      });
+      themeSelect.value = currentTheme;
     }
   }
 
   function applyTheme(theme, persist = true) {
     if (!THEMES.includes(theme)) theme = "minimalist-light";
     currentTheme = theme;
+    const scheme = isDarkTheme(theme) ? "dark" : "light";
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.colorScheme = scheme;
     if (persist) {
       try { localStorage.setItem(THEME_KEY, theme); } catch (_) { /* ignore */ }
     }
     updateControls();
-    document.dispatchEvent(new CustomEvent("scada:theme-change", { detail: { theme } }));
+    document.dispatchEvent(new CustomEvent("scada:theme-change", { detail: { theme, colorScheme: scheme } }));
   }
 
   function applyLang(lang, persist = true) {
@@ -456,15 +489,19 @@
     select.value = currentLang;
     select.addEventListener("change", () => applyLang(select.value));
 
-    const toggle = document.createElement("button");
-    toggle.id = "ui-theme-toggle";
-    toggle.type = "button";
-    toggle.className = "ui-theme-toggle";
-    toggle.addEventListener("click", () => {
-      applyTheme(currentTheme === "precision-dark" ? "minimalist-light" : "precision-dark");
-    });
+    const themeSelect = document.createElement("select");
+    themeSelect.id = "ui-theme-select";
+    themeSelect.className = "ui-theme-select";
+    for (const themeId of THEMES) {
+      const opt = document.createElement("option");
+      opt.value = themeId;
+      opt.textContent = t(`ui.theme.${themeId}`, themeId);
+      themeSelect.append(opt);
+    }
+    themeSelect.value = currentTheme;
+    themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
 
-    box.append(select, toggle);
+    box.append(select, themeSelect);
     tools.append(box);
     updateControls();
   }
@@ -486,8 +523,9 @@
     }
   });
 
-  // 立即在 html 根元素激活主题，避免首屏闪烁
+  // 立即在 html 根元素激活主题与明暗属性，避免首屏闪烁
   document.documentElement.dataset.theme = currentTheme;
+  document.documentElement.dataset.colorScheme = isDarkTheme(currentTheme) ? "dark" : "light";
   document.documentElement.lang = currentLang;
 
   let pendingTranslate = false;
@@ -519,6 +557,8 @@
 
   window.scadaI18n = {
     t,
+    themes: THEMES.slice(),
+    isDarkTheme,
     getLang: () => currentLang,
     setLang: lang => applyLang(lang, true),
     getTheme: () => currentTheme,

@@ -14,8 +14,14 @@
   const FULL_TIME = new Intl.DateTimeFormat(undefined, {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const TIME = new Intl.DateTimeFormat(undefined, {hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const AXIS_NAMES = {left:'左轴', right:'右轴'};
-  const isDarkTheme = () => document.documentElement.dataset.theme === 'precision-dark';
-  const themeAxisColors = () => isDarkTheme() ? {left:'#38BDF8', right:'#FBBF24'} : {left:'#2563EB', right:'#D97706'};
+  const DARK_THEMES = new Set(['precision-dark', 'sci-fi', 'glassmorphism']);
+  const isDarkTheme = () => document.documentElement.dataset.colorScheme === 'dark' || DARK_THEMES.has(document.documentElement.dataset.theme || '');
+  const themeAxisColors = () => {
+    const theme = document.documentElement.dataset.theme;
+    if (theme === 'sci-fi') return {left:'#00E5FF', right:'#FFB020'};
+    if (theme === 'editorial') return {left:'#9F1239', right:'#B45309'};
+    return isDarkTheme() ? {left:'#38BDF8', right:'#FBBF24'} : {left:'#2563EB', right:'#D97706'};
+  };
   const AXIS_COLORS = {left:'#2563EB', right:'#D97706'};
   let nextMount = 0;
 
@@ -138,31 +144,59 @@
     const panel = make('details', {class:'point-trend'});
     panel.open = management;
     panel.innerHTML =
-      '<summary><strong>实时曲线</strong><span class="point-trend-count"></span></summary>' +
+      '<summary><strong>实时曲线</strong><span class="point-trend-count"></span><span class="point-trend-meta"></span></summary>' +
       '<div class="point-trend-body">' +
         '<div class="point-trend-toolbar"></div>' +
-        '<div class="point-trend-chart"><canvas role="img" aria-label="已选测点实时值双轴曲线"></canvas>' +
+        '<div class="point-trend-chart" tabindex="0"><canvas role="img" aria-label="已选测点实时值双轴曲线"></canvas>' +
           '<div class="point-trend-empty"></div><div class="point-trend-cursor" hidden></div>' +
           '<div class="point-trend-tooltip" hidden></div></div>' +
-        '<p class="point-trend-range"></p><p class="point-trend-status"></p><p class="point-trend-error" role="alert" hidden></p>' +
-        '<details class="point-trend-axis"><summary>纵轴设置</summary><div></div></details>' +
-        '<div class="point-trend-series" aria-label="曲线设置"></div>' +
+        '<div class="point-trend-legend" aria-label="已选曲线图例"></div>' +
+        '<p class="point-trend-error" role="alert" hidden></p>' +
       '</div>';
     container.append(panel);
     container.classList.add('point-trend-host');
     const find = selector => panel.querySelector(selector);
     const summary = find('.point-trend-count');
+    const metaStatus = find('.point-trend-meta');
     const toolbar = find('.point-trend-toolbar');
     const chart = find('.point-trend-chart');
     const canvas = find('canvas');
     const empty = find('.point-trend-empty');
     const cursor = find('.point-trend-cursor');
     const tooltip = find('.point-trend-tooltip');
-    const rangeStatus = find('.point-trend-range');
-    const status = find('.point-trend-status');
+    const legend = find('.point-trend-legend');
     const warning = find('.point-trend-error');
-    const curves = find('.point-trend-series');
-    const axesPanel = find('.point-trend-axis');
+
+    // 将纵轴设置与曲线设置移入独立模态弹窗，通过右键菜单按需唤出，不占用主页面空间。
+    function makeSettingDialog(titleText, bodyNode, extraClass = '') {
+      const dialog = make('dialog', {class:('point-trend-dialog ' + extraClass).trim()});
+      const header = make('div', {class:'point-trend-dialog-head'});
+      const heading = make('h3');
+      heading.textContent = titleText;
+      const closeBtn = make('button', {type:'button', class:'point-trend-dialog-close', 'aria-label':'关闭'});
+      closeBtn.textContent = '×';
+      header.append(heading, closeBtn);
+      const footer = make('div', {class:'point-trend-dialog-foot'});
+      const doneBtn = make('button', {type:'button', class:'point-trend-dialog-done'});
+      doneBtn.textContent = '完成';
+      footer.append(doneBtn);
+      dialog.append(header, bodyNode, footer);
+      const close = () => { if (dialog.open) dialog.close(); };
+      closeBtn.addEventListener('click', close);
+      doneBtn.addEventListener('click', close);
+      dialog.addEventListener('click', event => { if (event.target === dialog) close(); });
+      document.body.append(dialog);
+      return dialog;
+    }
+
+    const axesBody = make('div', {class:'point-trend-axis-body'});
+    const axes = {left:makeAxis('left'), right:makeAxis('right')};
+    axesBody.append(axes.left.section, axes.right.section);
+    const axesDialog = makeSettingDialog('纵轴设置', axesBody, 'point-trend-dialog-axis');
+
+    const curves = make('div', {class:'point-trend-series', 'aria-label':'曲线设置'});
+    const seriesDialog = makeSettingDialog('曲线设置', curves, 'point-trend-dialog-series');
+
     const interval = numberInput(5, 1, 60, 1);
     const retention = numberInput(60, 1, 1440, 1);
     const mode = select([['rolling', '跟随当前时刻'], ['fixed', '固定起止']]);
@@ -186,8 +220,6 @@
     toolbar.append(label('刷新周期（秒）', interval));
     if (!management) toolbar.append(label('后台保留（分钟）', retention));
     toolbar.append(label('时间区间', mode), span, alignmentLabel, fromLabel, untilLabel, zoomInBtn, zoomOutBtn, resetZoomBtn, exportCsvBtn);
-    const axes = {left:makeAxis('left'), right:makeAxis('right')};
-    axesPanel.querySelector('div').append(axes.left.section, axes.right.section);
 
     const series = new Map();
     let recordingKeys = new Set();
@@ -233,14 +265,16 @@
       const message = [selectionError, settingsError, ...axisErrors, fetchError, saveError].filter(Boolean).join('；');
       if (warning.textContent !== message) warning.textContent = message;
       warning.hidden = !message;
-      rangeStatus.textContent = FULL_TIME.format(start) + ' – ' + FULL_TIME.format(end);
-      status.textContent = lastSample
-        ? '最近采样 ' + FULL_TIME.format(lastSample) + ' · 后台保留 ' + retentionMs / 60000 + ' 分钟 · 虚线表示无效品质'
-        : '加入曲线的测点由后台持续采样';
+      const rangeText = FULL_TIME.format(start) + ' – ' + FULL_TIME.format(end);
+      metaStatus.textContent = lastSample
+        ? rangeText + ' · 采样 ' + TIME.format(lastSample)
+        : rangeText;
       for (const item of series.values()) {
         const latest = item.samples.at(-1);
-        item.latest.textContent = latest?.value != null
+        const text = latest?.value != null
           ? formatValue(latest.value) + (latest.invalid ? '（无效）' : '') : '—';
+        item.latest.textContent = text;
+        if (item.chipValue) item.chipValue.textContent = text;
       }
     }
 
@@ -463,7 +497,7 @@
         retention_seconds: retentionMs / 1000,
         series: [...series.values()].map(item => ({point:item.point, name:item.name, unit:item.unit, kind:item.kind,
           visible:item.visible.checked, axis:item.axis.value, color:item.color.value, width:item.thickness})),
-        view: {open:management ? sourceOpen : panel.open, axes_open:management ? sourceAxesOpen : axesPanel.open,
+        view: {open:management ? sourceOpen : panel.open, axes_open:false,
           mode:mode.value, duration_minutes:duration / 60000,
           alignment:alignment.value, from:from.value, until:until.value,
           axes:Object.fromEntries(Object.entries(axes).map(([side, control]) => [side, {
@@ -508,12 +542,12 @@
           item.axis.value = entry.axis === 'right' ? 'right' : 'left';
           if (entry.color) item.color.value = entry.color;
           item.width.value = item.thickness = Number(entry.width) || 2;
+          syncLegendChip(item);
         }
         sourceOpen = view.open === true;
-        sourceAxesOpen = view.axes_open === true;
+        sourceAxesOpen = false;
         if (!management) {
           panel.open = sourceOpen;
-          axesPanel.open = sourceAxesOpen;
         }
         settingsChanged();
         changedSelection();
@@ -758,12 +792,23 @@
       saveSettings();
     }
 
+    function syncLegendChip(item) {
+      if (!item?.chip) return;
+      item.chip.classList.toggle('is-hidden', !item.visible.checked);
+      item.chipDot.style.background = item.color.value;
+      item.chipAxis.textContent = item.axis.value === 'right' ? '右' : '左';
+      item.chipAxis.classList.toggle('is-right', item.axis.value === 'right');
+      item.chip.setAttribute('aria-pressed', String(item.visible.checked));
+    }
+
     function remove(item) {
       series.delete(item.key);
       item.controls.remove();
+      item.chip?.remove();
       if (!series.size) {
         lastSample = 0;
         if (!databaseChanged) fetchError = '';
+        if (seriesDialog.open) seriesDialog.close();
       }
       changedSelection();
     }
@@ -784,18 +829,44 @@
       const axis = select(Object.entries(AXIS_NAMES));
       const removeButton = make('button', {type:'button', 'aria-label':'移除曲线 · ' + name});
       removeButton.textContent = '移除';
+      const chip = make('button', {type:'button', class:'point-trend-chip', title:title.textContent + '（左键显隐，右键设置）'});
+      const chipDot = make('span', {class:'point-trend-chip-dot', 'aria-hidden':'true'});
+      const chipName = make('span', {class:'point-trend-chip-name'});
+      chipName.textContent = name;
+      const chipAxis = make('span', {class:'point-trend-chip-axis'});
+      const chipValue = make('span', {class:'point-trend-chip-val'});
+      chipValue.textContent = '—';
+      chip.append(chipDot, chipName, chipAxis, chipValue);
       const item = {key, point, name, latest, samples:[], controls:row, visible, axis, color, width, thickness:2,
-                    unit, kind:definition.kind, digital:['yx','yk'].includes(definition.kind)};
+                    unit, kind:definition.kind, digital:['yx','yk'].includes(definition.kind),
+                    chip, chipDot, chipAxis, chipValue};
       series.set(key, item);
       curves.append(row);
+      legend.append(chip);
       row.append(visible, title, latest, label('坐标轴', axis), label('颜色', color), label('线宽', width), removeButton);
-      row.addEventListener('change', () => {
-        if (width.value !== '' && width.validity.valid) item.thickness = width.valueAsNumber;
-        else width.value = item.thickness;
+      syncLegendChip(item);
+      chip.addEventListener('click', () => {
+        visible.checked = !visible.checked;
+        syncLegendChip(item);
         scheduleDraw();
         saveSettings();
       });
-      color.addEventListener('input', scheduleDraw);
+      chip.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        openChartMenu(event.clientX, event.clientY, item);
+      });
+      row.addEventListener('change', () => {
+        if (width.value !== '' && width.validity.valid) item.thickness = width.valueAsNumber;
+        else width.value = item.thickness;
+        syncLegendChip(item);
+        scheduleDraw();
+        saveSettings();
+      });
+      color.addEventListener('input', () => {
+        syncLegendChip(item);
+        scheduleDraw();
+      });
       removeButton.addEventListener('click', () => remove(item));
       if (!restoring) {
         lastSample = 0;
@@ -874,6 +945,7 @@
       panel.open = true;
       if (!item.visible.checked) {
         item.visible.checked = true;
+        syncLegendChip(item);
         saveSettings();
       }
       updateActivity();
@@ -960,8 +1032,93 @@
       if (!canRead() && pageVisible()) loadHistory();
     }
 
+    // 曲线画布与图例右键菜单：集中承载纵轴设置、曲线设置与视图快捷操作。
+    let chartMenu;
+    function closeChartMenu() {
+      if (chartMenu && !chartMenu.hidden) chartMenu.hidden = true;
+    }
+    function openDialog(dialog) {
+      if (typeof dialog.showModal === 'function') {
+        if (!dialog.open) dialog.showModal();
+      } else {
+        dialog.setAttribute('open', '');
+      }
+    }
+    function openChartMenu(x, y, targetItem = null) {
+      closeRowMenu();
+      if (!chartMenu) {
+        chartMenu = make('div', {class:'point-trend-menu', role:'menu', 'aria-label':'实时曲线菜单'});
+        document.body.append(chartMenu);
+        document.addEventListener('pointerdown', event => {
+          if (!chartMenu.contains(event.target)) closeChartMenu();
+        });
+        document.addEventListener('keydown', event => {
+          if (!chartMenu.hidden && (event.key === 'Escape' || event.key === 'Tab')) {
+            closeChartMenu();
+          }
+        });
+        window.addEventListener('resize', closeChartMenu);
+        document.addEventListener('scroll', closeChartMenu, true);
+      }
+      chartMenu.replaceChildren();
+      const addAction = (labelText, handler, {disabled = false, danger = false} = {}) => {
+        const btn = make('button', {type:'button', role:'menuitem', tabindex:'-1'});
+        btn.textContent = labelText;
+        if (disabled) btn.setAttribute('aria-disabled', 'true');
+        if (danger) btn.classList.add('is-danger');
+        btn.addEventListener('click', () => {
+          if (disabled) return;
+          closeChartMenu();
+          handler();
+        });
+        chartMenu.append(btn);
+      };
+      const addSep = () => chartMenu.append(make('div', {class:'point-trend-menu-sep', role:'separator'}));
+
+      if (targetItem && series.has(targetItem.key)) {
+        const nextAxis = targetItem.axis.value === 'right' ? 'left' : 'right';
+        addAction('切换至' + AXIS_NAMES[nextAxis], () => {
+          targetItem.axis.value = nextAxis;
+          syncLegendChip(targetItem);
+          scheduleDraw();
+          saveSettings();
+        });
+        addAction(targetItem.visible.checked ? '隐藏此曲线' : '显示此曲线', () => {
+          targetItem.visible.checked = !targetItem.visible.checked;
+          syncLegendChip(targetItem);
+          scheduleDraw();
+          saveSettings();
+        });
+        addAction('移除此曲线', () => remove(targetItem), {danger:true});
+        addSep();
+      }
+      addAction('纵轴设置…', () => openDialog(axesDialog));
+      addAction('曲线设置…', () => openDialog(seriesDialog), {disabled:!series.size});
+      addSep();
+      addAction('放大', () => zoomWindow(0.5), {disabled:!series.size});
+      addAction('缩小', () => zoomWindow(2), {disabled:!series.size});
+      addAction('重置视图', () => resetZoomBtn.click());
+      addAction('导出 CSV', () => exportCsvBtn.click(), {disabled:!series.size});
+
+      chartMenu.hidden = false;
+      chartMenu.style.left = Math.max(4, Math.min(x, document.documentElement.clientWidth - chartMenu.offsetWidth - 4)) + 'px';
+      chartMenu.style.top = Math.max(4, Math.min(y, document.documentElement.clientHeight - chartMenu.offsetHeight - 4)) + 'px';
+      chartMenu.querySelector('button:not([aria-disabled="true"])')?.focus({preventScroll:true});
+    }
+
+    chart.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      openChartMenu(event.clientX, event.clientY, null);
+    });
+    chart.addEventListener('keydown', event => {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        event.preventDefault();
+        const rect = chart.getBoundingClientRect();
+        openChartMenu(rect.left + rect.width / 2, rect.top + 36, null);
+      }
+    });
+
     panel.addEventListener('toggle', () => { updateActivity(); if (!management) saveSettings(); });
-    if (!management) axesPanel.addEventListener('toggle', saveSettings);
     document.addEventListener('visibilitychange', refreshAfterResume);
     document.addEventListener('scada:theme-change', scheduleDraw);
     document.addEventListener('scada:lang-change', scheduleDraw);
