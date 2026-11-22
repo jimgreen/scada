@@ -152,6 +152,11 @@ class Phase3WebRegressionTests(unittest.TestCase):
             self.assertIn(f'"{theme_id}"', i18n_js)
         self.assertNotIn('[data-theme="neo-brutalism"]', theme_css)
         self.assertIn("ui-theme-select", i18n_js)
+        self.assertIn("PATTERN_RULES", i18n_js)
+        self.assertIn("translateElementAttrs", i18n_js)
+        self.assertIn("translateText", i18n_js)
+        for sample_phrase in ("一键启动全部", "运行参数与日志保留", "搜索 RTU、名称或规约", "进程已退出，未收到正常退出状态"):
+            self.assertIn(sample_phrase, i18n_js)
         self.assertIn("tabular-nums", theme_css)
         self.assertNotIn("https://", theme_css)
         self.assertIn('"zh-CN"', i18n_js)

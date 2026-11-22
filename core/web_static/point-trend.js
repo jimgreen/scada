@@ -1103,6 +1103,7 @@
       addAction('导出 CSV', () => exportCsvBtn.click(), {disabled:!series.size});
 
       chartMenu.hidden = false;
+      window.scadaI18n?.translateRoot?.(chartMenu);
       chartMenu.style.left = Math.max(4, Math.min(x, document.documentElement.clientWidth - chartMenu.offsetWidth - 4)) + 'px';
       chartMenu.style.top = Math.max(4, Math.min(y, document.documentElement.clientHeight - chartMenu.offsetHeight - 4)) + 'px';
       chartMenu.querySelector('button:not([aria-disabled="true"])')?.focus({preventScroll:true});
