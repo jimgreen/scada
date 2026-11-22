@@ -1031,6 +1031,8 @@
     ["暂无通道，请先在“通道定义”中创建通道。", "No channels yet. Create one in Channels first.", "Каналов нет. Сначала создайте канал."],
     ["暂无采样点。可在测点表格中右键加入实时曲线。", "No trend points yet. Check or right-click points to add.", "Нет точек тренда. Выберите точки в таблице."],
     ["勾选表格中的测点开始采样", "Select points in the table to start plotting", "Выберите точки в таблице для графика"],
+    ["右键表格中的测点行设为采样点", "Right-click a table row to add as sampling point", "Нажмите ПКМ на строку таблицы для добавления точки"],
+    ["时间", "Time", "Время"],
     ["当前时段暂无样本", "No samples in this time range", "Нет данных за выбранный период"],
     ["当前曲线均已隐藏", "All series are currently hidden", "Все кривые скрыты"],
     ["请在测点页面加入实时曲线", "Add points from a points table first", "Добавьте точки со страницы точек"],

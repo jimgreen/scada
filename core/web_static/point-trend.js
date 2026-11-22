@@ -72,6 +72,120 @@
     return Number(value.toPrecision(5)).toLocaleString(undefined, {maximumSignificantDigits:5});
   }
 
+  function translateText(text) {
+    return window.scadaI18n?.t ? window.scadaI18n.t(text, text) : text;
+  }
+
+  // 按给定最大像素宽度安全截断 Canvas 文本，避免挤压变形或溢出遮挡。
+  function fitCanvasText(context, text, maxWidth) {
+    if (maxWidth <= 8) return '';
+    if (context.measureText(text).width <= maxWidth) return text;
+    const ellipsis = '…';
+    const ellipsisW = context.measureText(ellipsis).width;
+    if (ellipsisW >= maxWidth) return '';
+    let low = 0, high = text.length;
+    while (low < high) {
+      const mid = (low + high + 1) >>> 1;
+      if (context.measureText(text.slice(0, mid)).width + ellipsisW <= maxWidth) low = mid;
+      else high = mid - 1;
+    }
+    return low > 0 ? text.slice(0, low) + ellipsis : ellipsis;
+  }
+
+  // 绘制曲线标题左侧的彩色线型图标（开关量为阶跃折线，模拟量为实线加圆点）。
+  function drawSeriesIcon(context, x, y, color, digital, thickness = 2) {
+    const iconW = 16;
+    const lw = Math.min(2.6, Math.max(1.6, Number(thickness) || 2));
+    context.save();
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = lw;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.setLineDash([]);
+    context.beginPath();
+    if (digital) {
+      context.moveTo(x, y + 3.5);
+      context.lineTo(x + iconW * 0.45, y + 3.5);
+      context.lineTo(x + iconW * 0.45, y - 3.5);
+      context.lineTo(x + iconW, y - 3.5);
+      context.stroke();
+    } else {
+      context.moveTo(x, y);
+      context.lineTo(x + iconW, y);
+      context.stroke();
+      context.beginPath();
+      context.arc(x + iconW / 2, y, Math.min(3, lw + 0.8), 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+  }
+
+  // 构造单条可见曲线的图标标题文本（含单位与左/右轴短标）。
+  function buildSeriesTitle(item) {
+    const axisShort = translateText(item.axis.value === 'right' ? '右' : '左');
+    const unitPart = item.unit && !item.name.includes(item.unit) ? ' (' + item.unit + ')' : '';
+    return item.name + unitPart + ' [' + axisShort + ']';
+  }
+
+  // 规划顶部曲线图标标题区排版（流式折行，超出最大行数时以 +N 汇总）。
+  function layoutSeriesHeader(context, items, width, maxRows) {
+    if (!items.length || maxRows <= 0 || width < 140) return {rows:[], height:0};
+    const padX = 10;
+    const iconW = 16;
+    const iconGap = 5;
+    const itemGap = 14;
+    const rowH = 18;
+    const maxLineW = width - padX * 2;
+    const maxItemTextW = Math.max(72, Math.min(240, Math.floor(maxLineW * 0.48) - iconW - iconGap));
+    const entries = items.map(item => {
+      const label = fitCanvasText(context, buildSeriesTitle(item), maxItemTextW);
+      const textW = context.measureText(label).width;
+      return {item, label, width: iconW + iconGap + textW};
+    });
+    const rows = [];
+    let current = [];
+    let lineW = 0;
+    let index = 0;
+    while (index < entries.length) {
+      const entry = entries[index];
+      const nextW = current.length ? lineW + itemGap + entry.width : entry.width;
+      if (!current.length || nextW <= maxLineW) {
+        current.push(entry);
+        lineW = nextW;
+        index++;
+        continue;
+      }
+      if (rows.length + 1 < maxRows) {
+        rows.push(current);
+        current = [entry];
+        lineW = entry.width;
+        index++;
+        continue;
+      }
+      // 达到最大行数：腾出末尾空间显示 +N 剩余曲线计数。
+      let hiddenCount = entries.length - index;
+      while (current.length > 0) {
+        const moreText = '+' + hiddenCount;
+        const moreW = context.measureText(moreText).width + 10;
+        const usedW = current.reduce((sum, e, i) => sum + e.width + (i ? itemGap : 0), 0);
+        if (usedW + itemGap + moreW <= maxLineW) {
+          current.push({more: moreText, width: moreW});
+          break;
+        }
+        current.pop();
+        hiddenCount++;
+      }
+      if (!current.length) {
+        const moreText = '+' + hiddenCount;
+        current.push({more: moreText, width: context.measureText(moreText).width + 10});
+      }
+      break;
+    }
+    if (current.length) rows.push(current);
+    return {rows, height: rows.length ? 6 + rows.length * rowH + 4 : 0, rowH, padX, iconW, iconGap, itemGap};
+  }
+
   function nearestSample(samples, time) {
     let first = 0, last = samples.length;
     while (first < last) {
@@ -152,7 +266,6 @@
         '<div class="point-trend-chart" tabindex="0"><canvas role="img" aria-label="已选测点实时值双轴曲线"></canvas>' +
           '<div class="point-trend-empty"></div><div class="point-trend-cursor" hidden></div>' +
           '<div class="point-trend-tooltip" hidden></div></div>' +
-        '<div class="point-trend-legend" aria-label="已选曲线图例"></div>' +
         '<p class="point-trend-error" role="alert" hidden></p>' +
       '</div>';
     container.append(panel);
@@ -166,7 +279,6 @@
     const empty = find('.point-trend-empty');
     const cursor = find('.point-trend-cursor');
     const tooltip = find('.point-trend-tooltip');
-    const legend = find('.point-trend-legend');
     const warning = find('.point-trend-error');
 
     // 将纵轴设置与曲线设置移入独立模态弹窗，通过右键菜单按需唤出，不占用主页面空间。
@@ -232,6 +344,7 @@
     let settingsVersion = 0, saveQueue = Promise.resolve(), queuedSettings = '', serverSettings = '', serverRevision = '';
     let sourceOpen = false, sourceAxesOpen = false;
     let plotRange = null;
+    let headerHitboxes = [];
     let fetchError = '', saveError = '', settingsError = '', selectionError = '';
     const pageVisible = () => !pageHidden && !document.hidden && panel.getClientRects().length > 0;
     const canDraw = () => panel.open && pageVisible();
@@ -276,7 +389,6 @@
         const text = latest?.value != null
           ? formatValue(latest.value) + (latest.invalid ? '（无效）' : '') : '—';
         item.latest.textContent = text;
-        if (item.chipValue) item.chipValue.textContent = text;
       }
     }
 
@@ -284,9 +396,10 @@
       frame = 0;
       if (!canDraw()) return;
       const {start, end} = timeRange();
-      const visible = [...series.values()].filter(item => item.visible.checked);
+      const allSeries = [...series.values()];
+      const visible = allSeries.filter(item => item.visible.checked);
       const datasets = visible.map(item => ({item, data:item.samples.filter(point => point.time >= start && point.time <= end)}));
-      empty.textContent = !series.size ? (management ? '请在测点页面加入实时曲线' : '勾选表格中的测点开始采样')
+      empty.textContent = !series.size ? (management ? '请在测点页面加入实时曲线' : '右键表格中的测点行设为采样点')
         : !visible.length ? '当前曲线均已隐藏'
         : datasets.some(({data}) => data.some(point => point.value !== null)) ? '' : '当前时段暂无样本';
       empty.hidden = !empty.textContent;
@@ -305,8 +418,31 @@
       const gridColor = dark ? 'rgba(255, 255, 255, 0.08)' : '#E2E8F0';
       const axisLineColor = dark ? 'rgba(148, 163, 184, 0.35)' : '#CBD5E1';
       const tickTextColor = dark ? '#94A3B8' : '#64748B';
+      const titleTextColor = dark ? '#E2E8F0' : '#1E293B';
+      const headerSepColor = dark ? 'rgba(148, 163, 184, 0.16)' : 'rgba(148, 163, 184, 0.28)';
       const axisPalette = themeAxisColors();
-      context.font = '11px "JetBrains Mono", "Segoe UI", "Roboto", "Microsoft YaHei", sans-serif';
+      const tickFont = '11px "JetBrains Mono", "Segoe UI", "Roboto", "Microsoft YaHei", sans-serif';
+      const titleFont = '500 11px "Segoe UI", "Roboto", "Microsoft YaHei", sans-serif';
+
+      // 1. 顶部全部已选曲线图标标题区排版（含已隐藏曲线，便于点击恢复），按画布高度自适应行数。
+      context.font = titleFont;
+      const maxHeaderRows = height < 150 ? 0 : height < 215 ? 1 : 2;
+      let header = layoutSeriesHeader(context, allSeries, width, maxHeaderRows);
+      const showXAxisTitle = height >= 135;
+      const bottomPad = showXAxisTitle ? 40 : 26;
+      const axisTitleBand = 24;
+      if (header.height > 0 && height - header.height - axisTitleBand - bottomPad < 52) {
+        header = layoutSeriesHeader(context, allSeries, width, Math.max(0, maxHeaderRows - 1));
+        if (header.height > 0 && height - header.height - axisTitleBand - bottomPad < 48) {
+          header = {rows:[], height:0};
+        }
+      }
+
+      // 2. 结合可用绘图区高度计算各纵轴刻度与自适应左右留白，确保纵坐标数字与单位完整展示。
+      context.font = tickFont;
+      const top = header.height + axisTitleBand;
+      const bottom = height - bottomPad;
+      const plotHeight = Math.max(40, bottom - top);
       const domains = {}, units = {}, errors = [];
       for (const [side, control] of Object.entries(axes)) {
         let low = Infinity, high = -Infinity;
@@ -320,22 +456,97 @@
             high = Math.max(high, point.value);
           }
         }
-        domains[side] = axisScale(control, low, high, Math.max(3, Math.floor(height / 40)));
+        domains[side] = axisScale(control, low, high, Math.max(3, Math.floor(plotHeight / 34)));
         units[side] = axisUnits.size === 1 ? [...axisUnits][0] : '';
         if (domains[side].error) errors.push(AXIS_NAMES[side] + '范围或刻度间隔无效，已使用有效刻度');
       }
       updateStatus(errors, start, end);
 
-      const margin = side => axes[side].show.checked ? (width < 440 ? 50 : 72) : 12;
-      const left = margin('left'), right = width - margin('right'), top = 24, bottom = height - 27;
+      const maxTickWidth = side => {
+        if (!axes[side].show.checked) return 0;
+        let widest = 0;
+        for (const tick of domains[side].ticks) {
+          widest = Math.max(widest, context.measureText(formatValue(tick)).width);
+        }
+        return widest;
+      };
+      const rawMargin = side => axes[side].show.checked
+        ? Math.min(Math.max(54, Math.ceil(maxTickWidth(side)) + 18), Math.floor(width * 0.26))
+        : 16;
+      let leftMargin = rawMargin('left');
+      let rightMargin = rawMargin('right');
+      const minPlotWidth = 110;
+      if (width - leftMargin - rightMargin < minPlotWidth) {
+        const available = Math.max(24, width - minPlotWidth);
+        const total = leftMargin + rightMargin || 1;
+        leftMargin = Math.max(12, Math.floor(available * leftMargin / total));
+        rightMargin = Math.max(12, available - leftMargin);
+      }
+      const left = leftMargin, right = width - rightMargin;
       plotRange = {start, end, left, right, top, bottom};
       const x = time => left + (right - left) * (time - start) / (end - start);
       const y = (value, domain) => bottom - (bottom - top) * (value - domain.low) / (domain.high - domain.low);
       const gridSide = axes.left.show.checked ? 'left' : 'right';
-      const tickTarget = Math.max(1000, (end - start) / Math.max(2, Math.floor((right - left) / 108)));
+
+      // 3. 绘制顶部曲线图标标题区并记录点击命中区（点击可切换显隐，隐藏项呈半透明删除线）。
+      headerHitboxes = [];
+      if (header.rows.length) {
+        context.save();
+        context.font = titleFont;
+        context.textBaseline = 'middle';
+        context.textAlign = 'left';
+        header.rows.forEach((rowItems, rowIndex) => {
+          const rowTop = 6 + rowIndex * header.rowH;
+          const rowY = rowTop + header.rowH / 2;
+          let cursorX = header.padX;
+          for (const entry of rowItems) {
+            if (entry.more) {
+              context.fillStyle = tickTextColor;
+              context.fillText(entry.more, cursorX + 2, rowY);
+              headerHitboxes.push({more:true, x:cursorX - 2, y:rowTop, w:entry.width + 4, h:header.rowH});
+            } else {
+              const hiddenSeries = !entry.item.visible.checked;
+              context.save();
+              if (hiddenSeries) context.globalAlpha = 0.42;
+              drawSeriesIcon(context, cursorX, rowY, entry.item.color.value, entry.item.digital, entry.item.thickness);
+              const textX = cursorX + header.iconW + header.iconGap;
+              context.fillStyle = hiddenSeries ? tickTextColor : titleTextColor;
+              context.fillText(entry.label, textX, rowY);
+              if (hiddenSeries) {
+                const labelW = context.measureText(entry.label).width;
+                context.strokeStyle = tickTextColor;
+                context.lineWidth = 1;
+                context.beginPath();
+                context.moveTo(textX, rowY);
+                context.lineTo(textX + labelW, rowY);
+                context.stroke();
+              }
+              context.restore();
+              headerHitboxes.push({item:entry.item, x:cursorX - 3, y:rowTop, w:entry.width + 6, h:header.rowH});
+            }
+            cursorX += entry.width + header.itemGap;
+          }
+        });
+        context.strokeStyle = headerSepColor;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(8, header.height - 1.5);
+        context.lineTo(width - 8, header.height - 1.5);
+        context.stroke();
+        context.restore();
+      }
+
+      // 4. 测量时间文本实际宽度，计算防重叠 X 轴步长并安全绘制横坐标刻度与横轴标题。
+      context.font = tickFont;
+      const clock = end - start >= 3600000 || new Date(start).toDateString() !== new Date(end).toDateString() ? FULL_TIME : TIME;
+      const sampleTimeW = Math.ceil(Math.max(
+        context.measureText(clock.format(start)).width,
+        context.measureText(clock.format(end)).width,
+      ));
+      const minTickSpacing = Math.max(68, sampleTimeW + 18);
+      const tickTarget = Math.max(1000, (end - start) / Math.max(2, Math.floor((right - left) / minTickSpacing)));
       const tickStep = Math.max(1000, (TIME_STEPS.find(seconds => seconds * 1000 >= tickTarget)
         || Math.max(1, Math.ceil(tickTarget / DAY)) * DAY / 1000) * 1000);
-      const clock = end - start >= 3600000 || new Date(start).toDateString() !== new Date(end).toDateString() ? FULL_TIME : TIME;
       const grid = (x1, y1, x2, y2, color = gridColor, dashed = false) => {
         context.strokeStyle = color;
         context.lineWidth = 1;
@@ -347,18 +558,47 @@
         if (dashed) context.setLineDash([]);
       };
       context.textBaseline = 'middle';
-      context.textAlign = 'center';
+      let lastXLabelRight = -Infinity;
       for (let time = Math.ceil(start / tickStep) * tickStep; time <= end; time += tickStep) {
         const tickX = x(time);
         grid(tickX, bottom, tickX, bottom + 4, axisLineColor);
-        context.fillStyle = tickTextColor;
-        const maxTickLabel = Math.min(110, 2 * Math.min(tickX - 2, width - tickX - 2));
-        context.fillText(clock.format(time), tickX, bottom + 14, maxTickLabel);
+        const text = clock.format(time);
+        const labelW = context.measureText(text).width;
+        let labelLeft = tickX - labelW / 2;
+        let labelRight = tickX + labelW / 2;
+        let drawX = tickX;
+        let align = 'center';
+        if (labelLeft < 4) {
+          labelLeft = 4;
+          labelRight = 4 + labelW;
+          drawX = 4;
+          align = 'left';
+        } else if (labelRight > width - 4) {
+          labelRight = width - 4;
+          labelLeft = labelRight - labelW;
+          drawX = width - 4;
+          align = 'right';
+        }
+        if (labelLeft >= lastXLabelRight + 10 && labelRight <= width - 4) {
+          context.fillStyle = tickTextColor;
+          context.textAlign = align;
+          context.fillText(text, drawX, bottom + 15);
+          lastXLabelRight = labelRight;
+        }
       }
       grid(left, bottom, right, bottom, axisLineColor);
+      if (showXAxisTitle) {
+        context.fillStyle = tickTextColor;
+        context.textAlign = 'center';
+        context.fillText(translateText('时间'), (left + right) / 2, height - 10, Math.max(40, right - left));
+      }
+
+      // 5. 绘制左/右纵坐标轴线、网格、防重叠数值刻度及独立于最高刻度之上的轴标题。
+      const axisTitleY = header.height + 11;
       for (const [side, control] of Object.entries(axes)) {
         if (!control.show.checked) continue;
         const isLeft = side === 'left', edge = isLeft ? left : right;
+        const sideMargin = isLeft ? leftMargin : rightMargin;
         const color = axisPalette[side];
         grid(edge, top, edge, bottom, color);
         context.fillStyle = color;
@@ -366,16 +606,19 @@
         let lastLabelY = Infinity;
         for (const tick of domains[side].ticks) {
           const tickY = y(tick, domains[side]);
+          if (tickY < top - 1 || tickY > bottom + 1) continue;
           if (side === gridSide) grid(left, tickY, right, tickY, gridColor, true);
           grid(edge, tickY, edge + (isLeft ? -4 : 4), tickY, color);
-          if (lastLabelY - tickY >= 13) {
-            context.fillText(formatValue(tick), edge + (isLeft ? -8 : 8), tickY, margin(side) - 11);
+          if (lastLabelY - tickY >= 15) {
+            context.fillText(formatValue(tick), edge + (isLeft ? -8 : 8), tickY, Math.max(24, sideMargin - 12));
             lastLabelY = tickY;
           }
         }
         context.textAlign = isLeft ? 'left' : 'right';
-        const axisLabel = window.scadaI18n?.t(AXIS_NAMES[side], AXIS_NAMES[side]) || AXIS_NAMES[side];
-        context.fillText(axisLabel + (units[side] ? ' (' + units[side] + ')' : ''), isLeft ? 7 : width - 7, 10, width / 2 - 8);
+        const axisLabel = translateText(AXIS_NAMES[side]);
+        const axisTitle = axisLabel + (units[side] ? ' (' + units[side] + ')' : '');
+        const maxAxisTitleW = Math.max(40, width / 2 - 14);
+        context.fillText(fitCanvasText(context, axisTitle, maxAxisTitleW), isLeft ? 8 : width - 8, axisTitleY);
       }
       context.save();
       context.beginPath();
@@ -443,11 +686,41 @@
       cursor.hidden = tooltip.hidden = true;
     }
 
-    canvas.addEventListener('pointerleave', hideHover);
+    function findHeaderHit(offsetX, offsetY) {
+      for (const box of headerHitboxes) {
+        if (offsetX >= box.x && offsetX <= box.x + box.w && offsetY >= box.y && offsetY <= box.y + box.h) {
+          return box;
+        }
+      }
+      return null;
+    }
+
+    canvas.addEventListener('pointerleave', () => {
+      canvas.style.cursor = '';
+      hideHover();
+    });
+    canvas.addEventListener('click', event => {
+      const hit = findHeaderHit(event.offsetX, event.offsetY);
+      if (!hit) return;
+      if (hit.more) {
+        openDialog(seriesDialog);
+        return;
+      }
+      if (hit.item && series.has(hit.item.key)) {
+        hit.item.visible.checked = !hit.item.visible.checked;
+        scheduleDraw();
+        saveSettings();
+      }
+    });
     canvas.addEventListener('pointermove', event => {
-      if (!plotRange) return;
-      const {start, end, left, right, top, bottom} = plotRange;
       const {offsetX:x, offsetY:y} = event;
+      const headerHit = findHeaderHit(x, y);
+      canvas.style.cursor = headerHit ? 'pointer' : '';
+      if (headerHit || !plotRange) {
+        hideHover();
+        return;
+      }
+      const {start, end, left, right, top, bottom} = plotRange;
       if (x < left || x > right || y < top || y > bottom) {
         hideHover();
         return;
@@ -469,6 +742,8 @@
       cursor.style.left = x + 'px';
       cursor.style.top = top + 'px';
       cursor.style.height = (bottom - top) + 'px';
+      tooltip.style.top = (top + 6) + 'px';
+      tooltip.style.maxHeight = Math.max(48, bottom - top - 12) + 'px';
       tooltip.textContent = FULL_TIME.format(time) + '\n' + readings.join('\n');
       tooltip.classList.toggle('point-trend-tooltip-left', x > chart.clientWidth / 2);
       cursor.hidden = tooltip.hidden = false;
@@ -544,7 +819,6 @@
           item.axis.value = entry.axis === 'right' ? 'right' : 'left';
           if (entry.color) item.color.value = entry.color;
           item.width.value = item.thickness = Number(entry.width) || 2;
-          syncLegendChip(item);
         }
         sourceOpen = view.open === true;
         sourceAxesOpen = false;
@@ -772,7 +1046,6 @@
         const nextAxis = existing.axis.value === 'right' ? 'left' : 'right';
         addItem('切换至' + AXIS_NAMES[nextAxis], () => {
           existing.axis.value = nextAxis;
-          syncLegendChip(existing);
           scheduleDraw();
           saveSettings();
         });
@@ -856,19 +1129,9 @@
       saveSettings();
     }
 
-    function syncLegendChip(item) {
-      if (!item?.chip) return;
-      item.chip.classList.toggle('is-hidden', !item.visible.checked);
-      item.chipDot.style.background = item.color.value;
-      item.chipAxis.textContent = item.axis.value === 'right' ? '右' : '左';
-      item.chipAxis.classList.toggle('is-right', item.axis.value === 'right');
-      item.chip.setAttribute('aria-pressed', String(item.visible.checked));
-    }
-
     function remove(item) {
       series.delete(item.key);
       item.controls.remove();
-      item.chip?.remove();
       if (!series.size) {
         lastSample = 0;
         if (!databaseChanged) fetchError = '';
@@ -894,42 +1157,19 @@
       if (targetAxis === 'right') axis.value = 'right';
       const removeButton = make('button', {type:'button', 'aria-label':'移除曲线 · ' + name});
       removeButton.textContent = '移除';
-      const chip = make('button', {type:'button', class:'point-trend-chip', title:title.textContent + '（左键显隐，右键设置）'});
-      const chipDot = make('span', {class:'point-trend-chip-dot', 'aria-hidden':'true'});
-      const chipName = make('span', {class:'point-trend-chip-name'});
-      chipName.textContent = name;
-      const chipAxis = make('span', {class:'point-trend-chip-axis'});
-      const chipValue = make('span', {class:'point-trend-chip-val'});
-      chipValue.textContent = '—';
-      chip.append(chipDot, chipName, chipAxis, chipValue);
+      const digital = ['yx', 'yk'].includes(definition.kind);
       const item = {key, point, name, latest, samples:[], controls:row, visible, axis, color, width, thickness:2,
-                    unit, kind:definition.kind, digital:['yx','yk'].includes(definition.kind),
-                    chip, chipDot, chipAxis, chipValue};
+                    unit, kind:definition.kind, digital};
       series.set(key, item);
       curves.append(row);
-      legend.append(chip);
       row.append(visible, title, latest, label('坐标轴', axis), label('颜色', color), label('线宽', width), removeButton);
-      syncLegendChip(item);
-      chip.addEventListener('click', () => {
-        visible.checked = !visible.checked;
-        syncLegendChip(item);
-        scheduleDraw();
-        saveSettings();
-      });
-      chip.addEventListener('contextmenu', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        openChartMenu(event.clientX, event.clientY, item);
-      });
       row.addEventListener('change', () => {
         if (width.value !== '' && width.validity.valid) item.thickness = width.valueAsNumber;
         else width.value = item.thickness;
-        syncLegendChip(item);
         scheduleDraw();
         saveSettings();
       });
       color.addEventListener('input', () => {
-        syncLegendChip(item);
         syncCheckboxes();
         scheduleDraw();
       });
@@ -1011,7 +1251,6 @@
       panel.open = true;
       if (!item.visible.checked) {
         item.visible.checked = true;
-        syncLegendChip(item);
         saveSettings();
       }
       updateActivity();
@@ -1154,13 +1393,11 @@
         const nextAxis = targetItem.axis.value === 'right' ? 'left' : 'right';
         addAction('切换至' + AXIS_NAMES[nextAxis], () => {
           targetItem.axis.value = nextAxis;
-          syncLegendChip(targetItem);
           scheduleDraw();
           saveSettings();
         });
         addAction(targetItem.visible.checked ? '隐藏此曲线' : '显示此曲线', () => {
           targetItem.visible.checked = !targetItem.visible.checked;
-          syncLegendChip(targetItem);
           scheduleDraw();
           saveSettings();
         });
@@ -1184,7 +1421,9 @@
 
     chart.addEventListener('contextmenu', event => {
       event.preventDefault();
-      openChartMenu(event.clientX, event.clientY, null);
+      const rect = canvas.getBoundingClientRect();
+      const hit = findHeaderHit(event.clientX - rect.left, event.clientY - rect.top);
+      openChartMenu(event.clientX, event.clientY, hit?.item || null);
     });
     chart.addEventListener('keydown', event => {
       if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -1248,7 +1487,7 @@
       try {
         const saved = JSON.parse(localStorage.getItem(SPLIT_KEY) || 'null');
         if (saved && ['split', 'table-hidden', 'trend-hidden'].includes(saved.mode)) splitMode = saved.mode;
-        if (saved && Number.isFinite(saved.height) && saved.height >= 120 && saved.height <= 900) chartHeight = saved.height;
+        if (saved && Number.isFinite(saved.height) && saved.height >= 150 && saved.height <= 900) chartHeight = saved.height;
       } catch (_) { /* ignore */ }
 
       const persistSplit = () => {
@@ -1359,7 +1598,7 @@
           if (dy < -12) {
             drag.mode = splitMode = 'split';
             panel.open = true;
-            chartHeight = Math.max(120, Math.min(600, -dy));
+            chartHeight = Math.max(150, Math.min(600, -dy));
             applySplit(false);
           }
           return;
@@ -1367,8 +1606,8 @@
         if (drag.mode === 'table-hidden') {
           if (dy > 12) {
             drag.mode = splitMode = 'split';
-            const maxH = Math.max(180, window.innerHeight - 280);
-            chartHeight = Math.max(120, Math.min(maxH, drag.chartH - dy));
+            const maxH = Math.max(200, window.innerHeight - 280);
+            chartHeight = Math.max(150, Math.min(maxH, drag.chartH - dy));
             applySplit(false);
           }
           return;
@@ -1390,7 +1629,7 @@
         }
         const maxH = Math.max(220, window.innerHeight - 220);
         splitMode = 'split';
-        chartHeight = Math.max(120, Math.min(maxH, nextChartH));
+        chartHeight = Math.max(150, Math.min(maxH, nextChartH));
         applySplit(false);
       });
 

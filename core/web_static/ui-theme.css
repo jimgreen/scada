@@ -947,7 +947,7 @@ small {
 /* ==================== 按钮、输入框与下拉控件 ==================== */
 
 /* 仅对标准交互按钮应用边框与填充，排除侧边栏导航、行内文本按钮、Tab、文件列表与自定义轻按钮 */
-button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-chip):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer),
+button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer),
 .button,
 .database-select-button,
 .protocol-card nav a {
@@ -961,7 +961,7 @@ button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point
   transition: background var(--ease), border-color var(--ease), color var(--ease), box-shadow var(--ease), transform 100ms ease;
 }
 
-button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-chip):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer):hover:not(:disabled),
+button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer):hover:not(:disabled),
 .button:hover:not(:disabled),
 .database-select-button:hover:not(:disabled),
 .protocol-card nav a:hover {
@@ -1471,29 +1471,8 @@ table tbody tr.point-trend-row-active > .point-trend-cell-active {
   font-variant-numeric: tabular-nums;
 }
 
-.point-trend-meta,
-.point-trend-chip-val {
+.point-trend-meta {
   color: var(--text-secondary) !important;
-}
-
-.point-trend-chip {
-  background: var(--bg-subtle) !important;
-  border: 1px solid var(--border-color) !important;
-  color: var(--text-primary) !important;
-}
-
-.point-trend-chip:hover {
-  background: var(--bg-hover) !important;
-}
-
-.point-trend-chip-axis {
-  background: var(--accent-soft) !important;
-  color: var(--accent) !important;
-}
-
-.point-trend-chip-axis.is-right {
-  background: var(--warn-soft) !important;
-  color: var(--warn) !important;
 }
 
 .point-trend-menu,
