@@ -1468,7 +1468,7 @@
         const list = [];
         let node = splitter.previousElementSibling;
         while (node) {
-          if (node.matches('.table-wrap, .point-pages, .pager, .trend-point-list')) list.push(node);
+          if (node.matches('.table-wrap, .point-pages, #point-panels, .pager, .trend-point-list')) list.push(node);
           node = node.previousElementSibling;
         }
         return list;
@@ -1476,10 +1476,64 @@
       const getTablePane = () => {
         let node = splitter.previousElementSibling;
         while (node) {
-          if (node.matches('.table-wrap, .point-pages, .trend-point-list')) return node;
+          if (node.matches('.table-wrap, .point-pages, #point-panels, .trend-point-list')) return node;
           node = node.previousElementSibling;
         }
         return null;
+      };
+
+      // 按父容器实际剩余高度动态计算分栏模式下允许的最大安全画布高度，防止把横坐标顶出底边。
+      const computeMaxChartHeight = () => {
+        const parentRect = parent.getBoundingClientRect();
+        if (parentRect.height <= 0) return Math.max(150, window.innerHeight - 260);
+        const parentStyle = getComputedStyle(parent);
+        const padTop = parseFloat(parentStyle.paddingTop) || 0;
+        const padBottom = parseFloat(parentStyle.paddingBottom) || 0;
+        const rowGap = parseFloat(parentStyle.rowGap) || 0;
+        const innerByParent = parent.clientHeight - padTop - padBottom;
+        const innerByViewport = window.innerHeight - parentRect.top - padTop - padBottom - 4;
+        const availableH = Math.min(innerByParent > 0 ? innerByParent : innerByViewport, innerByViewport);
+        const tablePane = getTablePane();
+
+        let visibleChildren = 0;
+        let fixedSiblingsH = 0;
+        for (const child of parent.children) {
+          if (child === container || child === tablePane) {
+            visibleChildren++;
+            continue;
+          }
+          const cs = getComputedStyle(child);
+          if (child.hidden || cs.display === 'none') continue;
+          visibleChildren++;
+          fixedSiblingsH += child.getBoundingClientRect().height
+            + (parseFloat(cs.marginTop) || 0)
+            + (parseFloat(cs.marginBottom) || 0);
+        }
+        const totalGaps = Math.max(0, visibleChildren - 1) * rowGap;
+
+        let tableMinH = 0;
+        if (tablePane) {
+          const ts = getComputedStyle(tablePane);
+          const cssMinH = parseFloat(ts.minHeight) || 0;
+          tableMinH = Math.max(72, cssMinH) + (parseFloat(ts.marginTop) || 0) + (parseFloat(ts.marginBottom) || 0);
+        }
+
+        const hostStyle = getComputedStyle(container);
+        const hostMargins = (parseFloat(hostStyle.marginTop) || 0) + (parseFloat(hostStyle.marginBottom) || 0);
+        const containerRect = container.getBoundingClientRect();
+        const chartRect = chart.getBoundingClientRect();
+        const chromeH = (containerRect.height > 0 && chartRect.height > 0)
+          ? Math.max(60, containerRect.height - chartRect.height) + hostMargins
+          : 92 + hostMargins;
+
+        return Math.max(120, Math.floor(availableH - fixedSiblingsH - totalGaps - chromeH - tableMinH));
+      };
+
+      const clampChartHeight = value => {
+        if (!Number.isFinite(value)) return null;
+        const maxH = computeMaxChartHeight();
+        const minH = Math.min(150, maxH);
+        return Math.max(minH, Math.min(maxH, Math.round(value)));
       };
 
       let splitMode = 'split'; // 'split' | 'table-hidden' | 'trend-hidden'
@@ -1487,7 +1541,7 @@
       try {
         const saved = JSON.parse(localStorage.getItem(SPLIT_KEY) || 'null');
         if (saved && ['split', 'table-hidden', 'trend-hidden'].includes(saved.mode)) splitMode = saved.mode;
-        if (saved && Number.isFinite(saved.height) && saved.height >= 150 && saved.height <= 900) chartHeight = saved.height;
+        if (saved && Number.isFinite(saved.height) && saved.height >= 120 && saved.height <= 900) chartHeight = saved.height;
       } catch (_) { /* ignore */ }
 
       const persistSplit = () => {
@@ -1511,7 +1565,12 @@
           panel.open = true;
           chart.style.height = '';
         } else if (!hostHidden && effectiveMode === 'split') {
-          chart.style.height = chartHeight ? `${Math.round(chartHeight)}px` : '';
+          if (chartHeight) {
+            const safeH = clampChartHeight(chartHeight);
+            chart.style.height = safeH ? `${safeH}px` : '';
+          } else {
+            chart.style.height = '';
+          }
         }
 
         btnUp.classList.toggle('is-active', effectiveMode === 'table-hidden');
@@ -1584,6 +1643,7 @@
           mode: splitMode,
           chartH: chart.getBoundingClientRect().height || chartHeight || 220,
           tableH: tablePane ? tablePane.getBoundingClientRect().height : 260,
+          maxSplitH: computeMaxChartHeight(),
         };
         splitter.classList.add('is-dragging');
         document.body.classList.add('point-trend-resizing');
@@ -1594,11 +1654,13 @@
       splitter.addEventListener('pointermove', event => {
         if (!drag) return;
         const dy = event.clientY - drag.y;
+        const maxH = drag.maxSplitH || computeMaxChartHeight();
+        const minH = Math.min(150, maxH);
         if (drag.mode === 'trend-hidden') {
           if (dy < -12) {
             drag.mode = splitMode = 'split';
             panel.open = true;
-            chartHeight = Math.max(150, Math.min(600, -dy));
+            chartHeight = Math.max(minH, Math.min(maxH, -dy));
             applySplit(false);
           }
           return;
@@ -1606,8 +1668,7 @@
         if (drag.mode === 'table-hidden') {
           if (dy > 12) {
             drag.mode = splitMode = 'split';
-            const maxH = Math.max(200, window.innerHeight - 280);
-            chartHeight = Math.max(150, Math.min(maxH, drag.chartH - dy));
+            chartHeight = Math.max(minH, Math.min(maxH, drag.chartH - dy));
             applySplit(false);
           }
           return;
@@ -1627,9 +1688,8 @@
           applySplit(false);
           return;
         }
-        const maxH = Math.max(220, window.innerHeight - 220);
         splitMode = 'split';
-        chartHeight = Math.max(150, Math.min(maxH, nextChartH));
+        chartHeight = Math.max(minH, Math.min(maxH, nextChartH));
         applySplit(false);
       });
 
@@ -1638,11 +1698,23 @@
         drag = null;
         splitter.classList.remove('is-dragging');
         document.body.classList.remove('point-trend-resizing');
+        if (splitMode === 'split' && chartHeight) chartHeight = clampChartHeight(chartHeight);
         persistSplit();
         scheduleDraw();
       };
       splitter.addEventListener('pointerup', endDrag);
       splitter.addEventListener('pointercancel', endDrag);
+
+      const clampOnParentResize = () => {
+        if (drag || splitMode !== 'split' || !chartHeight || !panel.open || container.hasAttribute('hidden')) return;
+        const safeH = clampChartHeight(chartHeight);
+        if (safeH && chart.style.height !== `${safeH}px`) {
+          chart.style.height = `${safeH}px`;
+          scheduleDraw();
+        }
+      };
+      window.addEventListener('resize', clampOnParentResize);
+      new ResizeObserver(clampOnParentResize).observe(parent);
 
       new MutationObserver(() => applySplit(false)).observe(container, {
         attributes: true,

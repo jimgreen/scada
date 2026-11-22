@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>scdfe_s · 通信测试</title>
   <link rel="stylesheet" href="/static/protocol.css">
+  <link rel="stylesheet" href="/static/point-trend.css">
   <link rel="stylesheet" href="/static/log-browser.css">
   <script defer src="/static/log-browser.js"></script>
 </head>
@@ -56,12 +57,13 @@
           <button class="page-tab" type="button" data-point-tab="yt" aria-selected="false">遥调 YT</button>
           <input id="point-search" class="point-name-filter" type="search" placeholder="按名称过滤测点" aria-label="按名称过滤测点" autocomplete="off">
         </nav><button id="points-refresh" type="button">刷新</button></div>
-        <div id="point-panels">
+        <div id="point-panels" class="point-pages">
           <section data-point-panel="yc"><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>原始状态</th><th>刷新时间</th><th>操作</th></tr></thead><tbody data-point-body="yc"><tr><td colspan="7" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yc"></div></section>
           <section data-point-panel="yx" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>刷新时间</th><th>操作</th></tr></thead><tbody data-point-body="yx"><tr><td colspan="6" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yx"></div></section>
           <section data-point-panel="yk" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>刷新时间</th><th>指令接收时间</th><th>操作</th></tr></thead><tbody data-point-body="yk"><tr><td colspan="7" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yk"></div></section>
           <section data-point-panel="yt" hidden><div class="table-wrap"><table><thead><tr><th>点号</th><th>名称</th><th>当前值</th><th>状态</th><th>原始状态</th><th>刷新时间</th><th>指令接收时间</th><th>操作</th></tr></thead><tbody data-point-body="yt"><tr><td colspan="8" class="muted">请选择 RTU</td></tr></tbody></table></div><div class="table-pager" data-point-pager="yt"></div></section>
         </div>
+        <div class="point-trend-host" id="point-trend"></div>
       </article>
         </section>
 
@@ -93,6 +95,7 @@
       <div class="form-actions"><button type="button" id="point-update-cancel">取消</button><button class="primary" type="submit">保存</button></div>
     </form>
   </dialog>
+  <script defer src="/static/point-trend.js"></script>
   <script defer src="/static/test.js"></script>
 </body>
 </html>

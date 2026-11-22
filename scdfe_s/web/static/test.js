@@ -2,6 +2,8 @@
   "use strict";
   const $ = (s, root = document) => root.querySelector(s);
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+  const trendHost = $("#point-trend");
+  const pointTrend = trendHost && globalThis.scadaPointTrend?.mount(trendHost);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const protocolMap = {
     iec104: {label:"IEC 60870-5-104", service:"iec104"},
@@ -86,7 +88,21 @@
         times.map(value => `<td>${esc(value)}</td>`).join("") +
         `<td><button type="button" data-point-action="${esc(kind)}" data-point-no="${esc(point.pnt_no)}">${command ? "下发" : "更新"}</button></td></tr>`;
     }).join("") : `<tr><td colspan="${6 + (rawStatus ? 1 : 0) + (command ? 1 : 0)}" class="muted">${pointNameFilter() ? "没有匹配的测点" : "暂无定义"}</td></tr>`;
+    const rtuId = state.rtu ? String(state.rtu.rtu_id) : "";
+    const rebuilt = body._pointHtml !== html || body._pointRtu !== rtuId;
     if (body._pointHtml !== html) { body.innerHTML = html; body._pointHtml = html; }
+    body._pointRtu = rtuId;
+    if (pointTrend && rtuId && slice.length) {
+      if (rebuilt) {
+        slice.forEach((point, index) => {
+          const row = body.rows[index];
+          if (!row) return;
+          pointTrend.bindRow?.(row, {kind, rtu_id:rtuId, pnt_no:point.pnt_no, name:point.name}, row.cells[0]);
+        });
+      } else {
+        pointTrend.syncCheckboxes?.();
+      }
+    }
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     $(`[data-point-pager="${kind}"]`).innerHTML = total > PAGE_SIZE ? `<button type="button" data-point-page="prev" data-point-kind="${kind}" ${page === 0 ? "disabled" : ""}>上一页</button><span>第 ${page + 1} / ${pages} 页，共 ${total} 点</span><button type="button" data-point-page="next" data-point-kind="${kind}" ${page + 1 >= pages ? "disabled" : ""}>下一页</button>` : `<span>${total} 点</span>`;
   }

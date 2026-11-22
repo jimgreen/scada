@@ -44,8 +44,8 @@ tr.changed td { background:#fcf8e8; }
 .workbench .two input { min-width:0; }
 .interval-form { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 #interval-error { margin-top:8px; }
-.workbench #measure-panel:has(> #point-trend > .point-trend[open]) { overflow:auto; }
-.workbench #measure-panel:has(> #point-trend > .point-trend[open]) > .table-wrap { min-height:112px; }
+.workbench #measure-panel:has(> #point-trend > .point-trend[open]) { overflow:hidden; }
+.workbench #measure-panel:has(> #point-trend > .point-trend[open]) > .table-wrap { min-height:72px; }
 @media (max-width:700px) {
   .workbench .filters #definition-actions { margin-left:0; flex-wrap:wrap; }
   .workbench .filters #device, .workbench .filters #model-table { max-width:120px; min-width:0; }

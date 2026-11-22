@@ -109,6 +109,10 @@ body[data-points] #point-editor-error { min-height:1.2em; margin:0 20px; color:#
 .test-body-main > .tab-panel:not([hidden]) > .log-browser { flex:1 1 auto; min-height:0; }
 .test-body-main > .tab-panel:not([hidden]) > .grid > .card,
 .test-body-main > .tab-panel:not([hidden]) > .card { display:flex; flex-direction:column; min-height:0; }
+.test-body-main > #test-panel-points:not([hidden]) > .card { overflow:hidden; }
+#point-panels { display:flex; flex:1 1 0; flex-direction:column; min-height:72px; overflow:hidden; }
+#point-panels > section:not([hidden]) { display:flex; flex:1 1 0; flex-direction:column; min-height:0; overflow:hidden; }
+#point-panels .table-pager { flex:0 0 auto; }
 .test-body-main > .tab-panel:not([hidden]) .table-wrap { flex:1 1 auto; min-height:0; max-height:none; }
 body[data-points] .point-filters { display:flex; align-items:center; gap:10px; flex:1 1 auto; min-width:280px; }
 body[data-points] .point-filters > label:not(.visually-hidden) { flex-direction:row; align-items:center; gap:8px; white-space:nowrap; }
