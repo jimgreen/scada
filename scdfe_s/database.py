@@ -10,7 +10,6 @@ _FORBIDDEN_BUSINESS_FILENAMES = frozenset({"scdfe_c.sqlite3"})
 
 
 class SimulatorStore(ScadaStore):
-    extra_metadata_tables = frozenset({"simulator104_models", "simulator104_points"})
     application_id = int.from_bytes(b"SDFS", "big")
 
     def __init__(self, db_path=DEFAULT_DB, schema_dir=SCHEMA_DIR, **kwargs):

@@ -643,13 +643,7 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
                 raise ApiError(405, '指令下发只支持 POST')
             if query:
                 raise ApiError(400, '指令下发不接受查询参数')
-            rtu_id = self._rtu_id(parts[2])
-            simulator_command = getattr(self.server, "simulator_command", None)
-            if simulator_command is not None:
-                result = simulator_command(rtu_id, parts[4], parts[5], self._body())
-                if result is not None:
-                    return self._json(200, {"item": result, "command_status": "applied"})
-            item = self.store.submit_command(rtu_id, parts[4], parts[5],
+            item = self.store.submit_command(self._rtu_id(parts[2]), parts[4], parts[5],
                                              self._body(), self._if_match())
             return self._json(202, {'item': item, 'command_status': 'pending'})
         if parts in (["api", "log-files"], ["api", "log-files", "search"]):
@@ -905,7 +899,6 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
 
 
 class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
-    iec104_service_class = IEC104Service
     daemon_threads = True
     request_queue_size = LISTEN_BACKLOG
     allow_reuse_address = True
@@ -937,7 +930,7 @@ class ScadaHTTPServer(DatabaseSelectionMixin, ThreadingHTTPServer):
         transport is never replaced by a monitor request.
         """
         classes = {
-            "iec104": self.iec104_service_class,
+            "iec104": IEC104Service,
             "modbus-tcp": ModbusTcpService,
             "modbus-rtu": ModbusRtuService,
             "can": CanService,

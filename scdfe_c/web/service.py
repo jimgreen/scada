@@ -393,7 +393,6 @@ class ScadaStore:
                 expected_tables
                 | required_internal
                 | MONITOR_TABLES
-                | getattr(self, "extra_metadata_tables", frozenset())
             )
             if actual_tables - allowed:
                 return False
@@ -469,8 +468,7 @@ class ScadaStore:
                     from core.command_trace import TABLES as COMMAND_TRACE_TABLES, ensure_schema as ensure_command_trace
                     unexpected_tables = (actual_tables - expected_tables -
                                          {'_scada_schema', '_scada_rtu_version'} - SOE_TABLES - MONITOR_TABLES
-                                         - COMMAND_TRACE_TABLES - RTDB_METADATA_TABLES
-                                         - getattr(self, "extra_metadata_tables", frozenset()))
+                                         - COMMAND_TRACE_TABLES - RTDB_METADATA_TABLES)
                     if unexpected_tables:
                         raise RuntimeError(
                             '数据库包含当前 schema 未定义的表；请使用当前 schema 重新初始化数据库: '
