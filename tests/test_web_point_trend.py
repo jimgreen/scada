@@ -195,20 +195,20 @@ class PointTrendTests(unittest.TestCase):
                     self.assertTrue(source, asset)
                 self.assertEqual(request(server, method="POST", path=MANAGEMENT)[0], 405)
 
-    def wait_for_background_samples(self, server, count, *, after_ms=0):
+    def wait_for_background_samples(self, server, count, *, point_key="yc:1:7", after_ms=0):
         # Observe the worker directly so no HTTP history read can trigger sampling.
         path = server._point_trend_history.path
         deadline = time.monotonic() + 8
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2)) as connection:
             while time.monotonic() < deadline:
                 rows = connection.execute(
-                    "SELECT time_ms FROM trend_sample WHERE time_ms>? ORDER BY time_ms LIMIT ?",
-                    (after_ms, count),
+                    "SELECT time_ms FROM trend_point_sample WHERE point_key=? AND time_ms>? ORDER BY time_ms LIMIT ?",
+                    (point_key, after_ms, count),
                 ).fetchall()
                 if len(rows) == count:
                     return [row[0] for row in rows]
                 time.sleep(0.05)
-        self.fail(f"background sampler did not write {count} sample(s) after {after_ms}")
+        self.fail(f"background sampler did not write {count} sample(s) for {point_key} after {after_ms}")
 
     def test_history_samples_without_an_open_page_and_resumes_after_reopen(self):
         with tempfile.TemporaryDirectory() as workspace:
@@ -220,44 +220,76 @@ class PointTrendTests(unittest.TestCase):
                     "status": 0, "refresh_time": stamp,
                 })
                 status, result = request(server, {
-                    "interval_seconds": 1,
                     "series": [{"point": {"kind": "yc", "rtu_id": 1, "pnt_no": 7}, "name": "P"}],
                     "view": {"follow": True},
                 }, method="PUT", path=HISTORY)
                 self.assertEqual(status, 200, result)
                 settings = result["settings"]
-                self.assertEqual(settings["retention_seconds"], 3600)
+                self.assertNotIn("interval_seconds", settings)
+                self.assertNotIn("retention_seconds", settings)
+                self.assertEqual(settings["series"][0]["interval_seconds"], 1)
+                self.assertEqual(settings["series"][0]["retention_points"], 10000)
                 self.assertEqual(settings["series"][0]["point"], {"kind": "yc", "rtu_id": "1", "pnt_no": "7"})
-                first, second = self.wait_for_background_samples(server, 2)
+                first, second = self.wait_for_background_samples(server, 2, point_key="yc:1:7")
                 status, result = request(server, method="GET", path=f"{HISTORY}?after_ms={first}")
                 self.assertEqual(status, 200, result)
                 self.assertEqual(result["settings"], settings)
-                self.assertEqual(result["samples"][0], {
-                    "time_ms": second, "values": [{"value": 13.5, "quality": 0, "time_ms": stamp}],
+                self.assertEqual(result["series_samples"][0][0], {
+                    "time_ms": second, "value": 13.5, "quality": 0, "source_time_ms": stamp,
                 })
 
             stopped_at = time.time_ns() // 1_000_000
             with running_server(make_c, workspace) as (server, _):
-                third, = self.wait_for_background_samples(server, 1, after_ms=stopped_at)
+                third, = self.wait_for_background_samples(server, 1, point_key="yc:1:7", after_ms=stopped_at)
                 status, result = request(server, method="GET", path=HISTORY)
                 self.assertEqual(status, 200, result)
                 self.assertEqual(result["settings"], settings)
-                observed = {sample["time_ms"] for sample in result["samples"]}
+                observed = {sample["time_ms"] for sample in result["series_samples"][0]}
                 self.assertTrue({first, second, third} <= observed)
+
+    def test_per_point_interval_and_point_count_retention(self):
+        with running_server(make_c) as (server, _):
+            define_rtu(server.store, 1)
+            server.store.create_row("fes_yc_define", {"rtu_id": 1, "pnt_no": 1, "name": "Fast", "value": 10.0})
+            server.store.create_row("fes_yc_define", {"rtu_id": 1, "pnt_no": 2, "name": "Slow", "value": 20.0})
+            status, result = request(server, {
+                "series": [
+                    {"point": {"kind": "yc", "rtu_id": 1, "pnt_no": 1}, "name": "Fast",
+                     "interval_seconds": 1, "retention_points": 2},
+                    {"point": {"kind": "yc", "rtu_id": 1, "pnt_no": 2}, "name": "Slow",
+                     "interval_seconds": 3, "retention_points": 5},
+                ],
+                "view": {},
+            }, method="PUT", path=HISTORY)
+            self.assertEqual(status, 200, result)
+            # 等待快点采样至少 3 次，验证其按点数精确裁剪至 2 点，且慢点频率低于快点。
+            first, second = self.wait_for_background_samples(server, 2, point_key="yc:1:1")
+            third, = self.wait_for_background_samples(server, 1, point_key="yc:1:1", after_ms=second)
+            self.assertGreater(third, second)
+            status, fetched = request(server, method="GET", path=HISTORY)
+            self.assertEqual(status, 200, fetched)
+            fast_samples = fetched["series_samples"][0]
+            slow_samples = fetched["series_samples"][1]
+            self.assertEqual(len(fast_samples), 2)
+            self.assertEqual([s["time_ms"] for s in fast_samples], [second, third])
+            self.assertGreaterEqual(len(slow_samples), 1)
+            self.assertLessEqual(len(slow_samples), 2)
 
     def test_history_remove_and_restore_series_preserves_sampling_configuration(self):
         with running_server(make_c) as (server, _):
             point = {"kind": "yc", "rtu_id": 1, "pnt_no": 7}
             define_rtu(server.store, 1)
             server.store.create_row("fes_yc_define", {"rtu_id": 1, "pnt_no": 7, "name": "P", "value": 13.5})
-            settings = {"interval_seconds": 2, "retention_seconds": 600,
-                        "series": [{"point": point, "name": "P"}], "view": {"follow": True}}
+            settings = {
+                "series": [{"point": point, "name": "P", "interval_seconds": 2, "retention_points": 500}],
+                "view": {"follow": True},
+            }
             status, result = request(server, settings, method="PUT", path=HISTORY)
             self.assertEqual(status, 200, result)
             settings = result["settings"]
             previous_revision = result["revision"]
             self.assertRegex(previous_revision, r'^"[0-9a-f]{64}"$')
-            observed, = self.wait_for_background_samples(server, 1)
+            observed, = self.wait_for_background_samples(server, 1, point_key="yc:1:7")
 
             cleared = dict(settings, series=[])
             status, result = request(server, cleared, method="PUT", path=HISTORY,
@@ -270,7 +302,7 @@ class PointTrendTests(unittest.TestCase):
             self.assertEqual(status, 409, result)
             self.assertEqual(result["error"]["code"], "trend_settings_changed")
             self.assertEqual(request(server, method="GET", path=HISTORY),
-                             (200, {"settings": cleared, "samples": [], "revision": revision}))
+                             (200, {"settings": cleared, "series_samples": [], "revision": revision}))
 
             status, result = request(server, settings, method="PUT", path=HISTORY,
                                      headers={"If-Match": revision})
@@ -278,29 +310,64 @@ class PointTrendTests(unittest.TestCase):
             status, result = request(server, method="GET", path=HISTORY)
             self.assertEqual(status, 200, result)
             self.assertEqual(result["settings"], settings)
-            retained = {sample["time_ms"]: sample["values"][0]["value"] for sample in result["samples"]}
+            retained = {sample["time_ms"]: sample["value"] for sample in result["series_samples"][0]}
             self.assertEqual(retained.get(observed), 13.5)
 
-    def test_history_rejects_duplicate_points_and_invalid_retention(self):
+    def test_history_rejects_duplicate_points_and_invalid_per_point_config(self):
         with running_server(make_c) as (server, _):
             status, result = request(server, method="GET", path=HISTORY)
             self.assertEqual(status, 200, result)
             self.assertIsNone(result["settings"])
-            self.assertEqual(result["samples"], [])
+            self.assertEqual(result["series_samples"], [])
             self.assertRegex(result["revision"], r'^"[0-9a-f]{64}"$')
-            status, saved = request(server, {"series": [], "retention_seconds": 600}, method="PUT", path=HISTORY,
+            status, saved = request(server, {"series": []}, method="PUT", path=HISTORY,
                                     headers={"If-Match": result["revision"]})
             self.assertEqual(status, 200, saved)
             duplicate = {"kind": "yc", "rtu_id": "1", "pnt_no": "7"}
             invalid = [
                 {"series": [{"point": duplicate}, {"point": {"kind": "yc", "rtu_id": 1, "pnt_no": 7}}]},
-                *({"series": [], "retention_seconds": value} for value in (0, 86401, True, "600")),
+                {"series": [], "retention_seconds": 600},
+                {"series": [], "interval_seconds": 5},
+                *({"series": [{"point": duplicate, "interval_seconds": value}]} for value in (0, 3601, True, "1", 1.5)),
+                *({"series": [{"point": duplicate, "retention_points": value}]} for value in (0, 100001, True, "10000", 10.5)),
             ]
             for body in invalid:
                 with self.subTest(body=body):
                     status, result = request(server, body, method="PUT", path=HISTORY)
                     self.assertEqual(status, 400, result)
             self.assertEqual(request(server, method="GET", path=HISTORY), (200, saved))
+
+    def test_legacy_history_database_migrates_to_per_point_schema(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            with running_server(make_c, workspace) as (server, _):
+                define_rtu(server.store, 1)
+                server.store.create_row("fes_yc_define", {"rtu_id": 1, "pnt_no": 7, "name": "P", "value": 9.5})
+                history_path = server._point_trend_history.path
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_settings = json.dumps({
+                "interval_seconds": 4,
+                "retention_seconds": 3600,
+                "series": [{"point": {"kind": "yc", "rtu_id": "1", "pnt_no": "7"}, "name": "P"}],
+                "view": {},
+            })
+            legacy_stamp = 1_700_000_000_000
+            with closing(sqlite3.connect(history_path)) as con, con:
+                con.execute(f"PRAGMA application_id={int.from_bytes(b'SDTH', 'big')}")
+                con.execute("CREATE TABLE trend_settings (id INTEGER PRIMARY KEY CHECK(id=1), settings TEXT NOT NULL)")
+                con.execute("CREATE TABLE trend_sample (time_ms INTEGER PRIMARY KEY, samples TEXT NOT NULL)")
+                con.execute("INSERT INTO trend_settings VALUES(1, ?)", (legacy_settings,))
+                con.execute(
+                    "INSERT INTO trend_sample VALUES(?, ?)",
+                    (legacy_stamp, json.dumps({"yc:1:7": {"value": 8.25, "quality": 0, "time_ms": legacy_stamp}})),
+                )
+            with running_server(make_c, workspace) as (server, _):
+                status, result = request(server, method="GET", path=HISTORY)
+                self.assertEqual(status, 200, result)
+                item = result["settings"]["series"][0]
+                self.assertEqual(item["interval_seconds"], 4)
+                self.assertEqual(item["retention_points"], 10000)
+                migrated = {s["time_ms"]: s["value"] for s in result["series_samples"][0]}
+                self.assertEqual(migrated.get(legacy_stamp), 8.25)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,12 @@
   'use strict';
 
   const LIMIT = 24;
-  const SAMPLE_LIMIT = 7200;
+  const DEFAULT_INTERVAL_SECONDS = 1;
+  const MIN_INTERVAL_SECONDS = 1;
+  const MAX_INTERVAL_SECONDS = 3600;
+  const DEFAULT_RETENTION_POINTS = 10000;
+  const MIN_RETENTION_POINTS = 1;
+  const MAX_RETENTION_POINTS = 100000;
   const DAY = 86400000;
   const HISTORY_URL = '/api/point-trend/history';
   // scientific-dashboard.md 色盲友好序列配色（浅色 / 暗黑）
@@ -92,17 +97,17 @@
     return low > 0 ? text.slice(0, low) + ellipsis : ellipsis;
   }
 
-  // 绘制曲线标题左侧的彩色线型图标（开关量为阶跃折线，模拟量为实线加圆点）。
-  function drawSeriesIcon(context, x, y, color, digital, thickness = 2) {
+  // 绘制曲线标题左侧的线型图标（显示态为曲线彩色实线/阶跃线，隐藏态为灰色虚线）。
+  function drawSeriesIcon(context, x, y, color, digital, thickness = 2, hidden = false) {
     const iconW = 16;
-    const lw = Math.min(2.6, Math.max(1.6, Number(thickness) || 2));
+    const lw = hidden ? 1.5 : Math.min(2.6, Math.max(1.6, Number(thickness) || 2));
     context.save();
     context.strokeStyle = color;
     context.fillStyle = color;
     context.lineWidth = lw;
     context.lineCap = 'round';
     context.lineJoin = 'round';
-    context.setLineDash([]);
+    context.setLineDash(hidden ? [3, 2.5] : []);
     context.beginPath();
     if (digital) {
       context.moveTo(x, y + 3.5);
@@ -114,18 +119,22 @@
       context.moveTo(x, y);
       context.lineTo(x + iconW, y);
       context.stroke();
-      context.beginPath();
-      context.arc(x + iconW / 2, y, Math.min(3, lw + 0.8), 0, Math.PI * 2);
-      context.fill();
+      if (!hidden) {
+        context.beginPath();
+        context.arc(x + iconW / 2, y, Math.min(3, lw + 0.8), 0, Math.PI * 2);
+        context.fill();
+      }
     }
     context.restore();
   }
 
-  // 构造单条可见曲线的图标标题文本（含单位与左/右轴短标）。
+  // 构造单条曲线的图标标题文本（显示态标明 [左]/[右]，隐藏态标明 [隐藏]）。
   function buildSeriesTitle(item) {
-    const axisShort = translateText(item.axis.value === 'right' ? '右' : '左');
+    const stateTag = item.visible.checked
+      ? translateText(item.axis.value === 'right' ? '右' : '左')
+      : translateText('隐藏');
     const unitPart = item.unit && !item.name.includes(item.unit) ? ' (' + item.unit + ')' : '';
-    return item.name + unitPart + ' [' + axisShort + ']';
+    return item.name + unitPart + ' [' + stateTag + ']';
   }
 
   // 规划顶部曲线图标标题区排版（流式折行，超出最大行数时以 +N 汇总）。
@@ -311,8 +320,6 @@
     const curves = make('div', {class:'point-trend-series', 'aria-label':'曲线设置'});
     const seriesDialog = makeSettingDialog('曲线设置', curves, 'point-trend-dialog-series');
 
-    const interval = numberInput(5, 1, 60, 1);
-    const retention = numberInput(60, 1, 1440, 1);
     const mode = select([['rolling', '跟随当前时刻'], ['fixed', '固定起止']]);
     const length = numberInput(10, 1, 1440, 1);
     const span = label('窗口（分钟）', length);
@@ -331,35 +338,95 @@
     resetZoomBtn.textContent = '重置';
     const exportCsvBtn = make('button', {type:'button', title:'导出当前时段采样数据为 CSV'});
     exportCsvBtn.textContent = '导出 CSV';
-    toolbar.append(label('刷新周期（秒）', interval));
-    if (!management) toolbar.append(label('后台保留（分钟）', retention));
     toolbar.append(label('时间区间', mode), span, alignmentLabel, fromLabel, untilLabel, zoomInBtn, zoomOutBtn, resetZoomBtn, exportCsvBtn);
 
     const series = new Map();
     let recordingKeys = new Set();
     let historyTimer, rollTimer, frame, lastSample = 0, colorIndex = 0;
-    let refreshMs = 5000, retentionMs = 3600000, duration = 600000, fixed = null;
+    let duration = 600000, fixed = null;
     let databaseChanged = false, pageHidden = false, wasReadingActive = false;
     let ready = false, reading = false, restoring = false, pendingSaves = 0;
     let settingsVersion = 0, saveQueue = Promise.resolve(), queuedSettings = '', serverSettings = '', serverRevision = '';
     let sourceOpen = false, sourceAxesOpen = false;
     let plotRange = null;
     let headerHitboxes = [];
+    let openSelect = null, deferredPublish = false;
     let fetchError = '', saveError = '', settingsError = '', selectionError = '';
+    const isSelectPopupActive = () => Boolean(openSelect && openSelect.isConnected);
+    const releaseOpenSelect = () => {
+      if (!openSelect) return;
+      openSelect = null;
+      if (deferredPublish) {
+        deferredPublish = false;
+        scheduleDraw();
+        publishChange();
+      }
+      if (!reading && !pendingSaves) queueHistory(0);
+    };
+    document.addEventListener('pointerdown', event => {
+      if (event.target?.tagName === 'SELECT') {
+        openSelect = event.target;
+      } else if (openSelect && event.target !== openSelect) {
+        releaseOpenSelect();
+      }
+    }, true);
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        releaseOpenSelect();
+      } else if (event.target?.tagName === 'SELECT' && [' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
+        openSelect = event.target;
+      }
+    }, true);
+    document.addEventListener('change', event => {
+      if (event.target?.tagName === 'SELECT') releaseOpenSelect();
+    }, true);
+    document.addEventListener('blur', event => {
+      if (event.target === openSelect) releaseOpenSelect();
+    }, true);
     const pageVisible = () => !pageHidden && !document.hidden && panel.getClientRects().length > 0;
     const canDraw = () => panel.open && pageVisible();
     const canRead = () => (management || panel.open) && pageVisible();
+    const pollDelayMs = () => {
+      if (!series.size) return 2000;
+      let fastest = MAX_INTERVAL_SECONDS;
+      for (const item of series.values()) {
+        fastest = Math.min(fastest, item.intervalSeconds || DEFAULT_INTERVAL_SECONDS);
+      }
+      return Math.max(1000, fastest * 1000);
+    };
+
+    function itemDisplayState(item) {
+      if (!item.visible.checked) return 'hidden';
+      return item.axis.value === 'right' ? 'right' : 'left';
+    }
+
+    function applyDisplayState(item, displayState) {
+      if (displayState === 'hidden') {
+        item.visible.checked = false;
+      } else {
+        item.visible.checked = true;
+        item.axis.value = displayState === 'right' ? 'right' : 'left';
+      }
+      if (item.displaySelect) item.displaySelect.value = itemDisplayState(item);
+    }
 
     function publishChange() {
       if (typeof onChange !== 'function' || restoring) return;
+      const items = [...series.values()];
+      const minIntervalSeconds = items.length
+        ? Math.min(...items.map(item => item.intervalSeconds || DEFAULT_INTERVAL_SECONDS))
+        : DEFAULT_INTERVAL_SECONDS;
       onChange({
         ready:ready && !databaseChanged, error:[selectionError, settingsError, fetchError, saveError].filter(Boolean).join('；'),
         saving:pendingSaves > 0,
-        intervalSeconds:refreshMs / 1000, retentionMinutes:retentionMs / 60000, lastSampleTime:lastSample || null,
-        series:[...series.values()].map(item => {
+        minIntervalSeconds,
+        lastSampleTime:lastSample || null,
+        series:items.map(item => {
           const latest = item.samples.at(-1);
           return {key:item.key, name:item.name, kind:item.kind, point:{...item.point}, unit:item.unit,
-                  axis:item.axis.value, visible:item.visible.checked, color:item.color.value, width:item.thickness,
+                  axis:item.axis.value, visible:item.visible.checked, displayState:itemDisplayState(item),
+                  color:item.color.value, width:item.thickness,
+                  intervalSeconds:item.intervalSeconds, retentionPoints:item.retentionPoints,
                   value:latest?.value ?? null, invalid:latest?.invalid ?? false, quality:latest?.quality ?? null,
                   timeMs:latest?.time ?? null, sourceTimeMs:latest?.sourceTime ?? null, recording:recordingKeys.has(item.key)};
         }),
@@ -506,15 +573,24 @@
               headerHitboxes.push({more:true, x:cursorX - 2, y:rowTop, w:entry.width + 4, h:header.rowH});
             } else {
               const hiddenSeries = !entry.item.visible.checked;
+              const hiddenColor = dark ? '#64748B' : '#94A3B8';
+              const activeColor = entry.item.color.value || titleTextColor;
               context.save();
-              if (hiddenSeries) context.globalAlpha = 0.42;
-              drawSeriesIcon(context, cursorX, rowY, entry.item.color.value, entry.item.digital, entry.item.thickness);
+              drawSeriesIcon(
+                context,
+                cursorX,
+                rowY,
+                hiddenSeries ? hiddenColor : activeColor,
+                entry.item.digital,
+                entry.item.thickness,
+                hiddenSeries,
+              );
               const textX = cursorX + header.iconW + header.iconGap;
-              context.fillStyle = hiddenSeries ? tickTextColor : titleTextColor;
+              context.fillStyle = hiddenSeries ? hiddenColor : activeColor;
               context.fillText(entry.label, textX, rowY);
               if (hiddenSeries) {
                 const labelW = context.measureText(entry.label).width;
-                context.strokeStyle = tickTextColor;
+                context.strokeStyle = hiddenColor;
                 context.lineWidth = 1;
                 context.beginPath();
                 context.moveTo(textX, rowY);
@@ -626,10 +702,11 @@
       context.clip();
       for (const {item, data} of datasets) {
         const domain = domains[item.axis.value];
+        const itemMs = (item.intervalSeconds || DEFAULT_INTERVAL_SECONDS) * 1000;
         const expectedStep = data.length > 2
-          ? Math.max(refreshMs, (end - start) / Math.max(1, data.length - 1))
-          : refreshMs;
-        const gapMs = Math.max(refreshMs * 3, expectedStep * 3, 5000);
+          ? Math.max(itemMs, (end - start) / Math.max(1, data.length - 1))
+          : itemMs;
+        const gapMs = Math.max(itemMs * 3, expectedStep * 3, 5000);
         context.strokeStyle = item.color.value;
         context.fillStyle = item.color.value;
         context.lineWidth = item.thickness;
@@ -679,6 +756,10 @@
     }
 
     function scheduleDraw() {
+      if (isSelectPopupActive()) {
+        deferredPublish = true;
+        return;
+      }
       if (!frame && canDraw()) frame = requestAnimationFrame(draw);
     }
 
@@ -707,7 +788,8 @@
         return;
       }
       if (hit.item && series.has(hit.item.key)) {
-        hit.item.visible.checked = !hit.item.visible.checked;
+        openSelect = null;
+        applyDisplayState(hit.item, hit.item.visible.checked ? 'hidden' : (hit.item.axis.value === 'right' ? 'right' : 'left'));
         scheduleDraw();
         saveSettings();
       }
@@ -730,7 +812,8 @@
       for (const item of series.values()) {
         if (!item.visible.checked) continue;
         const point = nearestSample(item.samples, time);
-        if (point && point.time >= start && point.time <= end && Math.abs(point.time - time) <= refreshMs) {
+        const hitTolerance = Math.max(2000, (item.intervalSeconds || DEFAULT_INTERVAL_SECONDS) * 1000);
+        if (point && point.time >= start && point.time <= end && Math.abs(point.time - time) <= hitTolerance) {
           readings.push(item.name + '  ' + (point.value === null ? '—' : formatValue(point.value)) +
                         (item.unit ? ' ' + item.unit : '') + (point.invalid ? '（无效）' : ''));
         }
@@ -759,21 +842,24 @@
       }, delay);
     }
 
+    function trimItemSamples(item) {
+      const limit = Math.min(MAX_RETENTION_POINTS, Math.max(MIN_RETENTION_POINTS, item.retentionPoints || DEFAULT_RETENTION_POINTS));
+      const discard = item.samples.length - limit;
+      if (discard > 0) item.samples.splice(0, discard);
+    }
+
     function appendSample(item, time, value, quality, sourceTime) {
       if (item.samples.at(-1)?.time >= time) return;
       const badQuality = quality !== null && quality !== undefined && Number(quality) !== 0;
       item.samples.push({time, value, quality, sourceTime, invalid: badQuality});
-      const firstRetained = item.samples.findIndex(point => point.time >= time - retentionMs);
-      const discard = Math.max(item.samples.length - SAMPLE_LIMIT, firstRetained);
-      if (discard > 0) item.samples.splice(0, discard);
+      trimItemSamples(item);
     }
 
     function currentSettings() {
       return {
-        interval_seconds: refreshMs / 1000,
-        retention_seconds: retentionMs / 1000,
         series: [...series.values()].map(item => ({point:item.point, name:item.name, unit:item.unit, kind:item.kind,
-          visible:item.visible.checked, axis:item.axis.value, color:item.color.value, width:item.thickness})),
+          visible:item.visible.checked, axis:item.axis.value, color:item.color.value, width:item.thickness,
+          interval_seconds:item.intervalSeconds, retention_points:item.retentionPoints})),
         view: {open:management ? sourceOpen : panel.open, axes_open:false,
           mode:mode.value, duration_minutes:duration / 60000,
           alignment:alignment.value, from:from.value, until:until.value,
@@ -785,11 +871,9 @@
     }
 
     function restoreSettings(settings) {
-      settings ??= {interval_seconds:5, retention_seconds:3600, series:[]};
+      settings ??= {series:[]};
       restoring = true;
       try {
-        interval.value = settings.interval_seconds;
-        retention.value = settings.retention_seconds / 60;
         const view = settings.view || {};
         mode.value = view.mode === 'fixed' ? 'fixed' : 'rolling';
         length.value = view.duration_minutes ?? 10;
@@ -806,7 +890,7 @@
           control.step.value = saved.step ?? '';
           control.min.disabled = control.max.disabled = control.mode.value !== 'manual';
         }
-        const savedPoints = settings.series.map(entry => {
+        const savedPoints = (settings.series || []).map(entry => {
           const def = {...entry.point, name:entry.name, unit:entry.unit, kind:entry.kind || entry.point.kind};
           const point = pointKey(def);
           return {entry, def, point, key:JSON.stringify(point)};
@@ -814,11 +898,19 @@
         const wanted = new Set(savedPoints.map(row => row.key));
         for (const item of series.values()) if (!wanted.has(item.key)) remove(item);
         for (const {entry, def, point, key} of savedPoints) {
-          const item = series.get(key) || add(def, key, point);
-          item.visible.checked = entry.visible !== false;
-          item.axis.value = entry.axis === 'right' ? 'right' : 'left';
+          const item = series.get(key) || add(def, key, point, 'hidden');
+          applyDisplayState(item, entry.visible === false ? 'hidden' : (entry.axis === 'right' ? 'right' : 'left'));
           if (entry.color) item.color.value = entry.color;
           item.width.value = item.thickness = Number(entry.width) || 2;
+          const nextInterval = Number.isInteger(entry.interval_seconds)
+            ? Math.min(MAX_INTERVAL_SECONDS, Math.max(MIN_INTERVAL_SECONDS, entry.interval_seconds))
+            : DEFAULT_INTERVAL_SECONDS;
+          const nextRetention = Number.isInteger(entry.retention_points)
+            ? Math.min(MAX_RETENTION_POINTS, Math.max(MIN_RETENTION_POINTS, entry.retention_points))
+            : DEFAULT_RETENTION_POINTS;
+          item.intervalInput.value = item.intervalSeconds = nextInterval;
+          item.retentionInput.value = item.retentionPoints = nextRetention;
+          trimItemSamples(item);
         }
         sourceOpen = view.open === true;
         sourceAxesOpen = false;
@@ -834,11 +926,11 @@
 
     function dataSignature(settings) {
       if (!settings) return '';
-      return JSON.stringify({
-        interval: settings.interval_seconds,
-        retention: settings.retention_seconds,
-        points: (settings.series || []).map(entry => pointKey(entry.point)),
-      });
+      return JSON.stringify((settings.series || []).map(entry => ({
+        point: pointKey(entry.point),
+        interval_seconds: entry.interval_seconds ?? DEFAULT_INTERVAL_SECONDS,
+        retention_points: entry.retention_points ?? DEFAULT_RETENTION_POINTS,
+      })));
     }
 
     function confirmSettings({settings, revision}) {
@@ -869,11 +961,12 @@
 
     async function loadHistory() {
       if (reading || databaseChanged) return;
-      if (pendingSaves) { queueHistory(refreshMs); return; }
+      if (pendingSaves) { queueHistory(pollDelayMs()); return; }
+      if (isSelectPopupActive()) { queueHistory(400); return; }
       reading = true;
       const version = settingsVersion;
       const after = lastSample;
-      let nextDelay = refreshMs;
+      let nextDelay = pollDelayMs();
       try {
         const result = await historyApi('?after_ms=' + after, {signal:AbortSignal.timeout(12000)});
         if (version !== settingsVersion) { nextDelay = 0; return; }
@@ -889,7 +982,8 @@
         fetchError = '';
         ready = true;
         syncCheckboxes();
-        // 仅当采样周期、留存时长或测点集合真正变更时才重载全量样本，折叠/改颜色等纯视图变化不重拉。
+        nextDelay = pollDelayMs();
+        // 仅当测点集合或单点采样周期/留存点数变更时才重载全量样本，折叠/改颜色等纯视图变化不重拉。
         if (dataChangedOnServer && after) {
           lastSample = 0;
           nextDelay = 0;
@@ -898,22 +992,28 @@
         const items = (result.settings?.series || []).map(entry =>
           series.get(JSON.stringify(pointKey(entry.point))));
         if (!after) for (const item of items) if (item) item.samples.length = 0;
-        for (const sample of result.samples) {
-          for (const [index, item] of items.entries()) {
-            if (!item) continue;
-            const point = sample.values[index];
-            const value = Number.isFinite(point?.value) ? point.value : null;
-            appendSample(item, sample.time_ms, value, point?.quality ?? null, point?.time_ms ?? null);
+        const perSeries = Array.isArray(result.series_samples) ? result.series_samples : [];
+        for (const [index, item] of items.entries()) {
+          if (!item) continue;
+          const rows = Array.isArray(perSeries[index]) ? perSeries[index] : [];
+          for (const pt of rows) {
+            const value = Number.isFinite(pt?.value) ? pt.value : null;
+            appendSample(item, pt.time_ms, value, pt?.quality ?? null, pt?.source_time_ms ?? null);
+            lastSample = Math.max(lastSample, pt.time_ms);
           }
-          lastSample = Math.max(lastSample, sample.time_ms);
         }
       } catch (error) {
         fetchError = '读取曲线失败：' + error.message;
       } finally {
         reading = false;
-        scheduleDraw();
-        queueHistory(nextDelay);
-        publishChange();
+        if (isSelectPopupActive()) {
+          deferredPublish = true;
+          queueHistory(400);
+        } else {
+          scheduleDraw();
+          queueHistory(nextDelay);
+          publishChange();
+        }
       }
     }
 
@@ -1004,7 +1104,7 @@
       document.addEventListener('scroll', () => closeRowMenu(), true);
     }
 
-    function updateRowMenu() {
+    function updateRowMenu(force = false) {
       if (!menuRow?.isConnected) {
         closeRowMenu();
         return;
@@ -1016,13 +1116,16 @@
       }
       const {definition, key, point} = binding;
       const existing = series.get(key);
+      const signature = [ready ? '1' : '0', key, existing ? itemDisplayState(existing) : 'none'].join('|');
+      if (!force && rowMenu.dataset.signature === signature) return;
+      rowMenu.dataset.signature = signature;
       rowMenu.replaceChildren();
-      const addItem = (text, onClick, {disabled = false, danger = false} = {}) => {
+      const addItem = (text, onClick, {disabled = false, danger = false, checked = false} = {}) => {
         const btn = make('button', {
           type:'button',
           role:'menuitem',
           tabindex:'-1',
-          class: danger ? 'is-danger' : '',
+          class: [danger ? 'is-danger' : '', checked ? 'is-checked' : ''].filter(Boolean).join(' '),
         });
         btn.textContent = text;
         if (disabled) btn.setAttribute('aria-disabled', 'true');
@@ -1033,23 +1136,37 @@
         });
         rowMenu.append(btn);
       };
+      const addSep = () => rowMenu.append(make('div', {class:'point-trend-menu-sep', role:'separator'}));
       if (!ready) {
         addItem('正在读取曲线设置…', () => {}, {disabled:true});
       } else if (!existing) {
-        addItem('设为采样点（左轴）', () => requestPoint(definition, key, point, 'left'));
-        addItem('设为采样点（右轴）', () => requestPoint(definition, key, point, 'right'));
+        addItem('设为采样点', () => requestPoint(definition, key, point, 'hidden'));
+        addSep();
+        addItem('左轴显示', () => requestPoint(definition, key, point, 'left'));
+        addItem('右轴显示', () => requestPoint(definition, key, point, 'right'));
+        addItem('隐藏', () => {}, {disabled:true});
       } else {
-        addItem('在曲线中定位', () => {
+        const curState = itemDisplayState(existing);
+        addItem('左轴显示', () => {
+          applyDisplayState(existing, 'left');
           revealTrendPane();
-          showSeries(key);
-        });
-        const nextAxis = existing.axis.value === 'right' ? 'left' : 'right';
-        addItem('切换至' + AXIS_NAMES[nextAxis], () => {
-          existing.axis.value = nextAxis;
+          panel.open = true;
           scheduleDraw();
           saveSettings();
-        });
-        rowMenu.append(make('div', {class:'point-trend-menu-sep', role:'separator'}));
+        }, {checked: curState === 'left'});
+        addItem('右轴显示', () => {
+          applyDisplayState(existing, 'right');
+          revealTrendPane();
+          panel.open = true;
+          scheduleDraw();
+          saveSettings();
+        }, {checked: curState === 'right'});
+        addItem('隐藏', () => {
+          applyDisplayState(existing, 'hidden');
+          scheduleDraw();
+          saveSettings();
+        }, {checked: curState === 'hidden'});
+        addSep();
         addItem('删除采样点', async () => {
           const ok = typeof window.scadaConfirm === 'function'
             ? await window.scadaConfirm('确认删除该采样点并移出实时曲线？', {title:'删除采样点', confirmText:'确认删除', danger:true})
@@ -1060,8 +1177,19 @@
       window.scadaI18n?.translateRoot?.(rowMenu);
     }
 
-    function requestPoint(definition, key, point, targetAxis = 'left') {
-      if (!ready || series.has(key)) return;
+    function requestPoint(definition, key, point, displayState = 'hidden') {
+      if (!ready) return;
+      const existing = series.get(key);
+      if (existing) {
+        applyDisplayState(existing, displayState);
+        if (displayState !== 'hidden') {
+          revealTrendPane();
+          panel.open = true;
+        }
+        scheduleDraw();
+        saveSettings();
+        return;
+      }
       if (series.size >= LIMIT) {
         selectionError = '每个曲线板最多选择 ' + LIMIT + ' 条测点';
         revealTrendPane();
@@ -1070,15 +1198,15 @@
         scheduleDraw();
         return;
       }
-      revealTrendPane();
-      add(definition, key, point, targetAxis);
+      if (displayState !== 'hidden') revealTrendPane();
+      add(definition, key, point, displayState);
     }
 
     function openRowMenu(row, x, y) {
       ensureRowMenu();
       menuRow = row;
       menuReturnFocus = row.contains(document.activeElement) ? document.activeElement : row;
-      updateRowMenu();
+      updateRowMenu(true);
       rowMenu.hidden = false;
       rowMenu.style.left = Math.max(4, Math.min(x, document.documentElement.clientWidth - rowMenu.offsetWidth - 4)) + 'px';
       rowMenu.style.top = Math.max(4, Math.min(y, document.documentElement.clientHeight - rowMenu.offsetHeight - 4)) + 'px';
@@ -1140,12 +1268,14 @@
       changedSelection();
     }
 
-    function add(definition, key, point, targetAxis = 'left') {
+    function add(definition, key, point, displayState = 'hidden') {
       const name = String(definition.name || definition.metric || (definition.pnt_no ?? definition.measurement_id));
       const unit = definition.unit || name.match(/[（(]([^）()]{1,16})[）)]$/)?.[1] || '';
       const row = make('div', {class:'point-trend-series-row'});
-      const visible = make('input', {type:'checkbox', 'aria-label':'显示曲线 · ' + name});
-      visible.checked = true;
+      const visible = {checked: displayState !== 'hidden'};
+      const axis = {value: displayState === 'right' ? 'right' : 'left'};
+      const displaySelect = select([['hidden', '隐藏'], ['left', '左轴显示'], ['right', '右轴显示']]);
+      displaySelect.value = displayState === 'right' ? 'right' : displayState === 'left' ? 'left' : 'hidden';
       const title = make('span', {class:'point-trend-name'});
       title.textContent = name + (definition.unit && !name.includes('(' + definition.unit + ')') ? ' · ' + definition.unit : '');
       title.title = title.textContent;
@@ -1153,19 +1283,45 @@
       latest.textContent = '—';
       const color = make('input', {type:'color', 'aria-label':'曲线颜色 · ' + name, value:COLORS[colorIndex++ % COLORS.length]});
       const width = numberInput(2, 1, 8, 0.5);
-      const axis = select(Object.entries(AXIS_NAMES));
-      if (targetAxis === 'right') axis.value = 'right';
+      const intervalInput = numberInput(DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS, 1);
+      intervalInput.className = 'point-trend-interval-input';
+      const retentionInput = numberInput(DEFAULT_RETENTION_POINTS, MIN_RETENTION_POINTS, MAX_RETENTION_POINTS, 1);
+      retentionInput.className = 'point-trend-retention-input';
       const removeButton = make('button', {type:'button', 'aria-label':'移除曲线 · ' + name});
       removeButton.textContent = '移除';
       const digital = ['yx', 'yk'].includes(definition.kind);
-      const item = {key, point, name, latest, samples:[], controls:row, visible, axis, color, width, thickness:2,
+      const item = {key, point, name, latest, samples:[], controls:row, visible, axis, displaySelect, color, width, thickness:2,
+                    intervalInput, intervalSeconds:DEFAULT_INTERVAL_SECONDS,
+                    retentionInput, retentionPoints:DEFAULT_RETENTION_POINTS,
                     unit, kind:definition.kind, digital};
       series.set(key, item);
       curves.append(row);
-      row.append(visible, title, latest, label('坐标轴', axis), label('颜色', color), label('线宽', width), removeButton);
-      row.addEventListener('change', () => {
+      row.append(
+        title, latest,
+        label('曲线状态', displaySelect),
+        label('采样周期（秒）', intervalInput),
+        label('后台留存（点数）', retentionInput),
+        label('颜色', color), label('线宽', width),
+        removeButton,
+      );
+      row.addEventListener('change', event => {
+        if (event.target === displaySelect) {
+          applyDisplayState(item, displaySelect.value);
+        }
         if (width.value !== '' && width.validity.valid) item.thickness = width.valueAsNumber;
         else width.value = item.thickness;
+        if (intervalInput.value !== '' && intervalInput.validity.valid && Number.isInteger(intervalInput.valueAsNumber)) {
+          item.intervalSeconds = intervalInput.valueAsNumber;
+        } else {
+          intervalInput.value = item.intervalSeconds;
+        }
+        if (retentionInput.value !== '' && retentionInput.validity.valid && Number.isInteger(retentionInput.valueAsNumber)) {
+          item.retentionPoints = retentionInput.valueAsNumber;
+          trimItemSamples(item);
+        } else {
+          retentionInput.value = item.retentionPoints;
+        }
+        if (event.target === retentionInput || event.target === intervalInput) lastSample = 0;
         scheduleDraw();
         saveSettings();
       });
@@ -1176,7 +1332,7 @@
       removeButton.addEventListener('click', () => remove(item));
       if (!restoring) {
         lastSample = 0;
-        panel.open = true;
+        if (displayState !== 'hidden') panel.open = true;
         changedSelection();
       }
       return item;
@@ -1202,13 +1358,12 @@
 
     function settingsChanged() {
       settingsError = '';
-      if (interval.value !== '' && interval.validity.valid) refreshMs = interval.valueAsNumber * 1000;
-      else interval.value = refreshMs / 1000;
-      if (retention.value !== '' && retention.validity.valid) retentionMs = retention.valueAsNumber * 60000;
-      else retention.value = retentionMs / 60000;
       if (length.value !== '' && length.validity.valid) duration = length.valueAsNumber * 60000;
       else length.value = duration / 60000;
-      for (const option of alignment.options) option.disabled = Number(option.value) * 4000 > duration;
+      for (const option of alignment.options) {
+        const shouldDisable = Number(option.value) * 4000 > duration;
+        if (option.disabled !== shouldDisable) option.disabled = shouldDisable;
+      }
       if (alignment.selectedOptions[0]?.disabled) alignment.value = 'auto';
       const rolling = mode.value === 'rolling';
       span.hidden = alignmentLabel.hidden = !rolling;
@@ -1227,14 +1382,53 @@
 
     function toolbarChanged(control) {
       settingsChanged();
-      if (control !== interval && control !== alignment) lastSample = 0;
+      if (control !== alignment) lastSample = 0;
       saveSettings();
     }
 
-    function setRetention(minutes) {
-      if (!ready || databaseChanged || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return false;
-      retention.value = minutes;
-      toolbarChanged(retention);
+    function updateSeriesConfig(key, {intervalSeconds, retentionPoints, displayState} = {}) {
+      const item = series.get(key);
+      if (!ready || databaseChanged || !item) return false;
+      let changed = false;
+      let dataChanged = false;
+      if (intervalSeconds !== undefined) {
+        if (!Number.isInteger(intervalSeconds) || intervalSeconds < MIN_INTERVAL_SECONDS || intervalSeconds > MAX_INTERVAL_SECONDS) {
+          return false;
+        }
+        if (item.intervalSeconds !== intervalSeconds) {
+          item.intervalSeconds = intervalSeconds;
+          item.intervalInput.value = intervalSeconds;
+          changed = true;
+          dataChanged = true;
+        }
+      }
+      if (retentionPoints !== undefined) {
+        if (!Number.isInteger(retentionPoints) || retentionPoints < MIN_RETENTION_POINTS || retentionPoints > MAX_RETENTION_POINTS) {
+          return false;
+        }
+        if (item.retentionPoints !== retentionPoints) {
+          item.retentionPoints = retentionPoints;
+          item.retentionInput.value = retentionPoints;
+          trimItemSamples(item);
+          changed = true;
+          dataChanged = true;
+        }
+      }
+      if (displayState !== undefined) {
+        if (!['hidden', 'left', 'right'].includes(displayState)) return false;
+        if (itemDisplayState(item) !== displayState) {
+          applyDisplayState(item, displayState);
+          if (displayState !== 'hidden') {
+            revealTrendPane();
+            panel.open = true;
+          }
+          changed = true;
+        }
+      }
+      if (!changed) return true;
+      if (dataChanged) lastSample = 0;
+      scheduleDraw();
+      saveSettings();
       return true;
     }
 
@@ -1248,9 +1442,10 @@
     function showSeries(key) {
       const item = series.get(key);
       if (!ready || databaseChanged || !item) return false;
+      revealTrendPane();
       panel.open = true;
       if (!item.visible.checked) {
-        item.visible.checked = true;
+        applyDisplayState(item, item.axis.value === 'right' ? 'right' : 'left');
         saveSettings();
       }
       updateActivity();
@@ -1375,11 +1570,12 @@
         document.addEventListener('scroll', closeChartMenu, true);
       }
       chartMenu.replaceChildren();
-      const addAction = (labelText, handler, {disabled = false, danger = false} = {}) => {
+      const addAction = (labelText, handler, {disabled = false, danger = false, checked = false} = {}) => {
         const btn = make('button', {type:'button', role:'menuitem', tabindex:'-1'});
         btn.textContent = labelText;
         if (disabled) btn.setAttribute('aria-disabled', 'true');
         if (danger) btn.classList.add('is-danger');
+        if (checked) btn.classList.add('is-checked');
         btn.addEventListener('click', () => {
           if (disabled) return;
           closeChartMenu();
@@ -1390,18 +1586,28 @@
       const addSep = () => chartMenu.append(make('div', {class:'point-trend-menu-sep', role:'separator'}));
 
       if (targetItem && series.has(targetItem.key)) {
-        const nextAxis = targetItem.axis.value === 'right' ? 'left' : 'right';
-        addAction('切换至' + AXIS_NAMES[nextAxis], () => {
-          targetItem.axis.value = nextAxis;
+        const curState = itemDisplayState(targetItem);
+        addAction('左轴显示', () => {
+          applyDisplayState(targetItem, 'left');
           scheduleDraw();
           saveSettings();
-        });
-        addAction(targetItem.visible.checked ? '隐藏此曲线' : '显示此曲线', () => {
-          targetItem.visible.checked = !targetItem.visible.checked;
+        }, {checked: curState === 'left'});
+        addAction('右轴显示', () => {
+          applyDisplayState(targetItem, 'right');
           scheduleDraw();
           saveSettings();
-        });
-        addAction('移除此曲线', () => remove(targetItem), {danger:true});
+        }, {checked: curState === 'right'});
+        addAction('隐藏', () => {
+          applyDisplayState(targetItem, 'hidden');
+          scheduleDraw();
+          saveSettings();
+        }, {checked: curState === 'hidden'});
+        addAction('删除采样点', async () => {
+          const ok = typeof window.scadaConfirm === 'function'
+            ? await window.scadaConfirm('确认删除该采样点并移出实时曲线？', {title:'删除采样点', confirmText:'确认删除', danger:true})
+            : true;
+          if (ok && series.has(targetItem.key)) remove(targetItem);
+        }, {danger:true});
         addSep();
       }
       addAction('纵轴设置…', () => openDialog(axesDialog));
@@ -1734,7 +1940,7 @@
     resizeObserver.observe(chart);
     changedSelection();
     loadHistory();
-    return {checkbox, bindRow, syncCheckboxes, setRetention, removeSeries, showSeries};
+    return {checkbox, bindRow, syncCheckboxes, updateSeriesConfig, removeSeries, showSeries};
   }
 
   window.scadaPointTrend = {mount};

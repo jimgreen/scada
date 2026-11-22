@@ -54,7 +54,7 @@ body[data-point-trends]:not(.workbench) > main {
 .trend-list-status { min-height: 1.35em; margin: 6px 0 0; flex: 0 0 auto; }
 .trend-list-error { color: var(--danger, #a22b34); margin: 0 0 8px; font-size: 13px; flex: 0 0 auto; }
 
-.trend-point-list button, #trend-retention {
+.trend-point-list button, .trend-cell-input, .trend-cell-select {
   box-sizing: border-box;
   min-height: 28px;
   border: var(--border, 1px solid #cfdce6);
@@ -64,7 +64,10 @@ body[data-point-trends]:not(.workbench) > main {
   padding: 3px 8px;
   font: inherit;
 }
-#trend-retention { width: 6em; }
+.trend-cell-input { font-variant-numeric: tabular-nums; padding: 2px 6px; }
+.trend-cell-select { padding: 2px 6px; min-width: 6.8em; }
+.trend-interval-input { width: 5.2em; }
+.trend-retention-input { width: 7.2em; }
 .trend-point-list button:not(:disabled) { cursor: pointer; }
 .trend-point-list button:not(:disabled):hover { background: var(--bg-hover, #edf7f8); }
 .trend-point-list :disabled { opacity: .55; }
@@ -90,7 +93,8 @@ body[data-point-trends]:not(.workbench) > main {
 .trend-list-table tbody tr:nth-child(even) { background: var(--bg-surface-2, #f9fbfc); }
 .trend-list-table .trend-list-name { min-width: 12em; white-space: normal; overflow-wrap: anywhere; }
 .trend-list-table .trend-list-empty { padding: 16px 10px; color: var(--text-secondary, #566c7e); white-space: normal; text-align: center; }
-.trend-list-value { font-variant-numeric: tabular-nums; }
+.trend-list-value { min-width: 8.5em; font-variant-numeric: tabular-nums; }
+.trend-list-time { min-width: 9.5em; font-variant-numeric: tabular-nums; }
 .trend-list-invalid { color: var(--warn, #95602c); }
 .trend-list-actions { display: flex; gap: 5px; }
 .trend-list-actions .trend-remove { color: var(--danger, #982d36); }

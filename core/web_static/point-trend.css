@@ -238,6 +238,8 @@ dialog.point-trend-dialog input:disabled { background: #f2f5f7; opacity: 0.7; }
 .point-trend-name { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .point-trend-latest { color: #566c7e; font-variant-numeric: tabular-nums; font-size: 12px; }
 .point-trend-series-row input[type=number] { width: 4.5em; }
+.point-trend-series-row input.point-trend-interval-input { width: 5.2em; }
+.point-trend-series-row input.point-trend-retention-input { width: 6.8em; }
 .point-trend-checkbox { accent-color: var(--accent, #2563eb); vertical-align: middle; cursor: pointer; }
 .point-trend-cell { min-width: 42px; width: 42px; white-space: nowrap; }
 .point-trend-row-dot {
@@ -411,6 +413,13 @@ body.point-trend-resizing * {
   background: var(--bg-hover, #e7f3f5);
   color: var(--text-primary, inherit);
   outline: 0;
+}
+.point-trend-menu button.is-checked {
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+}
+.point-trend-menu button.is-checked::before {
+  content: "✓ ";
 }
 .point-trend-menu button.is-danger { color: var(--danger, #dc2626); }
 .point-trend-menu button.is-danger:hover,
