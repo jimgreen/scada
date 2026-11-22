@@ -131,6 +131,9 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
             method = "GET" if self.command == "HEAD" else self.command
             if handle_database(self, parts, query, method) is not False:
                 return
+            from core.web_diagnostics import handle_diagnostics
+            if handle_diagnostics(self, parts, query, method, self.store, "d") is not False:
+                return
             if parts[:1] == ["api"]:
                 return self._api(method, parts, query)
             if method != "GET":

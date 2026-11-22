@@ -1194,8 +1194,8 @@
       }
     });
 
-    // 在表格分页栏与实时曲线区之间挂载可拖拽、可双向折叠/展开的水平分隔条。
-    if (!management && container.parentElement) {
+    // 在表格/采样点列表与实时曲线区之间挂载可拖拽、可双向折叠/展开的水平分隔条（同时覆盖数据表页与采样管理页）。
+    if (container.parentElement) {
       const parent = container.parentElement;
       const SPLIT_KEY = 'scada_point_trend_split_v1:' + location.pathname;
       const splitter = make('div', {
@@ -1229,7 +1229,7 @@
         const list = [];
         let node = splitter.previousElementSibling;
         while (node) {
-          if (node.matches('.table-wrap, .point-pages, .pager')) list.push(node);
+          if (node.matches('.table-wrap, .point-pages, .pager, .trend-point-list')) list.push(node);
           node = node.previousElementSibling;
         }
         return list;
@@ -1237,7 +1237,7 @@
       const getTablePane = () => {
         let node = splitter.previousElementSibling;
         while (node) {
-          if (node.matches('.table-wrap, .point-pages')) return node;
+          if (node.matches('.table-wrap, .point-pages, .trend-point-list')) return node;
           node = node.previousElementSibling;
         }
         return null;

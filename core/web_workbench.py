@@ -99,6 +99,7 @@ T_PAGES = [
 D_PAGES = [
     ('运行管理', [('overview.html', '/', '◉', '设备采集', '设备量测采集状态与启停'),
                   ('history.html', '/history', '≡', '采集与修改记录', '采集批次和映射修改记录'),
+                  ('diagnostics.html', '/diagnostics', '◴', '运行诊断', '设备采集耗时与源库检查'),
                   POINT_TRENDS_PAGE]),
     ('设备量测', [('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联'),
                  ('measurements.html', '/measurements', '▦', '量测查询', '按设备查看实时量测值、时间和状态'),
