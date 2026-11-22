@@ -141,14 +141,16 @@ class Phase3WebRegressionTests(unittest.TestCase):
         for theme_id in (
             "minimalist-light",
             "precision-dark",
-            "sci-fi",
+            "sci-fi-cyan",
+            "sci-fi-purple",
+            "sci-fi-matrix",
             "bento-grid",
             "glassmorphism",
             "editorial",
-            "neo-brutalism",
         ):
             self.assertIn(f'[data-theme="{theme_id}"]', theme_css)
             self.assertIn(f'"{theme_id}"', i18n_js)
+        self.assertNotIn('[data-theme="neo-brutalism"]', theme_css)
         self.assertIn("ui-theme-select", i18n_js)
         self.assertIn("tabular-nums", theme_css)
         self.assertNotIn("https://", theme_css)

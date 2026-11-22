@@ -1,5 +1,6 @@
 /* SCADA 全站多语言（zh-CN / en-US / ru-RU）与多风格主题引擎。
- * 支持全部 7 套 Design Tokens 预设：minimalist-light / precision-dark / sci-fi / bento-grid / glassmorphism / editorial / neo-brutalism。
+ * 支持全部 8 套 Design Tokens 预设：
+ * minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix / bento-grid / glassmorphism / editorial。
  * 无外部依赖、完全兼容严格 CSP（无内联脚本），支持动态 DOM 增量翻译与 localStorage 持久化。
  */
 (() => {
@@ -10,13 +11,24 @@
   const THEMES = [
     "minimalist-light",
     "precision-dark",
-    "sci-fi",
+    "sci-fi-cyan",
+    "sci-fi-purple",
+    "sci-fi-matrix",
     "bento-grid",
     "glassmorphism",
     "editorial",
-    "neo-brutalism",
   ];
-  const DARK_THEMES = new Set(["precision-dark", "sci-fi", "glassmorphism"]);
+  const LEGACY_THEME_MAP = {
+    "sci-fi": "sci-fi-cyan",
+    "neo-brutalism": "minimalist-light",
+  };
+  const DARK_THEMES = new Set([
+    "precision-dark",
+    "sci-fi-cyan",
+    "sci-fi-purple",
+    "sci-fi-matrix",
+    "glassmorphism",
+  ]);
   const LANGS = ["zh-CN", "en-US", "ru-RU"];
 
   // 集中式多语言字典：以简体中文为基准键，便于对现有零散静态/动态页面无缝覆盖。
@@ -25,22 +37,24 @@
       "ui.theme.label": "界面风格",
       "ui.theme.minimalist-light": "极简明亮",
       "ui.theme.precision-dark": "精密暗黑",
-      "ui.theme.sci-fi": "科幻风",
+      "ui.theme.sci-fi-cyan": "科幻 · 电光青",
+      "ui.theme.sci-fi-purple": "科幻 · 赛博紫",
+      "ui.theme.sci-fi-matrix": "科幻 · 矩阵绿",
       "ui.theme.bento-grid": "便当盒网格",
       "ui.theme.glassmorphism": "毛玻璃拟态",
       "ui.theme.editorial": "编辑杂志",
-      "ui.theme.neo-brutalism": "新粗野主义",
       "ui.lang.label": "界面语言",
     },
     "en-US": {
       "ui.theme.label": "UI Theme",
       "ui.theme.minimalist-light": "Minimalist Light",
       "ui.theme.precision-dark": "Precision Dark",
-      "ui.theme.sci-fi": "Sci-Fi HUD",
+      "ui.theme.sci-fi-cyan": "Sci-Fi · Cyan",
+      "ui.theme.sci-fi-purple": "Sci-Fi · Cyber Purple",
+      "ui.theme.sci-fi-matrix": "Sci-Fi · Matrix Green",
       "ui.theme.bento-grid": "Bento Grid",
       "ui.theme.glassmorphism": "Glassmorphism",
       "ui.theme.editorial": "Editorial",
-      "ui.theme.neo-brutalism": "Neo-Brutalism",
       "ui.lang.label": "Language",
 
       // 顶栏与模块名
@@ -197,11 +211,12 @@
       "ui.theme.label": "Стиль интерфейса",
       "ui.theme.minimalist-light": "Светлый минимализм",
       "ui.theme.precision-dark": "Тёмный приборный",
-      "ui.theme.sci-fi": "Научная фантастика",
+      "ui.theme.sci-fi-cyan": "Sci-Fi · Циан",
+      "ui.theme.sci-fi-purple": "Sci-Fi · Кибер-пурпур",
+      "ui.theme.sci-fi-matrix": "Sci-Fi · Матрица",
       "ui.theme.bento-grid": "Сетка Бенто",
       "ui.theme.glassmorphism": "Стекломорфизм",
       "ui.theme.editorial": "Журнальный",
-      "ui.theme.neo-brutalism": "Необрутализм",
       "ui.lang.label": "Язык интерфейса",
 
       // 顶栏与模块名
@@ -361,9 +376,17 @@
   const originalTexts = new WeakMap();
   const originalAttrs = new WeakMap();
 
+  function normalizeTheme(theme) {
+    if (THEMES.includes(theme)) return theme;
+    if (theme && Object.prototype.hasOwnProperty.call(LEGACY_THEME_MAP, theme)) {
+      return LEGACY_THEME_MAP[theme];
+    }
+    return "minimalist-light";
+  }
+
   try {
     const savedTheme = localStorage.getItem(THEME_KEY);
-    if (THEMES.includes(savedTheme)) currentTheme = savedTheme;
+    if (savedTheme) currentTheme = normalizeTheme(savedTheme);
     const savedLang = localStorage.getItem(LANG_KEY);
     if (LANGS.includes(savedLang)) currentLang = savedLang;
   } catch (_) {
@@ -448,7 +471,7 @@
   }
 
   function applyTheme(theme, persist = true) {
-    if (!THEMES.includes(theme)) theme = "minimalist-light";
+    theme = normalizeTheme(theme);
     currentTheme = theme;
     const scheme = isDarkTheme(theme) ? "dark" : "light";
     document.documentElement.dataset.theme = theme;

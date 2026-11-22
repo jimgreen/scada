@@ -1,7 +1,7 @@
 /* SCADA Multi-Theme Design System
  * 严格遵循 web-ui-design / scientific-dashboard / web-ui-i18n 规范：
- * 支持全部 7 套 Design Tokens 预设：
- * minimalist-light / precision-dark / sci-fi / bento-grid / glassmorphism / editorial / neo-brutalism。
+ * 支持全部 8 套 Design Tokens 预设：
+ * minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix / bento-grid / glassmorphism / editorial。
  */
 
 :root,
@@ -142,7 +142,7 @@
   --shadow: var(--shadow-card);
 }
 
-[data-theme="sci-fi"] {
+[data-theme="sci-fi-cyan"] {
   color-scheme: dark;
   --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --font-heading: "JetBrains Mono", "Cascadia Code", "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -197,6 +197,140 @@
   --radius-pill: 4px;
   --shadow-card: 0 0 0 1px rgba(0, 229, 255, 0.08), 0 8px 24px rgba(0, 8, 24, 0.55);
   --shadow-dialog: 0 0 28px rgba(0, 229, 255, 0.18), 0 24px 64px rgba(0, 0, 0, 0.72);
+  --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+[data-theme="sci-fi-purple"] {
+  color-scheme: dark;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: "JetBrains Mono", "Cascadia Code", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  /* 60% Nebula Surface */
+  --bg-canvas: #090614;
+  --bg-surface: #120C24;
+  --bg-subtle: #1C1336;
+  --bg-hover: rgba(192, 132, 252, 0.08);
+  --table-stripe: #160F2B;
+  --table-hover: #231845;
+  --bg-selected: rgba(192, 132, 252, 0.16);
+
+  /* Sidebar */
+  --sidebar-bg: #070410;
+  --sidebar-border: rgba(192, 132, 252, 0.20);
+  --sidebar-title: #7D69A8;
+  --sidebar-text: #BDB0DB;
+  --sidebar-hover: rgba(192, 132, 252, 0.10);
+  --sidebar-active-bg: rgba(192, 132, 252, 0.18);
+  --sidebar-active-text: #F5F0FF;
+  --sidebar-active-bar: #C084FC;
+
+  /* 30% Holographic Structure */
+  --text-primary: #F3EEFF;
+  --text-secondary: #A695C9;
+  --text-tertiary: #756499;
+  --border-color: rgba(192, 132, 252, 0.24);
+  --border-strong: rgba(192, 132, 252, 0.42);
+  --border: 1px solid var(--border-color);
+
+  /* 10% Cyber Purple & Semantic */
+  --accent: #C084FC;
+  --accent-hover: #D8B4FE;
+  --accent-contrast: #090614;
+  --accent-soft: rgba(192, 132, 252, 0.16);
+  --accent-ring: rgba(192, 132, 252, 0.34);
+
+  --ok: #2DD4BF;
+  --ok-soft: rgba(45, 212, 191, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.15);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.16);
+
+  --radius-card: 6px;
+  --radius-btn: 4px;
+  --radius-input: 4px;
+  --radius-dialog: 8px;
+  --radius-pill: 4px;
+  --shadow-card: 0 0 0 1px rgba(192, 132, 252, 0.09), 0 8px 24px rgba(9, 4, 24, 0.58);
+  --shadow-dialog: 0 0 28px rgba(192, 132, 252, 0.20), 0 24px 64px rgba(0, 0, 0, 0.72);
+  --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+[data-theme="sci-fi-matrix"] {
+  color-scheme: dark;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: "JetBrains Mono", "Cascadia Code", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  /* 60% Matrix Terminal Surface */
+  --bg-canvas: #040D08;
+  --bg-surface: #081810;
+  --bg-subtle: #0F261A;
+  --bg-hover: rgba(0, 230, 118, 0.07);
+  --table-stripe: #0B1F15;
+  --table-hover: #133322;
+  --bg-selected: rgba(0, 230, 118, 0.14);
+
+  /* Sidebar */
+  --sidebar-bg: #030A06;
+  --sidebar-border: rgba(0, 230, 118, 0.18);
+  --sidebar-title: #4B8566;
+  --sidebar-text: #8CC4A5;
+  --sidebar-hover: rgba(0, 230, 118, 0.08);
+  --sidebar-active-bg: rgba(0, 230, 118, 0.16);
+  --sidebar-active-text: #E2FBE9;
+  --sidebar-active-bar: #00E676;
+
+  /* 30% Matrix Structure */
+  --text-primary: #E2FBE9;
+  --text-secondary: #7EB396;
+  --text-tertiary: #4E7D63;
+  --border-color: rgba(0, 230, 118, 0.22);
+  --border-strong: rgba(0, 230, 118, 0.38);
+  --border: 1px solid var(--border-color);
+
+  /* 10% Matrix Phosphor Green & Semantic */
+  --accent: #00E676;
+  --accent-hover: #33F094;
+  --accent-contrast: #040D08;
+  --accent-soft: rgba(0, 230, 118, 0.14);
+  --accent-ring: rgba(0, 230, 118, 0.32);
+
+  --ok: #00E676;
+  --ok-soft: rgba(0, 230, 118, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.15);
+  --danger: #FF5C77;
+  --danger-soft: rgba(255, 92, 119, 0.16);
+
+  --radius-card: 6px;
+  --radius-btn: 4px;
+  --radius-input: 4px;
+  --radius-dialog: 8px;
+  --radius-pill: 4px;
+  --shadow-card: 0 0 0 1px rgba(0, 230, 118, 0.08), 0 8px 24px rgba(2, 14, 8, 0.56);
+  --shadow-dialog: 0 0 26px rgba(0, 230, 118, 0.18), 0 24px 64px rgba(0, 0, 0, 0.72);
   --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
 
   --ink: var(--text-primary);
@@ -387,69 +521,6 @@
   --shadow-card: none;
   --shadow-dialog: 0 18px 40px rgba(24, 24, 27, 0.18);
   --ease: 160ms ease-out;
-
-  --ink: var(--text-primary);
-  --muted: var(--text-secondary);
-  --line: var(--border-color);
-  --paper: var(--bg-canvas);
-  --white: var(--bg-surface);
-  --teal: var(--accent);
-  --teal-dark: var(--accent-hover);
-  --red: var(--danger);
-  --shadow: var(--shadow-card);
-}
-
-[data-theme="neo-brutalism"] {
-  color-scheme: light;
-  --font-sans: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-heading: var(--font-sans);
-  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
-
-  --bg-canvas: #FFFDF7;
-  --bg-surface: #FFFFFF;
-  --bg-subtle: #FEF9C3;
-  --bg-hover: #FEF08A;
-  --table-stripe: #FFFBEB;
-  --table-hover: #FEF08A;
-  --bg-selected: rgba(250, 204, 21, 0.35);
-
-  --sidebar-bg: #18181B;
-  --sidebar-border: #09090B;
-  --sidebar-title: #A1A1AA;
-  --sidebar-text: #F4F4F5;
-  --sidebar-hover: rgba(250, 204, 21, 0.18);
-  --sidebar-active-bg: #FACC15;
-  --sidebar-active-text: #09090B;
-  --sidebar-active-bar: #09090B;
-
-  --text-primary: #09090B;
-  --text-secondary: #3F3F46;
-  --text-tertiary: #52525B;
-  --border-color: #09090B;
-  --border-strong: #09090B;
-  --border: 2px solid #09090B;
-
-  --accent: #FACC15;
-  --accent-hover: #EAB308;
-  --accent-contrast: #09090B;
-  --accent-soft: #FEF08A;
-  --accent-ring: rgba(9, 9, 11, 0.25);
-
-  --ok: #15803D;
-  --ok-soft: #DCFCE7;
-  --warn: #B45309;
-  --warn-soft: #FEF3C7;
-  --danger: #DC2626;
-  --danger-soft: #FEE2E2;
-
-  --radius-card: 6px;
-  --radius-btn: 6px;
-  --radius-input: 6px;
-  --radius-dialog: 8px;
-  --radius-pill: 4px;
-  --shadow-card: 3px 3px 0px #09090B;
-  --shadow-dialog: 6px 6px 0px #09090B;
-  --ease: 120ms ease-out;
 
   --ink: var(--text-primary);
   --muted: var(--text-secondary);
@@ -1731,9 +1802,9 @@ body[data-points] .point-editor .dialog-head h2,
 
 /* ==================== 特色风格专属强化 ==================== */
 
-/* 1. 科幻风（sci-fi）：深空全息网格画布、克制电光青微光与 HUD 遥测质感 */
-[data-theme="sci-fi"] .workbench-content,
-[data-theme="sci-fi"] .workspace {
+/* 1a. 科幻 · 电光青（sci-fi-cyan）：深空全息青网格与克制 HUD 微光 */
+[data-theme="sci-fi-cyan"] .workbench-content,
+[data-theme="sci-fi-cyan"] .workspace {
   background-color: #040812 !important;
   background-image:
     radial-gradient(circle at 12% 0%, rgba(0, 229, 255, 0.09), transparent 46%),
@@ -1742,28 +1813,98 @@ body[data-points] .point-editor .dialog-head h2,
   background-size: 100% 100%, 28px 28px, 28px 28px !important;
 }
 
-[data-theme="sci-fi"] .workbench-topbar,
-[data-theme="sci-fi"] .topbar {
+[data-theme="sci-fi-cyan"] .workbench-topbar,
+[data-theme="sci-fi-cyan"] .topbar {
   box-shadow: 0 1px 0 rgba(0, 229, 255, 0.28), 0 4px 18px rgba(0, 229, 255, 0.08) !important;
 }
 
-[data-theme="sci-fi"] .workbench-sidebar .nav[aria-current="page"],
-[data-theme="sci-fi"] .sidebar .nav.active,
-[data-theme="sci-fi"] .sidebar button.nav.active {
+[data-theme="sci-fi-cyan"] .workbench-sidebar .nav[aria-current="page"],
+[data-theme="sci-fi-cyan"] .sidebar .nav.active,
+[data-theme="sci-fi-cyan"] .sidebar button.nav.active {
   box-shadow: inset 0 0 16px rgba(0, 229, 255, 0.14) !important;
 }
 
-[data-theme="sci-fi"] button.primary,
-[data-theme="sci-fi"] .button.primary {
+[data-theme="sci-fi-cyan"] button.primary,
+[data-theme="sci-fi-cyan"] .button.primary {
   box-shadow: 0 0 12px rgba(0, 229, 255, 0.28) !important;
 }
 
-[data-theme="sci-fi"] .log-browser .lb-content,
-[data-theme="sci-fi"] .log-content,
-[data-theme="sci-fi"] .conn-events,
-[data-theme="sci-fi"] .log-list {
+[data-theme="sci-fi-cyan"] .log-browser .lb-content,
+[data-theme="sci-fi-cyan"] .log-content,
+[data-theme="sci-fi-cyan"] .conn-events,
+[data-theme="sci-fi-cyan"] .log-list {
   background: #030711 !important;
   color: #CBEAFF !important;
+}
+
+/* 1b. 科幻 · 赛博紫（sci-fi-purple）：深星云紫罗兰网格与全息微光 */
+[data-theme="sci-fi-purple"] .workbench-content,
+[data-theme="sci-fi-purple"] .workspace {
+  background-color: #090614 !important;
+  background-image:
+    radial-gradient(circle at 14% 0%, rgba(192, 132, 252, 0.11), transparent 48%),
+    linear-gradient(rgba(192, 132, 252, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(192, 132, 252, 0.04) 1px, transparent 1px) !important;
+  background-size: 100% 100%, 28px 28px, 28px 28px !important;
+}
+
+[data-theme="sci-fi-purple"] .workbench-topbar,
+[data-theme="sci-fi-purple"] .topbar {
+  box-shadow: 0 1px 0 rgba(192, 132, 252, 0.30), 0 4px 18px rgba(192, 132, 252, 0.10) !important;
+}
+
+[data-theme="sci-fi-purple"] .workbench-sidebar .nav[aria-current="page"],
+[data-theme="sci-fi-purple"] .sidebar .nav.active,
+[data-theme="sci-fi-purple"] .sidebar button.nav.active {
+  box-shadow: inset 0 0 16px rgba(192, 132, 252, 0.16) !important;
+}
+
+[data-theme="sci-fi-purple"] button.primary,
+[data-theme="sci-fi-purple"] .button.primary {
+  box-shadow: 0 0 12px rgba(192, 132, 252, 0.30) !important;
+}
+
+[data-theme="sci-fi-purple"] .log-browser .lb-content,
+[data-theme="sci-fi-purple"] .log-content,
+[data-theme="sci-fi-purple"] .conn-events,
+[data-theme="sci-fi-purple"] .log-list {
+  background: #070411 !important;
+  color: #E7DCFF !important;
+}
+
+/* 1c. 科幻 · 矩阵绿（sci-fi-matrix）：幽暗数字矩阵网格与荧光绿微光 */
+[data-theme="sci-fi-matrix"] .workbench-content,
+[data-theme="sci-fi-matrix"] .workspace {
+  background-color: #040D08 !important;
+  background-image:
+    radial-gradient(circle at 12% 0%, rgba(0, 230, 118, 0.09), transparent 46%),
+    linear-gradient(rgba(0, 230, 118, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 230, 118, 0.035) 1px, transparent 1px) !important;
+  background-size: 100% 100%, 28px 28px, 28px 28px !important;
+}
+
+[data-theme="sci-fi-matrix"] .workbench-topbar,
+[data-theme="sci-fi-matrix"] .topbar {
+  box-shadow: 0 1px 0 rgba(0, 230, 118, 0.28), 0 4px 18px rgba(0, 230, 118, 0.08) !important;
+}
+
+[data-theme="sci-fi-matrix"] .workbench-sidebar .nav[aria-current="page"],
+[data-theme="sci-fi-matrix"] .sidebar .nav.active,
+[data-theme="sci-fi-matrix"] .sidebar button.nav.active {
+  box-shadow: inset 0 0 16px rgba(0, 230, 118, 0.14) !important;
+}
+
+[data-theme="sci-fi-matrix"] button.primary,
+[data-theme="sci-fi-matrix"] .button.primary {
+  box-shadow: 0 0 12px rgba(0, 230, 118, 0.26) !important;
+}
+
+[data-theme="sci-fi-matrix"] .log-browser .lb-content,
+[data-theme="sci-fi-matrix"] .log-content,
+[data-theme="sci-fi-matrix"] .conn-events,
+[data-theme="sci-fi-matrix"] .log-list {
+  background: #030A06 !important;
+  color: #C8F7D6 !important;
 }
 
 /* 2. 毛玻璃拟态（glassmorphism）：深海弥散渐变画布 + 磨砂卡片 + 冻结列/弹窗实底防透字 */
@@ -1815,33 +1956,6 @@ body[data-points] .point-editor .dialog-head h2,
 [data-theme="editorial"] .log-content {
   background: #FAF9F6 !important;
   color: #18181B !important;
-}
-
-/* 4. 新粗野主义（neo-brutalism）：2px 实黑边 + 硬阴影按压反馈 */
-[data-theme="neo-brutalism"] button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-chip):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer),
-[data-theme="neo-brutalism"] .button,
-[data-theme="neo-brutalism"] .database-select-button {
-  border-width: 2px !important;
-  box-shadow: 2px 2px 0px #09090B !important;
-  font-weight: 600;
-}
-
-[data-theme="neo-brutalism"] button:not(.nav):not(.layout-resizer):active:not(:disabled),
-[data-theme="neo-brutalism"] .button:active:not(:disabled) {
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 #09090B !important;
-}
-
-[data-theme="neo-brutalism"] input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
-[data-theme="neo-brutalism"] select,
-[data-theme="neo-brutalism"] textarea {
-  border-width: 2px !important;
-}
-
-[data-theme="neo-brutalism"] .workbench-sidebar .nav[aria-current="page"] span,
-[data-theme="neo-brutalism"] .sidebar .nav.active span,
-[data-theme="neo-brutalism"] .sidebar button.nav.active span {
-  color: #09090B !important;
 }
 
 /* ==================== 多语言（英文 / 俄文）防溢出布局 ==================== */
