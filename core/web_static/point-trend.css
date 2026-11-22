@@ -282,13 +282,18 @@ dialog.point-trend-dialog input:disabled { background: #f2f5f7; opacity: 0.7; }
 .point-trend-name { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .point-trend-latest { color: #566c7e; font-variant-numeric: tabular-nums; font-size: 12px; }
 .point-trend-series-row input[type=number] { width: 4.5em; }
-.point-trend-checkbox { accent-color: #087f8c; vertical-align: middle; cursor: pointer; }
+.point-trend-checkbox { accent-color: var(--accent, #2563eb); vertical-align: middle; cursor: pointer; }
 .point-trend-cell { min-width: 42px; width: 42px; white-space: nowrap; }
-table tbody tr.point-trend-row-active > .point-trend-cell,
+table tbody tr.point-trend-row-active,
+table tbody tr.point-trend-row-active > td {
+  background: var(--bg-selected, rgba(37, 99, 235, 0.08));
+  color: var(--text-primary, inherit);
+}
+table tbody tr.point-trend-row-active > td:first-child {
+  box-shadow: inset 3px 0 var(--accent, #2563eb);
+}
 table tbody tr.point-trend-row-active > .point-trend-cell-active {
-  background: #def2f3;
-  color: #124c57;
-  box-shadow: inset 3px 0 #13818b;
+  box-shadow: none;
 }
 
 .point-trend-menu {

@@ -322,11 +322,26 @@
   }
 
   function quantityMarkup(row, includeDevice) {
-    const quantity = html(row.name || row.metric);
-    const target = includeDevice
-      ? html(row.model_table || detail?.device.table) + '[' + html(row.model_idx ?? detail?.device.idx) + '].' : '';
-    return '<td class="quantity-identity"><strong>' + quantity + '</strong><small><code>' + target
-      + html(row.metric) + '</code>' + (includeDevice ? ' · ' + html(row.device_name || detail?.device.name) : '') + '</small></td>';
+    const primary = String(row.name || row.metric || '');
+    const metric = String(row.metric || '');
+    const tableName = row.model_table || detail?.device?.table || '';
+    const idx = row.model_idx ?? detail?.device?.idx ?? '';
+    const devName = row.device_name || detail?.device?.name || '';
+    const subParts = [];
+    if (includeDevice) {
+      const code = (tableName ? `${tableName}[${idx}].` : '') + metric;
+      if (code) subParts.push(`<code>${html(code)}</code>`);
+      if (devName) subParts.push(html(devName));
+    } else if (metric && metric !== primary) {
+      subParts.push(`<code>${html(metric)}</code>`);
+    }
+    const subHtml = subParts.length ? `<small>${subParts.join(' · ')}</small>` : '';
+    const plainTitle = [
+      primary,
+      includeDevice ? `${tableName ? `${tableName}[${idx}].` : ''}${metric}` : (metric !== primary ? metric : ''),
+      includeDevice ? devName : '',
+    ].filter(Boolean).join(' · ');
+    return `<td class="quantity-identity" title="${html(plainTitle)}"><strong>${html(primary)}</strong>${subHtml}</td>`;
   }
 
   function sourceMarkup(row) {

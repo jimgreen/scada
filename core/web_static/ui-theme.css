@@ -18,7 +18,7 @@
   --bg-hover: #F8FAFC;
   --table-stripe: #F8FAFC;
   --table-hover: #EFF6FF;
-  --bg-selected: rgba(37, 99, 235, 0.08);
+  --bg-selected: #EAF1FE;
 
   /* Sidebar */
   --sidebar-bg: #0F172A;
@@ -87,7 +87,7 @@
   --bg-hover: rgba(255, 255, 255, 0.045);
   --table-stripe: #162032;
   --table-hover: #1E293B;
-  --bg-selected: rgba(56, 189, 248, 0.12);
+  --bg-selected: #162E44;
 
   /* Sidebar */
   --sidebar-bg: #090D16;
@@ -155,7 +155,7 @@
   --bg-hover: rgba(0, 229, 255, 0.07);
   --table-stripe: #0A162B;
   --table-hover: #102444;
-  --bg-selected: rgba(0, 229, 255, 0.14);
+  --bg-selected: #072E3F;
 
   /* Sidebar */
   --sidebar-bg: #030710;
@@ -223,7 +223,7 @@
   --bg-hover: rgba(192, 132, 252, 0.08);
   --table-stripe: #160F2B;
   --table-hover: #231845;
-  --bg-selected: rgba(192, 132, 252, 0.16);
+  --bg-selected: #2D1F46;
 
   /* Sidebar */
   --sidebar-bg: #070410;
@@ -290,7 +290,7 @@
   --bg-hover: rgba(0, 230, 118, 0.07);
   --table-stripe: #0B1F15;
   --table-hover: #133322;
-  --bg-selected: rgba(0, 230, 118, 0.14);
+  --bg-selected: #07341E;
 
   /* Sidebar */
   --sidebar-bg: #030A06;
@@ -356,7 +356,7 @@
   --bg-hover: #F2F2F7;
   --table-stripe: #FAFAFC;
   --table-hover: #EEF6FF;
-  --bg-selected: rgba(0, 113, 227, 0.10);
+  --bg-selected: #E6F1FC;
 
   --sidebar-bg: #1D1D1F;
   --sidebar-border: rgba(255, 255, 255, 0.08);
@@ -419,7 +419,7 @@
   --bg-hover: rgba(255, 255, 255, 0.07);
   --table-stripe: #16223A;
   --table-hover: #1E3050;
-  --bg-selected: rgba(96, 165, 250, 0.18);
+  --bg-selected: #203657;
 
   --sidebar-bg: rgba(9, 14, 28, 0.86);
   --sidebar-border: rgba(255, 255, 255, 0.12);
@@ -482,7 +482,7 @@
   --bg-hover: #F5F2EB;
   --table-stripe: #FAF9F6;
   --table-hover: #F3ECE7;
-  --bg-selected: rgba(159, 18, 57, 0.08);
+  --bg-selected: #F7EBEE;
 
   --sidebar-bg: #1C1917;
   --sidebar-border: rgba(255, 255, 255, 0.08);
@@ -1230,9 +1230,69 @@ table td {
   border-bottom: var(--border) !important;
   border-left: 0 !important;
   border-right: 0 !important;
-  padding: 8px 12px !important;
+  padding: 6px 10px !important;
   color: var(--text-primary) !important;
+  vertical-align: middle !important;
+}
+
+/* 全站表格单元格单行紧凑排布（除 .wrap 审计明细列外，副文本与操作按钮同行展示） */
+table td:not(.wrap),
+td.quantity-identity,
+td.name {
+  white-space: nowrap !important;
+}
+
+table td small,
+table td .cell-sub,
+table td .muted,
+.quantity-identity small,
+.conn-panel td small,
+.communication-table .cell-sub,
+.process-table .cell-sub,
+.thread-table .cell-sub {
+  display: inline !important;
+  margin: 0 0 0 8px !important;
+  font-size: 11px !important;
+  line-height: inherit !important;
+  color: var(--text-secondary) !important;
+  vertical-align: baseline;
+}
+
+table td label.cell-sub {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
   vertical-align: middle;
+}
+
+table td small:empty,
+table td .cell-sub:empty,
+table td .muted:empty {
+  display: none !important;
+}
+
+.process-times span {
+  display: inline !important;
+  line-height: inherit !important;
+}
+
+.process-times span + span::before {
+  content: " · ";
+  color: var(--text-tertiary);
+}
+
+.process-actions {
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+.process-message {
+  max-width: 360px !important;
+  white-space: nowrap !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 tbody tr {
@@ -1262,10 +1322,28 @@ tbody tr:hover .sticky-actions,
   background: var(--table-hover) !important;
 }
 
+/* 表格行/勾选选中态：整行柔和主题选中底 + 行首 3px 强调色左竖条，禁止孤立亮白块 */
 tbody tr.selected,
+tbody tr.selected > td,
 tbody tr.selected td:first-child,
-tbody tr.selected .sticky-actions {
+tbody tr.selected .sticky-actions,
+table tbody tr.point-trend-row-active,
+table tbody tr.point-trend-row-active > td,
+table tbody tr.point-trend-row-active > .point-trend-cell,
+table tbody tr.point-trend-row-active > .point-trend-cell-active,
+table tbody tr.point-trend-row-active td:first-child,
+table tbody tr.point-trend-row-active .sticky-actions {
   background: var(--bg-selected) !important;
+  color: var(--text-primary) !important;
+}
+
+tbody tr.selected > td:first-child,
+table tbody tr.point-trend-row-active > td:first-child {
+  box-shadow: inset 3px 0 var(--accent) !important;
+}
+
+table tbody tr.point-trend-row-active > .point-trend-cell-active {
+  box-shadow: none !important;
 }
 
 [data-color-scheme="dark"] .sticky-actions {
@@ -1406,6 +1484,16 @@ tbody tr.selected .sticky-actions {
 
 .point-trend-chip:hover {
   background: var(--bg-hover) !important;
+}
+
+.point-trend-chip-axis {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+.point-trend-chip-axis.is-right {
+  background: var(--warn-soft) !important;
+  color: var(--warn) !important;
 }
 
 .point-trend-menu,
@@ -1939,6 +2027,23 @@ body[data-points] .point-editor .dialog-head h2,
 [data-theme="glassmorphism"] tbody tr:nth-child(even) td:first-child,
 [data-theme="glassmorphism"] tbody tr:nth-child(even) .sticky-actions {
   background: #182540 !important;
+}
+
+[data-theme="glassmorphism"] tbody tr:hover,
+[data-theme="glassmorphism"] tbody tr:hover td:first-child,
+[data-theme="glassmorphism"] tbody tr:hover .sticky-actions {
+  background: #1E3050 !important;
+}
+
+[data-theme="glassmorphism"] tbody tr.selected,
+[data-theme="glassmorphism"] tbody tr.selected > td,
+[data-theme="glassmorphism"] tbody tr.selected td:first-child,
+[data-theme="glassmorphism"] tbody tr.selected .sticky-actions,
+[data-theme="glassmorphism"] table tbody tr.point-trend-row-active,
+[data-theme="glassmorphism"] table tbody tr.point-trend-row-active > td,
+[data-theme="glassmorphism"] table tbody tr.point-trend-row-active td:first-child,
+[data-theme="glassmorphism"] table tbody tr.point-trend-row-active .sticky-actions {
+  background: var(--bg-selected) !important;
 }
 
 /* 3. 编辑杂志风（editorial）：衬线标题 + 纸张微暖色调 */
