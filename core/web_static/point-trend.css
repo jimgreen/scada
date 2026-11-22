@@ -284,6 +284,16 @@ dialog.point-trend-dialog input:disabled { background: #f2f5f7; opacity: 0.7; }
 .point-trend-series-row input[type=number] { width: 4.5em; }
 .point-trend-checkbox { accent-color: var(--accent, #2563eb); vertical-align: middle; cursor: pointer; }
 .point-trend-cell { min-width: 42px; width: 42px; white-space: nowrap; }
+.point-trend-row-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: 6px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 2px var(--bg-surface, #fff);
+  flex-shrink: 0;
+}
 table tbody tr.point-trend-row-active,
 table tbody tr.point-trend-row-active > td {
   background: var(--bg-selected, rgba(37, 99, 235, 0.08));
@@ -293,22 +303,137 @@ table tbody tr.point-trend-row-active > td:first-child {
   box-shadow: inset 3px 0 var(--accent, #2563eb);
 }
 table tbody tr.point-trend-row-active > .point-trend-cell-active {
-  box-shadow: none;
+  box-shadow: inset 3px 0 var(--accent, #2563eb);
+}
+
+/* ==================== 表格 / 实时曲线双向可拖拽分隔条 ==================== */
+.point-trend-pane-hidden {
+  display: none !important;
+}
+
+.point-trend-splitter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 18px;
+  margin: 4px 0;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.point-trend-splitter[hidden] {
+  display: none !important;
+}
+
+.point-trend-splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--border-color, #cbd5e1);
+  border-radius: 2px;
+  transition: background 150ms ease, height 150ms ease;
+}
+
+.point-trend-splitter:hover::before,
+.point-trend-splitter.is-dragging::before {
+  height: 3px;
+  background: var(--accent, #2563eb);
+}
+
+.point-trend-splitter-grip {
+  position: relative;
+  z-index: 1;
+  width: 28px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-color, #94a3b8);
+  transition: background 150ms ease;
+}
+
+.point-trend-splitter:hover .point-trend-splitter-grip,
+.point-trend-splitter.is-dragging .point-trend-splitter-grip {
+  background: var(--accent, #2563eb);
+}
+
+.point-trend-splitter-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 16px;
+  padding: 0;
+  border: var(--border, 1px solid #cbd5e1);
+  border-radius: 999px;
+  background: var(--bg-surface, #ffffff);
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.point-trend-splitter-btn:hover,
+.point-trend-splitter-btn.is-active {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: var(--accent-contrast, #ffffff);
+}
+
+body.point-trend-resizing,
+body.point-trend-resizing * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+.point-trend-host.is-trend-expanded {
+  flex: 1 1 auto !important;
+  display: flex;
+  flex-direction: column;
+  min-height: 260px;
+}
+
+.point-trend-host.is-trend-expanded .point-trend {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.point-trend-host.is-trend-expanded .point-trend-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.point-trend-host.is-trend-expanded .point-trend-chart {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: clamp(320px, 56dvh, 680px);
 }
 
 .point-trend-menu {
   position: fixed;
   z-index: 1000;
-  min-width: 152px;
+  min-width: 164px;
   padding: 4px;
-  border: 1px solid #cfdce6;
-  border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  border: var(--border, 1px solid #cfdce6);
+  border-radius: var(--radius-card, 6px);
+  background: var(--bg-surface, #fff);
+  color: var(--text-primary, #124c57);
+  box-shadow: var(--shadow-dialog, 0 8px 24px rgba(15, 23, 42, 0.22));
 }
 
 .point-trend-menu[hidden] { display: none; }
-.point-trend-menu-sep { height: 1px; margin: 4px 2px; background: #e2e8f0; }
+.point-trend-menu-sep { height: 1px; margin: 4px 2px; background: var(--border-color, #e2e8f0); }
 .point-trend-menu button {
   display: block;
   width: 100%;
@@ -317,16 +442,24 @@ table tbody tr.point-trend-row-active > .point-trend-cell-active {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #124c57;
+  color: var(--text-primary, #124c57);
   font: inherit;
   font-size: 13px;
   text-align: start;
   cursor: pointer;
 }
-.point-trend-menu button:focus, .point-trend-menu button:hover { background: #e7f3f5; outline: 0; }
-.point-trend-menu button.is-danger { color: #dc2626; }
-.point-trend-menu button.is-danger:hover { background: #fef2f2; }
-.point-trend-menu button[aria-disabled=true] { color: #94a3b8; cursor: default; background: transparent; }
+.point-trend-menu button:focus, .point-trend-menu button:hover {
+  background: var(--bg-hover, #e7f3f5);
+  color: var(--text-primary, inherit);
+  outline: 0;
+}
+.point-trend-menu button.is-danger { color: var(--danger, #dc2626); }
+.point-trend-menu button.is-danger:hover,
+.point-trend-menu button.is-danger:focus {
+  background: var(--danger-soft, rgba(220, 38, 38, 0.12));
+  color: var(--danger, #dc2626);
+}
+.point-trend-menu button[aria-disabled=true] { color: var(--text-muted, #94a3b8); cursor: default; background: transparent; }
 
 @media (max-width: 575px) {
   .point-trend-body { padding: 6px; }

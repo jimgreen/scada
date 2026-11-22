@@ -75,15 +75,14 @@ function renderDetail(){if(!$("#channel-detail"))return;const x=selected();if(!x
 function pno(x){return x.pnt_no??0}
 const pointTrendHost = $("#point-trend");
 const pointTrend = pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
-const pointColumnOffset = pointTrend ? 1 : 0;
-const pointColumnCount = 13 + pointColumnOffset;
+const pointColumnOffset = 0;
+const pointColumnCount = 13;
 
 function renderPointTrendRow(row, point) {
   const identity = `通道 ${point.owner} · ${point.kind.toUpperCase()} ${point.no}`;
   const name = point.cells[4] ? `${identity} · ${point.cells[4]}` : identity;
   const definition = {channel_id: point.owner, pnt_no: point.no, kind: point.kind, name};
-  row.cells[0].replaceChildren(pointTrend.checkbox(definition));
-  pointTrend.bindRow?.(row, definition, row.cells[1 + pointColumnOffset]);
+  pointTrend.bindRow?.(row, definition, row.cells[0]);
 }
 
 let previousRows = null;
@@ -92,11 +91,10 @@ function renderPoints(){
   if(!body)return;
   const head=pointTableHead(kind);
   if (head) {
-    const selection = pointTrend ? '<th class="point-trend-cell" scope="col">曲线</th>' : '';
     const headings = ["类型", "转发点号", "源 RTU", "源点号", "名称",
       protocol === "iec104" ? "IEC IOA" : "Modbus 区/地址", "实时值", "状态", "刷新时间",
       "指令接收时间", "最后转发", "启用", "操作"];
-    const markup = selection + headings.map(label => `<th>${label}</th>`).join("");
+    const markup = headings.map(label => `<th>${label}</th>`).join("");
     if (head._pointMarkup !== markup) {
       head.innerHTML = markup;
       head._pointMarkup = markup;
@@ -111,8 +109,7 @@ function renderPoints(){
     const old=previousRows[i];return x.owner===old.owner && x.kind===old.kind && x.no===old.no;
   });
   if (!same) {
-    const selection = pointTrend ? '<td class="point-trend-cell"></td>' : '';
-    body.innerHTML = rows.map(point => `<tr>${selection}${point.cells.map(value => `<td>${esc(value)}</td>`).join("")}
+    body.innerHTML = rows.map(point => `<tr>${point.cells.map(value => `<td>${esc(value)}</td>`).join("")}
       <td class="actions"><button data-point-edit="${esc(point.no)}" data-point-kind="${esc(point.kind)}">编辑</button><button
         data-owner="${esc(point.owner)}" data-version="${esc(point.version)}" data-point-delete="${esc(point.no)}"
         data-point-kind="${esc(point.kind)}" class="danger">删除</button></td></tr>`).join("")

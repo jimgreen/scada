@@ -1033,7 +1033,6 @@ function renderTable() {
   }
   const head =
     "<tr>" +
-    (showTrend ? '<th class="point-trend-cell" scope="col">曲线</th>' : "") +
     columns
       .map(
         (column) =>
@@ -1083,7 +1082,6 @@ function renderTable() {
           '<tr data-row="' +
           index +
           '">' +
-          (showTrend ? '<td class="point-trend-cell" data-point-name="' + esc(item.name ?? "") + '"></td>' : "") +
           columns
             .map(
               (column, columnIndex) =>
@@ -1127,16 +1125,15 @@ function renderTable() {
         return markup;
       })
     : ['<tr><td class="empty" colspan="' +
-      (columns.length + (showTrend ? 2 : 1)) +
+      (columns.length + 1) +
       '">没有匹配的记录</td></tr>'];
   reconcileBody(body, rows, tableRender, stableKeys);
   if (showTrend) {
     state.items.forEach((point, index) => {
-      const row = body.rows[index], cell = row.cells[0];
-      if (cell.firstChild) return;
+      const row = body.rows[index];
+      if (!row) return;
       const definition = {kind: state.resource, rtu_id: point.rtu_id, pnt_no: point.pnt_no, name: point.name};
-      cell.append(pointTrend.checkbox(definition));
-      pointTrend.bindRow?.(row, definition);
+      pointTrend.bindRow?.(row, definition, row.cells[0]);
     });
   }
   tableRender.entries.length = state.items.length;

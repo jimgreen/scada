@@ -12,7 +12,7 @@
   const deviceMode = mappingMode || queryMode || parameterMode;
   const pointTrendHost = $('#point-trend');
   const pointTrend = queryMode && pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
-  const liveColumnOffset = pointTrend ? 1 : 0;
+  const liveColumnOffset = 0;
   if (pointTrend) pointTrendHost.hidden = false;
   const pointKinds = ['', 'yc', 'yx'];
   const reasons = {
@@ -363,7 +363,7 @@
   }
 
   function liveRow(row) {
-    return '<tr>' + (pointTrend ? '<td class="point-trend-cell"></td>' : '')
+    return '<tr>'
       + quantityMarkup(row, !detail) + '<td>' + kindLabel(row.kind) + '</td>'
       + '<td class="quantity-value">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
       + '<td>' + html(time(row.source_time_ms)) + '</td><td>' + html(time(row.collected_at)) + '</td>'
@@ -430,11 +430,10 @@
       ? ['目标设备量测', '类型', '源数据库', 'RTU / 点号', '变换', '映射状态', '操作']
       : parameterMode
         ? ['<input id="choose-all" type="checkbox" aria-label="选择当前显示的可配置量测" title="全选当前显示的可配置量测">', '量测属性', '类型', 'RTU / 点号', '启用采集映射', '禁用量测', '量测权重', '超时阈值（秒）']
-        : [...(pointTrend ? ['曲线'] : []), '量测属性', '类型', '实时值', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
+        : ['量测属性', '类型', '实时值', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
     const renderer = mappingMode ? mappingRow : parameterMode ? configRow : liveRow;
     if (!$('#measure-head').firstElementChild) {
-      $('#measure-head').innerHTML = '<tr>' + headers.map(label => '<th scope="col"'
-        + (label === '曲线' ? ' class="point-trend-cell"' : '') + '>' + label + '</th>').join('') + '</tr>';
+      $('#measure-head').innerHTML = '<tr>' + headers.map(label => '<th scope="col">' + label + '</th>').join('') + '</tr>';
     }
     if (!queryMode || !updateLiveRows(previous, items)) {
       const body = $('#measure-rows');
@@ -442,18 +441,12 @@
         || emptyRow(headers, detail || mappingMode ? '没有匹配的量测' : '请选择设备表和设备');
       if (pointTrend) rows.forEach((row, index) => {
         const element = body.rows[index];
-        const cell = element.cells[0];
-        if (!attached(row)) {
-          cell.textContent = '—';
-          cell.title = '绑定量测后可绘制曲线';
-          return;
-        }
+        if (!element || !attached(row)) return;
         const quantity = row.name || row.metric;
         const devName = detail?.device?.name || row.device_name || '';
         const name = devName ? `${devName} · ${quantity}` : quantity;
         const definition = {measurement_id: row.measurement_id, kind: row.kind, name, unit: row.unit};
-        cell.append(pointTrend.checkbox(definition));
-        pointTrend.bindRow?.(element, definition, element.cells[liveColumnOffset]);
+        pointTrend.bindRow?.(element, definition, element.cells[0]);
       });
     }
     const count = total ?? rows.length;

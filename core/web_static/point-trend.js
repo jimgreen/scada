@@ -677,14 +677,29 @@
     }
 
     const rowBindings = new WeakMap();
-    let rowMenu, menuAction, menuRow, menuReturnFocus;
+    let rowMenu, menuRow, menuReturnFocus;
+    let revealTrendPane = () => {};
 
     function syncRow(row) {
       const binding = rowBindings.get(row);
       if (!binding) return;
-      const selected = recordingKeys.has(binding.key);
+      const item = series.get(binding.key);
+      const selected = Boolean(item || recordingKeys.has(binding.key));
       row.classList.toggle('point-trend-row-active', selected);
       binding.cell?.classList.toggle('point-trend-cell-active', selected);
+      const markerHost = binding.cell || row.cells?.[0];
+      if (markerHost) {
+        let dot = markerHost.querySelector(':scope > .point-trend-row-dot');
+        if (selected) {
+          if (!dot) {
+            dot = make('span', {class:'point-trend-row-dot', 'aria-hidden':'true', title:'已设为采样点（右键可管理或删除）'});
+            markerHost.prepend(dot);
+          }
+          dot.style.background = item?.color?.value || 'var(--accent, #2563eb)';
+        } else if (dot) {
+          dot.remove();
+        }
+      }
     }
 
     function closeRowMenu(restoreFocus = false) {
@@ -695,69 +710,116 @@
       menuReturnFocus = null;
     }
 
+    function ensureRowMenu() {
+      if (rowMenu) return;
+      rowMenu = make('div', {class:'point-trend-menu', role:'menu', 'aria-label':'采样点菜单'});
+      document.body.append(rowMenu);
+      document.addEventListener('pointerdown', event => {
+        if (!rowMenu.contains(event.target)) closeRowMenu();
+      });
+      document.addEventListener('keydown', event => {
+        if (rowMenu.hidden) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeRowMenu(true);
+        } else if (event.key === 'Tab') {
+          closeRowMenu(true);
+        }
+      });
+      window.addEventListener('resize', () => closeRowMenu());
+      document.addEventListener('scroll', () => closeRowMenu(), true);
+    }
+
     function updateRowMenu() {
       if (!menuRow?.isConnected) {
         closeRowMenu();
         return;
       }
-      const selected = series.has(rowBindings.get(menuRow).key);
-      menuAction.textContent = !ready ? '正在读取曲线设置' : selected ? '已加入曲线' : '加入实时曲线';
-      menuAction.setAttribute('aria-disabled', String(!ready || selected));
+      const binding = rowBindings.get(menuRow);
+      if (!binding) {
+        closeRowMenu();
+        return;
+      }
+      const {definition, key, point} = binding;
+      const existing = series.get(key);
+      rowMenu.replaceChildren();
+      const addItem = (text, onClick, {disabled = false, danger = false} = {}) => {
+        const btn = make('button', {
+          type:'button',
+          role:'menuitem',
+          tabindex:'-1',
+          class: danger ? 'is-danger' : '',
+        });
+        btn.textContent = text;
+        if (disabled) btn.setAttribute('aria-disabled', 'true');
+        btn.addEventListener('click', () => {
+          if (disabled) return;
+          closeRowMenu(true);
+          onClick();
+        });
+        rowMenu.append(btn);
+      };
+      if (!ready) {
+        addItem('正在读取曲线设置…', () => {}, {disabled:true});
+      } else if (!existing) {
+        addItem('设为采样点（左轴）', () => requestPoint(definition, key, point, 'left'));
+        addItem('设为采样点（右轴）', () => requestPoint(definition, key, point, 'right'));
+      } else {
+        addItem('在曲线中定位', () => {
+          revealTrendPane();
+          showSeries(key);
+        });
+        const nextAxis = existing.axis.value === 'right' ? 'left' : 'right';
+        addItem('切换至' + AXIS_NAMES[nextAxis], () => {
+          existing.axis.value = nextAxis;
+          syncLegendChip(existing);
+          scheduleDraw();
+          saveSettings();
+        });
+        rowMenu.append(make('div', {class:'point-trend-menu-sep', role:'separator'}));
+        addItem('删除采样点', async () => {
+          const ok = typeof window.scadaConfirm === 'function'
+            ? await window.scadaConfirm('确认删除该采样点并移出实时曲线？', {title:'删除采样点', confirmText:'确认删除', danger:true})
+            : true;
+          if (ok && series.has(key)) remove(series.get(key));
+        }, {danger:true});
+      }
+      window.scadaI18n?.translateRoot?.(rowMenu);
     }
 
-    function requestPoint(definition, key, point) {
+    function requestPoint(definition, key, point, targetAxis = 'left') {
       if (!ready || series.has(key)) return;
       if (series.size >= LIMIT) {
         selectionError = '每个曲线板最多选择 ' + LIMIT + ' 条测点';
+        revealTrendPane();
         panel.open = true;
         syncCheckboxes();
         scheduleDraw();
         return;
       }
-      add(definition, key, point);
+      revealTrendPane();
+      add(definition, key, point, targetAxis);
     }
 
     function openRowMenu(row, x, y) {
-      if (!rowMenu) {
-        rowMenu = make('div', {class:'point-trend-menu', role:'menu', 'aria-label':'测点曲线操作'});
-        menuAction = make('button', {type:'button', role:'menuitem', tabindex:'-1'});
-        rowMenu.append(menuAction);
-        document.body.append(rowMenu);
-        menuAction.addEventListener('click', () => {
-          if (!menuRow?.isConnected || menuAction.getAttribute('aria-disabled') === 'true') return;
-          const {definition, key, point} = rowBindings.get(menuRow);
-          closeRowMenu(true);
-          requestPoint(definition, key, point);
-        });
-        document.addEventListener('pointerdown', event => {
-          if (!rowMenu.contains(event.target)) closeRowMenu();
-        });
-        document.addEventListener('keydown', event => {
-          if (rowMenu.hidden) return;
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            closeRowMenu(true);
-          } else if (event.key === 'Tab') {
-            closeRowMenu(true);
-          }
-        });
-        window.addEventListener('resize', () => closeRowMenu());
-        document.addEventListener('scroll', () => closeRowMenu(), true);
-      }
+      ensureRowMenu();
       menuRow = row;
-      menuReturnFocus = row.contains(document.activeElement) ? document.activeElement : row.querySelector('.point-trend-checkbox');
-      rowMenu.hidden = false;
+      menuReturnFocus = row.contains(document.activeElement) ? document.activeElement : row;
       updateRowMenu();
+      rowMenu.hidden = false;
       rowMenu.style.left = Math.max(4, Math.min(x, document.documentElement.clientWidth - rowMenu.offsetWidth - 4)) + 'px';
       rowMenu.style.top = Math.max(4, Math.min(y, document.documentElement.clientHeight - rowMenu.offsetHeight - 4)) + 'px';
-      menuAction.focus({preventScroll:true});
+      rowMenu.querySelector('button:not([aria-disabled="true"])')?.focus({preventScroll:true});
     }
 
     function bindRow(row, definition, activeCell) {
       const previous = rowBindings.get(row);
       const point = pointKey(definition), key = JSON.stringify(point);
-      const cell = activeCell || row.querySelector('.point-trend-cell');
-      if (previous?.cell && previous.cell !== cell) previous.cell.classList.remove('point-trend-cell-active');
+      const cell = activeCell || row.querySelector('.point-trend-cell') || row.cells?.[0];
+      if (previous?.cell && previous.cell !== cell) {
+        previous.cell.classList.remove('point-trend-cell-active');
+        previous.cell.querySelector(':scope > .point-trend-row-dot')?.remove();
+      }
       if (menuRow === row && previous?.key !== key) closeRowMenu();
       rowBindings.set(row, {definition, point, key, cell});
       if (!previous) {
@@ -815,7 +877,7 @@
       changedSelection();
     }
 
-    function add(definition, key, point) {
+    function add(definition, key, point, targetAxis = 'left') {
       const name = String(definition.name || definition.metric || (definition.pnt_no ?? definition.measurement_id));
       const unit = definition.unit || name.match(/[（(]([^）()]{1,16})[）)]$/)?.[1] || '';
       const row = make('div', {class:'point-trend-series-row'});
@@ -829,6 +891,7 @@
       const color = make('input', {type:'color', 'aria-label':'曲线颜色 · ' + name, value:COLORS[colorIndex++ % COLORS.length]});
       const width = numberInput(2, 1, 8, 0.5);
       const axis = select(Object.entries(AXIS_NAMES));
+      if (targetAxis === 'right') axis.value = 'right';
       const removeButton = make('button', {type:'button', 'aria-label':'移除曲线 · ' + name});
       removeButton.textContent = '移除';
       const chip = make('button', {type:'button', class:'point-trend-chip', title:title.textContent + '（左键显隐，右键设置）'});
@@ -867,6 +930,7 @@
       });
       color.addEventListener('input', () => {
         syncLegendChip(item);
+        syncCheckboxes();
         scheduleDraw();
       });
       removeButton.addEventListener('click', () => remove(item));
@@ -1129,6 +1193,224 @@
         openChartMenu(rect.left + rect.width / 2, rect.top + 36, null);
       }
     });
+
+    // 在表格分页栏与实时曲线区之间挂载可拖拽、可双向折叠/展开的水平分隔条。
+    if (!management && container.parentElement) {
+      const parent = container.parentElement;
+      const SPLIT_KEY = 'scada_point_trend_split_v1:' + location.pathname;
+      const splitter = make('div', {
+        class:'point-trend-splitter',
+        role:'separator',
+        'aria-orientation':'horizontal',
+        'aria-label':'拖动调整表格与实时曲线高度；点击按钮可折叠或展开上下区域',
+        title:'拖动调整高度 · 双击复位',
+      });
+      const btnUp = make('button', {
+        type:'button',
+        class:'point-trend-splitter-btn',
+        'data-split-action':'up',
+        'aria-label':'折叠上方表格 / 展开曲线',
+        title:'折叠上方表格（实时曲线全屏）',
+      });
+      btnUp.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 6 4l3.5 3.5"/></svg>';
+      const btnDown = make('button', {
+        type:'button',
+        class:'point-trend-splitter-btn',
+        'data-split-action':'down',
+        'aria-label':'折叠下方曲线 / 展开表格',
+        title:'隐藏下方实时曲线（表格全屏）',
+      });
+      btnDown.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>';
+      const grip = make('span', {class:'point-trend-splitter-grip', 'aria-hidden':'true'});
+      splitter.append(btnUp, grip, btnDown);
+      parent.insertBefore(splitter, container);
+
+      const getUpperPanes = () => {
+        const list = [];
+        let node = splitter.previousElementSibling;
+        while (node) {
+          if (node.matches('.table-wrap, .point-pages, .pager')) list.push(node);
+          node = node.previousElementSibling;
+        }
+        return list;
+      };
+      const getTablePane = () => {
+        let node = splitter.previousElementSibling;
+        while (node) {
+          if (node.matches('.table-wrap, .point-pages')) return node;
+          node = node.previousElementSibling;
+        }
+        return null;
+      };
+
+      let splitMode = 'split'; // 'split' | 'table-hidden' | 'trend-hidden'
+      let chartHeight = null;
+      try {
+        const saved = JSON.parse(localStorage.getItem(SPLIT_KEY) || 'null');
+        if (saved && ['split', 'table-hidden', 'trend-hidden'].includes(saved.mode)) splitMode = saved.mode;
+        if (saved && Number.isFinite(saved.height) && saved.height >= 120 && saved.height <= 900) chartHeight = saved.height;
+      } catch (_) { /* ignore */ }
+
+      const persistSplit = () => {
+        try {
+          localStorage.setItem(SPLIT_KEY, JSON.stringify({mode: splitMode, height: chartHeight}));
+        } catch (_) { /* ignore */ }
+      };
+
+      const applySplit = (save = false) => {
+        const hostHidden = container.hasAttribute('hidden');
+        splitter.hidden = hostHidden;
+        const upperPanes = getUpperPanes();
+        const effectiveMode = hostHidden ? 'split' : splitMode;
+
+        upperPanes.forEach(el => el.classList.toggle('point-trend-pane-hidden', effectiveMode === 'table-hidden'));
+        container.classList.toggle('point-trend-pane-hidden', !hostHidden && effectiveMode === 'trend-hidden');
+        container.classList.toggle('is-trend-expanded', !hostHidden && effectiveMode === 'table-hidden');
+        splitter.dataset.mode = effectiveMode;
+
+        if (!hostHidden && effectiveMode === 'table-hidden') {
+          panel.open = true;
+          chart.style.height = '';
+        } else if (!hostHidden && effectiveMode === 'split') {
+          chart.style.height = chartHeight ? `${Math.round(chartHeight)}px` : '';
+        }
+
+        btnUp.classList.toggle('is-active', effectiveMode === 'table-hidden');
+        btnDown.classList.toggle('is-active', effectiveMode === 'trend-hidden');
+        btnUp.title = effectiveMode === 'table-hidden'
+          ? '恢复显示上方表格'
+          : effectiveMode === 'trend-hidden'
+            ? '展开下方实时曲线'
+            : '折叠上方表格（实时曲线全屏）';
+        btnDown.title = effectiveMode === 'trend-hidden'
+          ? '恢复显示下方实时曲线'
+          : effectiveMode === 'table-hidden'
+            ? '恢复显示上方表格'
+            : '隐藏下方实时曲线（表格全屏）';
+
+        if (save) persistSplit();
+        updateActivity();
+        scheduleDraw();
+      };
+
+      revealTrendPane = () => {
+        if (splitMode === 'trend-hidden') {
+          splitMode = 'split';
+          panel.open = true;
+          applySplit(true);
+        }
+      };
+
+      btnUp.addEventListener('click', event => {
+        event.stopPropagation();
+        if (splitMode === 'trend-hidden') {
+          splitMode = 'split';
+          panel.open = true;
+        } else if (splitMode === 'table-hidden') {
+          splitMode = 'split';
+        } else {
+          splitMode = 'table-hidden';
+          panel.open = true;
+        }
+        applySplit(true);
+      });
+
+      btnDown.addEventListener('click', event => {
+        event.stopPropagation();
+        if (splitMode === 'table-hidden') {
+          splitMode = 'split';
+        } else if (splitMode === 'trend-hidden') {
+          splitMode = 'split';
+          panel.open = true;
+        } else {
+          splitMode = 'trend-hidden';
+        }
+        applySplit(true);
+      });
+
+      splitter.addEventListener('dblclick', event => {
+        if (event.target.closest('button')) return;
+        splitMode = 'split';
+        chartHeight = null;
+        panel.open = true;
+        applySplit(true);
+      });
+
+      let drag = null;
+      splitter.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        const tablePane = getTablePane();
+        drag = {
+          y: event.clientY,
+          mode: splitMode,
+          chartH: chart.getBoundingClientRect().height || chartHeight || 220,
+          tableH: tablePane ? tablePane.getBoundingClientRect().height : 260,
+        };
+        splitter.classList.add('is-dragging');
+        document.body.classList.add('point-trend-resizing');
+        splitter.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+      });
+
+      splitter.addEventListener('pointermove', event => {
+        if (!drag) return;
+        const dy = event.clientY - drag.y;
+        if (drag.mode === 'trend-hidden') {
+          if (dy < -12) {
+            drag.mode = splitMode = 'split';
+            panel.open = true;
+            chartHeight = Math.max(120, Math.min(600, -dy));
+            applySplit(false);
+          }
+          return;
+        }
+        if (drag.mode === 'table-hidden') {
+          if (dy > 12) {
+            drag.mode = splitMode = 'split';
+            const maxH = Math.max(180, window.innerHeight - 280);
+            chartHeight = Math.max(120, Math.min(maxH, drag.chartH - dy));
+            applySplit(false);
+          }
+          return;
+        }
+        if (!panel.open && dy < -10) {
+          panel.open = true;
+        }
+        const nextTableH = drag.tableH + dy;
+        const nextChartH = drag.chartH - dy;
+        if (nextTableH < 48) {
+          splitMode = 'table-hidden';
+          applySplit(false);
+          return;
+        }
+        if (nextChartH < 72) {
+          splitMode = 'trend-hidden';
+          applySplit(false);
+          return;
+        }
+        const maxH = Math.max(220, window.innerHeight - 220);
+        splitMode = 'split';
+        chartHeight = Math.max(120, Math.min(maxH, nextChartH));
+        applySplit(false);
+      });
+
+      const endDrag = () => {
+        if (!drag) return;
+        drag = null;
+        splitter.classList.remove('is-dragging');
+        document.body.classList.remove('point-trend-resizing');
+        persistSplit();
+        scheduleDraw();
+      };
+      splitter.addEventListener('pointerup', endDrag);
+      splitter.addEventListener('pointercancel', endDrag);
+
+      new MutationObserver(() => applySplit(false)).observe(container, {
+        attributes: true,
+        attributeFilter: ['hidden'],
+      });
+      applySplit(false);
+    }
 
     panel.addEventListener('toggle', () => { updateActivity(); if (!management) saveSettings(); });
     document.addEventListener('visibilitychange', refreshAfterResume);

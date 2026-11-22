@@ -4,8 +4,7 @@
   const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const trendHost = $("#point-trend");
   const pointTrend = trendHost && globalThis.scadaPointTrend?.mount(trendHost);
-  const trendColumn = pointTrend ? '<td class="point-trend-cell"></td>' : "";
-  if (pointTrend) document.querySelectorAll("th.point-trend-cell").forEach(cell => { cell.hidden = false; });
+  const trendColumn = "";
   const names = {yc:"遥测",yx:"遥信",yk:"遥控",yt:"遥调"};
   let selected = null, selectedPoint = null, selectedParameter = null, parameterSchema = null;
   let offset = 0, limit = 100, total = 0, requestId = 0, parameterRequest = 0;
@@ -219,8 +218,8 @@
     const request = ++requestId, rtu = selected?.rtu_id, nameFilter = pointNameFilter();
     const scope = JSON.stringify([rtu, kind, nameFilter]);
     const commandPoint = ["yk", "yt"].includes(kind);
-    const dataOffset = pointTrend ? 1 : 0;
-    const columnCount = 7 + dataOffset + Number(pointHasRawStatus(kind)) + Number(commandPoint);
+    const dataOffset = 0;
+    const columnCount = 7 + Number(pointHasRawStatus(kind)) + Number(commandPoint);
     if (scope !== pointScope) {
       pointScope = scope; selectedPoint = null;
       previousPointRows = null;
@@ -262,8 +261,7 @@
         if (stable && rows[index].cells[2] === previousPointRows[index].cells[2]) return;
         const row = body.rows[index];
         const definition = {kind, rtu_id: rtu, pnt_no: point.pnt_no, name: point.name};
-        row.cells[0].replaceChildren(pointTrend.checkbox(definition));
-        pointTrend.bindRow?.(row, definition);
+        pointTrend.bindRow?.(row, definition, row.cells[0]);
       });
       previousPointRows = rows; previousPointBody = body;
       $("#point-page-summary").textContent = `共 ${total} 条 · 当前 ${points.length ? offset + 1 : 0}–${offset + points.length} 条`;

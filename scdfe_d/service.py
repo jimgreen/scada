@@ -162,6 +162,18 @@ def parse_device_table_columns(columns_info):
     return metrics
 
 
+# RTDB Web 编辑工具写入的伴随表前缀（不影响设备宽表语义，校验与发现时放行）。
+RTDB_WEB_TABLE_PREFIX = "rtdb_web_"
+
+
+def _is_rtdb_companion_table(name):
+    return (
+        name in RTDB_METADATA_TABLES
+        or name in LEGACY_AUX_TABLES
+        or name.startswith(RTDB_WEB_TABLE_PREFIX)
+    )
+
+
 def discover_device_tables(con):
     """发现库内全部合法设备宽表，返回有序列表 [(table_name, [(metric, kind), ...]), ...]。"""
     all_tables = [
@@ -174,8 +186,7 @@ def discover_device_tables(con):
     for table in all_tables:
         if (
             table.startswith("sqlite_")
-            or table in RTDB_METADATA_TABLES
-            or table in LEGACY_AUX_TABLES
+            or _is_rtdb_companion_table(table)
             or not _TABLE_NAME_RE.fullmatch(table)
         ):
             continue
@@ -187,7 +198,7 @@ def discover_device_tables(con):
 
 
 def validate_database(path):
-    """只读校验 scdfe_d 设备数据库：仅允许合法设备宽表与 RTDB 元数据表。"""
+    """只读校验 scdfe_d 设备数据库：仅允许合法设备宽表与 RTDB 元数据/伴随表。"""
     try:
         path = Path(path).resolve()
         if not path.is_file():
@@ -214,7 +225,7 @@ def validate_database(path):
 
             device_tables = []
             for table in raw_tables:
-                if table in RTDB_METADATA_TABLES or table in LEGACY_AUX_TABLES:
+                if _is_rtdb_companion_table(table):
                     continue
                 if not _TABLE_NAME_RE.fullmatch(table):
                     raise ValueError(f"包含非设备表：{table}")
