@@ -19,6 +19,7 @@ else:
     from scdfe_c.web.service import ApiError, DEFAULT_DB, SCHEMA_DIR, KIND_TABLES, ScadaStore
 
 from core.process_registry import PROCESS_TABLE, process_is_alive
+from core.channel_efile import import_channel_efile
 from core.runtime_status import runtime_status_rows
 from core.network_endpoint import configured_endpoints
 from core.network_limits import LISTEN_BACKLOG
@@ -78,6 +79,11 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
     @property
     def store(self):
         return self.server.store
+
+    def _max_request_body_bytes(self):
+        if urlsplit(self.path).path == "/api/channels/import-efile":
+            return 16_000_000
+        return super()._max_request_body_bytes()
 
     def log_message(self, message, *args):
         LOG.debug(message, *args)
@@ -523,6 +529,8 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
                 return self._json(200, {"items": items, "total": len(items)})
             if parts == ["api", "channels"]:
                 return self._json(200, self._list_channels(query))
+            if parts == ["api", "channels", "import-efile"]:
+                raise ApiError(405, "导入 E 文件只支持 POST", code="method_not_allowed")
             channel_definition = self._channel_definition_endpoint(parts)
             if channel_definition is not None:
                 channel_type, channel_id, section = channel_definition
@@ -571,6 +579,29 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
             if method == "POST":
                 return self._json(201, {"item": self.store.create_channel_definition(self._body())})
             raise ApiError(405, "通道目录只支持 POST")
+        if parts == ["api", "channels", "import-efile"]:
+            if query:
+                raise ApiError(400, "写操作不接受查询参数")
+            if method != "POST":
+                raise ApiError(405, "导入 E 文件只支持 POST", code="method_not_allowed")
+            body = self._body()
+            unknown = sorted(set(body) - {"content", "conflict_mode", "host_override"})
+            if unknown:
+                raise ApiError(400, "包含未知导入参数：" + ", ".join(unknown))
+            content = body.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ApiError(400, "E 文件内容不能为空")
+            conflict_mode = body.get("conflict_mode") or "auto_remap"
+            host_override = body.get("host_override")
+            if host_override is not None and not isinstance(host_override, str):
+                raise ApiError(400, "host_override 必须是字符串")
+            result = import_channel_efile(
+                self.store,
+                content,
+                conflict_mode=conflict_mode,
+                host_override=host_override,
+            )
+            return self._json(201, result)
         channel_definition = self._channel_definition_endpoint(parts)
         if channel_definition is not None:
             channel_type, channel_id, section = channel_definition

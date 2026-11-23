@@ -26,5 +26,15 @@
       <div class="form-actions"><button type="button" id="cancel-parameter-editor">取消</button><button class="primary" id="save-parameters" type="submit">保存规约参数</button><button type="button" id="delete-parameters" class="danger" hidden>删除规约参数</button></div>
     </form>
   </dialog>
+  <dialog class="editor-dialog" id="efile-export-dialog" aria-labelledby="efile-export-title">
+    <form id="efile-export-form" class="data-form" method="dialog">
+      <div class="dialog-head"><h2 id="efile-export-title">导出 E 文件</h2><button type="button" id="close-efile-export" aria-label="关闭">×</button></div>
+      <div class="dialog-fields">
+        <label class="wide">文件名<input id="efile-export-name" type="text" required placeholder="例如 scdfe_s_rtu1.e"></label>
+      </div>
+      <p id="efile-export-summary" class="muted"></p>
+      <div class="form-actions"><button type="button" id="cancel-efile-export">取消</button><button class="primary" type="submit">保存文件</button></div>
+    </form>
+  </dialog>
   <div class="table-wrap"><table><thead><tr><th>RTU</th><th>通道</th><th>规约</th><th>名称</th><th>自动通信</th><th>操作</th></tr></thead><tbody id="channels"></tbody></table></div>
 </section></main><script src="/static/channels.js"></script></body></html>

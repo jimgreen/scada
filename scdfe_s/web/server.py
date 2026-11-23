@@ -731,6 +731,11 @@ class ScadaHandler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandl
                     raise ApiError(400, "未知查询参数")
                 rid = self.store._key_values("fes_rtu_define", query["rtu_id"])["rtu_id"] if "rtu_id" in query else None
                 return self._json(200, self.store.overview(rid))
+            if len(parts) == 4 and parts[:2] == ["api", "channels"] and parts[3] == "export-efile":
+                if query:
+                    raise ApiError(400, "导出 E 文件不接受查询参数")
+                from core.channel_efile import export_channel_efile
+                return self._json(200, export_channel_efile(self.store, parts[2], services=self._service_map()))
             channel_endpoint = self._channel_endpoint(parts)
             if channel_endpoint is not None:
                 rtu_id, section = channel_endpoint

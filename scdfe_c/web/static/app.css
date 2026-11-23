@@ -1379,6 +1379,21 @@ dialog::backdrop {
 .small-dialog {
   width: min(480px, calc(100vw - 30px));
 }
+.efile-import-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.efile-import-meta {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--soft, rgba(127, 127, 127, 0.08));
+  overflow-wrap: anywhere;
+}
 #command-dialog { width: min(520px, calc(100vw - 30px)); }
 .command-form { padding: 22px; }
 #command-point { overflow-wrap: anywhere; }

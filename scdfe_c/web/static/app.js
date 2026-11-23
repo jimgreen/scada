@@ -3155,6 +3155,165 @@ $("#show-schema").onclick = () => {
   $("#schema-dialog").showModal();
 };
 $("#close-schema").onclick = () => $("#schema-dialog").close();
+
+// -------------------- E 文件导入（对接 scdfe_s 导出） --------------------
+const efileImport = {
+  busy: false,
+  content: "",
+  filename: "",
+};
+
+function parseEfileHeaderPreview(text) {
+  const firstLine = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0].trim();
+  const match = /^<!([\s\S]*?)!>$/.exec(firstLine);
+  if (!match) return null;
+  const info = {};
+  const tokenRe = /([A-Za-z0-9_.-]+)=('(?:''|[^'])*'|[^\s]+)/g;
+  let m;
+  while ((m = tokenRe.exec(match[1])) !== null) {
+    let val = m[2];
+    if (val.startsWith("'") && val.endsWith("'")) {
+      val = val.slice(1, -1).replace(/''/g, "'");
+    }
+    info[m[1]] = val;
+  }
+  return info;
+}
+
+function formatByteSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+}
+
+function resetEfileImportDialog() {
+  efileImport.content = "";
+  efileImport.filename = "";
+  const fileInput = $("#efile-import-file");
+  const modeSelect = $("#efile-import-mode");
+  const hostInput = $("#efile-import-host");
+  const meta = $("#efile-import-meta");
+  const err = $("#efile-import-error");
+  if (fileInput) fileInput.value = "";
+  if (modeSelect) modeSelect.value = "auto_remap";
+  if (hostInput) hostInput.value = "";
+  if (meta) {
+    meta.textContent = "";
+    meta.hidden = true;
+  }
+  if (err) err.textContent = "";
+}
+
+function closeEfileImportDialog() {
+  if (efileImport.busy) return;
+  const dialog = $("#efile-import-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+$("#import-efile")?.addEventListener("click", () => {
+  resetEfileImportDialog();
+  const dialog = $("#efile-import-dialog");
+  if (dialog && !dialog.open) dialog.showModal();
+});
+$("#close-efile-import")?.addEventListener("click", closeEfileImportDialog);
+$("#cancel-efile-import")?.addEventListener("click", closeEfileImportDialog);
+$("#efile-import-dialog")?.addEventListener("cancel", (event) => {
+  if (efileImport.busy) event.preventDefault();
+});
+
+$("#efile-import-file")?.addEventListener("change", async (event) => {
+  const err = $("#efile-import-error");
+  const meta = $("#efile-import-meta");
+  if (err) err.textContent = "";
+  efileImport.content = "";
+  efileImport.filename = "";
+  const file = event.target.files?.[0];
+  if (!file) {
+    if (meta) {
+      meta.textContent = "";
+      meta.hidden = true;
+    }
+    return;
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    if (err) err.textContent = "E 文件超过 15 MB 上限";
+    return;
+  }
+  try {
+    const text = await file.text();
+    efileImport.content = text;
+    efileImport.filename = file.name;
+    const header = parseEfileHeaderPreview(text);
+    const parts = [file.name, formatByteSize(file.size)];
+    if (header?.ChannelType) parts.push("规约 " + header.ChannelType);
+    if (header?.RtuId) parts.push("RTU " + header.RtuId);
+    if (header?.ChannelId) parts.push("通道 " + header.ChannelId);
+    if (header?.ChannelName) parts.push(header.ChannelName);
+    if (meta) {
+      meta.textContent = parts.join(" · ");
+      meta.hidden = false;
+    }
+  } catch (error) {
+    if (err) err.textContent = "读取本地文件失败：" + error.message;
+  }
+});
+
+$("#efile-import-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (efileImport.busy) return;
+  const err = $("#efile-import-error");
+  if (err) err.textContent = "";
+  if (!efileImport.content.trim()) {
+    if (err) err.textContent = "请先选择要导入的 E 文件";
+    $("#efile-import-file")?.focus();
+    return;
+  }
+  const conflictMode = $("#efile-import-mode")?.value || "auto_remap";
+  const hostOverride = ($("#efile-import-host")?.value || "").trim();
+  if (conflictMode === "overwrite") {
+    const confirmFn = typeof window.scadaConfirm === "function" ? window.scadaConfirm : null;
+    const confirmed = confirmFn
+      ? await confirmFn(
+          "按原编号覆盖会删除同编号 RTU、通道参数及关联四遥点表后再写入，此操作不可撤销。确定继续？",
+          { title: "确认覆盖导入", confirmText: "确认覆盖", cancelText: "取消", danger: true },
+        )
+      : false;
+    if (!confirmed) return;
+  }
+  const submitBtn = $("#submit-efile-import");
+  efileImport.busy = true;
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const payload = {
+      content: efileImport.content,
+      conflict_mode: conflictMode,
+    };
+    if (hostOverride) payload.host_override = hostOverride;
+    const res = await api("/api/channels/import-efile", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    $("#efile-import-dialog")?.close();
+    await Promise.allSettled([
+      loadParameterChannels(),
+      loadRtuOptions(),
+      refreshSummary(),
+    ]);
+    await loadRows();
+    const remapNote = res.remapped
+      ? "（已自动重映射自 RTU " + res.original_rtu_id + " / 通道 " + res.original_channel_id + "）"
+      : "";
+    toast(
+      "导入完成：RTU " + res.rtu_id + " / 通道 " + res.channel_id +
+      "（" + res.channel_type + "），四遥 " + (res.total_points || 0) + " 点" + remapNote,
+    );
+  } catch (error) {
+    if (err) err.textContent = error.message;
+  } finally {
+    efileImport.busy = false;
+    if (submitBtn) submitBtn.disabled = false;
+  }
+});
 setInterval(() => {
   if (
     document.hidden ||

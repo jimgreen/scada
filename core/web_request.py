@@ -50,6 +50,9 @@ class RequestBodyMixin:
                 except OSError:
                     pass
 
+    def _max_request_body_bytes(self):
+        return 2_000_000
+
     def _prepare_request(self):
         self._unread_request = self.command not in {"GET", "HEAD"}
         host = self.headers.get("Host", "")
@@ -67,8 +70,9 @@ class RequestBodyMixin:
         if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdecimal():
             raise ApiError(400, "无效或重复的 Content-Length")
         length = int(lengths[0])
-        if length > 2_000_000:
-            raise ApiError(413, "请求体不能超过 2000000 字节")
+        max_bytes = int(self._max_request_body_bytes())
+        if length > max_bytes:
+            raise ApiError(413, f"请求体不能超过 {max_bytes} 字节")
         # Consume the declared body once, even if the route rejects this method.
         self._request_bytes = self.rfile.read(length)
         if len(self._request_bytes) != length:

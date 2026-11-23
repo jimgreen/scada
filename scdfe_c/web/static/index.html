@@ -89,6 +89,8 @@
             </div>
             <div class="actions">
               <button class="button secondary" id="refresh">刷新</button
+              ><button class="button secondary" id="import-efile" type="button">
+                导入 E 文件</button
               ><button class="button primary" id="add" disabled>
                 ＋ 新建通道
               </button>
@@ -428,6 +430,37 @@
         </div>
         <pre id="schema-json"></pre>
       </div>
+    </dialog>
+    <dialog id="efile-import-dialog" class="config-dialog" aria-labelledby="efile-import-title">
+      <form id="efile-import-form" class="config-dialog-form">
+        <div class="dialog-head">
+          <h2 id="efile-import-title">导入 E 文件</h2>
+          <button type="button" class="icon-button" id="close-efile-import" aria-label="关闭导入窗口">×</button>
+        </div>
+        <div class="efile-import-fields">
+          <label class="field">
+            <span>E 文件</span>
+            <input id="efile-import-file" type="file" accept=".e,.E,.txt" required />
+          </label>
+          <div id="efile-import-meta" class="efile-import-meta" hidden></div>
+          <label class="field">
+            <span>冲突策略</span>
+            <select id="efile-import-mode" aria-label="冲突策略">
+              <option value="auto_remap" selected>自动分配新编号（保留现有配置）</option>
+              <option value="overwrite">按原编号覆盖已有通道</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>目标服务端主机（可选）</span>
+            <input id="efile-import-host" type="text" placeholder="留空则使用 E 文件中的地址" autocomplete="off" />
+          </label>
+        </div>
+        <div class="dialog-foot">
+          <span id="efile-import-error" class="form-error" role="alert"></span>
+          <button class="button secondary" type="button" id="cancel-efile-import">取消</button>
+          <button class="button primary" type="submit" id="submit-efile-import">确认导入</button>
+        </div>
+      </form>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/static/point-trend.js"></script>

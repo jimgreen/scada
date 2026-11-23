@@ -116,7 +116,7 @@
       channelRows = rows;
       if (request !== channelsRequest) return;
       if ($("#channels")) {
-        $("#channels").innerHTML = rows.map(r => `<tr data-select="${esc(r.rtu_id)}"><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || "")}</td><td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button></td></tr>`).join("") || '<tr><td colspan="6">暂无通道</td></tr>';
+        $("#channels").innerHTML = rows.map(r => `<tr data-select="${esc(r.rtu_id)}"><td>${esc(r.rtu_id)}</td><td>${esc(r.channel_id)}</td><td>${esc(r.channel_type)}</td><td>${esc(r.name || "")}</td><td>${r.process_enable ? "启用" : "停用"}</td><td><a href="/points?rtu_id=${encodeURIComponent(r.rtu_id)}">四遥数据</a> <button type="button" data-edit='${esc(JSON.stringify(r))}'>编辑</button> <button type="button" data-version="${esc(r._version)}" data-delete='${esc(r.rtu_id)}'>删除</button> <button type="button" data-export-efile="${esc(r.rtu_id)}">导出 E 文件</button></td></tr>`).join("") || '<tr><td colspan="6">暂无通道</td></tr>';
         notice("#channel-message", `共 ${rows.length} 个通道`);
       }
       if ($("#point-rtu")) {
@@ -375,12 +375,79 @@
   if ($("#cancel-channel-editor")) $("#cancel-channel-editor").onclick = () => closeEditor("#channel-editor");
   if ($("#close-parameter-editor")) $("#close-parameter-editor").onclick = () => closeEditor("#parameter-editor");
   if ($("#cancel-parameter-editor")) $("#cancel-parameter-editor").onclick = () => closeEditor("#parameter-editor");
+  let pendingExportPayload = null;
+  function normalizeEfileName(raw, fallback) {
+    let name = String(raw || "").trim().replace(/[\\/:*?"<>|]+/g, "_");
+    if (!name) name = fallback || "channel.e";
+    if (!/\.e$/i.test(name)) name += ".e";
+    return name;
+  }
+  function triggerEfileDownload(filename, content) {
+    const blob = new Blob([content], {type: "text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function exportChannelEfile(rtuId) {
+    notice("#channel-message", "正在生成 E 文件…");
+    const payload = await api(`/api/channels/${encodeURIComponent(rtuId)}/export-efile`);
+    const suggested = normalizeEfileName(payload.filename, `scdfe_s_rtu${rtuId}.e`);
+    const summaryText = `RTU ${payload.summary?.rtu_id} · 通道 ${payload.summary?.channel_id} · ${payload.summary?.channel_type} · 四遥 ${payload.summary?.total_points ?? 0} 点`;
+    if (typeof window.showSaveFilePicker === "function") {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: suggested,
+          types: [{description: "SCADA E 文件", accept: {"text/plain": [".e", ".E"]}}],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(new Blob([payload.content], {type: "text/plain;charset=utf-8"}));
+        await writable.close();
+        notice("#channel-message", `已导出 E 文件：${handle.name}（${summaryText}）`);
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") {
+          notice("#channel-message", "已取消导出");
+          return;
+        }
+        // 非安全上下文或系统选择器受限时平滑降级到自定义文件名保存弹窗。
+      }
+    }
+    if ($("#efile-export-dialog")) {
+      pendingExportPayload = {...payload, suggested, summaryText};
+      $("#efile-export-name").value = suggested;
+      if ($("#efile-export-summary")) $("#efile-export-summary").textContent = summaryText;
+      showEditor("#efile-export-dialog");
+      $("#efile-export-name").focus();
+      $("#efile-export-name").select();
+      return;
+    }
+    triggerEfileDownload(suggested, payload.content);
+    notice("#channel-message", `已导出 E 文件：${suggested}（${summaryText}）`);
+  }
+  if ($("#efile-export-form")) $("#efile-export-form").onsubmit = event => {
+    event.preventDefault();
+    if (!pendingExportPayload) return closeEditor("#efile-export-dialog");
+    const filename = normalizeEfileName($("#efile-export-name").value, pendingExportPayload.suggested);
+    triggerEfileDownload(filename, pendingExportPayload.content);
+    notice("#channel-message", `已导出 E 文件：${filename}（${pendingExportPayload.summaryText}）`);
+    pendingExportPayload = null;
+    closeEditor("#efile-export-dialog");
+  };
+  if ($("#close-efile-export")) $("#close-efile-export").onclick = () => { pendingExportPayload = null; closeEditor("#efile-export-dialog"); };
+  if ($("#cancel-efile-export")) $("#cancel-efile-export").onclick = () => { pendingExportPayload = null; closeEditor("#efile-export-dialog"); };
   document.addEventListener("click", async event => {
     const tab = event.target.closest("button[data-point-tab]"), edit = event.target.closest("button[data-edit]"), del = event.target.closest("button[data-delete]"),
+      exportBtn = event.target.closest("button[data-export-efile]"),
       pointEdit = event.target.closest("button[data-point-edit]"), pointDelete = event.target.closest("button[data-point-delete]");
     try {
       if (tab) { selectedPoint = null; offset = 0; setPointTab(tab.dataset.pointTab); await loadPoints(); return; }
       if (edit) fillChannel(JSON.parse(edit.dataset.edit));
+      if (exportBtn) { await exportChannelEfile(exportBtn.dataset.exportEfile); return; }
       if (del && (await window.scadaConfirm("确定删除该通道及其四遥点？", { title: "确认删除", confirmText: "确认删除", danger: true }))) { await api(`/api/channels/${del.dataset.delete}`, {method:"DELETE",headers:versionHeaders(del.dataset.version),body:"{}"}); selected = null; renderParameters(null); await loadChannels({fresh:true}); }
       if (pointEdit) fillPoint(JSON.parse(pointEdit.dataset.pointEdit));
       if (pointDelete && selected && pointDelete.dataset.owner === String(selected.rtu_id) && (await window.scadaConfirm("确定删除该测点？", { title: "确认删除", confirmText: "确认删除", danger: true }))) { await api(`/api/channels/${pointDelete.dataset.owner}/points/${pointDelete.dataset.pointDelete}/${pointDelete.dataset.pointNo}`, {method:"DELETE",headers:versionHeaders(pointDelete.dataset.version),body:"{}"}); selectedPoint = null; await loadPoints({fresh:true}); }
