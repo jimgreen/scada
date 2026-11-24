@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="sci-fi-cyan">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>南极秦岭站综合能量管理系统 · SCADA</title>
+    <link rel="stylesheet" href="/static/ui-theme.css" />
+    <link rel="stylesheet" href="/static/portal.css" />
+    <script defer src="/static/ui-i18n.js"></script>
+    <script defer src="/static/portal.js"></script>
+  </head>
+  <body>
+    <header class="portal-topbar">
+      <div class="portal-brand">
+        <span class="brand-badge" aria-hidden="true">Q</span>
+        <div class="brand-titles">
+          <strong id="station-title">南极秦岭站综合能量管理系统</strong>
+          <small id="station-scene">realtime / qinling</small>
+        </div>
+      </div>
+      <div class="header-tools">
+        <span class="live-clock" id="live-clock">--:--:--</span>
+        <label class="inline-select">
+          <span>刷新</span>
+          <select id="refresh-interval" aria-label="刷新间隔">
+            <option value="2000">2 秒</option>
+            <option value="5000" selected>5 秒</option>
+            <option value="10000">10 秒</option>
+            <option value="0">暂停</option>
+          </select>
+        </label>
+        <button type="button" class="btn secondary" id="manual-refresh">刷新</button>
+        <div class="conn-pill" id="conn-pill" role="status">
+          <span class="dot"></span>
+          <span id="conn-text">连接中</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="portal-shell">
+      <aside class="portal-sidebar" aria-label="主导航">
+        <nav class="portal-nav" id="portal-nav">
+          <button type="button" class="nav-item active" data-view="home">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+            <span>系统首页</span>
+          </button>
+          <button type="button" class="nav-item" data-view="powerflow">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7.5 6h9M6.3 8.2 10.7 15.8M17.7 8.2 13.3 15.8"/></svg>
+            <span>潮流图</span>
+          </button>
+          <button type="button" class="nav-item" data-view="devices">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M12 16v4M6 12l3-3 3 2 4-4 2 2"/></svg>
+            <span>设备图</span>
+          </button>
+          <button type="button" class="nav-item" data-view="comm">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8m12.8 0a9 9 0 0 1 0 12.8M8.5 15.5a5 5 0 0 1 0-7m7 0a5 5 0 0 1 0 7"/></svg>
+            <span>通信图</span>
+          </button>
+          <button type="button" class="nav-item" data-view="logs">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            <span>运行日志</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-health" id="sidebar-health">
+          <div class="health-row">
+            <span>在线 RTU</span>
+            <strong id="health-rtus">--</strong>
+          </div>
+          <div class="health-row">
+            <span>有效量测</span>
+            <strong id="health-points">--</strong>
+          </div>
+          <div class="health-row">
+            <span>总发电功率</span>
+            <strong id="health-gen">-- kW</strong>
+          </div>
+          <div class="health-row">
+            <span>总用电负荷</span>
+            <strong id="health-load">-- kW</strong>
+          </div>
+        </div>
+      </aside>
+
+      <main class="portal-main">
+        <!-- ==================== 1. 系统首页（输入图底图实时刷新） ==================== -->
+        <section id="view-home" class="portal-view active">
+          <div class="hero-kpi-strip" aria-label="系统核心指标">
+            <div class="kpi-card">
+              <div class="kpi-label">运行总天数</div>
+              <div class="kpi-val"><strong id="kpi-days">--</strong><span>天</span></div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">负荷总用电</div>
+              <div class="kpi-val"><strong id="kpi-load-total">--</strong><span>万kWh</span></div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">柴油总发电</div>
+              <div class="kpi-val"><strong id="kpi-diesel-total">--</strong><span>万kWh</span></div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">新能源总发电</div>
+              <div class="kpi-val"><strong id="kpi-renew-total">--</strong><span>万kWh</span></div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">柴油总节约量</div>
+              <div class="kpi-val"><strong id="kpi-diesel-saved">--</strong><span>吨</span></div>
+            </div>
+          </div>
+
+          <div class="hero-stage" id="hero-stage">
+            <img
+              class="hero-bg"
+              src="/static/assets/qinling-hero.jpg"
+              alt="南极秦岭站综合能源实景"
+              draggable="false"
+            />
+            <div class="hero-scrim" aria-hidden="true"></div>
+
+            <!-- 动态能量流路径叠加层 -->
+            <svg class="hero-flow-svg" viewBox="0 0 1200 540" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <filter id="flow-glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+              <!-- 左侧汇流支路 -->
+              <path id="flow-pv" class="flow-path" d="M 245 104 C 310 104, 320 218, 375 218" />
+              <path id="flow-wind" class="flow-path" d="M 245 190 C 310 190, 320 218, 375 218" />
+              <path id="flow-h2prod" class="flow-path" d="M 245 276 C 310 276, 320 218, 375 218" />
+              <path id="flow-h2gen" class="flow-path" d="M 245 362 C 310 362, 320 218, 375 218" />
+              <!-- 主干能量母线 -->
+              <path id="flow-trunk" class="flow-path trunk" d="M 375 218 C 560 218, 700 225, 835 338" />
+              <!-- 右侧分支 -->
+              <path id="flow-diesel" class="flow-path" d="M 945 268 C 885 268, 875 338, 835 338" />
+              <path id="flow-storage" class="flow-path" d="M 945 352 C 885 352, 875 338, 835 338" />
+              <path id="flow-load" class="flow-path" d="M 835 338 C 875 338, 885 436, 945 436" />
+            </svg>
+
+            <!-- 气象与储氢环境微标 -->
+            <div class="hero-env-badges" id="hero-env-badges">
+              <span class="env-chip">风速 <strong id="env-wind">--</strong> m/s</span>
+              <span class="env-chip">辐照度 <strong id="env-irr">--</strong> W/m²</span>
+              <span class="env-chip">储氢 <strong id="env-h2">--</strong></span>
+            </div>
+
+            <!-- 左侧 4 组实时能源卡片 -->
+            <div class="hero-col hero-col-left">
+              <button type="button" class="energy-node" data-jump-cat="pv">
+                <span class="node-icon" aria-hidden="true">☀</span>
+                <span class="node-name">光伏</span>
+                <strong class="node-val" id="rt-pv">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+              <button type="button" class="energy-node" data-jump-cat="wind">
+                <span class="node-icon" aria-hidden="true">✦</span>
+                <span class="node-name">风机</span>
+                <strong class="node-val" id="rt-wind">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+              <button type="button" class="energy-node" data-jump-cat="hydrogen">
+                <span class="node-icon" aria-hidden="true">H₂</span>
+                <span class="node-name">制氢</span>
+                <strong class="node-val" id="rt-h2prod">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+              <button type="button" class="energy-node" data-jump-cat="hydrogen">
+                <span class="node-icon" aria-hidden="true">⚡</span>
+                <span class="node-name">氢电</span>
+                <strong class="node-val" id="rt-h2gen">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+            </div>
+
+            <!-- 右侧 3 组实时能源卡片 -->
+            <div class="hero-col hero-col-right">
+              <button type="button" class="energy-node" data-jump-cat="diesel">
+                <span class="node-icon" aria-hidden="true">⚙</span>
+                <span class="node-name">柴发</span>
+                <strong class="node-val" id="rt-diesel">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+              <button type="button" class="energy-node" data-jump-cat="storage">
+                <span class="node-icon" aria-hidden="true">▮</span>
+                <span class="node-name">电储</span>
+                <strong class="node-val" id="rt-storage">--</strong>
+                <span class="node-unit" id="rt-storage-soc">--%</span>
+              </button>
+              <button type="button" class="energy-node" data-jump-cat="load">
+                <span class="node-icon" aria-hidden="true">◈</span>
+                <span class="node-name">负荷</span>
+                <strong class="node-val" id="rt-load">--</strong>
+                <span class="node-unit">kW</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="hero-bottom-strip" aria-label="新能源统计">
+            <div class="strip-badge">新能源</div>
+            <div class="mini-kpi">
+              <span>风机总发电</span>
+              <div><strong id="kpi-wind-total">--</strong><small>万kWh</small></div>
+            </div>
+            <div class="mini-kpi">
+              <span>光伏总发电</span>
+              <div><strong id="kpi-pv-total">--</strong><small>万kWh</small></div>
+            </div>
+            <div class="mini-kpi">
+              <span>储能总发电</span>
+              <div><strong id="kpi-storage-total">--</strong><small>万kWh</small></div>
+            </div>
+            <div class="mini-kpi">
+              <span>氢能总发电</span>
+              <div><strong id="kpi-hydro-total">--</strong><small>万kWh</small></div>
+            </div>
+            <div class="mini-kpi accent">
+              <span>新能源占比</span>
+              <div><strong id="kpi-renew-share">--</strong><small>%</small></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 2. 潮流图（SVG 底图实时刷新） ==================== -->
+        <section id="view-powerflow" class="portal-view" hidden>
+          <div class="view-toolbar">
+            <div class="toolbar-left">
+              <h2>站内一次接线与实时潮流图</h2>
+              <span class="badge" id="pf-stat">加载中…</span>
+            </div>
+            <div class="toolbar-right">
+              <input id="pf-search" type="search" placeholder="搜索定位设备…" aria-label="搜索定位设备" />
+              <label class="chk"><input type="checkbox" id="pf-show-meas" checked /> 量测值</label>
+              <label class="chk"><input type="checkbox" id="pf-show-labels" checked /> 设备名称</label>
+              <div class="btn-group">
+                <button type="button" class="btn secondary" id="pf-zoom-out" title="缩小">－</button>
+                <button type="button" class="btn secondary" id="pf-zoom-fit" title="适应窗口">适应</button>
+                <button type="button" class="btn secondary" id="pf-zoom-in" title="放大">＋</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="pf-layout">
+            <div class="pf-canvas-wrap" id="pf-canvas-wrap">
+              <div class="pf-stage" id="pf-stage">
+                <div class="empty-hint">正在加载秦岭站 SVG 接线图…</div>
+              </div>
+              <div class="pf-legend">
+                <span><i class="swatch ok"></i>合闸 / 有效</span>
+                <span><i class="swatch danger"></i>分闸 / 异常</span>
+                <span id="pf-zoom-label">100%</span>
+              </div>
+            </div>
+
+            <aside class="pf-drawer" id="pf-drawer" hidden>
+              <div class="drawer-head">
+                <div>
+                  <h3 id="pf-drawer-name">设备详情</h3>
+                  <small id="pf-drawer-meta"></small>
+                </div>
+                <button type="button" class="icon-btn" id="pf-drawer-close" aria-label="关闭">×</button>
+              </div>
+              <div class="drawer-body" id="pf-drawer-metrics"></div>
+              <div class="drawer-foot">
+                <button type="button" class="btn primary" id="pf-jump-device">查看设备日曲线</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ==================== 3. 设备图（分类标签 + 实时值 + 日曲线） ==================== -->
+        <section id="view-devices" class="portal-view" hidden>
+          <div class="view-toolbar">
+            <div class="tab-bar" id="dev-cat-tabs" role="tablist" aria-label="设备类别"></div>
+            <div class="toolbar-right">
+              <input id="dev-search" type="search" placeholder="筛选设备名称…" aria-label="筛选设备名称" />
+            </div>
+          </div>
+
+          <div class="dev-layout">
+            <aside class="dev-list-panel">
+              <div class="panel-head">
+                <span id="dev-list-title">设备列表</span>
+                <small id="dev-list-count">0</small>
+              </div>
+              <div class="dev-list" id="dev-list"></div>
+            </aside>
+
+            <div class="dev-detail-panel">
+              <div class="detail-header">
+                <div>
+                  <h2 id="dev-detail-name">请选择左侧设备</h2>
+                  <small id="dev-detail-meta"></small>
+                </div>
+                <div class="detail-actions">
+                  <button type="button" class="btn secondary" id="dev-locate-svg" disabled>在潮流图定位</button>
+                </div>
+              </div>
+
+              <div class="metric-grid" id="dev-metric-grid"></div>
+
+              <div class="trend-card">
+                <div class="trend-head">
+                  <div class="trend-title">
+                    <h3>设备日曲线</h3>
+                    <div class="series-chips" id="trend-series-chips"></div>
+                  </div>
+                  <div class="trend-tools">
+                    <label class="inline-select">
+                      <span>时间窗</span>
+                      <select id="trend-hours" aria-label="曲线时间窗">
+                        <option value="1">近 1 小时</option>
+                        <option value="6">近 6 小时</option>
+                        <option value="12">近 12 小时</option>
+                        <option value="24" selected>近 24 小时</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div class="trend-canvas-wrap" id="trend-canvas-wrap">
+                  <canvas id="trend-canvas"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 4. 通信图（RTU / 通道 / 四遥数据） ==================== -->
+        <section id="view-comm" class="portal-view" hidden>
+          <div class="view-toolbar">
+            <div class="tab-bar" id="comm-tabs" role="tablist" aria-label="通信视图">
+              <button type="button" class="tab-btn active" data-comm-tab="rtus">RTU 状态</button>
+              <button type="button" class="tab-btn" data-comm-tab="channels">通信通道</button>
+              <button type="button" class="tab-btn" data-comm-tab="points">四遥数据</button>
+            </div>
+            <div class="toolbar-right" id="comm-point-filters" hidden>
+              <select id="comm-rtu-filter" aria-label="按 RTU 筛选">
+                <option value="">全部 RTU</option>
+              </select>
+              <select id="comm-kind-filter" aria-label="四遥类型">
+                <option value="yc">遥测 YC</option>
+                <option value="yx">遥信 YX</option>
+                <option value="yt">遥调 YT</option>
+                <option value="yk">遥控 YK</option>
+              </select>
+              <input id="comm-point-search" type="search" placeholder="搜索测点名称或点号…" aria-label="搜索测点" />
+            </div>
+          </div>
+
+          <div class="comm-summary" id="comm-summary"></div>
+
+          <div class="table-panel" id="comm-rtus-panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>RTU</th>
+                    <th>名称</th>
+                    <th>通道 / 规约</th>
+                    <th>自动通信</th>
+                    <th>连接状态</th>
+                    <th class="num">YC / YX / YK / YT</th>
+                    <th class="num">收 / 发 / 错</th>
+                    <th>最近心跳</th>
+                    <th>诊断信息</th>
+                  </tr>
+                </thead>
+                <tbody id="comm-rtus-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="table-panel" id="comm-channels-panel" hidden>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>通道</th>
+                    <th>规约</th>
+                    <th>名称</th>
+                    <th>绑定 RTU</th>
+                    <th>目标端点</th>
+                    <th>连接状态</th>
+                    <th class="num">接收帧</th>
+                    <th class="num">错误数</th>
+                    <th>关键参数</th>
+                  </tr>
+                </thead>
+                <tbody id="comm-channels-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="table-panel" id="comm-points-panel" hidden>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="num">RTU</th>
+                    <th class="num">点号</th>
+                    <th>测点名称</th>
+                    <th class="num">原始值</th>
+                    <th class="num">工程值</th>
+                    <th>质量状态</th>
+                    <th>刷新时间</th>
+                  </tr>
+                </thead>
+                <tbody id="comm-points-body"></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <span id="comm-points-info">0 条</span>
+              <div class="btn-group">
+                <button type="button" class="btn secondary" id="comm-prev">上一页</button>
+                <span id="comm-page-label">1 / 1</span>
+                <button type="button" class="btn secondary" id="comm-next">下一页</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 5. 运行日志 ==================== -->
+        <section id="view-logs" class="portal-view" hidden>
+          <div class="view-toolbar">
+            <div class="tab-bar" id="log-record-tabs">
+              <button type="button" class="tab-btn active" data-log-record="runtime">运行日志</button>
+              <button type="button" class="tab-btn" data-log-record="packet">报文日志</button>
+            </div>
+            <div class="toolbar-right">
+              <select id="log-process" aria-label="按进程筛选">
+                <option value="">全部进程</option>
+              </select>
+              <select id="log-level" aria-label="日志级别">
+                <option value="">全部级别</option>
+                <option value="INFO">日志</option>
+                <option value="WARNING">警告</option>
+                <option value="ERROR">错误</option>
+                <option value="PACKET">报文</option>
+                <option value="PROCESS">进程</option>
+              </select>
+              <select id="log-direction" aria-label="报文方向" disabled>
+                <option value="">全部方向</option>
+                <option value="RX">接收 RX</option>
+                <option value="TX">发送 TX</option>
+              </select>
+              <input id="log-keyword" type="search" placeholder="关键字检索…" aria-label="日志关键字" />
+              <label class="chk"><input type="checkbox" id="log-follow" checked /> 跟随最新</label>
+              <button type="button" class="btn secondary" id="log-export">导出日志</button>
+            </div>
+          </div>
+
+          <div class="logs-layout">
+            <aside class="log-files-panel">
+              <div class="panel-head">
+                <span>日志文件</span>
+                <small id="log-file-count">0</small>
+              </div>
+              <div class="log-file-list" id="log-file-list"></div>
+            </aside>
+            <div class="log-reader-panel">
+              <div class="panel-head">
+                <span id="log-active-file">全部最新日志</span>
+                <small id="log-line-count">0 条</small>
+              </div>
+              <div class="log-stream" id="log-stream"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
