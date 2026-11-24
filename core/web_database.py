@@ -10,8 +10,7 @@ import threading
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
-from scdfe_c.web.service import ApiError, ScadaStore
-from core.database_validation import validate_database
+from core.common import ApiError
 from core.workspace_paths import (
     DEFAULT_RUNTIME_NAME,
     DEFAULT_SCENE_NAME,
@@ -141,43 +140,16 @@ def resolve_web_database_args(role, args):
 
 
 def prepare_database(role, path, schema_dir, workspace_root=None):
+    if role != 'd':
+        raise ValueError(f'scada 仓库仅支持角色 d，收到：{role!r}')
     resources = ExitStack()
     try:
-        if role == 'd':
-            from scdfe_d.service import DeviceStore, Collector
-            store = DeviceStore(path, schema_dir, workspace_root=workspace_root, connection_pool_size=4)
-            resources.callback(store.close)
-            collector = Collector(store)
-            resources.callback(collector.close)
-            return resources, {'store': store, 'collector': collector}
-        if role == 't':
-            from scdfe_t.web.service import TransStore
-            trans = TransStore(path, schema_dir, connection_pool_size=4)
-            resources.callback(trans.store.close)
-            return resources, {'trans_store': trans}
-        if role == 'c':
-            from scdfe_c.web.process_control import ProcessController
-            store = ScadaStore(path, schema_dir, connection_pool_size=4)
-            resources.callback(store.close)
-            return resources, {'store': store, 'process_controller': ProcessController(store)}
-        from scdfe_s.database import SimulatorStore
-        from scdfe_s.web.iec104_service import IEC104Service
-        from scdfe_s.web.protocol_service import (ModbusTcpService, ModbusTcpServerService,
-            ModbusRtuService, ModbusRtuServerService, CanService, CanServerService,
-            OpcServerService, BacnetServerService)
-        from core.service_log import ServiceFileLog
-        store = SimulatorStore(path, schema_dir, connection_pool_size=4)
+        from scdfe_d.service import DeviceStore, Collector
+        store = DeviceStore(path, schema_dir, workspace_root=workspace_root, connection_pool_size=4)
         resources.callback(store.close)
-        history = ServiceFileLog.startup_catalog(store.db_path.parent / 'logs')
-        context = {'store': store, '_channel_service_lock': threading.RLock(),
-                   '_channel_service_cache': {}, '_channel_service_history': history}
-        for name, cls in zip(SERVICE_NAMES, (IEC104Service, ModbusTcpService, ModbusTcpServerService,
-                ModbusRtuService, ModbusRtuServerService, CanService, CanServerService,
-                OpcServerService, BacnetServerService)):
-            service = cls(store, startup_catalog=history)
-            context[name] = service
-            resources.callback(service.close)
-        return resources, context
+        collector = Collector(store)
+        resources.callback(collector.close)
+        return resources, {'store': store, 'collector': collector}
     except BaseException:
         resources.close()
         raise
@@ -322,10 +294,8 @@ class DatabaseSelectionMixin:
 
     def check_database(self, path):
         self.check_database_paths(path)
-        if self.database_role == 'd':
-            from scdfe_d.service import validate_database as validate_device_database
-            return validate_device_database(path)
-        return validate_database(path, self.database_role, self.database_store().catalog)
+        from scdfe_d.service import validate_database as validate_device_database
+        return validate_device_database(path)
 
     def confined_file_path(self, path):
         """Bound trusted absolute runtime paths as well as paths supplied by the UI."""
@@ -398,13 +368,8 @@ class DatabaseSelectionMixin:
             # Exclusive creation prevents accidental replacement, including races.
             with target.open('xb'):
                 created = True
-            from scdfe_s.database import SimulatorStore
-            store_type = SimulatorStore if self.database_role == 's' else ScadaStore
-            if self.database_role == 'd':
-                from scdfe_d.service import DeviceStore
-                created_store = DeviceStore(target, workspace_root=self._database_base_directory)
-            else:
-                created_store = store_type(target, self.database_store().catalog.directory)
+            from scdfe_d.service import DeviceStore
+            created_store = DeviceStore(target, workspace_root=self._database_base_directory)
             created_store.close()
             validation = self.require_valid_database(target)
             return dict(path=self.relative_database_path(target), validation=validation)
@@ -425,33 +390,11 @@ class DatabaseSelectionMixin:
         return result
 
     def _assert_database_idle(self):
-        from core.process_registry import process_is_alive
         from core.scdfe_control import InstanceLock
         store = self.database_store()
-        busy = False
-        if self.database_role == 'd':
-            busy = self.collector.running or InstanceLock.held(store.db_path, 'device-collector')
-        elif self.database_role == 's':
-            services = [getattr(self, name) for name in SERVICE_NAMES]
-            services += list(self._channel_service_cache.values())
-            busy = any(service.running for service in services)
-        elif self.database_role == 'c':
-            controller = self.process_controller
-            with controller._mutex:
-                busy = bool(controller._operation and controller._operation['status'] == 'running')
-                busy |= any(child.poll() is None for child in controller._children.values())
-            with store.connection() as con:
-                busy |= any(process_is_alive(int(r[0] or 0)) for r in con.execute(
-                    'SELECT process_pid FROM fes_process_define'))
-            busy |= InstanceLock.held(store.db_path, 'process-control')
-        else:
-            busy = any(child.poll() is None for child in self.trans_store._children.values())
-            with store.connection() as con:
-                channels = [r[0] for r in con.execute('SELECT channel_id FROM fes_scdfe_t_define')]
-            busy |= any(InstanceLock.held(store.db_path, f'trans-{cid}') or
-                        InstanceLock.held(store.db_path, f'trans-control-{cid}') for cid in channels)
+        busy = self.collector.running or InstanceLock.held(store.db_path, 'device-collector')
         if busy:
-            raise ApiError(409, '当前服务仍在运行或处理启停，请先在进程/通信监控中停止，再切换数据库', code='database_busy')
+            raise ApiError(409, '当前服务仍在运行或处理启停，请先在设备采集中停止，再切换数据库', code='database_busy')
 
     def switch_database(self, body):
         if not isinstance(body, dict) or set(body) != {'database', 'expected_database'}:

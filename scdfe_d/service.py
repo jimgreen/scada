@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 from core.scdfe_control import InstanceLock
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from scdfe_d.measurement_layout import (
     EXTENSION_METRICS,
     SUFFIXES,
@@ -481,16 +481,24 @@ class DeviceStore:
         return interval
 
     def default_source_database(self):
-        """解析默认源 SCADA 采集库（优先显式配置，其次同目录 scdfe_c.sqlite3）。"""
+        """解析默认源 FES 采集库（优先显式配置，其次同级 ../fes/scdfe_c.sqlite3，再其次同目录 scdfe_c.sqlite3）。"""
         with self._mutex:
             explicit = self._source_database
         if explicit:
             return explicit
-        for candidate in ("scdfe_c.sqlite3", "c.sqlite3"):
-            path = (self.db_path.parent / candidate).resolve()
+        candidates = (
+            self.db_path.parent.parent / "fes" / "scdfe_c.sqlite3",
+            self.db_path.parent / "scdfe_c.sqlite3",
+            self.db_path.parent / "c.sqlite3",
+        )
+        for raw in candidates:
+            path = raw.resolve()
             if path.is_file() and path.is_relative_to(self.root):
                 return path.relative_to(self.root).as_posix()
-        fallback = (self.db_path.parent / "scdfe_c.sqlite3").resolve()
+        if self.db_path.parent.name.lower() == "scada":
+            fallback = (self.db_path.parent.parent / "fes" / "scdfe_c.sqlite3").resolve()
+        else:
+            fallback = (self.db_path.parent / "scdfe_c.sqlite3").resolve()
         if fallback.is_relative_to(self.root):
             return fallback.relative_to(self.root).as_posix()
         return "scdfe_c.sqlite3"

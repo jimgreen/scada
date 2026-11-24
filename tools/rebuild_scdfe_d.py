@@ -10,7 +10,7 @@ import sqlite3
 import tempfile
 
 from core.web_database import DEFAULT_WORKSPACE_ROOT
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from scdfe_d.service import DeviceStore, validate_database
 
 

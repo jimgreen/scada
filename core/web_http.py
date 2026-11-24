@@ -180,7 +180,7 @@ def write_security_headers(
 
 def parse_if_match(handler) -> int | None:
     """解析并校验正整数版本号 If-Match 请求头。"""
-    from scdfe_c.web.service import ApiError
+    from core.common import ApiError
 
     value = handler.headers.get("If-Match") if handler.headers else None
     if value is None:
@@ -195,7 +195,7 @@ def parse_if_match(handler) -> int | None:
 
 def parse_request_path(handler, *, max_num_fields: int = 80) -> tuple[list[str], dict[str, str]]:
     """解析请求路径段与去重后的查询参数字典。"""
-    from scdfe_c.web.service import ApiError
+    from core.common import ApiError
 
     split = urlsplit(handler.path)
     parts = [unquote(part) for part in split.path.strip("/").split("/") if part]
@@ -203,60 +203,6 @@ def parse_request_path(handler, *, max_num_fields: int = 80) -> tuple[list[str],
     if any(len(values) != 1 for values in raw.values()):
         raise ApiError(400, "同一查询参数只能出现一次")
     return parts, {key: values[0] for key, values in raw.items()}
-
-
-def handle_packet_recording(handler, parts: list[str], query: dict[str, str], method: str,
-                            db_path: Path | str, component: str):
-    """统一处理 C/S/T 的 /api/packet-recording 全局与通道报文记录策略接口。"""
-    from scdfe_c.web.service import ApiError
-
-    if parts[:2] != ["api", "packet-recording"]:
-        return False
-    if query:
-        raise ApiError(400, "报文记录策略接口不接受查询参数")
-    from core.packet_logging import packet_log_switch, packet_recording_state
-
-    switch = packet_log_switch(db_path, component)
-    if len(parts) == 2:
-        if method == "GET":
-            return handler._json(200, packet_recording_state(db_path, component))
-        if method != "PUT":
-            raise ApiError(405, "报文记录策略只支持 GET/PUT")
-        body = handler._body()
-        if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
-            raise ApiError(400, "enabled 必须是布尔值，且不能包含其他字段")
-        switch.set_enabled(body["enabled"])
-        return handler._json(200, packet_recording_state(db_path, component))
-    if len(parts) == 3:
-        raw_channel = parts[2]
-    elif len(parts) == 4 and parts[2] == "channels":
-        raw_channel = parts[3]
-    else:
-        raise ApiError(404, "路径不存在", code="not_found")
-    try:
-        channel_id = int(raw_channel)
-    except ValueError as exc:
-        raise ApiError(400, "channel_id 必须是整数") from exc
-    if channel_id <= 0:
-        raise ApiError(400, "channel_id 必须是正整数")
-    if method == "GET":
-        try:
-            item = switch.channel_snapshot(channel_id)
-        except KeyError as exc:
-            raise ApiError(404, str(exc), code="not_found") from exc
-        return handler._json(200, item)
-    if method != "PUT":
-        raise ApiError(405, "通道报文记录策略只支持 GET/PUT")
-    body = handler._body()
-    if set(body) != {"enabled"} or (body["enabled"] is not None and type(body["enabled"]) is not bool):
-        raise ApiError(400, "enabled 必须是布尔值或 null，且不能包含其他字段")
-    try:
-        switch.channel_snapshot(channel_id)
-        switch.set_channel(channel_id, body["enabled"])
-        item = switch.channel_snapshot(channel_id)
-    except KeyError as exc:
-        raise ApiError(404, str(exc), code="not_found") from exc
-    return handler._json(200, item)
 
 
 class BaseScadaHandlerMixin:

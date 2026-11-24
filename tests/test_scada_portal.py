@@ -11,7 +11,6 @@ import unittest
 from urllib.parse import quote
 
 from scada_portal.server import make_server
-from scdfe_c.web.service import ScadaStore
 from scdfe_d.measurement_layout import SUFFIXES
 
 
@@ -62,33 +61,68 @@ class ScadaPortalTests(unittest.TestCase):
         self.thread.join(5)
 
     def _seed_c_db(self):
-        store = ScadaStore(self.c_db)
+        conn = sqlite3.connect(self.c_db)
         try:
-            store.create_row("fes_rtu_define", {
-                "rtu_id": 3, "channel_id": 3, "channel_type": "iec104",
-                "name": "秦岭站", "process_enable": 1,
-            })
-            store.create_row("fes_channel_iec104_define", {
-                "id": 3, "channel_id": 3, "rtu_addr": 1,
-                "remote_host": "127.0.0.1", "remote_port": 2405,
-            })
-            store.create_row("fes_yc_define", {
-                "rtu_id": 3, "pnt_no": 1, "name": "ACGenerator.交流风电-1.P_GEN",
-                "raw_value": 45.2, "value": 45.2, "status": 0, "refresh_time": 1795517000000,
-            })
-            store.create_row("fes_yx_define", {
-                "rtu_id": 3, "pnt_no": 1, "name": "ACBreak.交流断路器-1.status",
-                "value": 1, "status": 0, "refresh_time": 1795517000000,
-            })
-            with store.connection() as conn:
-                conn.execute(
-                    "INSERT INTO fes_channel_runtime_status "
-                    "(service_name, channel_id, protocol, channel_name, state, running, connection_state, rx_count, tx_count, error_count, process_heartbeat_time) "
-                    "VALUES ('scdfe_c', 3, 'iec104', '秦岭站', 'running', 1, 'connected', 1200, 10, 0, 1795517000000)"
-                )
-                conn.commit()
+            conn.executescript(
+                """
+                CREATE TABLE fes_rtu_define (
+                    rtu_id INTEGER PRIMARY KEY, channel_id INTEGER, channel_type TEXT,
+                    name TEXT, process_enable INTEGER DEFAULT 0, status INTEGER DEFAULT 0,
+                    refresh_time INTEGER DEFAULT 0
+                );
+                CREATE TABLE fes_channel_iec104_define (
+                    id INTEGER PRIMARY KEY, channel_id INTEGER, rtu_addr INTEGER,
+                    remote_host TEXT, remote_port INTEGER
+                );
+                CREATE TABLE fes_yc_define (
+                    rtu_id INTEGER, pnt_no INTEGER, name TEXT,
+                    raw_value REAL, value REAL, status INTEGER, refresh_time INTEGER
+                );
+                CREATE TABLE fes_yx_define (
+                    rtu_id INTEGER, pnt_no INTEGER, name TEXT,
+                    raw_status INTEGER, value INTEGER, status INTEGER, refresh_time INTEGER
+                );
+                CREATE TABLE fes_yk_define (
+                    rtu_id INTEGER, pnt_no INTEGER, name TEXT,
+                    value INTEGER, status INTEGER, refresh_time INTEGER, cmd_handle_time INTEGER
+                );
+                CREATE TABLE fes_yt_define (
+                    rtu_id INTEGER, pnt_no INTEGER, name TEXT,
+                    value REAL, status INTEGER, refresh_time INTEGER, cmd_handle_time INTEGER
+                );
+                CREATE TABLE fes_channel_runtime_status (
+                    service_name TEXT, channel_id INTEGER, protocol TEXT, channel_name TEXT,
+                    state TEXT, running INTEGER, connection_state TEXT, process_pid INTEGER DEFAULT 0,
+                    rx_count INTEGER, tx_count INTEGER, error_count INTEGER,
+                    last_error TEXT, process_error TEXT, process_heartbeat_time INTEGER,
+                    diagnostic_json TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO fes_rtu_define (rtu_id, channel_id, channel_type, name, process_enable) "
+                "VALUES (3, 3, 'iec104', '秦岭站', 1)"
+            )
+            conn.execute(
+                "INSERT INTO fes_channel_iec104_define (id, channel_id, rtu_addr, remote_host, remote_port) "
+                "VALUES (3, 3, 1, '127.0.0.1', 2405)"
+            )
+            conn.execute(
+                "INSERT INTO fes_yc_define (rtu_id, pnt_no, name, raw_value, value, status, refresh_time) "
+                "VALUES (3, 1, 'ACGenerator.交流风电-1.P_GEN', 45.2, 45.2, 0, 1795517000000)"
+            )
+            conn.execute(
+                "INSERT INTO fes_yx_define (rtu_id, pnt_no, name, value, status, refresh_time) "
+                "VALUES (3, 1, 'ACBreak.交流断路器-1.status', 1, 0, 1795517000000)"
+            )
+            conn.execute(
+                "INSERT INTO fes_channel_runtime_status "
+                "(service_name, channel_id, protocol, channel_name, state, running, connection_state, rx_count, tx_count, error_count, process_heartbeat_time) "
+                "VALUES ('scdfe_c', 3, 'iec104', '秦岭站', 'running', 1, 'connected', 1200, 10, 0, 1795517000000)"
+            )
+            conn.commit()
         finally:
-            store.close()
+            conn.close()
 
     def _create_device_table(self, conn: sqlite3.Connection, table: str, metrics: list[tuple[str, str]]):
         cols = ["idx INTEGER PRIMARY KEY", "name TEXT"]

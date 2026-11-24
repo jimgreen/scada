@@ -7,12 +7,8 @@ ASSET_DIR = Path(__file__).with_name("web_static")
 ASSETS = {"workbench.css": "text/css; charset=utf-8",
           "ui-theme.css": "text/css; charset=utf-8",
           "ui-i18n.js": "application/javascript; charset=utf-8",
-          "connections.css": "text/css; charset=utf-8",
-          "connections.js": "application/javascript; charset=utf-8",
           "audit-client.js": "application/javascript; charset=utf-8",
           "workbench.js": "application/javascript; charset=utf-8",
-          "log-browser.css": "text/css; charset=utf-8",
-          "log-browser.js": "application/javascript; charset=utf-8",
           "layout-resizer.js": "application/javascript; charset=utf-8"}
 
 # 统一线宽（1.75px）的极简矢量导航图标，替代零散字符符号。

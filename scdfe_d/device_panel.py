@@ -2,7 +2,7 @@
 
 import math
 
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from scdfe_d.measurement_layout import SUFFIXES
 from scdfe_d.service import CATEGORIES, category_for
 

@@ -17,11 +17,11 @@ from core.web_database import (
 )
 from core.workspace_paths import add_workspace_arguments
 from core import operation_audit as audit
-from scdfe_c._logger import ScdfeLogger
+from core.scdfe_logger import ScdfeLogger
 from core.web_http import BaseScadaHandlerMixin, encode_json, send_static
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from scdfe_d.device_panel import device_catalog, read_device, update_parameters
 
 STATIC = Path(__file__).with_name("static")
@@ -239,7 +239,7 @@ def main(argv=None):
     parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数或Web选择定位")
     add_workspace_arguments(parser)
     parser.add_argument(
-        "--source", type=str, default=None, help="源 SCADA 数据库相对路径，省略时默认同目录 scdfe_c.sqlite3"
+        "--source", type=str, default=None, help="源 FES 数据库相对路径，省略时默认优先同级 ../fes/scdfe_c.sqlite3，其次同目录 scdfe_c.sqlite3"
     )
     parser.add_argument(
         "--collect", action="store_true", help="启动 Web 时同时启动采集"

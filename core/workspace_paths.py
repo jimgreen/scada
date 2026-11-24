@@ -95,15 +95,35 @@ def database_directory(
     return directory
 
 
+FES_SQLDB_RELATIVE_PARTS = ("sqldb", "fes")
+
+
+def fes_database_directory(
+    workspace_root: str | Path | None = None,
+    runtime_name: str | None = None,
+    scene_name: str | None = None,
+) -> Path:
+    """组合返回 `<workspace_root>/<runtime_name>/<scene_name>/sqldb/fes` 目录。"""
+    root = resolve_workspace_root(workspace_root)
+    runtime = resolve_runtime_name(runtime_name)
+    scene = resolve_scene_name(scene_name)
+    directory = (root / runtime / scene / Path(*FES_SQLDB_RELATIVE_PARTS)).resolve()
+    if not directory.is_relative_to(root):
+        raise ValueError("数据库目录超出工作区根目录范围")
+    return directory
+
+
 def default_database_path(
     role: str,
     workspace_root: str | Path | None = None,
     runtime_name: str | None = None,
     scene_name: str | None = None,
 ) -> Path:
-    """返回指定角色（c/s/t/d）在三参数下的默认 SQLite 文件路径。"""
+    """返回指定角色在三参数下的默认 SQLite 文件路径（d 位于 sqldb/scada，c/s/t 位于 sqldb/fes）。"""
     if role not in ROLE_DB_FILENAMES:
         raise ValueError(f"不支持的服务角色：{role!r}")
+    if role in {"c", "s", "t"}:
+        return fes_database_directory(workspace_root, runtime_name, scene_name) / ROLE_DB_FILENAMES[role]
     return database_directory(workspace_root, runtime_name, scene_name) / ROLE_DB_FILENAMES[role]
 
 

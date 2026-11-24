@@ -4,7 +4,7 @@ from collections import defaultdict
 from math import isfinite
 from time import time_ns
 
-from scdfe_c.web.service import ApiError, quote_identifier
+from core.common import ApiError, quote_identifier
 
 MAX_POINTS = 24
 POINT_TABLES = {kind: f'fes_{kind}_define' for kind in ('yc', 'yx', 'yk', 'yt')}

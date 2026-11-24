@@ -13,7 +13,7 @@ import time
 
 from core.scdfe_control import InstanceLock
 from core.web_point_trend import MAX_POINTS, POINT_TABLES, _identifier, read_point_trend
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 
 
 LOG = logging.getLogger(__name__)

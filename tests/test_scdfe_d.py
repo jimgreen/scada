@@ -9,7 +9,7 @@ import unittest
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from scdfe_d.service import DeviceStore, Collector
 
 

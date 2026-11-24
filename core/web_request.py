@@ -4,7 +4,7 @@ import socket
 import time
 from urllib.parse import urlsplit
 
-from scdfe_c.web.service import ApiError
+from core.common import ApiError
 from core import operation_audit as audit
 
 

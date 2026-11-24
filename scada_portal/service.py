@@ -15,8 +15,8 @@ from typing import Any
 from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
 from core.web_database import DEFAULT_WORKSPACE_ROOT
-from scdfe_c.web.log_query import LOG_PATTERNS, search_logs
-from scdfe_c.web.service import CHANNEL_PARAMETER_TABLES, KIND_TABLES
+from core.log_query import LOG_PATTERNS, search_logs
+from core.common import CHANNEL_PARAMETER_TABLES, KIND_TABLES
 from scdfe_d.measurement_layout import SUFFIXES
 
 # 秦岭站正式开站投运基准日（2024-02-07 建站开站）
@@ -164,8 +164,14 @@ class PortalService:
         self.scene_name = scene_name
         scene_dir = self.workspace_root / runtime_name / scene_name
         sqldb_dir = scene_dir / "sqldb" / "scada"
+        fes_sqldb_dir = scene_dir / "sqldb" / "fes"
 
-        self.c_db = Path(c_db).resolve() if c_db else (sqldb_dir / "scdfe_c.sqlite3")
+        if c_db:
+            self.c_db = Path(c_db).resolve()
+        else:
+            fes_c_db = fes_sqldb_dir / "scdfe_c.sqlite3"
+            legacy_c_db = sqldb_dir / "scdfe_c.sqlite3"
+            self.c_db = fes_c_db if (fes_c_db.is_file() or not legacy_c_db.is_file()) else legacy_c_db
         self.d_db = Path(d_db).resolve() if d_db else (sqldb_dir / "scdfe_d.sqlite3")
         self.svg_path = self._resolve_svg(svg_path, scene_dir / "model", scene_name)
         self.log_dir = Path(log_dir).resolve() if log_dir else (self.c_db.parent / "logs")
