@@ -9,31 +9,55 @@
     <script defer src="/static/ui-i18n.js"></script>
     <script defer src="/static/portal.js"></script>
   </head>
-  <body>
+  <body class="view-home">
+    <!-- 全屏全景实景底图与宇宙飞船舷窗全息叠层（所有控件均悬浮在其上） -->
+    <div class="cockpit-backdrop" id="cockpit-backdrop" aria-hidden="true">
+      <img
+        class="cockpit-bg-img"
+        src="/static/assets/qinling-hero.jpg?v=2"
+        alt=""
+        draggable="false"
+      />
+      <div class="cockpit-vignette"></div>
+      <div class="cockpit-grid-overlay"></div>
+      <div class="cockpit-corner tl"></div>
+      <div class="cockpit-corner tr"></div>
+      <div class="cockpit-corner bl"></div>
+      <div class="cockpit-corner br"></div>
+    </div>
+
     <header class="portal-topbar">
-      <div class="portal-brand">
-        <span class="brand-badge" aria-hidden="true">Q</span>
-        <div class="brand-titles">
-          <strong id="station-title">南极秦岭站综合能量管理系统</strong>
-          <small id="station-scene">realtime / qinling</small>
+      <div class="topbar-left">
+        <div class="portal-brand">
+          <span class="brand-badge" aria-hidden="true">Q</span>
+          <div class="brand-titles">
+            <span class="brand-tag">SCADA BRIDGE</span>
+            <small id="station-scene">realtime / qinling</small>
+          </div>
         </div>
-      </div>
-      <div class="header-tools">
-        <span class="live-clock" id="live-clock">--:--:--</span>
-        <label class="inline-select">
-          <span>刷新</span>
-          <select id="refresh-interval" aria-label="刷新间隔">
+        <div class="topbar-controls">
+          <select id="refresh-interval" aria-label="刷新间隔" title="自动刷新周期">
             <option value="2000">2 秒</option>
             <option value="5000" selected>5 秒</option>
             <option value="10000">10 秒</option>
             <option value="0">暂停</option>
           </select>
-        </label>
-        <button type="button" class="btn secondary" id="manual-refresh">刷新</button>
-        <div class="conn-pill" id="conn-pill" role="status">
-          <span class="dot"></span>
-          <span id="conn-text">连接中</span>
+          <button type="button" class="btn secondary" id="manual-refresh">刷新</button>
+          <div class="conn-pill" id="conn-pill" role="status">
+            <span class="dot"></span>
+            <span id="conn-text">连接中</span>
+          </div>
         </div>
+      </div>
+
+      <div class="bridge-crest">
+        <span class="crest-wing left" aria-hidden="true"></span>
+        <strong id="station-title">南极秦岭站综合能量管理系统</strong>
+        <span class="crest-wing right" aria-hidden="true"></span>
+      </div>
+
+      <div class="header-tools">
+        <span class="live-clock" id="live-clock">--:--:--</span>
       </div>
     </header>
 
@@ -83,62 +107,60 @@
       </aside>
 
       <main class="portal-main">
-        <!-- ==================== 1. 系统首页（输入图底图实时刷新） ==================== -->
+        <!-- ==================== 1. 系统首页（纯净底图 + 实时全息大屏） ==================== -->
         <section id="view-home" class="portal-view active">
           <div class="hero-kpi-strip" aria-label="系统核心指标">
-            <div class="kpi-card">
-              <div class="kpi-label">运行总天数</div>
-              <div class="kpi-val"><strong id="kpi-days">--</strong><span>天</span></div>
+            <div class="kpi-card has-icon">
+              <span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M8 14h2M14 14h2M8 18h2M14 18h2"/></svg></span>
+              <div>
+                <div class="kpi-label">运行总天数</div>
+                <div class="kpi-val"><strong id="kpi-days">--</strong><span>天</span></div>
+              </div>
             </div>
-            <div class="kpi-card">
-              <div class="kpi-label">负荷总用电</div>
-              <div class="kpi-val"><strong id="kpi-load-total">--</strong><span>万kWh</span></div>
+            <div class="kpi-card has-icon">
+              <span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M13 6 8.5 13H12l-1 5 4.5-7H12z"/></svg></span>
+              <div>
+                <div class="kpi-label">负荷总用电</div>
+                <div class="kpi-val"><strong id="kpi-load-total">--</strong><span>万kWh</span></div>
+              </div>
             </div>
-            <div class="kpi-card">
-              <div class="kpi-label">柴油总发电</div>
-              <div class="kpi-val"><strong id="kpi-diesel-total">--</strong><span>万kWh</span></div>
+            <div class="kpi-card has-icon">
+              <span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h4M7 14h3M15 10v4M18 10v4M7 6V4M17 6V4"/></svg></span>
+              <div>
+                <div class="kpi-label">柴油总发电</div>
+                <div class="kpi-val"><strong id="kpi-diesel-total">--</strong><span>万kWh</span></div>
+              </div>
             </div>
-            <div class="kpi-card">
-              <div class="kpi-label">新能源总发电</div>
-              <div class="kpi-val"><strong id="kpi-renew-total">--</strong><span>万kWh</span></div>
+            <div class="kpi-card has-icon">
+              <span class="kpi-icon ok" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 5c-6 0-11 3.5-13 9 2.5 1 5.5 1.5 8 0 3.5-2 5-5.5 5-9Z"/><path d="M6 19c1.5-2.5 4-4.5 7-6"/></svg></span>
+              <div>
+                <div class="kpi-label">新能源总发电</div>
+                <div class="kpi-val"><strong id="kpi-renew-total">--</strong><span>万kWh</span></div>
+              </div>
             </div>
-            <div class="kpi-card">
-              <div class="kpi-label">柴油总节约量</div>
-              <div class="kpi-val"><strong id="kpi-diesel-saved">--</strong><span>吨</span></div>
+            <div class="kpi-card has-icon">
+              <span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s6 6.8 6 11a6 6 0 1 1-12 0c0-4.2 6-11 6-11Z"/><path d="M9.5 15a2.5 2.5 0 0 0 2.5 2.5"/></svg></span>
+              <div>
+                <div class="kpi-label">柴油总节约量</div>
+                <div class="kpi-val"><strong id="kpi-diesel-saved">--</strong><span>吨</span></div>
+              </div>
             </div>
           </div>
 
           <div class="hero-stage" id="hero-stage">
-            <img
-              class="hero-bg"
-              src="/static/assets/qinling-hero.jpg"
-              alt="南极秦岭站综合能源实景"
-              draggable="false"
-            />
-            <div class="hero-scrim" aria-hidden="true"></div>
-
-            <!-- 动态能量流路径叠加层 -->
-            <svg class="hero-flow-svg" viewBox="0 0 1200 540" preserveAspectRatio="none" aria-hidden="true">
+            <!-- 基于 DOM 真实坐标动态绘制的能量流连线层（零偏移、零重叠） -->
+            <svg class="hero-flow-svg" id="hero-flow-svg" aria-hidden="true">
               <defs>
-                <filter id="flow-glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="4" result="blur" />
+                <filter id="flow-glow" x="-30%" y="-30%" width="160%" height="160%">
+                  <feGaussianBlur stdDeviation="3.5" result="blur" />
                   <feMerge>
                     <feMergeNode in="blur" />
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
               </defs>
-              <!-- 左侧汇流支路 -->
-              <path id="flow-pv" class="flow-path" d="M 245 104 C 310 104, 320 218, 375 218" />
-              <path id="flow-wind" class="flow-path" d="M 245 190 C 310 190, 320 218, 375 218" />
-              <path id="flow-h2prod" class="flow-path" d="M 245 276 C 310 276, 320 218, 375 218" />
-              <path id="flow-h2gen" class="flow-path" d="M 245 362 C 310 362, 320 218, 375 218" />
-              <!-- 主干能量母线 -->
-              <path id="flow-trunk" class="flow-path trunk" d="M 375 218 C 560 218, 700 225, 835 338" />
-              <!-- 右侧分支 -->
-              <path id="flow-diesel" class="flow-path" d="M 945 268 C 885 268, 875 338, 835 338" />
-              <path id="flow-storage" class="flow-path" d="M 945 352 C 885 352, 875 338, 835 338" />
-              <path id="flow-load" class="flow-path" d="M 835 338 C 875 338, 885 436, 945 436" />
+              <g id="hero-flow-tracks"></g>
+              <g id="hero-flow-pulses"></g>
             </svg>
 
             <!-- 气象与储氢环境微标 -->
@@ -150,48 +172,70 @@
 
             <!-- 左侧 4 组实时能源卡片 -->
             <div class="hero-col hero-col-left">
-              <button type="button" class="energy-node" data-jump-cat="pv">
-                <span class="node-icon" aria-hidden="true">☀</span>
+              <button type="button" class="energy-node" id="node-pv" data-jump-cat="pv">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="10" rx="1.5"/><path d="M3 11h18M9 6v10M15 6v10M8 20h8M12 16v4"/></svg></span>
                 <span class="node-name">光伏</span>
                 <strong class="node-val" id="rt-pv">--</strong>
                 <span class="node-unit">kW</span>
               </button>
-              <button type="button" class="energy-node" data-jump-cat="wind">
-                <span class="node-icon" aria-hidden="true">✦</span>
+              <button type="button" class="energy-node" id="node-wind" data-jump-cat="wind">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M9 21h6M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg></span>
                 <span class="node-name">风机</span>
                 <strong class="node-val" id="rt-wind">--</strong>
                 <span class="node-unit">kW</span>
               </button>
-              <button type="button" class="energy-node" data-jump-cat="hydrogen">
-                <span class="node-icon" aria-hidden="true">H₂</span>
+              <button type="button" class="energy-node" id="node-h2prod" data-jump-cat="hydrogen">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9v6M12 9v6M8 12h4M15 15h2.5a1.5 1.5 0 0 0 0-3H15v-2h2.5"/></svg></span>
                 <span class="node-name">制氢</span>
                 <strong class="node-val" id="rt-h2prod">--</strong>
                 <span class="node-unit">kW</span>
               </button>
-              <button type="button" class="energy-node" data-jump-cat="hydrogen">
-                <span class="node-icon" aria-hidden="true">⚡</span>
+              <button type="button" class="energy-node" id="node-h2gen" data-jump-cat="hydrogen">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 9v6M13 9v6M9 12h4M15.5 15h2"/></svg></span>
                 <span class="node-name">氢电</span>
                 <strong class="node-val" id="rt-h2gen">--</strong>
                 <span class="node-unit">kW</span>
               </button>
             </div>
 
+            <!-- 中央全息「新能源占比」星舰焦点面板 -->
+            <div class="hero-center-hud" id="hero-center-hud">
+              <div class="hud-frame">
+                <svg class="renew-pie" viewBox="0 0 120 120" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="pie-grad" x1="0" y1="0" x2="1" y2="1">
+                      <stop class="pie-grad-start" offset="0%" />
+                      <stop class="pie-grad-end" offset="100%" />
+                    </linearGradient>
+                  </defs>
+                  <circle class="hud-radar-ring" cx="60" cy="60" r="54" fill="none" stroke-width="1.4" stroke-dasharray="10 6 2 6" />
+                  <circle class="hud-pie-base" cx="58" cy="62" r="42" stroke-width="2.2" />
+                  <path id="renew-pie-slice" class="hud-pie-slice" d="" fill="url(#pie-grad)" stroke-width="1.6" />
+                </svg>
+                <div class="hud-readout">
+                  <div class="hud-title">新能源占比</div>
+                  <div class="hud-pct"><strong id="kpi-renew-share">--</strong><span>%</span></div>
+                  <div class="hud-sub" id="hero-renew-kw">-- / -- kW</div>
+                </div>
+              </div>
+            </div>
+
             <!-- 右侧 3 组实时能源卡片 -->
             <div class="hero-col hero-col-right">
-              <button type="button" class="energy-node" data-jump-cat="diesel">
-                <span class="node-icon" aria-hidden="true">⚙</span>
+              <button type="button" class="energy-node" id="node-diesel" data-jump-cat="diesel">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h4M7 14h3M15 10v4M18 10v4"/></svg></span>
                 <span class="node-name">柴发</span>
                 <strong class="node-val" id="rt-diesel">--</strong>
                 <span class="node-unit">kW</span>
               </button>
-              <button type="button" class="energy-node" data-jump-cat="storage">
-                <span class="node-icon" aria-hidden="true">▮</span>
+              <button type="button" class="energy-node" id="node-storage" data-jump-cat="storage">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 9h6M9 13h6M9 17h6"/></svg></span>
                 <span class="node-name">电储</span>
                 <strong class="node-val" id="rt-storage">--</strong>
                 <span class="node-unit" id="rt-storage-soc">--%</span>
               </button>
-              <button type="button" class="energy-node" data-jump-cat="load">
-                <span class="node-icon" aria-hidden="true">◈</span>
+              <button type="button" class="energy-node" id="node-load" data-jump-cat="load">
+                <span class="node-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 4v5M16 4v5M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg></span>
                 <span class="node-name">负荷</span>
                 <strong class="node-val" id="rt-load">--</strong>
                 <span class="node-unit">kW</span>
@@ -202,24 +246,32 @@
           <div class="hero-bottom-strip" aria-label="新能源统计">
             <div class="strip-badge">新能源</div>
             <div class="mini-kpi">
-              <span>风机总发电</span>
-              <div><strong id="kpi-wind-total">--</strong><small>万kWh</small></div>
+              <span class="mini-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M9 21h6M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg></span>
+              <div class="mini-body">
+                <span>风机总发电</span>
+                <div><strong id="kpi-wind-total">--</strong><small>万kWh</small></div>
+              </div>
             </div>
             <div class="mini-kpi">
-              <span>光伏总发电</span>
-              <div><strong id="kpi-pv-total">--</strong><small>万kWh</small></div>
+              <span class="mini-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="10" rx="1.5"/><path d="M3 11h18M9 6v10M15 6v10M8 20h8M12 16v4"/></svg></span>
+              <div class="mini-body">
+                <span>光伏总发电</span>
+                <div><strong id="kpi-pv-total">--</strong><small>万kWh</small></div>
+              </div>
             </div>
             <div class="mini-kpi">
-              <span>储能总发电</span>
-              <div><strong id="kpi-storage-total">--</strong><small>万kWh</small></div>
+              <span class="mini-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 9h6M9 13h6M9 17h6"/></svg></span>
+              <div class="mini-body">
+                <span>储能总发电</span>
+                <div><strong id="kpi-storage-total">--</strong><small>万kWh</small></div>
+              </div>
             </div>
             <div class="mini-kpi">
-              <span>氢能总发电</span>
-              <div><strong id="kpi-hydro-total">--</strong><small>万kWh</small></div>
-            </div>
-            <div class="mini-kpi accent">
-              <span>新能源占比</span>
-              <div><strong id="kpi-renew-share">--</strong><small>%</small></div>
+              <span class="mini-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 9v6M12.5 9v6M8.5 12h4M15 15h2"/></svg></span>
+              <div class="mini-body">
+                <span>氢能总发电</span>
+                <div><strong id="kpi-hydro-total">--</strong><small>万kWh</small></div>
+              </div>
             </div>
           </div>
         </section>

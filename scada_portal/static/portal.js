@@ -103,6 +103,7 @@
     const valid = ["home", "powerflow", "devices", "comm", "logs"];
     if (!valid.includes(view)) view = "home";
     state.view = view;
+    document.body.classList.toggle("view-home", view === "home");
     if (updateHash && location.hash !== "#" + view) {
       history.replaceState(null, "", "#" + view);
     }
@@ -114,6 +115,9 @@
       if (sec) sec.hidden = v !== view;
     });
     refreshCurrentView();
+    if (view === "home") {
+      requestAnimationFrame(() => updateHeroFlowLines(lastRealtimeEnergy));
+    }
     if (view === "powerflow" && state.svgLoaded) {
       requestAnimationFrame(() => fitSvgView());
     }
@@ -131,23 +135,140 @@
     if (h && h !== state.view) switchView(h, false);
   });
 
-  // ==================== 1. 系统首页（输入底图实时刷新） ====================
-  function updateFlowPath(id, powerKw, { reverseOnNeg = false, alwaysReverse = false } = {}) {
-    const el = $("#" + id);
-    if (!el) return;
-    const val = Number(powerKw || 0);
-    const abs = Math.abs(val);
-    el.classList.remove("idle", "reverse");
-    if (abs < 0.05) {
-      el.classList.add("idle");
-      el.style.animationDuration = "";
+  // ==================== 1. 系统首页（纯净底图 + 中央全息面板 + DOM精准能量流） ====================
+  let lastRealtimeEnergy = null;
+
+  function renderRenewPie(pct) {
+    const slice = $("#renew-pie-slice");
+    if (!slice) return;
+    const clamped = Math.max(0, Math.min(99.9, Number(pct || 0)));
+    if (clamped <= 0.1) {
+      slice.setAttribute("d", "");
       return;
     }
-    if (alwaysReverse || (reverseOnNeg && val < 0)) {
-      el.classList.add("reverse");
+    const cx = 61;
+    const cy = 58;
+    const r = 44;
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + (clamped / 100) * Math.PI * 2;
+    const x1 = cx + r * Math.cos(startAngle);
+    const y1 = cy + r * Math.sin(startAngle);
+    const x2 = cx + r * Math.cos(endAngle);
+    const y2 = cy + r * Math.sin(endAngle);
+    const largeArc = clamped > 50 ? 1 : 0;
+    slice.setAttribute(
+      "d",
+      `M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`
+    );
+  }
+
+  function updateHeroFlowLines(rt) {
+    const stage = $("#hero-stage");
+    const svg = $("#hero-flow-svg");
+    const tracksG = $("#hero-flow-tracks");
+    const pulsesG = $("#hero-flow-pulses");
+    const hud = $("#hero-center-hud");
+    if (!stage || !svg || !tracksG || !pulsesG || !hud) return;
+
+    const sRect = stage.getBoundingClientRect();
+    if (sRect.width < 40 || sRect.height < 40) return;
+    svg.setAttribute("viewBox", `0 0 ${Math.round(sRect.width)} ${Math.round(sRect.height)}`);
+
+    const relRect = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        left: r.left - sRect.left,
+        right: r.right - sRect.left,
+        top: r.top - sRect.top,
+        bottom: r.bottom - sRect.top,
+        cy: (r.top + r.bottom) / 2 - sRect.top,
+      };
+    };
+
+    const h = relRect(hud);
+    const leftNodes = [
+      { id: "node-pv", kw: rt?.pv_kw ?? 0, reverse: false },
+      { id: "node-wind", kw: rt?.wind_kw ?? 0, reverse: false },
+      { id: "node-h2prod", kw: rt?.hydrogen_prod_kw ?? 0, reverse: true },
+      { id: "node-h2gen", kw: rt?.hydrogen_gen_kw ?? 0, reverse: false },
+    ];
+    const rightNodes = [
+      { id: "node-diesel", kw: rt?.diesel_kw ?? 0, reverse: true },
+      { id: "node-storage", kw: rt?.storage_kw ?? 0, reverse: (rt?.storage_kw ?? 0) > 0 },
+      { id: "node-load", kw: rt?.load_kw ?? 0, reverse: false },
+    ];
+
+    const segs = [];
+    // 左侧 4 张卡 -> 左侧汇流点 -> 中央 HUD 左边缘中点
+    const leftEls = leftNodes.map((n) => ({ ...n, rect: $("#" + n.id) ? relRect($("#" + n.id)) : null })).filter((n) => n.rect);
+    if (leftEls.length) {
+      const maxLeftR = Math.max(...leftEls.map((n) => n.rect.right));
+      const busX = maxLeftR + (h.left - maxLeftR) * 0.56;
+      const busY = h.cy;
+      leftEls.forEach((n) => {
+        const sx = n.rect.right;
+        const sy = n.rect.cy;
+        const c1x = sx + (busX - sx) * 0.55;
+        const c2x = sx + (busX - sx) * 0.55;
+        segs.push({
+          d: `M ${sx.toFixed(1)} ${sy.toFixed(1)} C ${c1x.toFixed(1)} ${sy.toFixed(1)}, ${c2x.toFixed(1)} ${busY.toFixed(1)}, ${busX.toFixed(1)} ${busY.toFixed(1)}`,
+          kw: n.kw,
+          reverse: n.reverse,
+          trunk: false,
+        });
+      });
+      const leftNet = (rt?.pv_kw || 0) + (rt?.wind_kw || 0) + (rt?.hydrogen_gen_kw || 0) - (rt?.hydrogen_prod_kw || 0);
+      segs.push({
+        d: `M ${busX.toFixed(1)} ${busY.toFixed(1)} L ${h.left.toFixed(1)} ${busY.toFixed(1)}`,
+        kw: leftNet,
+        reverse: leftNet < 0,
+        trunk: true,
+      });
     }
-    const dur = Math.max(0.45, Math.min(2.2, 2.2 - Math.min(abs, 250) / 150));
-    el.style.animationDuration = dur.toFixed(2) + "s";
+
+    // 中央 HUD 右边缘中点 -> 右侧汇流点 -> 右侧 3 张卡左边缘中点
+    const rightEls = rightNodes.map((n) => ({ ...n, rect: $("#" + n.id) ? relRect($("#" + n.id)) : null })).filter((n) => n.rect);
+    if (rightEls.length) {
+      const minRightL = Math.min(...rightEls.map((n) => n.rect.left));
+      const rBusX = h.right + (minRightL - h.right) * 0.58;
+      const rBusY = rightEls.length >= 2 ? rightEls[1].rect.cy : h.cy;
+      const midC1x = h.right + (rBusX - h.right) * 0.55;
+      const midC2x = h.right + (rBusX - h.right) * 0.45;
+      segs.push({
+        d: `M ${h.right.toFixed(1)} ${h.cy.toFixed(1)} C ${midC1x.toFixed(1)} ${h.cy.toFixed(1)}, ${midC2x.toFixed(1)} ${rBusY.toFixed(1)}, ${rBusX.toFixed(1)} ${rBusY.toFixed(1)}`,
+        kw: (rt?.load_kw || 0) + Math.abs(rt?.diesel_kw || 0) + Math.abs(rt?.storage_kw || 0),
+        reverse: false,
+        trunk: true,
+      });
+      rightEls.forEach((n) => {
+        const tx = n.rect.left;
+        const ty = n.rect.cy;
+        const c1x = rBusX + (tx - rBusX) * 0.45;
+        const c2x = rBusX + (tx - rBusX) * 0.55;
+        segs.push({
+          d: `M ${rBusX.toFixed(1)} ${rBusY.toFixed(1)} C ${c1x.toFixed(1)} ${rBusY.toFixed(1)}, ${c2x.toFixed(1)} ${ty.toFixed(1)}, ${tx.toFixed(1)} ${ty.toFixed(1)}`,
+          kw: n.kw,
+          reverse: n.reverse,
+          trunk: false,
+        });
+      });
+    }
+
+    const trackHtml = [];
+    const pulseHtml = [];
+    segs.forEach((seg) => {
+      const abs = Math.abs(Number(seg.kw || 0));
+      const idle = abs < 0.05;
+      trackHtml.push(`<path class="flow-track${idle ? " idle" : ""}" d="${seg.d}" />`);
+      const cls = ["flow-path"];
+      if (seg.trunk) cls.push("trunk");
+      if (idle) cls.push("idle");
+      else if (seg.reverse) cls.push("reverse");
+      const dur = idle ? "" : ` style="animation-duration:${Math.max(0.45, Math.min(2.0, 2.0 - Math.min(abs, 250) / 160)).toFixed(2)}s"`;
+      pulseHtml.push(`<path class="${cls.join(" ")}" d="${seg.d}"${dur} />`);
+    });
+    tracksG.innerHTML = trackHtml.join("");
+    pulsesG.innerHTML = pulseHtml.join("");
   }
 
   async function loadOverview() {
@@ -158,6 +279,7 @@
     const k = data.kpis || {};
     const rt = data.realtime || {};
     const h = data.health || {};
+    lastRealtimeEnergy = rt;
 
     $("#kpi-days").textContent = k.running_days ?? "--";
     $("#kpi-load-total").textContent = fmtNum(k.load_total_wkwh, 1);
@@ -169,7 +291,13 @@
     $("#kpi-pv-total").textContent = fmtNum(k.pv_total_wkwh, 2);
     $("#kpi-storage-total").textContent = fmtNum(k.storage_total_wkwh, 2);
     $("#kpi-hydro-total").textContent = fmtNum(k.hydro_total_wkwh, 2);
-    $("#kpi-renew-share").textContent = fmtNum(k.renewable_share_pct, 1);
+
+    const sharePct = Number(k.renewable_share_pct ?? 0);
+    $("#kpi-renew-share").textContent = fmtNum(sharePct, 1);
+    if ($("#hero-renew-kw")) {
+      $("#hero-renew-kw").textContent = `${fmtNum(rt.renewable_kw, 1)} / ${fmtNum(rt.total_gen_kw, 1)} kW`;
+    }
+    renderRenewPie(sharePct);
 
     $("#rt-pv").textContent = fmtNum(rt.pv_kw, 1);
     $("#rt-wind").textContent = fmtNum(rt.wind_kw, 1);
@@ -193,15 +321,9 @@
     $("#health-gen").textContent = `${fmtNum(rt.total_gen_kw, 1)} kW`;
     $("#health-load").textContent = `${fmtNum(rt.total_load_kw, 1)} kW`;
 
-    // 动态能量流动画联动
-    updateFlowPath("flow-pv", rt.pv_kw);
-    updateFlowPath("flow-wind", rt.wind_kw);
-    updateFlowPath("flow-h2prod", rt.hydrogen_prod_kw, { alwaysReverse: true });
-    updateFlowPath("flow-h2gen", rt.hydrogen_gen_kw);
-    updateFlowPath("flow-trunk", (rt.pv_kw || 0) + (rt.wind_kw || 0) + (rt.hydrogen_gen_kw || 0) - (rt.hydrogen_prod_kw || 0), { reverseOnNeg: true });
-    updateFlowPath("flow-diesel", rt.diesel_kw);
-    updateFlowPath("flow-storage", rt.storage_kw, { reverseOnNeg: true });
-    updateFlowPath("flow-load", rt.load_kw);
+    if (state.view === "home") {
+      requestAnimationFrame(() => updateHeroFlowLines(rt));
+    }
   }
 
   $$(".energy-node[data-jump-cat]").forEach((btn) => {
@@ -1111,8 +1233,15 @@
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   window.addEventListener("resize", () => {
+    if (state.view === "home") updateHeroFlowLines(lastRealtimeEnergy);
     if (state.view === "devices") drawTrendChart();
   });
+
+  if (typeof ResizeObserver === "function" && $("#hero-stage")) {
+    new ResizeObserver(() => {
+      if (state.view === "home") updateHeroFlowLines(lastRealtimeEnergy);
+    }).observe($("#hero-stage"));
+  }
 
   // 启动入口
   const initialHash = location.hash.replace(/^#/, "");
