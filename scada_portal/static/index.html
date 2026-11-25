@@ -308,21 +308,46 @@
                 <span><i class="swatch flow-dc"></i>直流潮流</span>
                 <span id="pf-zoom-label">100%</span>
               </div>
-            </div>
 
-            <aside class="pf-drawer" id="pf-drawer" hidden>
-              <div class="drawer-head">
-                <div>
-                  <h3 id="pf-drawer-name">设备详情</h3>
-                  <small id="pf-drawer-meta"></small>
+              <!-- 设备鼠标悬浮框 -->
+              <div class="pf-popover" id="pf-dev-popover" hidden>
+                <div class="pf-pop-head">
+                  <div class="pf-pop-title-wrap">
+                    <strong id="pf-dev-pop-name">设备详情</strong>
+                    <small id="pf-dev-pop-meta"></small>
+                  </div>
+                  <button type="button" class="btn secondary pf-pop-jump" id="pf-jump-device">日曲线 →</button>
                 </div>
-                <button type="button" class="icon-btn" id="pf-drawer-close" aria-label="关闭">×</button>
+                <div class="pf-pop-metrics" id="pf-dev-pop-metrics"></div>
               </div>
-              <div class="drawer-body" id="pf-drawer-metrics"></div>
-              <div class="drawer-foot">
-                <button type="button" class="btn primary" id="pf-jump-device">查看设备日曲线</button>
+
+              <!-- 量测点鼠标悬浮框（含属性与近1小时/近1天实时曲线） -->
+              <div class="pf-popover pf-meas-popover" id="pf-meas-popover" hidden>
+                <div class="pf-pop-head">
+                  <div class="pf-pop-title-wrap">
+                    <strong id="pf-mp-title">量测详情</strong>
+                    <small id="pf-mp-sub"></small>
+                  </div>
+                  <div class="pf-mp-val-wrap">
+                    <strong id="pf-mp-value">--</strong>
+                    <span id="pf-mp-badge"></span>
+                  </div>
+                </div>
+                <div class="pf-mp-grid" id="pf-mp-meta-grid"></div>
+                <div class="pf-mp-chart-box">
+                  <div class="pf-mp-chart-head">
+                    <div class="pf-mp-tabs" id="pf-mp-tabs" role="tablist" aria-label="曲线时间窗">
+                      <button type="button" class="pf-mp-tab active" role="tab" aria-selected="true" data-mp-hours="1">近 1 小时</button>
+                      <button type="button" class="pf-mp-tab" role="tab" aria-selected="false" data-mp-hours="24">近 1 天</button>
+                    </div>
+                    <small id="pf-mp-chart-stat"></small>
+                  </div>
+                  <div class="pf-mp-canvas-wrap" id="pf-mp-canvas-wrap">
+                    <canvas id="pf-meas-canvas"></canvas>
+                  </div>
+                </div>
               </div>
-            </aside>
+            </div>
           </div>
         </section>
 
@@ -346,7 +371,7 @@
 
             <div class="dev-detail-panel">
               <div class="detail-header">
-                <div>
+                <div class="detail-title-line">
                   <h2 id="dev-detail-name">请选择左侧设备</h2>
                   <small id="dev-detail-meta"></small>
                 </div>
@@ -383,12 +408,11 @@
           </div>
         </section>
 
-        <!-- ==================== 4. 通信图（RTU / 通道 / 四遥数据） ==================== -->
+        <!-- ==================== 4. 通信图（RTU 与通信通道 / 四遥数据） ==================== -->
         <section id="view-comm" class="portal-view" hidden>
           <div class="view-toolbar">
             <div class="tab-bar" id="comm-tabs" role="tablist" aria-label="通信视图">
-              <button type="button" class="tab-btn active" data-comm-tab="rtus">RTU 状态</button>
-              <button type="button" class="tab-btn" data-comm-tab="channels">通信通道</button>
+              <button type="button" class="tab-btn active" data-comm-tab="overview">RTU 与通信通道</button>
               <button type="button" class="tab-btn" data-comm-tab="points">四遥数据</button>
             </div>
             <div class="toolbar-right" id="comm-point-filters" hidden>
@@ -401,45 +425,55 @@
 
           <div class="comm-summary" id="comm-summary"></div>
 
-          <div class="table-panel" id="comm-rtus-panel">
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>RTU</th>
-                    <th>名称</th>
-                    <th>通道 / 规约</th>
-                    <th>自动通信</th>
-                    <th>连接状态</th>
-                    <th class="num">YC / YX / YK / YT</th>
-                    <th class="num">收 / 发 / 错</th>
-                    <th>最近心跳</th>
-                    <th>诊断信息</th>
-                  </tr>
-                </thead>
-                <tbody id="comm-rtus-body"></tbody>
-              </table>
+          <div class="comm-overview-split" id="comm-overview-panel">
+            <div class="table-panel comm-sub-panel" id="comm-rtus-panel">
+              <div class="panel-head">
+                <span>RTU 状态</span>
+                <small id="comm-rtus-count">0</small>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>RTU</th>
+                      <th>名称</th>
+                      <th>通道 / 规约</th>
+                      <th>自动通信</th>
+                      <th>连接状态</th>
+                      <th class="num">YC / YX / YK / YT</th>
+                      <th class="num">收 / 发 / 错</th>
+                      <th>最近心跳</th>
+                      <th>诊断信息</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comm-rtus-body"></tbody>
+                </table>
+              </div>
             </div>
-          </div>
 
-          <div class="table-panel" id="comm-channels-panel" hidden>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>通道</th>
-                    <th>规约</th>
-                    <th>名称</th>
-                    <th>绑定 RTU</th>
-                    <th>目标端点</th>
-                    <th>连接状态</th>
-                    <th class="num">接收帧</th>
-                    <th class="num">错误数</th>
-                    <th>关键参数</th>
-                  </tr>
-                </thead>
-                <tbody id="comm-channels-body"></tbody>
-              </table>
+            <div class="table-panel comm-sub-panel" id="comm-channels-panel">
+              <div class="panel-head">
+                <span>通信通道</span>
+                <small id="comm-channels-count">0</small>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>通道</th>
+                      <th>规约</th>
+                      <th>名称</th>
+                      <th>绑定 RTU</th>
+                      <th>目标端点</th>
+                      <th>连接状态</th>
+                      <th class="num">接收帧</th>
+                      <th class="num">错误数</th>
+                      <th>关键参数</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comm-channels-body"></tbody>
+                </table>
+              </div>
             </div>
           </div>
 

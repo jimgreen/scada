@@ -93,6 +93,122 @@ DEVICE_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("switch", "断路器开关"),
 )
 
+# 模型库（model/devices.sqlite3）扩展表 -> (主表名, 关联外键列名)
+_MODEL_EXTENSIONS: dict[str, tuple[str, str]] = {
+    "ACWindGen": ("ACGenerator", "idx_acgenerator"),
+    "ACPVGen": ("ACGenerator", "idx_acgenerator"),
+    "ACDieselGen": ("ACGenerator", "idx_acgenerator"),
+    "ACStorageGen": ("ACGenerator", "idx_acgenerator"),
+    "DCPVGen": ("DCGenerator", "idx_dcgenerator"),
+    "DCStorageGen": ("DCGenerator", "idx_dcgenerator"),
+}
+
+# 模型库设备参数中文字典与单位（eng_name -> (中文名, 单位)）
+MODEL_PARAM_META: dict[str, tuple[str, str]] = {
+    "dev_type": ("设备类型", ""),
+    "rated_capacity": ("额定容量", "kW"),
+    "rated_voltage": ("额定电压", "V"),
+    "vbase": ("基准电压", "V"),
+    "control_type": ("控制模式", ""),
+    "ac_control_type": ("交流侧控制", ""),
+    "dc_control_type": ("直流侧控制", ""),
+    "i_control_type": ("I 侧控制", ""),
+    "j_control_type": ("J 侧控制", ""),
+    "p_set": ("有功设定", "kW"),
+    "q_set": ("无功设定", "kvar"),
+    "v_set": ("电压设定", "V"),
+    "i_set": ("电流设定", "A"),
+    "p_ac_set": ("交流有功设定", "kW"),
+    "q_ac_set": ("交流无功设定", "kvar"),
+    "v_ac_set": ("交流电压设定", "V"),
+    "p_dc_set": ("直流功率设定", "kW"),
+    "v_dc_set": ("直流电压设定", "V"),
+    "p_max": ("有功上限", "kW"),
+    "p_min": ("有功下限", "kW"),
+    "q_max": ("无功上限", "kvar"),
+    "q_min": ("无功下限", "kvar"),
+    "v_max": ("电压上限", "pu"),
+    "v_min": ("电压下限", "pu"),
+    "i_max": ("电流上限", "A"),
+    "ac_p_max": ("交流有功上限", "kW"),
+    "ac_p_min": ("交流有功下限", "kW"),
+    "dc_p_max": ("直流功率上限", "kW"),
+    "dc_p_min": ("直流功率下限", "kW"),
+    "ac_v_max": ("交流电压上限", "pu"),
+    "ac_v_min": ("交流电压下限", "pu"),
+    "dc_v_max": ("直流电压上限", "pu"),
+    "dc_v_min": ("直流电压下限", "pu"),
+    "i_p_max": ("I 侧功率上限", "kW"),
+    "i_p_min": ("I 侧功率下限", "kW"),
+    "j_p_max": ("J 侧功率上限", "kW"),
+    "j_p_min": ("J 侧功率下限", "kW"),
+    "i_v_max": ("I 侧电压上限", "pu"),
+    "i_v_min": ("I 侧电压下限", "pu"),
+    "j_v_max": ("J 侧电压上限", "pu"),
+    "j_v_min": ("J 侧电压下限", "pu"),
+    "r": ("电阻 R", "Ω"),
+    "x": ("电抗 X", "Ω"),
+    "b": ("电纳 B", "S"),
+    "r1": ("损耗系数 R1", ""),
+    "r2": ("损耗系数 R2", ""),
+    "pbase": ("基准有功", "kW"),
+    "qbase": ("基准无功", "kvar"),
+    "status": ("初始状态", ""),
+    "run_stat": ("投运状态", ""),
+    "node": ("关联节点", ""),
+    "i_node": ("首端节点", ""),
+    "j_node": ("末端节点", ""),
+    "ac_node": ("交流节点", ""),
+    "dc_node": ("直流节点", ""),
+    "pressure": ("额定压力", "MPa"),
+    "pressure_set": ("压力设定", "MPa"),
+    "flow_set": ("流量设定", "Nm³/h"),
+    "flow_min": ("流量下限", "Nm³/h"),
+    "flow_max": ("流量上限", "Nm³/h"),
+    "conductance": ("流导系数", ""),
+    "ratio": ("压比", ""),
+    "e2h_coeff": ("电制氢系数", ""),
+    "h2e_coeff": ("氢发电系数", ""),
+    # 扩展表：风机
+    "wind_turbine_model": ("风机型号", ""),
+    "cut_in_wind_speed": ("切入风速", "m/s"),
+    "rated_wind_speed": ("额定风速", "m/s"),
+    "cut_out_wind_speed": ("切出风速", "m/s"),
+    "rotor_diameter": ("叶轮直径", "m"),
+    "hub_height": ("轮毂高度", "m"),
+    # 扩展表：光伏
+    "pv_module_model": ("光伏组件型号", ""),
+    "module_efficiency": ("组件效率", ""),
+    "array_area": ("阵列面积", "m²"),
+    "mppt_count": ("MPPT 路数", ""),
+    "reference_irradiance": ("参考辐照度", "W/m²"),
+    "reference_temperature": ("参考温度", "°C"),
+    "temperature_coefficient": ("温度系数", ""),
+    # 扩展表：储能
+    "storage_technology": ("储能类型", ""),
+    "battery_rack_count": ("电池簇数", ""),
+    "energy_capacity": ("额定电量", "kWh"),
+    "charge_discharge_efficiency": ("充放电效率", ""),
+    "max_charge_power": ("最大充电功率", "kW"),
+    "max_discharge_power": ("最大放电功率", "kW"),
+    "state_of_charge": ("初始 SOC", "%"),
+    "soc_upper_limit": ("SOC 上限", "%"),
+    "soc_lower_limit": ("SOC 下限", "%"),
+    # 扩展表：柴油发电机
+    "diesel_unit_model": ("柴发型号", ""),
+    "fuel_grade": ("燃油牌号", ""),
+    "specific_fuel_consumption": ("燃油消耗率", "g/kWh"),
+    "fuel_tank_capacity": ("油箱容量", "L"),
+    "rated_speed": ("额定转速", "rpm"),
+    "start_time": ("启动时间", "s"),
+}
+
+_MODEL_SKIP_FIELDS = frozenset({
+    "idx", "name", "idx_acgenerator", "idx_dcgenerator",
+    "idx_ac_load_t1", "idx_h2_unit_t2", "idx_dc_unit_t1", "idx_h2_load_t2",
+    "pv0", "pv1", "pv2", "qv0", "qv1", "qv2", "isl", "alpha",
+})
+
 
 def _to_float(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
@@ -155,6 +271,7 @@ class PortalService:
         scene_name: str = "qinling",
         c_db: Path | str | None = None,
         d_db: Path | str | None = None,
+        model_db: Path | str | None = None,
         svg_path: Path | str | None = None,
         log_dir: Path | str | None = None,
         history_db: Path | str | None = None,
@@ -167,6 +284,7 @@ class PortalService:
         scene_dir = self.workspace_root / runtime_name / scene_name
         sqldb_dir = scene_dir / "sqldb" / "scada"
         fes_sqldb_dir = scene_dir / "sqldb" / "fes"
+        model_sqldb_dir = scene_dir / "sqldb" / "model"
 
         if c_db:
             self.c_db = Path(c_db).resolve()
@@ -175,6 +293,7 @@ class PortalService:
             legacy_c_db = sqldb_dir / "scdfe_c.sqlite3"
             self.c_db = fes_c_db if (fes_c_db.is_file() or not legacy_c_db.is_file()) else legacy_c_db
         self.d_db = Path(d_db).resolve() if d_db else (sqldb_dir / "scdfe_d.sqlite3")
+        self.model_db = Path(model_db).resolve() if model_db else (model_sqldb_dir / "devices.sqlite3")
         self.svg_path = self._resolve_svg(svg_path, scene_dir / "model", scene_name)
         self.log_dir = Path(log_dir).resolve() if log_dir else (self.c_db.parent / "logs")
         self.history_db = (
@@ -191,6 +310,7 @@ class PortalService:
         # 运行期实时累计（用于微电网总览能量微增量）
         self._session_kwh: dict[str, float] = defaultdict(float)
         self._svg_topo_cache: tuple[int, dict[str, Any]] | None = None
+        self._model_params_cache: tuple[int, dict[str, list[dict[str, Any]]]] | None = None
 
         self._init_history_db()
         if enable_sampler:
@@ -466,6 +586,7 @@ class PortalService:
                         qual = row_dict.get(f"{m}_qual")
                         notuse = bool(row_dict.get(f"{m}_notuse"))
                         src_time = row_dict.get(f"{m}_time")
+                        weight = row_dict.get(f"{m}_weight")
                         max_val = row_dict.get(f"{m}_max")
                         min_val = row_dict.get(f"{m}_min")
                         is_valid = (not notuse) and (qual == 0) and (val is not None)
@@ -490,6 +611,7 @@ class PortalService:
                             "quality_label": QUAL_LABELS.get(qual, str(qual) if qual is not None else "—"),
                             "max_value": max_val,
                             "min_value": min_val,
+                            "weight": weight if weight is not None else 1.0,
                             "valid": is_valid,
                             "disabled": notuse,
                             "source_time": src_time,
@@ -653,16 +775,173 @@ class PortalService:
             raise FileNotFoundError(f"未找到潮流图 SVG 文件：{self.svg_path}")
         return self.svg_path.read_bytes()
 
+    def _read_model_params(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+        """读取 model/devices.sqlite3 全部设备静态参数（主表 + 扩展表），按 mtime 缓存。"""
+        if not self.model_db.is_file():
+            return {}, {}
+        mtime = self.model_db.stat().st_mtime_ns
+        if self._model_params_cache is not None and self._model_params_cache[0] == mtime:
+            return self._model_params_cache[1]
+
+        params_by_dev: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        meta_by_dev: dict[str, dict[str, Any]] = {}
+
+        def _fmt_param_val(eng: str, raw: Any, unit: str) -> str | None:
+            if raw is None:
+                return None
+            if isinstance(raw, str):
+                text = raw.strip()
+                if not text:
+                    return None
+                return f"{text} {unit}".strip() if unit else text
+            if isinstance(raw, bool):
+                return "是" if raw else "否"
+            if isinstance(raw, (int, float)):
+                if not math.isfinite(float(raw)):
+                    return None
+                if eng == "run_stat":
+                    return "投运" if int(raw) else "停运"
+                if eng == "status":
+                    return "合闸" if int(raw) else "分闸"
+                num = float(raw)
+                s = str(int(num)) if abs(num - round(num)) < 1e-9 else f"{num:.4g}"
+                return f"{s} {unit}".strip() if unit else s
+            return str(raw)
+
+        def _append_fields(dev_id: str, fields: list[tuple[str, str]], row: tuple[Any, ...], seen: set[str]) -> None:
+            for (eng, chn), raw in zip(fields, row):
+                if eng in _MODEL_SKIP_FIELDS or eng in seen:
+                    continue
+                if raw is None or (isinstance(raw, str) and not raw.strip()):
+                    continue
+                label, unit = MODEL_PARAM_META.get(eng, (chn or eng, ""))
+                val_str = _fmt_param_val(eng, raw, unit)
+                if val_str is None:
+                    continue
+                seen.add(eng)
+                params_by_dev[dev_id].append({
+                    "key": eng,
+                    "label": label,
+                    "value": val_str,
+                })
+
+        try:
+            with self._open_readonly(self.model_db) as conn:
+                has_schema = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rtdb_schema_tables'"
+                ).fetchone()
+                if not has_schema:
+                    return {}, {}
+                tables = [
+                    r[0]
+                    for r in conn.execute("SELECT table_name FROM rtdb_schema_tables ORDER BY ordinal").fetchall()
+                ]
+                seen_keys: dict[str, set[str]] = defaultdict(set)
+                # 先读主表
+                for tbl in tables:
+                    if tbl in ("Model", "basevoltage", "HydroMedium") or tbl in _MODEL_EXTENSIONS:
+                        continue
+                    cols = conn.execute(
+                        "SELECT ordinal, eng_name, chn_name FROM rtdb_schema_columns WHERE table_name=? ORDER BY ordinal",
+                        (tbl,),
+                    ).fetchall()
+                    if not cols:
+                        continue
+                    eng_list = [r[1] for r in cols]
+                    if "idx" not in eng_list:
+                        continue
+                    idx_pos = eng_list.index("idx")
+                    name_pos = eng_list.index("name") if "name" in eng_list else -1
+                    sel = ", ".join(f'"c{int(r[0])}"' for r in cols)
+                    fields = [(r[1], r[2]) for r in cols]
+                    for row in conn.execute(f'SELECT {sel} FROM "rtdb_data_{tbl}"').fetchall():
+                        try:
+                            dev_idx = int(row[idx_pos])
+                        except (TypeError, ValueError):
+                            continue
+                        dev_id = f"{tbl}-{dev_idx}"
+                        dev_name = str(row[name_pos]) if name_pos >= 0 and row[name_pos] is not None else dev_id
+                        meta_by_dev[dev_id] = {
+                            "dev_id": dev_id,
+                            "table_name": tbl,
+                            "idx": dev_idx,
+                            "name": dev_name,
+                            "category": _classify_device(tbl, dev_name),
+                        }
+                        _append_fields(dev_id, fields, tuple(row), seen_keys[dev_id])
+
+                # 再按外键合并扩展表专项参数（风机/光伏/储能/柴发）
+                for ext_tbl, (parent_tbl, fk_col) in _MODEL_EXTENSIONS.items():
+                    if ext_tbl not in tables:
+                        continue
+                    cols = conn.execute(
+                        "SELECT ordinal, eng_name, chn_name FROM rtdb_schema_columns WHERE table_name=? ORDER BY ordinal",
+                        (ext_tbl,),
+                    ).fetchall()
+                    if not cols:
+                        continue
+                    eng_list = [r[1] for r in cols]
+                    if fk_col not in eng_list:
+                        continue
+                    fk_pos = eng_list.index(fk_col)
+                    sel = ", ".join(f'"c{int(r[0])}"' for r in cols)
+                    fields = [(r[1], r[2]) for r in cols]
+                    for row in conn.execute(f'SELECT {sel} FROM "rtdb_data_{ext_tbl}"').fetchall():
+                        try:
+                            parent_idx = int(row[fk_pos])
+                        except (TypeError, ValueError):
+                            continue
+                        parent_dev_id = f"{parent_tbl}-{parent_idx}"
+                        _append_fields(parent_dev_id, fields, tuple(row), seen_keys[parent_dev_id])
+        except sqlite3.Error:
+            return {}, {}
+
+        result = (dict(params_by_dev), meta_by_dev)
+        self._model_params_cache = (mtime, result)
+        return result
+
     def get_powerflow(self) -> dict[str, Any]:
         devices = self._read_all_devices()
+        model_params_map, model_meta_map = self._read_model_params()
         by_dev_id: dict[str, dict[str, Any]] = {d["dev_id"]: d for d in devices}
         # 储能 SOC 单独存放在 ACStorageGen / DCStorageGen，按设备名关联回 ACGenerator / DCGenerator
-        soc_by_name: dict[str, float] = {}
+        soc_by_name: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         for d in devices:
             if d["table_name"] in {"ACStorageGen", "DCStorageGen"}:
                 for m in d["metrics"]:
                     if m["metric"] == "soc" and m["display_value"] is not None:
-                        soc_by_name[d["name"]] = float(m["display_value"])
+                        soc_by_name[d["name"]] = (d, m)
+
+        def make_slot(
+            owner_dev: dict[str, Any],
+            metric_item: dict[str, Any],
+            value: Any,
+            unit: str,
+            extra: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "value": value,
+                "unit": unit,
+                "valid": metric_item["valid"],
+                "table_name": owner_dev["table_name"],
+                "idx": owner_dev["idx"],
+                "device_name": owner_dev["name"],
+                "metric": metric_item["metric"],
+                "label": metric_item["label"],
+                "kind": metric_item["kind"],
+                "rtu_id": metric_item["rtu_id"],
+                "point_no": metric_item["point_no"],
+                "quality": metric_item["quality"],
+                "quality_label": metric_item["quality_label"],
+                "disabled": metric_item["disabled"],
+                "max_value": metric_item["max_value"],
+                "min_value": metric_item["min_value"],
+                "weight": metric_item.get("weight", 1.0),
+                "source_time": metric_item["source_time"],
+            }
+            if extra:
+                payload.update(extra)
+            return payload
 
         # 组装 SVG 108 个 <g class="mg" dev="..."> 所需的精确测点映射
         svg_slots: dict[str, dict[str, dict[str, Any]]] = {}
@@ -684,71 +963,46 @@ class PortalService:
 
             p_m = pick("p", "i_p", "ac_p", "dc_p")
             if p_m is not None:
-                slots["activePower"] = {
-                    "value": round(float(p_m["value"]), 2),
-                    "unit": "kW",
-                    "valid": p_m["valid"],
-                }
+                slots["activePower"] = make_slot(dev, p_m, round(float(p_m["value"]), 2), "kW")
             q_m = pick("q", "i_q", "ac_q")
             if q_m is not None:
-                slots["reactivePower"] = {
-                    "value": round(float(q_m["value"]), 2),
-                    "unit": "kvar",
-                    "valid": q_m["valid"],
-                }
+                slots["reactivePower"] = make_slot(dev, q_m, round(float(q_m["value"]), 2), "kvar")
             v_m = pick("uab", "u", "ac_uab", "dc_u", "i_u", "j_u")
             if v_m is not None:
-                slots["voltage"] = {
-                    "value": round(float(v_m["value"]), 1),
-                    "unit": "V",
-                    "valid": v_m["valid"],
-                }
+                slots["voltage"] = make_slot(dev, v_m, round(float(v_m["value"]), 1), "V")
             i_m = pick("ia", "i", "i_ia", "i_i", "ac_ia", "dc_i")
             if i_m is not None:
-                slots["current"] = {
-                    "value": round(float(i_m["value"]), 2),
-                    "unit": "A",
-                    "valid": i_m["valid"],
-                }
+                slots["current"] = make_slot(dev, i_m, round(float(i_m["value"]), 2), "A")
             f_m = pick("f", "ac_f", "i_f")
             if f_m is not None:
-                slots["frequency"] = {
-                    "value": round(float(f_m["value"]), 2),
-                    "unit": "Hz",
-                    "valid": f_m["valid"],
-                }
+                slots["frequency"] = make_slot(dev, f_m, round(float(f_m["value"]), 2), "Hz")
             # SOC / 储氢液位
             if dev["name"] in soc_by_name:
-                slots["soc"] = {"value": round(soc_by_name[dev["name"]], 1), "unit": "%", "valid": True}
+                soc_dev, soc_m = soc_by_name[dev["name"]]
+                slots["soc"] = make_slot(soc_dev, soc_m, round(float(soc_m["display_value"]), 1), "%")
             elif "soc" in m_map and m_map["soc"]["display_value"] is not None:
-                val_soc = round(float(m_map["soc"]["display_value"]), 1)
-                slots["soc"] = {"value": val_soc, "unit": "%", "valid": m_map["soc"]["valid"]}
-                slots["level"] = {"value": val_soc, "unit": "%", "valid": m_map["soc"]["valid"]}
+                soc_m = m_map["soc"]
+                val_soc = round(float(soc_m["display_value"]), 1)
+                slots["soc"] = make_slot(dev, soc_m, val_soc, "%")
+                slots["level"] = make_slot(dev, soc_m, val_soc, "%")
             # 氢能压力与流量
             pr_m = pick("pressure")
             if pr_m is not None:
-                slots["pressure"] = {
-                    "value": round(float(pr_m["value"]), 2),
-                    "unit": "MPa",
-                    "valid": pr_m["valid"],
-                }
+                slots["pressure"] = make_slot(dev, pr_m, round(float(pr_m["value"]), 2), "MPa")
             fl_m = pick("flow")
             if fl_m is not None:
-                slots["flow"] = {
-                    "value": round(float(fl_m["value"]), 2),
-                    "unit": "Nm³/h",
-                    "valid": fl_m["valid"],
-                }
+                slots["flow"] = make_slot(dev, fl_m, round(float(fl_m["value"]), 2), "Nm³/h")
             # 断路器状态
             pos_m = pick("position")
             if pos_m is not None:
                 closed = int(pos_m["value"]) != 0
-                slots["status"] = {
-                    "value": "合闸" if closed else "分闸",
-                    "raw": 1 if closed else 0,
-                    "unit": "",
-                    "valid": pos_m["valid"],
-                }
+                slots["status"] = make_slot(
+                    dev,
+                    pos_m,
+                    "合闸" if closed else "分闸",
+                    "",
+                    {"raw": 1 if closed else 0},
+                )
                 if t in {"ACBreak", "DCBreak"}:
                     breakers[dev_id] = {
                         "closed": closed,
@@ -769,7 +1023,25 @@ class PortalService:
                 "valid_count": dev["valid_count"],
                 "bound_count": dev["bound_count"],
                 "metrics": dev["metrics"],
+                "model_params": model_params_map.get(dev_id, []),
             }
+
+        # 补充仅存在于模型库、尚未在 scdfe_d 绑定量测的设备（如母线、阀门等），确保悬停仍显示模型参数
+        for dev_id, meta in model_meta_map.items():
+            if dev_id not in dev_summaries:
+                dev_summaries[dev_id] = {
+                    "dev_id": dev_id,
+                    "table_name": meta["table_name"],
+                    "idx": meta["idx"],
+                    "name": meta["name"],
+                    "category": meta["category"],
+                    "run": None,
+                    "position": None,
+                    "valid_count": 0,
+                    "bound_count": 0,
+                    "metrics": [],
+                    "model_params": model_params_map.get(dev_id, []),
+                }
 
         # ACRealBs / DCRealBs 若自身无电压点，从同压级母线/节点补充代表电压
         ac_bus_v = [
@@ -790,47 +1062,55 @@ class PortalService:
             avg_ac_v = round(sum(ac_bus_v) / len(ac_bus_v), 1)
             for dev_id, d in by_dev_id.items():
                 if d["table_name"] == "ACRealBs":
-                    svg_slots.setdefault(dev_id, {})["voltage"] = {"value": avg_ac_v, "unit": "V", "valid": True}
+                    svg_slots.setdefault(dev_id, {})["voltage"] = {
+                        "value": avg_ac_v, "unit": "V", "valid": True,
+                        "table_name": d["table_name"], "idx": d["idx"], "device_name": d["name"],
+                        "metric": "uab", "label": "母线电压", "kind": "yc",
+                    }
         if dc_bus_v:
             avg_dc_v = round(sum(dc_bus_v) / len(dc_bus_v), 1)
             for dev_id, d in by_dev_id.items():
                 if d["table_name"] == "DCRealBs":
-                    svg_slots.setdefault(dev_id, {})["voltage"] = {"value": avg_dc_v, "unit": "V", "valid": True}
+                    svg_slots.setdefault(dev_id, {})["voltage"] = {
+                        "value": avg_dc_v, "unit": "V", "valid": True,
+                        "table_name": d["table_name"], "idx": d["idx"], "device_name": d["name"],
+                        "metric": "u", "label": "母线电压", "kind": "yc",
+                    }
 
         # AcE2Hydro / Hydro2DcE 若主表无功率点，从关联负荷/发电设备补充
         for dev in devices:
             if dev["table_name"] == "ACLoad" and "交流电制氢-1" in dev["name"]:
                 m_map = {m["metric"]: m for m in dev["metrics"]}
                 if "p" in m_map and m_map["p"]["value"] is not None:
-                    svg_slots.setdefault("AcE2Hydro-1", {})["activePower"] = {
-                        "value": round(float(m_map["p"]["value"]), 2), "unit": "kW", "valid": m_map["p"]["valid"]
-                    }
+                    svg_slots.setdefault("AcE2Hydro-1", {})["activePower"] = make_slot(
+                        dev, m_map["p"], round(float(m_map["p"]["value"]), 2), "kW"
+                    )
                 if "uab" in m_map and m_map["uab"]["value"] is not None:
-                    svg_slots.setdefault("AcE2Hydro-1", {})["voltage"] = {
-                        "value": round(float(m_map["uab"]["value"]), 1), "unit": "V", "valid": m_map["uab"]["valid"]
-                    }
+                    svg_slots.setdefault("AcE2Hydro-1", {})["voltage"] = make_slot(
+                        dev, m_map["uab"], round(float(m_map["uab"]["value"]), 1), "V"
+                    )
             if dev["table_name"] == "HydroSource" and "交流电制氢-1" in dev["name"]:
                 m_map = {m["metric"]: m for m in dev["metrics"]}
                 if "flow" in m_map and m_map["flow"]["value"] is not None:
-                    svg_slots.setdefault("AcE2Hydro-1", {})["flow"] = {
-                        "value": round(float(m_map["flow"]["value"]), 2), "unit": "Nm³/h", "valid": m_map["flow"]["valid"]
-                    }
+                    svg_slots.setdefault("AcE2Hydro-1", {})["flow"] = make_slot(
+                        dev, m_map["flow"], round(float(m_map["flow"]["value"]), 2), "Nm³/h"
+                    )
             if dev["table_name"] == "DCGenerator" and "直流燃料电池-1" in dev["name"]:
                 m_map = {m["metric"]: m for m in dev["metrics"]}
                 if "p" in m_map and m_map["p"]["value"] is not None:
-                    svg_slots.setdefault("Hydro2DcE-1", {})["activePower"] = {
-                        "value": round(float(m_map["p"]["value"]), 2), "unit": "kW", "valid": m_map["p"]["valid"]
-                    }
+                    svg_slots.setdefault("Hydro2DcE-1", {})["activePower"] = make_slot(
+                        dev, m_map["p"], round(float(m_map["p"]["value"]), 2), "kW"
+                    )
                 if "u" in m_map and m_map["u"]["value"] is not None:
-                    svg_slots.setdefault("Hydro2DcE-1", {})["voltage"] = {
-                        "value": round(float(m_map["u"]["value"]), 1), "unit": "V", "valid": m_map["u"]["valid"]
-                    }
+                    svg_slots.setdefault("Hydro2DcE-1", {})["voltage"] = make_slot(
+                        dev, m_map["u"], round(float(m_map["u"]["value"]), 1), "V"
+                    )
             if dev["table_name"] == "HydroLoad" and "直流燃料电池-1" in dev["name"]:
                 m_map = {m["metric"]: m for m in dev["metrics"]}
                 if "flow" in m_map and m_map["flow"]["value"] is not None:
-                    svg_slots.setdefault("Hydro2DcE-1", {})["flow"] = {
-                        "value": round(float(m_map["flow"]["value"]), 2), "unit": "Nm³/h", "valid": m_map["flow"]["valid"]
-                    }
+                    svg_slots.setdefault("Hydro2DcE-1", {})["flow"] = make_slot(
+                        dev, m_map["flow"], round(float(m_map["flow"]["value"]), 2), "Nm³/h"
+                    )
 
         flows = self._compute_powerflow_vectors(devices, breakers)
 

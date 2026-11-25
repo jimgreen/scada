@@ -29,6 +29,12 @@
     pfY: 0,
     pfData: null,
     pfSelectedDev: null,
+    pfHoverDev: null,
+    pfHoverMeas: null, // { devId, mt, slot }
+    pfMpHours: 1,
+    pfMpReqSeq: 0,
+    pfMpTrendCache: new Map(), // key -> { ts, points }
+    pfPopHideTimer: null,
     pfShowArrows: true,
     pfArrowPaths: [], // [{ key, kind, voltageType, pathEl, length, pKw, dir, speed, scale, arrows: [{el, offset}] }]
     pfAnimRaf: null,
@@ -42,7 +48,7 @@
     trendHidden: new Set(),
     trendHoverX: null,
     // 通信图状态
-    commTab: "rtus",
+    commTab: "overview",
     commPointKind: "yc",
     commPointOffset: 0,
     commPointLimit: 50,
@@ -510,11 +516,53 @@
     applySvgThemeColors();
     fitSvgView();
 
+    svg.addEventListener("mousemove", (event) => {
+      if ($("#pf-canvas-wrap")?.classList.contains("dragging")) return;
+      const measText = event.target.closest("#Measurement_Layer g.mg[dev] text");
+      if (measText) {
+        const group = measText.closest("g.mg[dev]");
+        const devId = group?.getAttribute("dev");
+        const mv = measText.querySelector("tspan.mv[mt]");
+        const mt = mv?.getAttribute("mt");
+        if (devId && mt) {
+          cancelHidePfPopovers();
+          if (!state.pfHoverMeas || state.pfHoverMeas.devId !== devId || state.pfHoverMeas.mt !== mt) {
+            showMeasPopover(devId, mt, event.clientX, event.clientY);
+          }
+          return;
+        }
+      }
+      const devNode = event.target.closest("use[dev-id], text[dev-id]");
+      if (devNode) {
+        const devId = devNode.getAttribute("dev-id");
+        if (devId) {
+          cancelHidePfPopovers();
+          if (state.pfHoverDev !== devId || $("#pf-dev-popover")?.hidden) {
+            showDevicePopover(devId, event.clientX, event.clientY, false);
+          }
+          return;
+        }
+      }
+      if (state.pfHoverDev || state.pfHoverMeas) {
+        scheduleHidePfPopovers();
+      }
+    });
+
+    svg.addEventListener("mouseleave", () => {
+      scheduleHidePfPopovers();
+    });
+
     svg.addEventListener("click", (event) => {
-      const target = event.target.closest("use[dev-id], g.mg[dev], text[dev-id]");
-      if (!target) return;
-      const devId = target.getAttribute("dev-id") || target.getAttribute("dev");
-      if (devId) openPowerflowDrawer(devId);
+      const devNode = event.target.closest("use[dev-id], text[dev-id]");
+      if (!devNode) return;
+      const devId = devNode.getAttribute("dev-id");
+      const dev = devId ? state.pfData?.devices?.[devId] : null;
+      if (dev) {
+        hidePfPopovers();
+        state.devCategory = dev.category;
+        state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
+        switchView("devices");
+      }
     });
   }
 
@@ -820,14 +868,58 @@
       stat.textContent = `已刷新 ${updatedSlots} 项量测 · 断路器合闸 ${closedCnt}/${totalBreakers}`;
       stat.className = "badge ok";
     }
-    if (state.pfSelectedDev) {
-      openPowerflowDrawer(state.pfSelectedDev, false);
+    if (state.pfHoverDev && !$("#pf-dev-popover")?.hidden) {
+      renderDevicePopoverContent(state.pfHoverDev, false);
+    }
+    if (state.pfHoverMeas && !$("#pf-meas-popover")?.hidden) {
+      const { devId, mt } = state.pfHoverMeas;
+      renderMeasPopoverContent(devId, mt, false);
     }
   }
 
-  function openPowerflowDrawer(devId, highlight = true) {
-    state.pfSelectedDev = devId;
-    const drawer = $("#pf-drawer");
+  function cancelHidePfPopovers() {
+    if (state.pfPopHideTimer) {
+      clearTimeout(state.pfPopHideTimer);
+      state.pfPopHideTimer = null;
+    }
+  }
+
+  function hidePfPopovers() {
+    cancelHidePfPopovers();
+    const devPop = $("#pf-dev-popover");
+    const measPop = $("#pf-meas-popover");
+    if (devPop) devPop.hidden = true;
+    if (measPop) measPop.hidden = true;
+    state.pfHoverDev = null;
+    state.pfHoverMeas = null;
+  }
+
+  function scheduleHidePfPopovers(delay = 180) {
+    cancelHidePfPopovers();
+    state.pfPopHideTimer = setTimeout(() => {
+      hidePfPopovers();
+    }, delay);
+  }
+
+  function positionPopover(popEl, clientX, clientY) {
+    const wrap = $("#pf-canvas-wrap");
+    if (!wrap || !popEl) return;
+    const rect = wrap.getBoundingClientRect();
+    const popW = popEl.offsetWidth || 300;
+    const popH = popEl.offsetHeight || 200;
+    const relX = clientX - rect.left;
+    const relY = clientY - rect.top;
+    let left = relX + 16;
+    let top = relY + 14;
+    if (left + popW > rect.width - 10) left = relX - popW - 16;
+    if (top + popH > rect.height - 10) top = relY - popH - 14;
+    left = Math.max(8, Math.min(rect.width - popW - 8, left));
+    top = Math.max(8, Math.min(rect.height - popH - 8, top));
+    popEl.style.left = `${Math.round(left)}px`;
+    popEl.style.top = `${Math.round(top)}px`;
+  }
+
+  function renderDevicePopoverContent(devId, highlight = false) {
     const dev = state.pfData?.devices?.[devId];
     const svg = $("#pf-stage svg");
     if (highlight && svg) {
@@ -835,30 +927,269 @@
       const node = svg.querySelector(`use[dev-id="${CSS.escape(devId)}"]`);
       if (node) node.classList.add("pf-highlight");
     }
+    const jumpBtn = $("#pf-jump-device");
     if (!dev) {
-      drawer.hidden = false;
-      $("#pf-drawer-name").textContent = devId;
-      $("#pf-drawer-meta").textContent = "该图元暂无绑定量测";
-      $("#pf-drawer-metrics").innerHTML = '<div class="empty-hint">无实时绑定量测</div>';
-      $("#pf-jump-device").disabled = true;
+      $("#pf-dev-pop-name").textContent = devId;
+      $("#pf-dev-pop-meta").textContent = "暂无模型参数";
+      $("#pf-dev-pop-metrics").innerHTML = '<div class="empty-hint">模型库无此设备参数</div>';
+      if (jumpBtn) jumpBtn.disabled = true;
       return;
     }
-    drawer.hidden = false;
-    $("#pf-drawer-name").textContent = dev.name;
-    $("#pf-drawer-meta").textContent = `${dev.table_name} #${dev.idx} · 有效 ${dev.valid_count}/${dev.bound_count}`;
-    $("#pf-jump-device").disabled = false;
-    $("#pf-jump-device").onclick = () => {
-      state.devCategory = dev.category;
-      state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
-      switchView("devices");
+    const params = dev.model_params || [];
+    $("#pf-dev-pop-name").textContent = dev.name;
+    $("#pf-dev-pop-meta").textContent = `${dev.table_name} #${dev.idx} · 参数 ${params.length} 项`;
+    if (jumpBtn) {
+      jumpBtn.disabled = !dev.bound_count;
+      jumpBtn.onclick = () => {
+        hidePfPopovers();
+        state.devCategory = dev.category;
+        state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
+        switchView("devices");
+      };
+    }
+    const itemsHtml = params.map(
+      (p) =>
+        `<div class="pf-pop-param" title="${esc(p.label)}: ${esc(p.value)}">` +
+        `<span>${esc(p.label)}</span>` +
+        `<strong>${esc(p.value)}</strong>` +
+        `</div>`
+    );
+    $("#pf-dev-pop-metrics").innerHTML = itemsHtml.length
+      ? itemsHtml.join("")
+      : '<div class="empty-hint">暂无设备模型参数</div>';
+  }
+
+  function showDevicePopover(devId, clientX, clientY, highlight = false) {
+    const devPop = $("#pf-dev-popover");
+    const measPop = $("#pf-meas-popover");
+    if (!devPop) return;
+    if (measPop) measPop.hidden = true;
+    state.pfHoverMeas = null;
+    state.pfHoverDev = devId;
+    renderDevicePopoverContent(devId, highlight);
+    devPop.hidden = false;
+    positionPopover(devPop, clientX, clientY);
+  }
+
+  function drawMeasPopoverChart(points, slot) {
+    const canvas = $("#pf-meas-canvas");
+    const wrap = $("#pf-mp-canvas-wrap");
+    const statEl = $("#pf-mp-chart-stat");
+    if (!canvas || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const w = Math.max(120, Math.round(rect.width));
+    const h = Math.max(80, Math.round(rect.height));
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const pal = chartPalette();
+    if (!points || !points.length) {
+      if (statEl) statEl.textContent = "暂无采样";
+      ctx.fillStyle = pal.axis;
+      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("暂无历史曲线数据", w / 2, h / 2);
+      return;
+    }
+
+    const pad = { left: 42, right: 10, top: 10, bottom: 20 };
+    const plotW = Math.max(20, w - pad.left - pad.right);
+    const plotH = Math.max(20, h - pad.top - pad.bottom);
+
+    let minT = points[0][0];
+    let maxT = points[points.length - 1][0];
+    if (maxT <= minT) maxT = minT + 60000;
+
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const [, v] of points) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (statEl) {
+      statEl.textContent = `${points.length} 点 · ${fmtNum(minV, 2)}~${fmtNum(maxV, 2)}`;
+    }
+    const hasLimits = slot && slot.max_value != null && slot.min_value != null && Number(slot.max_value) > Number(slot.min_value);
+    const isSocPct = slot?.metric === "soc" && maxV > 1.5;
+    const limMax = hasLimits ? (isSocPct && Number(slot.max_value) <= 1.5 ? Number(slot.max_value) * 100 : Number(slot.max_value)) : null;
+    const limMin = hasLimits ? (isSocPct && Number(slot.min_value) <= 1.5 ? Number(slot.min_value) * 100 : Number(slot.min_value)) : null;
+
+    if (Math.abs(maxV - minV) < 1e-6) {
+      const span = Math.max(1, Math.abs(maxV) * 0.1);
+      minV -= span;
+      maxV += span;
+    } else {
+      const m = (maxV - minV) * 0.12;
+      minV -= m;
+      maxV += m;
+    }
+
+    const xFor = (t) => pad.left + ((t - minT) / (maxT - minT)) * plotW;
+    const yFor = (v) => pad.top + (1 - (v - minV) / (maxV - minV)) * plotH;
+
+    // 水平网格与 Y 轴
+    ctx.strokeStyle = pal.grid;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.fillStyle = pal.axis;
+    ctx.font = '10px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i <= 2; i += 1) {
+      const ratio = i / 2;
+      const y = pad.top + ratio * plotH;
+      const v = maxV - ratio * (maxV - minV);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + plotW, y);
+      ctx.stroke();
+      ctx.fillText(v.toFixed(Math.abs(v) >= 100 ? 1 : 2), pad.left - 5, y);
+    }
+
+    // 若有效上下限落在当前纵轴范围内，绘制参考虚线
+    if (limMax !== null && limMax >= minV && limMax <= maxV) {
+      const y = yFor(limMax);
+      ctx.strokeStyle = "rgba(249, 115, 22, 0.72)";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + plotW, y);
+      ctx.stroke();
+    }
+    if (limMin !== null && limMin >= minV && limMin <= maxV) {
+      const y = yFor(limMin);
+      ctx.strokeStyle = "rgba(99, 102, 241, 0.72)";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + plotW, y);
+      ctx.stroke();
+    }
+
+    // X 轴起止时间
+    ctx.setLineDash([]);
+    ctx.fillStyle = pal.axis;
+    ctx.textBaseline = "top";
+    const fmtHM = (ms) => {
+      const d = new Date(ms);
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     };
-    const rows = (dev.metrics || []).map((m) => {
-      const valText = m.kind === "yx"
-        ? (m.metric === "position" ? (m.value ? "合闸" : "分闸") : (m.value ? "运行" : "停运"))
-        : `${fmtNum(m.display_value, 2)} ${m.unit || ""}`.trim();
-      return `<div class="drawer-row"><span>${esc(m.label)}</span><strong>${esc(valText)}</strong></div>`;
+    ctx.textAlign = "left";
+    ctx.fillText(fmtHM(minT), pad.left, pad.top + plotH + 4);
+    ctx.textAlign = "right";
+    ctx.fillText(fmtHM(maxT), pad.left + plotW, pad.top + plotH + 4);
+
+    // 曲线与淡填充
+    const lineColor = pal.colors[0];
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    points.forEach(([t, v], i) => {
+      const x = xFor(t);
+      const y = yFor(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     });
-    $("#pf-drawer-metrics").innerHTML = rows.length ? rows.join("") : '<div class="empty-hint">无量测</div>';
+    ctx.stroke();
+
+    if (points.length >= 2) {
+      ctx.lineTo(xFor(points[points.length - 1][0]), pad.top + plotH);
+      ctx.lineTo(xFor(points[0][0]), pad.top + plotH);
+      ctx.closePath();
+      ctx.fillStyle = isDarkTheme() ? "rgba(56, 189, 248, 0.14)" : "rgba(37, 99, 235, 0.12)";
+      ctx.fill();
+    } else {
+      ctx.fillStyle = lineColor;
+      ctx.beginPath();
+      ctx.arc(xFor(points[0][0]), yFor(points[0][1]), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  async function loadMeasPopoverTrend(slot, hours) {
+    const statEl = $("#pf-mp-chart-stat");
+    if (!slot || !slot.table_name || slot.idx == null || !slot.metric) {
+      drawMeasPopoverChart([], slot);
+      return;
+    }
+    const cacheKey = `${slot.table_name}:${slot.idx}:${slot.metric}:${hours}`;
+    const cached = state.pfMpTrendCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.ts < 5000) {
+      drawMeasPopoverChart(cached.points, slot);
+      return;
+    }
+    const seq = ++state.pfMpReqSeq;
+    if (statEl) statEl.textContent = "加载曲线…";
+    try {
+      const data = await api(
+        `/api/devices/${encodeURIComponent(slot.table_name)}/${slot.idx}/trend?hours=${hours}`
+      );
+      if (seq !== state.pfMpReqSeq) return;
+      const series = (data.series || []).find((s) => s.metric === slot.metric);
+      const pts = series ? series.points || [] : [];
+      state.pfMpTrendCache.set(cacheKey, { ts: Date.now(), points: pts });
+      drawMeasPopoverChart(pts, slot);
+    } catch (_) {
+      if (seq === state.pfMpReqSeq) drawMeasPopoverChart([], slot);
+    }
+  }
+
+  function renderMeasPopoverContent(devId, mt, reloadChart = true) {
+    const slot = state.pfData?.svg_slots?.[devId]?.[mt];
+    const dev = state.pfData?.devices?.[devId];
+    const title = slot?.label || mt;
+    const devName = slot?.device_name || dev?.name || devId;
+    $("#pf-mp-title").textContent = `${devName} · ${title}`;
+    const fieldRef = slot?.table_name && slot?.idx != null && slot?.metric
+      ? `${slot.table_name}#${slot.idx}.${slot.metric}`
+      : `${devId}.${mt}`;
+    $("#pf-mp-sub").textContent = fieldRef;
+    const valStr = slot
+      ? `${typeof slot.value === "number" ? fmtNum(slot.value, 2) : (slot.value ?? "--")} ${slot.unit || ""}`.trim()
+      : "--";
+    $("#pf-mp-value").textContent = valStr;
+    $("#pf-mp-badge").innerHTML = slot ? qualityBadge(slot) : '<span class="badge muted">无配置</span>';
+
+    const rtuPnt = slot?.rtu_id != null && slot?.point_no != null
+      ? `RTU ${slot.rtu_id} / #${slot.point_no}`
+      : "未配置";
+    const statusText = slot?.quality != null
+      ? `${slot.quality} · ${slot.quality_label || ""}`.trim()
+      : (slot?.valid ? "0 · 正常" : "—");
+    const minStr = slot?.min_value != null ? fmtLimitCompact(slot.min_value) : "—";
+    const maxStr = slot?.max_value != null ? fmtLimitCompact(slot.max_value) : "—";
+    const weightStr = slot?.weight != null ? fmtLimitCompact(slot.weight) : "—";
+    const timeStr = slot?.source_time ? fmtTime(slot.source_time).slice(5) : "—";
+
+    $("#pf-mp-meta-grid").innerHTML =
+      `<div class="pf-mp-kv"><span>RTU / 点号</span><strong title="${esc(rtuPnt)}">${esc(rtuPnt)}</strong></div>` +
+      `<div class="pf-mp-kv"><span>量测状态</span><strong>${esc(statusText)}</strong></div>` +
+      `<div class="pf-mp-kv"><span>权重</span><strong>${esc(weightStr)}</strong></div>` +
+      `<div class="pf-mp-kv"><span>下限 (min)</span><strong>${esc(minStr)}</strong></div>` +
+      `<div class="pf-mp-kv"><span>上限 (max)</span><strong>${esc(maxStr)}</strong></div>` +
+      `<div class="pf-mp-kv"><span>更新时间</span><strong title="${esc(timeStr)}">${esc(timeStr)}</strong></div>`;
+
+    state.pfHoverMeas = { devId, mt, slot };
+    if (reloadChart) {
+      loadMeasPopoverTrend(slot, state.pfMpHours);
+    }
+  }
+
+  function showMeasPopover(devId, mt, clientX, clientY) {
+    const devPop = $("#pf-dev-popover");
+    const measPop = $("#pf-meas-popover");
+    if (!measPop) return;
+    if (devPop) devPop.hidden = true;
+    state.pfHoverDev = null;
+    renderMeasPopoverContent(devId, mt, true);
+    measPop.hidden = false;
+    positionPopover(measPop, clientX, clientY);
   }
 
   function focusSvgDevice(devId) {
@@ -874,7 +1205,7 @@
     state.pfX = rect.width / 2 - x * state.pfScale;
     state.pfY = rect.height / 2 - y * state.pfScale;
     applySvgTransform();
-    openPowerflowDrawer(devId, true);
+    showDevicePopover(devId, rect.left + rect.width / 2 + 24, rect.top + rect.height / 2 - 20, true);
   }
 
   async function loadPowerflow() {
@@ -895,7 +1226,8 @@
     let origY = 0;
 
     wrap.addEventListener("mousedown", (e) => {
-      if (e.button !== 0 || e.target.closest("use[dev-id], g.mg[dev]")) return;
+      if (e.button !== 0 || e.target.closest("use[dev-id], g.mg[dev], .pf-popover")) return;
+      hidePfPopovers();
       dragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -915,7 +1247,9 @@
       wrap.classList.remove("dragging");
     });
     wrap.addEventListener("wheel", (e) => {
+      if (e.target.closest(".pf-popover")) return;
       e.preventDefault();
+      hidePfPopovers();
       const rect = wrap.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
@@ -927,6 +1261,27 @@
       applySvgTransform();
     }, { passive: false });
 
+    // 悬浮框自身鼠标进出与近1小时/近1天分页标签切换
+    ["#pf-dev-popover", "#pf-meas-popover"].forEach((sel) => {
+      const el = $(sel);
+      el?.addEventListener("mouseenter", cancelHidePfPopovers);
+      el?.addEventListener("mouseleave", () => scheduleHidePfPopovers());
+    });
+    $$("#pf-mp-tabs .pf-mp-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const hrs = Number(btn.dataset.mpHours || 1);
+        state.pfMpHours = hrs;
+        $$("#pf-mp-tabs .pf-mp-tab").forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        if (state.pfHoverMeas?.slot) {
+          loadMeasPopoverTrend(state.pfHoverMeas.slot, hrs);
+        }
+      });
+    });
+
     $("#pf-zoom-in")?.addEventListener("click", () => {
       state.pfScale = Math.min(3.5, state.pfScale * 1.2);
       applySvgTransform();
@@ -936,10 +1291,6 @@
       applySvgTransform();
     });
     $("#pf-zoom-fit")?.addEventListener("click", fitSvgView);
-    $("#pf-drawer-close")?.addEventListener("click", () => {
-      $("#pf-drawer").hidden = true;
-      state.pfSelectedDev = null;
-    });
     $("#pf-show-arrows")?.addEventListener("change", (e) => {
       state.pfShowArrows = Boolean(e.target.checked);
       $("#pf-stage").classList.toggle("hide-arrows", !state.pfShowArrows);
@@ -1089,8 +1440,10 @@
           : `<span>${esc(m.metric)}</span>`;
         return (
           `<div class="metric-box">` +
-          `<div class="m-label"><span>${esc(m.label)}</span>${qBadge}</div>` +
-          `<div class="metric-val">${esc(valStr)}<small>${esc(m.unit || "")}</small></div>` +
+          `<div class="m-top">` +
+          `<div class="m-main"><span class="m-name">${esc(m.label)}</span><span class="metric-val">${esc(valStr)}<small>${esc(m.unit || "")}</small></span></div>` +
+          `${qBadge}` +
+          `</div>` +
           `<div class="m-foot"><span>RTU ${m.rtu_id ?? "-"} / #${m.point_no ?? "-"}</span>${limitBtn}</div>` +
           `</div>`
         );
@@ -1367,10 +1720,10 @@
     const totalErr = rtus.reduce((s, r) => s + (r.error_count || 0), 0);
 
     $("#comm-summary").innerHTML =
-      `<div class="kpi-card"><div class="kpi-label">RTU 总数</div><div class="kpi-val"><strong>${rtus.length}</strong><span>台</span></div></div>` +
-      `<div class="kpi-card"><div class="kpi-label">在线连接</div><div class="kpi-val"><strong>${online}</strong><span>/ ${rtus.length}</span></div></div>` +
-      `<div class="kpi-card"><div class="kpi-label">累计接收帧</div><div class="kpi-val"><strong>${totalRx.toLocaleString()}</strong><span>帧</span></div></div>` +
-      `<div class="kpi-card"><div class="kpi-label">通信错误</div><div class="kpi-val"><strong>${totalErr.toLocaleString()}</strong><span>次</span></div></div>`;
+      `<div class="comm-stat-item"><span class="cs-lbl">RTU 总数</span><strong>${rtus.length}</strong><span class="cs-unit">台</span></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">在线连接</span><strong>${online}</strong><span class="cs-unit">/ ${rtus.length}</span></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">累计接收帧</span><strong>${totalRx.toLocaleString()}</strong><span class="cs-unit">帧</span></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">通信错误</span><strong>${totalErr.toLocaleString()}</strong><span class="cs-unit">次</span></div>`;
 
     if (!state.commRtuOptionsLoaded) {
       const sel = $("#comm-rtu-filter");
@@ -1379,7 +1732,12 @@
       state.commRtuOptionsLoaded = true;
     }
 
-    if (state.commTab === "rtus") {
+    if (state.commTab === "overview") {
+      const chRes = await api("/api/comm/channels");
+      const channels = chRes.items || [];
+      if ($("#comm-rtus-count")) $("#comm-rtus-count").textContent = String(rtus.length);
+      if ($("#comm-channels-count")) $("#comm-channels-count").textContent = String(channels.length);
+
       $("#comm-rtus-body").innerHTML = rtus.length
         ? rtus.map((r) => {
             const pc = r.point_counts || {};
@@ -1398,11 +1756,9 @@
             );
           }).join("")
         : '<tr><td colspan="9" class="empty-hint">暂无 RTU 记录</td></tr>';
-    } else if (state.commTab === "channels") {
-      const chRes = await api("/api/comm/channels");
-      const items = chRes.items || [];
-      $("#comm-channels-body").innerHTML = items.length
-        ? items.map((c) => {
+
+      $("#comm-channels-body").innerHTML = channels.length
+        ? channels.map((c) => {
             const p = c.parameters || {};
             const keyParams = [
               p.rtu_addr != null ? `站址=${p.rtu_addr}` : "",
@@ -1472,8 +1828,7 @@
     btn.addEventListener("click", () => {
       state.commTab = btn.dataset.commTab;
       $$("#comm-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
-      $("#comm-rtus-panel").hidden = state.commTab !== "rtus";
-      $("#comm-channels-panel").hidden = state.commTab !== "channels";
+      $("#comm-overview-panel").hidden = state.commTab !== "overview";
       $("#comm-points-panel").hidden = state.commTab !== "points";
       $("#comm-point-filters").hidden = state.commTab !== "points";
       loadComm();

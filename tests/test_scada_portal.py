@@ -31,12 +31,14 @@ class ScadaPortalTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.c_db = self.root / "scdfe_c.sqlite3"
         self.d_db = self.root / "scdfe_d.sqlite3"
+        self.model_db = self.root / "devices.sqlite3"
         self.svg_path = self.root / "qinling.svg"
         self.log_dir = self.root / "logs"
         self.hist_db = self.root / "history.sqlite3"
 
         self._seed_c_db()
         self._seed_d_db()
+        self._seed_model_db()
         self._seed_svg()
         self._seed_logs()
 
@@ -45,6 +47,7 @@ class ScadaPortalTests(unittest.TestCase):
             0,
             c_db=self.c_db,
             d_db=self.d_db,
+            model_db=self.model_db,
             svg_path=self.svg_path,
             log_dir=self.log_dir,
             history_db=self.hist_db,
@@ -191,6 +194,34 @@ class ScadaPortalTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def _seed_model_db(self):
+        conn = sqlite3.connect(self.model_db)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE rtdb_schema_tables (table_name TEXT, ordinal INTEGER);
+                CREATE TABLE rtdb_schema_columns (table_name TEXT, ordinal INTEGER, eng_name TEXT, chn_name TEXT);
+                INSERT INTO rtdb_schema_tables VALUES ('ACGenerator', 0), ('ACWindGen', 1);
+                INSERT INTO rtdb_schema_columns VALUES
+                    ('ACGenerator', 0, 'idx', 'idx'),
+                    ('ACGenerator', 1, 'name', 'name'),
+                    ('ACGenerator', 2, 'dev_type', 'dev_type'),
+                    ('ACGenerator', 3, 'rated_capacity', 'rated_capacity'),
+                    ('ACGenerator', 4, 'rated_voltage', 'rated_voltage'),
+                    ('ACWindGen', 0, 'idx', 'idx'),
+                    ('ACWindGen', 1, 'idx_acgenerator', 'idx_acgenerator'),
+                    ('ACWindGen', 2, 'wind_turbine_model', 'wind_turbine_model'),
+                    ('ACWindGen', 3, 'cut_out_wind_speed', 'cut_out_wind_speed');
+                CREATE TABLE rtdb_data_ACGenerator (row_id INTEGER PRIMARY KEY, c0 INTEGER, c1 TEXT, c2 TEXT, c3 REAL, c4 REAL);
+                INSERT INTO rtdb_data_ACGenerator VALUES (1, 1, '交流风电-1', 'ac-wind-source', 10.1, 380);
+                CREATE TABLE rtdb_data_ACWindGen (row_id INTEGER PRIMARY KEY, c0 INTEGER, c1 INTEGER, c2 TEXT, c3 REAL);
+                INSERT INTO rtdb_data_ACWindGen VALUES (1, 1, 1, 'WT-5MW', 35);
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _seed_svg(self):
         self.svg_path.write_text(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0,0,1000,800">'
@@ -258,8 +289,19 @@ class ScadaPortalTests(unittest.TestCase):
         pf = json.loads(body.decode("utf-8"))
         self.assertAlmostEqual(pf["svg_slots"]["ACGenerator-1"]["activePower"]["value"], 45.2)
         self.assertEqual(pf["svg_slots"]["ACGenerator-1"]["activePower"]["unit"], "kW")
-        # 储能 SOC 应自动关联到对应 ACGenerator-23
+        self.assertEqual(pf["svg_slots"]["ACGenerator-1"]["activePower"]["rtu_id"], 3)
+        self.assertEqual(pf["svg_slots"]["ACGenerator-1"]["activePower"]["weight"], 1.0)
+        self.assertEqual(pf["svg_slots"]["ACGenerator-1"]["activePower"]["quality_label"], "正常")
+        # 储能 SOC 应自动关联到对应 ACGenerator-23，并透传其真实扩展表与量测元数据
         self.assertAlmostEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["value"], 75.0)
+        self.assertEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["table_name"], "ACStorageGen")
+        self.assertEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["metric"], "soc")
+        # 设备静态模型参数（含主表 ACGenerator 与扩展表 ACWindGen 合并）
+        params = {p["key"]: p for p in pf["devices"]["ACGenerator-1"]["model_params"]}
+        self.assertEqual(params["rated_capacity"]["value"], "10.1 kW")
+        self.assertEqual(params["rated_voltage"]["value"], "380 V")
+        self.assertEqual(params["wind_turbine_model"]["value"], "WT-5MW")
+        self.assertEqual(params["cut_out_wind_speed"]["value"], "35 m/s")
         self.assertTrue(pf["breakers"]["ACBreak-1"]["closed"])
         # 潮流箭头矢量（支路与连接边）
         self.assertAlmostEqual(pf["flows"]["branches"]["ACBranch-20"]["p_kw"], 45.2)
