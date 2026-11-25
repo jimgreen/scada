@@ -127,3 +127,73 @@ class DeviceParameterHTTPTests(unittest.TestCase):
             ],
             404,
         )
+
+    def test_collect_duration_ms_clear_limits_and_collector_empty_post(self):
+        _, base = self.server()
+        # 1. 正常采集一次，应记录 duration_ms 且宽表写入有效值
+        status, once_res = self.call(base, "/api/collector/once", "POST", {})
+        self.assertEqual(status, 200)
+        self.assertIsInstance(once_res.get("duration_ms"), (int, float))
+        hist_status, history = self.call(base, "/api/history")
+        self.assertEqual(hist_status, 200)
+        self.assertIn("duration_ms", history["refreshes"][0])
+
+        # 2. 空请求体调用 POST /api/collector/stop 不应误报 415
+        import urllib.request
+        req = urllib.request.Request(base + "/api/collector/stop", method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+
+        # 3. 设限后再清绑（删除映射），数据库 _max/_min 须同步清空
+        route = "/api/device-measurements?table=Manual_generator&idx=1"
+        row = self.call(base, route)[1]["items"][0]
+        self.assertEqual(
+            self.call(
+                base,
+                "/api/device-parameters",
+                "PUT",
+                dict(
+                    table="Manual_generator",
+                    idx=1,
+                    items=[
+                        dict(
+                            measurement_id=row["measurement_id"],
+                            version=row["version"],
+                            enabled=1,
+                            notuse=0,
+                            weight=1.0,
+                            max_value=80.0,
+                            min_value=0.0,
+                        )
+                    ],
+                ),
+            )[0],
+            200,
+        )
+        updated = self.call(base, route)[1]["items"][0]
+        # 传 version=None 应被拒绝（防乐观锁绕过）
+        self.assertEqual(
+            self.call(
+                base,
+                f"/api/measurements/{updated['measurement_id']}",
+                "DELETE",
+                dict(version=None),
+            )[0],
+            400,
+        )
+        # 合法删除后 _max/_min 须清空（另一设备存在时不剪枝列）
+        self.store.create_device(dict(name="发电机 2", category="generator"))
+        self.assertEqual(
+            self.call(
+                base,
+                f"/api/measurements/{updated['measurement_id']}",
+                "DELETE",
+                dict(version=updated["version"]),
+            )[0],
+            200,
+        )
+        with self.store.connection() as con:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(Manual_generator)").fetchall()}
+            if "p_max" in cols:
+                lim = con.execute("SELECT p_max, p_min FROM Manual_generator WHERE idx=1").fetchone()
+                self.assertEqual(tuple(lim), (None, None))

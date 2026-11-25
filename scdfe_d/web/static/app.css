@@ -33,7 +33,35 @@ body{margin:0}button,input,select{font:inherit;color:inherit;border:1px solid #c
 .measure-status.over { background:#fff0e5; color:#c2410c; }
 .measure-status.under { background:#eef2ff; color:#4338ca; }
 .quantity-value { font-variant-numeric:tabular-nums; font-weight:600; }
-.limit-range { font-variant-numeric:tabular-nums; color:#58718a; }
+.limit-range { font-variant-numeric:tabular-nums; color:var(--text-secondary, #58718a); }
+/* 首页单行紧凑指标条（替代胖 KPI 卡片墙） */
+.stats.stats-compact {
+  display:flex !important;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:0 !important;
+  padding:4px 12px !important;
+  min-height:34px;
+  background:var(--bg-surface, #fff);
+  border:var(--border, 1px solid #dbe5ee);
+  border-radius:var(--radius-card, 6px);
+}
+.stats.stats-compact > div {
+  background:transparent !important;
+  border:0 !important;
+  border-radius:0 !important;
+  box-shadow:none !important;
+  padding:2px 16px 2px 0 !important;
+  margin-right:16px;
+  border-right:1px solid var(--border-color, #dbe5ee) !important;
+  gap:8px;
+  align-items:baseline;
+}
+.stats.stats-compact > div:last-child { border-right:0 !important; margin-right:0; padding-right:0 !important; }
+.stats.stats-compact strong { font-size:16px !important; font-variant-numeric:tabular-nums; font-family:var(--font-mono, monospace); }
+.stats.stats-compact span { font-size:12px !important; }
+.overview-bar { gap:8px; margin-bottom:6px; }
+.overview-bar #last-refresh { padding:0; white-space:nowrap; }
 /* 参数配置表：输入框无缝内嵌单元格，去独立边框，统一行高 */
 td.parameter-cell { padding:0 !important; vertical-align:stretch; min-width:86px; }
 td.parameter-cell .parameter-field {
@@ -61,8 +89,8 @@ td.parameter-cell .parameter-field.limit-invalid {
   color:var(--danger, #a22c36);
   box-shadow:inset 0 0 0 1.5px var(--danger, #c62828);
 }
-.parameter-check { text-align:center; }
-.parameter-check input { width:15px; height:15px; vertical-align:middle; }
+.parameter-check { text-align:center; cursor:pointer; }
+.parameter-check input { width:15px; height:15px; vertical-align:middle; cursor:pointer; }
 tr.changed td { background:var(--warn-soft, #fcf8e8); }
 #parameter-selection {
   flex-shrink:0;
@@ -79,7 +107,8 @@ tr.changed td { background:var(--warn-soft, #fcf8e8); }
   overflow:auto;
   margin:0;
   padding:8px 12px 8px 28px;
-  border:1px solid #dbe5ee;
+  border:var(--border, 1px solid #dbe5ee);
+  background:var(--bg-subtle, transparent);
   border-radius:5px;
   line-height:1.65;
 }

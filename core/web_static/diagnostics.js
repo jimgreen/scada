@@ -196,10 +196,11 @@
     $('refresh').disabled = true;
     if (btnDialogRecheck) btnDialogRecheck.disabled = true;
     try {
-      const response = await fetch('/api/diagnostics' + (checks ? '?checks=1' : ''), {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(12000),
-      });
+      const fetchOpts = { cache: 'no-store' };
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        fetchOpts.signal = AbortSignal.timeout(12000);
+      }
+      const response = await fetch('/api/diagnostics' + (checks ? '?checks=1' : ''), fetchOpts);
       const data = await response.json();
       if (!response.ok) throw Error(data.error?.message || `HTTP ${response.status}`);
       $('diag-title').textContent = `scdfe_${data.component} · 分段耗时与配置检查`;

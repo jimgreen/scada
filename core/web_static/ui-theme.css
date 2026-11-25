@@ -946,8 +946,8 @@ small {
 
 /* ==================== 按钮、输入框与下拉控件 ==================== */
 
-/* 仅对标准交互按钮应用边框与填充，排除侧边栏导航、行内文本按钮、Tab、文件列表与自定义轻按钮 */
-button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer),
+/* 仅对标准交互按钮应用边框与填充，排除侧边栏导航、行内文本按钮、Tab、文件列表、门户列表项与自定义轻按钮 */
+button:not(.nav):not(.nav-item):not(.energy-node):not(.tab-btn):not(.dev-item):not(.log-file-btn):not(.series-chip):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer),
 .button,
 .database-select-button,
 .protocol-card nav a {
@@ -961,7 +961,7 @@ button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point
   transition: background var(--ease), border-color var(--ease), color var(--ease), box-shadow var(--ease), transform 100ms ease;
 }
 
-button:not(.nav):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer):hover:not(:disabled),
+button:not(.nav):not(.nav-item):not(.energy-node):not(.tab-btn):not(.dev-item):not(.log-file-btn):not(.series-chip):not(.row-button):not(.sort-button):not(.icon-button):not(.point-trend-dialog-close):not(.lb-file):not(.log-file):not(.lb-record-tab):not(.log-record-tab):not(.page-tab):not(.layout-resizer):hover:not(:disabled),
 .button:hover:not(:disabled),
 .database-select-button:hover:not(:disabled),
 .protocol-card nav a:hover {
@@ -1452,14 +1452,33 @@ table tbody tr.point-trend-row-active > .point-trend-cell-active {
 .status.s5,
 .status-badge.error,
 .measure-status.bad,
+.measure-status.comm,
 .refresh-status.is-error {
   background: var(--danger-soft) !important;
   color: var(--danger) !important;
 }
 
+.measure-status.over {
+  background: var(--warn-soft) !important;
+  color: var(--warn) !important;
+}
+
+.measure-status.under {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
 .measure-status.unbound {
   background: var(--bg-subtle) !important;
   color: var(--text-secondary) !important;
+}
+
+table tbody tr.changed > td {
+  background: var(--warn-soft) !important;
+}
+
+table tbody tr.changed > td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn) !important;
 }
 
 .communication-state.is-running,
@@ -1486,6 +1505,7 @@ table tbody tr.point-trend-row-active > .point-trend-cell-active {
 }
 
 /* 报警与错误提示（左侧 4px 语义色条 + 克制底色） */
+.error,
 .error-panel,
 #alert,
 #collector-error,

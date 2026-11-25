@@ -89,22 +89,60 @@
     return t !== "minimalist-light" && t !== "bento-grid" && t !== "editorial";
   }
 
-  async function api(url) {
-    const resp = await fetch(url, { headers: { Accept: "application/json" } });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-    return data;
+  function debounce(fn, delayMs = 250) {
+    let timer = null;
+    return (...args) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        fn(...args);
+      }, delayMs);
+    };
   }
 
-  async function apiPut(url, body) {
-    const resp = await fetch(url, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-    return data;
+  async function fetchJson(url, { method = "GET", body, signal, timeoutMs = 12000 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("请求超时")), timeoutMs);
+    const onAbort = () => controller.abort(signal.reason);
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        throw new DOMException("Aborted", "AbortError");
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    try {
+      const headers = { Accept: "application/json" };
+      const init = { method, headers, signal: controller.signal };
+      if (body !== undefined) {
+        headers["Content-Type"] = "application/json";
+        init.body = JSON.stringify(body);
+      }
+      const resp = await fetch(url, init);
+      const text = await resp.text();
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          throw new Error("响应不是有效的 JSON");
+        }
+      }
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data;
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  function api(url, opts) {
+    return fetchJson(url, opts);
+  }
+
+  function apiPut(url, body, opts) {
+    return fetchJson(url, { ...(opts || {}), method: "PUT", body });
   }
 
   function qualityBadge(m) {
@@ -238,6 +276,7 @@
       startPowerflowAnimation();
     } else if (view !== "powerflow") {
       stopPowerflowAnimation();
+      hidePfPopovers?.();
     }
     if (view === "devices") {
       requestAnimationFrame(() => drawTrendChart());
@@ -499,28 +538,37 @@
     });
   }
 
+  let svgLoadPromise = null;
   async function ensureSvgLoaded() {
     if (state.svgLoaded) return;
-    const resp = await fetch("/api/svg");
-    if (!resp.ok) throw new Error("无法加载潮流图 SVG");
-    const svgText = await resp.text();
-    const stage = $("#pf-stage");
-    stage.innerHTML = svgText;
-    const svg = stage.querySelector("svg");
-    if (!svg) throw new Error("SVG 格式无效");
-    const vb = (svg.getAttribute("viewBox") || "0,0,2518,2143").split(/[\s,]+/).map(Number);
-    if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-      state.svgWidth = vb[2];
-      state.svgHeight = vb[3];
-    }
-    svg.setAttribute("width", String(state.svgWidth));
-    svg.setAttribute("height", String(state.svgHeight));
-    // 移除 SVG 内原生 <title>，防止浏览器弹出白底系统提示框遮挡自定义悬浮框
-    svg.querySelectorAll("title").forEach((el) => el.remove());
-    state.svgLoaded = true;
-    initPowerflowArrowPaths(svg);
-    applySvgThemeColors();
-    fitSvgView();
+    if (svgLoadPromise) return svgLoadPromise;
+    svgLoadPromise = (async () => {
+      const resp = await fetch("/api/svg");
+      if (!resp.ok) throw new Error("无法加载潮流图 SVG");
+      const svgText = await resp.text();
+      const stage = $("#pf-stage");
+      stage.innerHTML = svgText;
+      const svg = stage.querySelector("svg");
+      if (!svg) throw new Error("SVG 格式无效");
+      const vb = (svg.getAttribute("viewBox") || "0,0,2518,2143").split(/[\s,]+/).map(Number);
+      if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
+        state.svgWidth = vb[2];
+        state.svgHeight = vb[3];
+      }
+      svg.setAttribute("width", String(state.svgWidth));
+      svg.setAttribute("height", String(state.svgHeight));
+      // 移除 SVG 内原生 <title>，防止浏览器弹出白底系统提示框遮挡自定义悬浮框
+      svg.querySelectorAll("title").forEach((el) => el.remove());
+      state.svgLoaded = true;
+      initPowerflowArrowPaths(svg);
+      applySvgThemeColors();
+      fitSvgView();
+      return svg;
+    })();
+    try {
+      const svg = await svgLoadPromise;
+      if (!svg || svg.dataset.eventsBound === "1") return;
+      svg.dataset.eventsBound = "1";
 
     svg.addEventListener("mousemove", (event) => {
       if ($("#pf-canvas-wrap")?.classList.contains("dragging")) return;
@@ -570,6 +618,10 @@
         switchView("devices");
       }
     });
+    } catch (err) {
+      svgLoadPromise = null;
+      throw err;
+    }
   }
 
   // -------------------- SVG 潮流动态流动箭头引擎 --------------------
@@ -1334,11 +1386,15 @@
     if (statEl) statEl.textContent = "加载曲线…";
     try {
       const data = await api(
-        `/api/devices/${encodeURIComponent(slot.table_name)}/${slot.idx}/trend?start_ms=${win.startMs}&end_ms=${win.endMs}`
+        `/api/devices/${encodeURIComponent(slot.table_name)}/${slot.idx}/trend?start_ms=${win.startMs}&end_ms=${win.endMs}&metric=${encodeURIComponent(slot.metric)}`
       );
       if (seq !== state.pfMpReqSeq) return;
       const series = (data.series || []).find((s) => s.metric === slot.metric);
       const pts = series ? series.points || [] : [];
+      if (state.pfMpTrendCache.size >= 120) {
+        const oldestKey = state.pfMpTrendCache.keys().next().value;
+        if (oldestKey !== undefined) state.pfMpTrendCache.delete(oldestKey);
+      }
       state.pfMpTrendCache.set(cacheKey, { ts: Date.now(), points: pts });
       drawMeasPopoverChart(pts, slot, win);
     } catch (_) {
@@ -1538,14 +1594,33 @@
     $("#pf-show-labels")?.addEventListener("change", (e) => {
       $("#pf-stage").classList.toggle("hide-labels", !e.target.checked);
     });
+    let lastPfQuery = "";
+    let lastPfMatchIdx = -1;
     $("#pf-search")?.addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
       const q = e.target.value.trim().toLowerCase();
       if (!q || !state.pfData?.devices) return;
-      const match = Object.values(state.pfData.devices).find(
+      const matches = Object.values(state.pfData.devices).filter(
         (d) => d.name.toLowerCase().includes(q) || d.dev_id.toLowerCase().includes(q)
       );
-      if (match) focusSvgDevice(match.dev_id);
+      const statEl = $("#pf-stat");
+      if (!matches.length) {
+        lastPfQuery = q;
+        lastPfMatchIdx = -1;
+        if (statEl) statEl.textContent = `未找到匹配设备：${e.target.value.trim()}`;
+        return;
+      }
+      if (q === lastPfQuery) {
+        lastPfMatchIdx = (lastPfMatchIdx + 1) % matches.length;
+      } else {
+        lastPfQuery = q;
+        lastPfMatchIdx = 0;
+      }
+      const target = matches[lastPfMatchIdx];
+      focusSvgDevice(target.dev_id);
+      if (statEl && matches.length > 1) {
+        statEl.textContent = `定位 ${lastPfMatchIdx + 1}/${matches.length}：${target.name}`;
+      }
     });
   })();
 
@@ -1559,12 +1634,17 @@
     return `${dev.valid_count}/${dev.bound_count}`;
   }
 
+  let devReqSeq = 0;
+  let trendReqSeq = 0;
+
   async function loadDevices() {
+    const seq = ++devReqSeq;
     const search = ($("#dev-search")?.value || "").trim();
     const qs = new URLSearchParams();
     if (state.devCategory) qs.set("category", state.devCategory);
     if (search) qs.set("search", search);
     const data = await api("/api/devices?" + qs.toString());
+    if (seq !== devReqSeq) return;
     state.devCategories = data.categories || [];
     if (!state.devCategory && state.devCategories.length) {
       state.devCategory = state.devCategories[0].key;
@@ -1694,8 +1774,10 @@
   }
 
   async function loadDeviceTrend(dev) {
+    const seq = ++trendReqSeq;
     const hours = Number($("#trend-hours")?.value || 24);
     const data = await api(`/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/trend?hours=${hours}`);
+    if (seq !== trendReqSeq) return;
     state.trendData = data;
     renderTrendChips();
     drawTrendChart();
@@ -1751,8 +1833,12 @@
     if (rect.width < 40 || rect.height < 40) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(rect.width * dpr);
-    canvas.height = Math.round(rect.height * dpr);
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
@@ -1926,19 +2012,25 @@
     }
   }
 
+  let trendHoverRaf = 0;
   $("#trend-canvas")?.addEventListener("mousemove", (e) => {
     const rect = e.target.getBoundingClientRect();
     state.trendHoverX = e.clientX - rect.left;
-    drawTrendChart();
+    if (!trendHoverRaf) {
+      trendHoverRaf = requestAnimationFrame(() => {
+        trendHoverRaf = 0;
+        drawTrendChart();
+      });
+    }
   });
   $("#trend-canvas")?.addEventListener("mouseleave", () => {
     state.trendHoverX = null;
     drawTrendChart();
   });
   $("#trend-hours")?.addEventListener("change", () => {
-    if (state.devSelected) loadDeviceTrend(state.devSelected);
+    if (state.devSelected) loadDeviceTrend(state.devSelected).catch(() => {});
   });
-  $("#dev-search")?.addEventListener("input", () => loadDevices());
+  $("#dev-search")?.addEventListener("input", debounce(() => loadDevices().catch(() => {}), 250));
 
   // ==================== 4. 通信图（RTU / 通道 / 四遥） ====================
   function connBadge(connState) {
@@ -2084,29 +2176,43 @@
       loadComm();
     });
   });
-  $("#comm-point-search")?.addEventListener("input", () => { state.commPointOffset = 0; loadComm(); });
+  $("#comm-point-search")?.addEventListener("input", debounce(() => {
+    state.commPointOffset = 0;
+    loadComm().catch(() => {});
+  }, 250));
   $("#comm-prev")?.addEventListener("click", () => {
     state.commPointOffset = Math.max(0, state.commPointOffset - state.commPointLimit);
-    loadComm();
+    loadComm().catch(() => {});
   });
   $("#comm-next")?.addEventListener("click", () => {
     if (state.commPointOffset + state.commPointLimit < state.commPointTotal) {
       state.commPointOffset += state.commPointLimit;
-      loadComm();
+      loadComm().catch(() => {});
     }
   });
 
   // ==================== 5. 运行日志 ====================
+  let logReqSeq = 0;
+  let lastLogProcSig = "";
+  let lastLogStreamSig = "";
+
   async function loadLogs() {
+    const seq = ++logReqSeq;
     const filesRes = await api(`/api/logs/files?record=${encodeURIComponent(state.logRecord)}`);
+    if (seq !== logReqSeq) return;
     const files = filesRes.items || [];
     $("#log-file-count").textContent = String(filesRes.total || 0);
 
     const procSel = $("#log-process");
-    const prevProc = procSel.value;
-    procSel.innerHTML = '<option value="">全部进程</option>' +
-      (filesRes.processes || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
-    if ([...procSel.options].some((o) => o.value === prevProc)) procSel.value = prevProc;
+    const procList = filesRes.processes || [];
+    const nextProcSig = procList.join("|");
+    if (nextProcSig !== lastLogProcSig && document.activeElement !== procSel) {
+      const prevProc = procSel.value;
+      procSel.innerHTML = '<option value="">全部进程</option>' +
+        procList.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+      if ([...procSel.options].some((o) => o.value === prevProc)) procSel.value = prevProc;
+      lastLogProcSig = nextProcSig;
+    }
 
     const fileList = $("#log-file-list");
     const allBtn = `<button type="button" class="log-file-btn ${!state.logFilename ? "selected" : ""}" data-file=""><strong>全部最新日志</strong><small>合并检索最近文件</small></button>`;
@@ -2119,7 +2225,7 @@
     fileList.querySelectorAll(".log-file-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         state.logFilename = btn.dataset.file;
-        loadLogs();
+        loadLogs().catch(() => {});
       });
     });
 
@@ -2132,17 +2238,22 @@
     if (kw) qs.set("keyword", kw);
 
     const res = await api("/api/logs/read?" + qs.toString());
+    if (seq !== logReqSeq) return;
     const lines = (res.items || []).slice().reverse(); // 按时间正序阅读，最新在底部
     state.logLines = lines;
     $("#log-active-file").textContent = state.logFilename || "全部最新日志";
     $("#log-line-count").textContent = `${lines.length} 条`;
 
+    const streamSig = `${lines.length}|${lines[0]?.text || ""}|${lines[lines.length - 1]?.text || ""}`;
     const stream = $("#log-stream");
-    stream.innerHTML = lines.length
-      ? lines.map((l) => `<div class="log-line ${esc(l.level || "")}">${esc(l.text)}</div>`).join("")
-      : '<div class="empty-hint">当前筛选条件下暂无日志</div>';
-    if ($("#log-follow").checked) {
-      stream.scrollTop = stream.scrollHeight;
+    if (streamSig !== lastLogStreamSig) {
+      lastLogStreamSig = streamSig;
+      stream.innerHTML = lines.length
+        ? lines.map((l) => `<div class="log-line ${esc(l.level || "")}">${esc(l.text)}</div>`).join("")
+        : '<div class="empty-hint">当前筛选条件下暂无日志</div>';
+      if ($("#log-follow").checked) {
+        stream.scrollTop = stream.scrollHeight;
+      }
     }
   }
 
@@ -2150,16 +2261,17 @@
     btn.addEventListener("click", () => {
       state.logRecord = btn.dataset.logRecord;
       state.logFilename = "";
+      lastLogStreamSig = "";
       $$("#log-record-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
       $("#log-direction").disabled = state.logRecord !== "packet";
       if (state.logRecord !== "packet") $("#log-direction").value = "";
-      loadLogs();
+      loadLogs().catch(() => {});
     });
   });
   ["#log-process", "#log-level", "#log-direction"].forEach((id) => {
-    $(id)?.addEventListener("change", loadLogs);
+    $(id)?.addEventListener("change", () => loadLogs().catch(() => {}));
   });
-  $("#log-keyword")?.addEventListener("input", loadLogs);
+  $("#log-keyword")?.addEventListener("input", debounce(() => loadLogs().catch(() => {}), 250));
   $("#log-export")?.addEventListener("click", () => {
     const text = state.logLines.map((l) => l.text).join("\n");
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
@@ -2333,36 +2445,101 @@
     $("#ef-qual-ok").textContent = `${s.valid_measurements ?? 0}`;
     $("#ef-qual-limit").textContent = `${s.over_limit_count ?? 0} / ${s.under_limit_count ?? 0}`;
     $("#ef-qual-comm").textContent = `${s.comm_error_count ?? 0}`;
+    // 同步刷新左侧边栏健康摘要，无需额外重复请求 /api/overview
+    if ($("#health-rtus")) $("#health-rtus").textContent = `${s.rtu_online ?? 0} / ${s.rtu_total ?? 0}`;
+    if ($("#health-points")) $("#health-points").textContent = `${s.valid_measurements ?? 0} / ${s.bound_measurements ?? 0}`;
+    if ($("#health-gen")) $("#health-gen").textContent = `${fmtNum(s.total_gen_kw, 1)} kW`;
+    if ($("#health-load")) $("#health-load").textContent = `${fmtNum(s.total_load_kw, 1)} kW`;
   }
 
   $$("#view-energyflow [data-jump-cat]").forEach((node) => {
-    node.addEventListener("click", () => {
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "button");
+    const jump = () => {
       state.devCategory = node.dataset.jumpCat || "";
       switchView("devices");
+    };
+    node.addEventListener("click", jump);
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        jump();
+      }
     });
   });
   $$("#view-energyflow [data-ef-view]").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.efView));
   });
 
-  // ==================== 轮询调度与主题同步 ====================
+  // ==================== 轮询调度、快捷键盘与主题同步 ====================
+  let pendingRefresh = false;
+  let overviewTick = 0;
+
   async function refreshCurrentView() {
-    if (state.refreshing) return;
+    if (state.refreshing) {
+      pendingRefresh = true;
+      return;
+    }
     state.refreshing = true;
+    const viewAtStart = state.view;
     try {
-      await loadOverview();
-      if (state.view === "energyflow") await loadEnergyFlow();
-      else if (state.view === "powerflow") await loadPowerflow();
-      else if (state.view === "devices") await loadDevices();
-      else if (state.view === "comm") await loadComm();
-      else if (state.view === "logs") await loadLogs();
-      setConnection(true, "实时在线");
+      const tasks = [];
+      if (viewAtStart === "home") {
+        tasks.push(loadOverview());
+      } else if (viewAtStart === "energyflow") {
+        tasks.push(loadEnergyFlow());
+      } else {
+        if (viewAtStart === "powerflow") tasks.push(loadPowerflow());
+        else if (viewAtStart === "devices") tasks.push(loadDevices());
+        else if (viewAtStart === "comm") tasks.push(loadComm());
+        else if (viewAtStart === "logs") tasks.push(loadLogs());
+        // 非首页每 3 轮顺带并行刷新一次侧栏健康摘要，避免每次轮询串行重复拉取 /api/overview
+        if (overviewTick % 3 === 0) tasks.push(loadOverview());
+      }
+      overviewTick += 1;
+      await Promise.all(tasks);
+      const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      setConnection(true, `实时在线 · ${stamp}`);
     } catch (err) {
-      setConnection(false, err.message || "连接异常");
+      if (err?.name !== "AbortError") {
+        setConnection(false, err.message || "连接异常");
+      }
     } finally {
       state.refreshing = false;
+      if (pendingRefresh) {
+        pendingRefresh = false;
+        refreshCurrentView();
+      }
     }
   }
+
+  // 全局高频工程快捷键：1-6 切换视图，/ 聚焦搜索框，Esc 关闭潮流图悬浮框
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Escape") {
+      hidePfPopovers?.();
+      return;
+    }
+    const tag = (e.target?.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
+    if (e.key === "/") {
+      const searchSel = state.view === "powerflow" ? "#pf-search"
+        : state.view === "devices" ? "#dev-search"
+          : state.view === "comm" ? "#comm-point-search"
+            : state.view === "logs" ? "#log-keyword" : null;
+      const input = searchSel ? $(searchSel) : null;
+      if (input) {
+        e.preventDefault();
+        input.focus();
+        input.select?.();
+      }
+      return;
+    }
+    const keyViewMap = { "1": "home", "2": "energyflow", "3": "powerflow", "4": "devices", "5": "comm", "6": "logs" };
+    if (keyViewMap[e.key]) {
+      switchView(keyViewMap[e.key]);
+    }
+  });
 
   function resetTimer() {
     if (state.timer) clearInterval(state.timer);

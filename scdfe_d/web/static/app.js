@@ -100,9 +100,22 @@
       options.body = JSON.stringify(body);
     }
     const response = await fetch(url, options);
-    const data = await response.json();
+    const text = await response.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch (_) {
+        if (!response.ok) {
+          const failure = new Error('请求失败（HTTP ' + response.status + '）');
+          failure.status = response.status;
+          throw failure;
+        }
+        throw new Error('服务端返回了非 JSON 响应');
+      }
+    }
     if (!response.ok) {
-      const failure = new Error(data.error?.message || '请求失败');
+      const failure = new Error(data.error?.message || '请求失败（HTTP ' + response.status + '）');
       failure.status = response.status;
       throw failure;
     }
@@ -409,11 +422,11 @@
   function liveRow(row) {
     return '<tr>'
       + quantityMarkup(row, !detail) + '<td>' + kindLabel(row.kind) + '</td>'
-      + '<td class="quantity-value">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
-      + '<td class="limit-range">' + html(formatLimitRange(row)) + '</td>'
-      + '<td>' + html(time(row.source_time_ms)) + '</td><td>' + html(time(row.collected_at)) + '</td>'
+      + '<td class="quantity-value col-num">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
+      + '<td class="limit-range col-num">' + html(formatLimitRange(row)) + '</td>'
+      + '<td class="col-num">' + html(time(row.source_time_ms)) + '</td><td class="col-num">' + html(time(row.collected_at)) + '</td>'
       + '<td>' + html(qualityText(row.quality)) + '</td><td>' + statusMarkup(row) + '</td>'
-      + '<td>' + html(number(row.previous_value)) + '</td>' + sourceMarkup(row) + '</tr>';
+      + '<td class="col-num">' + html(number(row.previous_value)) + '</td>' + sourceMarkup(row) + '</tr>';
   }
 
   function updateLiveRows(previous, items) {
@@ -494,7 +507,7 @@
     if (!queryMode || !updateLiveRows(previous, items)) {
       const body = $('#measure-rows');
       body.innerHTML = rows.map(renderer).join('')
-        || emptyRow(headers, detail || mappingMode ? '没有匹配的量测' : '请选择设备表和设备');
+        || emptyRow(headers, detail || mappingMode || queryMode ? '没有匹配的量测' : '请选择设备表和设备');
       if (pointTrend) rows.forEach((row, index) => {
         const element = body.rows[index];
         if (!element || !attached(row)) return;
@@ -975,15 +988,39 @@
       await loadHistory();
     }));
   }
-  $('#previous').addEventListener('click', run(async () => { page -= 1; await loadRows(); }));
-  $('#next').addEventListener('click', run(async () => { page += 1; await loadRows(); }));
+  $('#previous').addEventListener('click', run(async () => {
+    if (page <= 1) return;
+    page = Math.max(1, page - 1);
+    $('#previous').disabled = true;
+    $('#next').disabled = true;
+    await loadRows();
+  }));
+  $('#next').addEventListener('click', run(async () => {
+    page += 1;
+    $('#previous').disabled = true;
+    $('#next').disabled = true;
+    await loadRows();
+  }));
   $('#save-parameters').addEventListener('click', run(saveParameters));
-  $('#discard-parameters').addEventListener('click', () => {
+  $('#discard-parameters').addEventListener('click', run(async () => {
+    if (!drafts.size) return;
+    if (!(await confirmDanger(
+      '确认撤销修改',
+      '将丢弃当前 ' + drafts.size + ' 项未保存的参数修改，确认继续？',
+      '确认撤销',
+    ))) return;
     drafts.clear();
     $('#only-draft').checked = false;
     parameterNotice = '';
     error('#alert', '');
-    renderRows(filtered(detail.items));
+    if (detail?.items) renderRows(filtered(detail.items));
+    else updateParameterButtons();
+  }));
+  // 支持在参数配置页按 Ctrl+S 快捷保存未保存参数
+  document.addEventListener('keydown', event => {
+    if (!parameterMode || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return;
+    event.preventDefault();
+    if (!$('#save-parameters').disabled) run(saveParameters)();
   });
   $('#only-draft').addEventListener('change', run(refreshRowsForFilter));
   $('#bulk-parameters').addEventListener('click', openBulkParameters);
@@ -1015,6 +1052,17 @@
     }
   });
   $('#measure-rows').addEventListener('click', run(async event => {
+    // 扩大参数配置页复选框单元格点击热区：点击单元格空白处同样切换勾选
+    if (parameterMode && !saving && event.target.tagName !== 'INPUT') {
+      const checkCell = event.target.closest('td.parameter-check');
+      const box = checkCell?.querySelector('input[type="checkbox"]:not(:disabled)');
+      if (box) {
+        box.checked = !box.checked;
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+    }
     const edit = event.target.closest('[data-edit]');
     const remove = event.target.closest('[data-delete]');
     if (edit) openEditor(rows[Number(edit.dataset.edit)]);
@@ -1098,8 +1146,19 @@
       findSource();
     }
   });
-  $('#source-prev').addEventListener('click', () => { sourcePage -= 1; findSource(); });
-  $('#source-next').addEventListener('click', () => { sourcePage += 1; findSource(); });
+  $('#source-prev').addEventListener('click', () => {
+    if (sourcePage <= 1) return;
+    sourcePage = Math.max(1, sourcePage - 1);
+    $('#source-prev').disabled = true;
+    $('#source-next').disabled = true;
+    findSource();
+  });
+  $('#source-next').addEventListener('click', () => {
+    sourcePage += 1;
+    $('#source-prev').disabled = true;
+    $('#source-next').disabled = true;
+    findSource();
+  });
   $('#browse-source').addEventListener('click', () => {
     browserMode = 'source';
     if ($('#source-browser-title')) $('#source-browser-title').textContent = '选择源数据库';
@@ -1120,6 +1179,8 @@
   $('#device-cancel').addEventListener('click', () => $('#device-editor').close());
   $('#device-form').addEventListener('submit', async event => {
     event.preventDefault();
+    const submitBtn = $('#device-form button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     try {
       await api('/api/devices', 'POST', { name: $('#device-name').value, category: $('#device-category').value });
       $('#device-editor').close();
@@ -1127,6 +1188,8 @@
       await refresh();
     } catch (exception) {
       error($('#device-editor').open ? '#device-error' : '#alert', exception.message);
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 

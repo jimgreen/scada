@@ -206,7 +206,7 @@ dialog.point-trend-dialog::backdrop { background: rgba(15, 23, 42, 0.36); backdr
   line-height: 1;
   cursor: pointer;
 }
-.point-trend-dialog-close:hover { background: #f1f5f9; color: #0f172a; }
+.point-trend-dialog-close:hover { background: var(--bg-hover, #f1f5f9); color: var(--text-primary, #0f172a); }
 .point-trend-axis-body,
 dialog.point-trend-dialog .point-trend-series {
   display: grid;
@@ -260,9 +260,9 @@ dialog.point-trend-dialog input:disabled { background: #f2f5f7; opacity: 0.7; }
 .point-trend-dialog-done {
   min-width: 72px;
   cursor: pointer;
-  background: #0d9488 !important;
-  border-color: #0d9488 !important;
-  color: #fff !important;
+  background: var(--accent, #0d9488) !important;
+  border-color: var(--accent, #0d9488) !important;
+  color: var(--accent-contrast, #fff) !important;
   font-weight: 500;
 }
 .point-trend-dialog-done:hover { filter: brightness(1.06); }

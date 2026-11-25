@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 import math
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
@@ -16,6 +17,44 @@ import sqlite3
 import threading
 import time
 from types import SimpleNamespace
+
+LOG = logging.getLogger("scdfe_d.service")
+_INT64_MIN = -(1 << 63)
+_INT64_MAX = (1 << 63) - 1
+
+
+def _strict_int64(value):
+    """严格解析 64 位有符号整数（拒绝 bool、小数截断与超 64 位溢出）。"""
+    if value is None or isinstance(value, bool):
+        raise ValueError("not an int64")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("not an integer float")
+        result = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError("empty integer string")
+        result = int(text, 10)
+    else:
+        raise ValueError("unsupported integer type")
+    if not (_INT64_MIN <= result <= _INT64_MAX):
+        raise OverflowError("int64 out of range")
+    return result
+
+
+def _same_value(a, b):
+    """比较两个量测值是否相等（正确处理 NaN == NaN，避免每周期冗余写库）。"""
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    if isinstance(a, float) and isinstance(b, float):
+        if math.isnan(a) and math.isnan(b):
+            return True
+    return a == b
 
 from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 from core.scdfe_control import InstanceLock
@@ -313,7 +352,8 @@ def validate_database(path):
         path = Path(path).resolve()
         if not path.is_file():
             raise ValueError("设备数据库文件不存在")
-        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as con:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=10)) as con:
+            con.execute("PRAGMA busy_timeout=10000")
             if con.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("数据库完整性检查失败")
             app_id = con.execute("PRAGMA application_id").fetchone()[0]
@@ -470,6 +510,7 @@ class DeviceStore:
         self._refresh_history = deque(maxlen=MAX_HISTORY_ITEMS)
         self._change_history = deque(maxlen=MAX_HISTORY_ITEMS)
         self._schema_cache = None  # (schema_version, [(table, [(metric, kind), ...])])
+        self._overview_cache = None  # (cache_key, overview_dict)
 
         existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
         if existing:
@@ -909,38 +950,36 @@ class DeviceStore:
             if pk_cache is not None:
                 pk_cache[table] = has_pk
         if has_pk:
-            if len(keys) <= 128:
-                wanted = ",".join("(?,?)" for _ in keys)
-                params = tuple(value for pair in sorted(keys) for value in pair)
-                qualified = ",".join(f"p.{field}" for field in columns.split(","))
-                sql = (
+            # 统一按 256 对点分批走 (rtu_id, pnt_no) 联合主键索引，避免大点集退化全表扫描
+            cur = connection.cursor()
+            cur.row_factory = None
+            snapshot = {}
+            sorted_keys = sorted(keys)
+            qualified = ",".join(f"p.{field}" for field in columns.split(","))
+            batch_size = 256
+            for offset in range(0, len(sorted_keys), batch_size):
+                chunk = sorted_keys[offset : offset + batch_size]
+                wanted = ",".join("(?,?)" for _ in chunk)
+                chunk_params = tuple(value for pair in chunk for value in pair)
+                chunk_sql = (
                     f"WITH wanted(rtu_id,pnt_no) AS (VALUES {wanted}) "
                     f"SELECT {qualified} FROM wanted CROSS JOIN {table} p "
                     "ON p.rtu_id=wanted.rtu_id AND p.pnt_no=wanted.pnt_no"
                 )
-            else:
-                distinct_rtus = sorted({rtu for rtu, _ in keys})
-                if len(distinct_rtus) <= 64:
-                    placeholders = ",".join("?" for _ in distinct_rtus)
-                    sql = f"SELECT {columns} FROM {table} WHERE rtu_id IN ({placeholders})"
-                    params = tuple(distinct_rtus)
+                for rtu_id, pnt_no, value, status, stamp in cur.execute(chunk_sql, chunk_params):
+                    snapshot[(rtu_id, pnt_no)] = (value, status, stamp)
+            return snapshot
         cur = connection.cursor()
         cur.row_factory = None
         snapshot = {}
-        if has_pk:
-            for rtu_id, pnt_no, value, status, stamp in cur.execute(sql, params):
-                key = (rtu_id, pnt_no)
-                if key in keys:
-                    snapshot[key] = (value, status, stamp)
-        else:
-            seen = set()
-            for rtu_id, pnt_no, value, status, stamp in cur.execute(sql, params):
-                key = (rtu_id, pnt_no)
-                if key in seen:
-                    raise ApiError(400, "源测点主键重复")
-                seen.add(key)
-                if key in keys:
-                    snapshot[key] = (value, status, stamp)
+        seen = set()
+        for rtu_id, pnt_no, value, status, stamp in cur.execute(sql, params):
+            key = (rtu_id, pnt_no)
+            if key in seen:
+                raise ApiError(400, "源测点主键重复")
+            seen.add(key)
+            if key in keys:
+                snapshot[key] = (value, status, stamp)
         return snapshot
 
     def _read_cached_source(self, source_name, kinds, source_cache):
@@ -1106,21 +1145,30 @@ class DeviceStore:
     def collect_once(self, *, _writer=None, _source_cache=None, _plan_cache=None):
         """根据量测配置、源库通信状态及上下限，实时更新设备宽表量测值与状态码（0/1/2/3/4）。"""
         started = utc_now()
+        t_start = time.perf_counter()
         source_name = self.default_source_database()
 
         # 第一阶段：获取各设备表全部量测槽位与当前值（命中 data_version 缓存时零 SQL 扫描）。
         bindings = None
         requested_kinds = None
         plan_key = None
+        epoch_before = self._config_epoch
         if _writer is not None and _plan_cache is not None:
             data_ver = _writer.execute("PRAGMA data_version").fetchone()[0]
-            plan_key = (data_ver, self._config_epoch, source_name)
+            plan_key = (data_ver, epoch_before, source_name)
             if _plan_cache.get("key") == plan_key:
                 bindings = _plan_cache["bindings"]
                 requested_kinds = _plan_cache["requested"]
         if bindings is None:
             with self.connection(_writer=_writer) as read_con:
-                bindings, requested_kinds = self._scan_bindings(read_con)
+                read_con.execute("BEGIN")
+                try:
+                    data_ver = read_con.execute("PRAGMA data_version").fetchone()[0]
+                    epoch_before = self._config_epoch
+                    bindings, requested_kinds = self._scan_bindings(read_con)
+                    plan_key = (data_ver, epoch_before, source_name)
+                finally:
+                    read_con.rollback()
             if _plan_cache is not None and plan_key is not None:
                 _plan_cache["key"] = plan_key
                 _plan_cache["bindings"] = bindings
@@ -1268,8 +1316,8 @@ class DeviceStore:
                     else:
                         try:
                             new_raw = float(point[0])
-                            new_qual = int(point[1])
-                            new_stamp = int(point[2])
+                            new_qual = _strict_int64(point[1])
+                            new_stamp = _strict_int64(point[2])
                             if not isfinite(new_raw) or not 0 <= new_qual <= 255:
                                 raise ValueError("invalid sample")
                             if kind == "yx":
@@ -1278,33 +1326,35 @@ class DeviceStore:
                                 new_val = int(new_raw)
                             else:
                                 new_val = new_raw
-                            if (
-                                not rebound
-                                and (old_val is not None or old_time is not None)
-                                and (new_stamp != old_time or new_val != old_val)
-                            ):
-                                pre = old_val
-                            val = new_val
-                            stamp = new_stamp
                             if new_qual:
                                 reason = "bad_quality"
                                 out_qual = QUAL_COMM_ERROR
-                            elif stamp <= 0:
+                            elif new_stamp <= 0:
                                 reason = "missing_time"
                                 out_qual = QUAL_COMM_ERROR
-                            elif stamp > future_limit:
+                            elif new_stamp > future_limit:
                                 reason = "future_time"
                                 out_qual = QUAL_COMM_ERROR
-                            elif now_ms - stamp > max_age_ms:
-                                reason = "stale"
-                                out_qual = QUAL_COMM_ERROR
                             else:
-                                # 3/4. 通信正常时按上下限判定越限（上限<=下限时判定上下限无效）
-                                limit_hit = _check_limit_status(val, max_val, min_val)
-                                if limit_hit is not None:
-                                    out_qual, reason = limit_hit
+                                # 仅在质量正常且时标有效时更新宽表当前值与前次值，防止异常脏样本污染历史可信值
+                                if (
+                                    not rebound
+                                    and (old_val is not None or old_time is not None)
+                                    and (new_stamp != old_time or not _same_value(new_val, old_val))
+                                ):
+                                    pre = old_val
+                                val = new_val
+                                stamp = new_stamp
+                                if now_ms - stamp > max_age_ms:
+                                    reason = "stale"
+                                    out_qual = QUAL_COMM_ERROR
                                 else:
-                                    out_qual = QUAL_OK
+                                    # 3/4. 通信正常时按上下限判定越限（上限<=下限时判定上下限无效）
+                                    limit_hit = _check_limit_status(val, max_val, min_val)
+                                    if limit_hit is not None:
+                                        out_qual, reason = limit_hit
+                                    else:
+                                        out_qual = QUAL_OK
                         except (ValueError, TypeError, OverflowError):
                             reason = "invalid_value"
                             out_qual = QUAL_COMM_ERROR
@@ -1319,17 +1369,17 @@ class DeviceStore:
                     "collected_at": collected_at,
                 }
                 if (
-                    val != old_val
+                    not _same_value(val, old_val)
                     or out_qual != old_qual
-                    or pre != old_pre
+                    or not _same_value(pre, old_pre)
                     or stamp != old_time
                 ):
                     row_updates = changes_by_row[(table, idx)]
-                    if val != old_val:
+                    if not _same_value(val, old_val):
                         row_updates[metric] = val
                     if out_qual != old_qual:
                         row_updates[metric + "_qual"] = out_qual
-                    if pre != old_pre:
+                    if not _same_value(pre, old_pre):
                         row_updates[metric + "_pre"] = pre
                     if stamp != old_time:
                         row_updates[metric + "_time"] = stamp
@@ -1357,19 +1407,20 @@ class DeviceStore:
             return configured_cnt, valid_cnt, changes_by_row, next_bindings, runtime_updates
 
         total_count, valid_count, changes, next_bindings, runtime_updates = evaluate(bindings)
+        skipped_stale_write = False
 
         # 第三阶段：仅当存在设备字段变化时开启写事务，直接按设备表批量 UPDATE。
         if changes:
             try:
                 with self.connection(_writer=_writer) as con:
                     con.execute("BEGIN IMMEDIATE")
-                    # 若在读源库期间有外部连接修改了设备库，重新扫描设备表后再计算差异写入。
-                    if _writer is not None and plan_key is not None:
+                    # 若在读源库期间有外部或并发请求修改了设备库，重新扫描设备表后再计算差异写入。
+                    if plan_key is not None:
                         cur_ver = con.execute("PRAGMA data_version").fetchone()[0]
                         if (cur_ver, self._config_epoch, source_name) != plan_key:
                             new_bindings, new_requested = self._scan_bindings(con)
                             # 若并发新增/改绑了本轮未读取的源点，不可复用旧源快照误写 missing_point；
-                            # 清空计划缓存，留待下一周期使用最新源库快照完整写入。
+                            # 清空计划缓存并跳过本轮缓存回填与状态覆写，留待下一周期使用最新快照写入。
                             unfetched = any(
                                 not new_requested[k].issubset(requested_kinds.get(k, set()))
                                 for k in new_requested
@@ -1378,6 +1429,7 @@ class DeviceStore:
                                 if _plan_cache is not None:
                                     _plan_cache.clear()
                                 changes = {}
+                                skipped_stale_write = True
                             else:
                                 bindings, requested_kinds = new_bindings, new_requested
                                 (
@@ -1395,26 +1447,33 @@ class DeviceStore:
                     _plan_cache.clear()
                 raise
 
-        if _plan_cache is not None and plan_key is not None:
+        if not skipped_stale_write and _plan_cache is not None and plan_key is not None:
             _plan_cache["key"] = plan_key
             _plan_cache["bindings"] = next_bindings
             _plan_cache["requested"] = requested_kinds
 
         finished = utc_now()
+        duration_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
         with self._mutex:
-            self._runtime_meta = runtime_updates
-            self._last_bound_points = {
-                (e[0], e[1], e[2]): (e[6], e[7])
-                for e in next_bindings
-                if e[6] is not None and e[7] is not None
-            }
+            # 仅当本轮未触发并发跳写且无配置版本跃迁时才更新内存快照，防止旧快照覆盖并发修改
+            if not skipped_stale_write and (
+                plan_key is None or self._config_epoch == plan_key[1]
+            ):
+                self._runtime_meta = runtime_updates
+                self._last_bound_points = {
+                    (e[0], e[1], e[2]): (e[6], e[7])
+                    for e in next_bindings
+                    if e[6] is not None and e[7] is not None
+                }
             self._refresh_seq += 1
+            self._overview_cache = None
             refresh_id = self._refresh_seq
             self._refresh_history.appendleft(
                 dict(
                     refresh_id=refresh_id,
                     started_at=started,
                     finished_at=finished,
+                    duration_ms=duration_ms,
                     total_count=total_count,
                     valid_count=valid_count,
                     se_valid_count=0,
@@ -1429,6 +1488,7 @@ class DeviceStore:
             total_count=total_count,
             valid_count=valid_count,
             updated_rows=len(changes),
+            duration_ms=duration_ms,
             errors=errors,
         )
 
@@ -1470,7 +1530,7 @@ class DeviceStore:
             ).fetchall()
         return dict(items=[dict(r) for r in rows], total=total, page=page, limit=50)
 
-    def _ensure_device_table(self, con, table, initial_metrics=()):
+    def _ensure_device_table(self, con, table, initial_metrics=(), *, sync_schema=True):
         """确保设备宽表存在并包含指定量测列组。"""
         quoted = _quote_table(table)
         existing = con.execute(f"PRAGMA table_info({quoted})").fetchall()
@@ -1494,12 +1554,15 @@ class DeviceStore:
                 for col, col_type, default in measurement_columns(metric, kind):
                     con.execute(f'ALTER TABLE {quoted} ADD COLUMN "{col}" {col_type}{default}')
                 schema_changed = True
-        if schema_changed:
+        if schema_changed and sync_schema:
             _sync_device_rtdb_schema(con)
         return schema_changed
 
     def create_device(self, data):
-        name, category = str(data.get("name", "")).strip(), data.get("category")
+        raw_name = data.get("name")
+        if not isinstance(raw_name, str):
+            raise ApiError(400, "请填写设备名称并选择设备类型")
+        name, category = raw_name.strip(), data.get("category")
         if not name or len(name) > 200 or category not in CATEGORIES:
             raise ApiError(400, "请填写设备名称并选择设备类型")
         table = "Manual_" + category
@@ -1511,16 +1574,16 @@ class DeviceStore:
                 f"SELECT coalesce(max(idx), 0) + 1 FROM {quoted}"
             ).fetchone()[0]
             con.execute(f"INSERT INTO {quoted}(idx, name) VALUES(?, ?)", (idx, name))
-            device_id = self.device_id_for(table, idx)
-            result = dict(
-                device_id=device_id,
-                model_table=table,
-                model_idx=idx,
-                name=name,
-                category=category,
-                active=1,
-            )
-            self._record_change("device", device_id, {}, result)
+        device_id = self.device_id_for(table, idx)
+        result = dict(
+            device_id=device_id,
+            model_table=table,
+            model_idx=idx,
+            name=name,
+            category=category,
+            active=1,
+        )
+        self._record_change("device", device_id, {}, result)
         self.bump_config_epoch()
         return result
 
@@ -1529,17 +1592,21 @@ class DeviceStore:
         path = self.source_path(relative_path)
         model = {}
         try:
-            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as src:
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=10)) as src:
+                src.execute("PRAGMA temp_store=MEMORY")
                 src.execute("BEGIN")
+                # 一次性加载全部列元数据，避免按表 N+1 查询 rtdb_schema_columns
+                cols_by_table = defaultdict(list)
+                for tbl_name, ordinal, eng_name in src.execute(
+                    "SELECT table_name, ordinal, eng_name FROM rtdb_schema_columns ORDER BY table_name, ordinal"
+                ):
+                    cols_by_table[tbl_name].append((ordinal, eng_name))
                 for (table,) in src.execute(
                     "SELECT table_name FROM rtdb_schema_tables ORDER BY ordinal"
                 ):
                     if table in ("Model", "basevoltage", "HydroMedium"):
                         continue
-                    fields = src.execute(
-                        "SELECT ordinal,eng_name FROM rtdb_schema_columns WHERE table_name=? ORDER BY ordinal",
-                        (table,),
-                    ).fetchall()
+                    fields = cols_by_table.get(table, ())
                     keys = [r[1] for r in fields]
                     if "idx" not in keys or (
                         "name" not in keys and table not in EXTENSIONS
@@ -1569,12 +1636,12 @@ class DeviceStore:
                 if profile:
                     initial.extend((m, "yc") for m in profile[0])
                     initial.extend((m, "yx") for m in profile[1])
-                self._ensure_device_table(con, table, initial)
+                self._ensure_device_table(con, table, initial, sync_schema=False)
                 quoted = _quote_table(table)
                 rows = []
                 for item in items:
                     idx = int(item["idx"])
-                    name = str(item["name"])
+                    name = "" if item["name"] is None else str(item["name"])
                     rows.append((idx, name))
                     parent_names[(table, idx)] = name
                 if rows:
@@ -1587,7 +1654,7 @@ class DeviceStore:
                 items = model.get(table)
                 if not items:
                     continue
-                self._ensure_device_table(con, table)
+                self._ensure_device_table(con, table, sync_schema=False)
                 quoted = _quote_table(table)
                 # 若父表在库中已有旧数据，补充查找父名称
                 parent_quoted = _quote_table(parent)
@@ -1612,12 +1679,12 @@ class DeviceStore:
                         rows,
                     )
             _sync_device_rtdb_schema(con)
-            self._record_change(
-                "model_import",
-                None,
-                {},
-                dict(path=relative_path, tables=len(model)),
-            )
+        self._record_change(
+            "model_import",
+            None,
+            {},
+            dict(path=relative_path, tables=len(model)),
+        )
         self.bump_config_epoch()
         return dict(
             tables=len(model),
@@ -1759,7 +1826,7 @@ class DeviceStore:
                     base = 2
                     for metric, kind in metrics:
                         rtu, pnt = row[base + 6], row[base + 7]
-                        if rtu is not None and pnt is not None:
+                        if _is_valid_point_config(rtu, pnt):
                             if filter_kind and kind != filter_kind:
                                 base += step
                                 continue
@@ -1849,16 +1916,25 @@ class DeviceStore:
         point = _parse_positive_int(data.get("pnt_no"))
         if rtu is None or point is None:
             raise ApiError(400, "RTU 编号和点号必须为正整数")
-        weight = float(data.get("weight", 1.0))
-        notuse = int(data.get("notuse", 0))
-        enabled = int(data.get("enabled", 1))
+        raw_weight = data.get("weight", 1.0)
+        if isinstance(raw_weight, bool):
+            raise ApiError(400, "量测权重必须为正数")
+        weight = float(raw_weight)
+        raw_notuse = data.get("notuse", 0)
+        raw_enabled = data.get("enabled", 1)
+        if isinstance(raw_notuse, bool) or isinstance(raw_enabled, bool):
+            raise ApiError(400, "启用和禁用标记只能为 0 或 1")
+        notuse = int(raw_notuse)
+        enabled = int(raw_enabled)
         has_max = "max_value" in data
         has_min = "min_value" in data
-        max_val = _parse_limit_number(data.get("max_value")) if has_max else None
-        min_val = _parse_limit_number(data.get("min_value")) if has_min else None
-        if has_max and data.get("max_value") is not None and max_val is None:
+        raw_max = data.get("max_value")
+        raw_min = data.get("min_value")
+        max_val = _parse_limit_number(raw_max) if has_max else None
+        min_val = _parse_limit_number(raw_min) if has_min else None
+        if has_max and raw_max is not None and str(raw_max).strip() != "" and max_val is None:
             raise ApiError(400, "量测上限必须为有限数值或留空")
-        if has_min and data.get("min_value") is not None and min_val is None:
+        if has_min and raw_min is not None and str(raw_min).strip() != "" and min_val is None:
             raise ApiError(400, "量测下限必须为有限数值或留空")
         if not math.isfinite(weight) or weight <= 0:
             raise ApiError(400, "量测权重必须为正数")
@@ -1875,8 +1951,6 @@ class DeviceStore:
             ).fetchall()
             if len(found) != 1:
                 raise ApiError(400, "指定的源测点不存在或主键不唯一")
-        if data.get("source_database"):
-            self.set_source_database(source)
 
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -1886,12 +1960,18 @@ class DeviceStore:
                 if old_target is None:
                     raise ApiError(404, "属性不存在")
                 cur_ver = self.version_for(*old_target)
-                if "version" in data and int(data["version"]) != cur_ver:
-                    raise ApiError(409, "定义已被修改，请刷新后重试")
+                if "version" in data:
+                    req_ver = data["version"]
+                    if type(req_ver) is not int or req_ver < 1:
+                        raise ApiError(400, "版本号必须为正整数")
+                    if req_ver != cur_ver:
+                        raise ApiError(409, "定义已被修改，请刷新后重试")
 
             if data.get("table") and data.get("idx") is not None:
-                table, idx = str(data["table"]), int(data["idx"])
+                table, idx = str(data["table"]), _strict_int64(data["idx"])
                 self._table_name(table)
+                if self.table_metrics(con, table) is None:
+                    raise ApiError(404, "目标设备表不存在")
             elif data.get("device_id") is not None:
                 resolved = self.resolve_device_id(con, data["device_id"])
                 if resolved is None:
@@ -1903,7 +1983,7 @@ class DeviceStore:
                 raise ApiError(400, "目标设备不存在")
 
             quoted = _quote_table(table)
-            row = con.execute(f"SELECT * FROM {quoted} WHERE idx=?", (idx,)).fetchone()
+            row = con.execute(f"SELECT 1 FROM {quoted} WHERE idx=?", (idx,)).fetchone()
             if row is None:
                 raise ApiError(400, "目标设备不存在")
 
@@ -1917,11 +1997,12 @@ class DeviceStore:
             # 重新读取当前行的该字段旧值
             cur_vals = con.execute(
                 f"SELECT {_quote_col(metric + '_rtu')}, {_quote_col(metric + '_pnt')}, {_quote_col(metric + '_qual')}, "
-                f"{_quote_col(metric + '_max')}, {_quote_col(metric + '_min')} FROM {quoted} WHERE idx=?",
+                f"{_quote_col(metric + '_max')}, {_quote_col(metric + '_min')}, {_quote_col(metric)} FROM {quoted} WHERE idx=?",
                 (idx,),
             ).fetchone()
-            final_max = max_val if has_max else cur_vals[3]
-            final_min = min_val if has_min else cur_vals[4]
+            existing_bound = _is_valid_point_config(cur_vals[0], cur_vals[1])
+            final_max = max_val if has_max else _parse_limit_number(cur_vals[3])
+            final_min = min_val if has_min else _parse_limit_number(cur_vals[4])
             if (
                 (has_max or has_min)
                 and final_max is not None
@@ -1930,6 +2011,8 @@ class DeviceStore:
             ):
                 raise ApiError(400, "量测上限必须大于下限，无法修改")
             point_changed = cur_vals[0] != rtu or cur_vals[1] != point
+            recomputed_reason = "definition_changed"
+            recomputed_valid = 0
             if point_changed:
                 con.execute(
                     f"""UPDATE {quoted} SET
@@ -1957,8 +2040,18 @@ class DeviceStore:
                 )
             else:
                 new_qual = cur_vals[2]
+                cur_val = cur_vals[5]
                 if new_qual is None or new_qual == QUAL_UNCONFIGURED:
                     new_qual = QUAL_COMM_ERROR
+                elif new_qual in (QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN) and cur_val is not None:
+                    limit_hit = _check_limit_status(cur_val, final_max, final_min)
+                    if limit_hit is not None:
+                        new_qual, recomputed_reason = limit_hit
+                        recomputed_valid = 0
+                    else:
+                        new_qual = QUAL_OK
+                        recomputed_reason = "notuse" if notuse else ""
+                        recomputed_valid = 0 if notuse else 1
                 con.execute(
                     f"""UPDATE {quoted} SET
                         {_quote_col(metric + '_qual')}=?,
@@ -1971,42 +2064,48 @@ class DeviceStore:
                 )
             mid = self.measurement_id_for(table, idx, metric)
             did = self.device_id_for(table, idx, con=con)
-            if measurement_id is None:
-                ver = self.version_for(table, idx, metric)
-            else:
-                ver = self.bump_version(table, idx, metric)
-            self.set_runtime_meta(
-                table,
-                idx,
-                metric,
-                valid=0,
-                reason="definition_changed",
-                collected_at=None,
-            )
-            after = dict(
-                measurement_id=mid,
-                device_id=did,
-                model_table=table,
-                model_idx=idx,
-                metric=metric,
-                kind=kind,
-                name=metric,
-                unit="",
-                weight=weight,
-                max_age_seconds=self._max_age_seconds,
-                notuse=notuse,
-                se_enabled=0,
-                source_database=source,
-                rtu_id=rtu,
-                pnt_no=point,
-                max_value=final_max,
-                min_value=final_min,
-                enabled=1,
-                scale=1.0,
-                offset=0.0,
-                version=ver,
-            )
-            self._record_change("mapping", mid, {}, after)
+        # 仅在 SQLite 事务提交成功后更新源库路径、版本号、运行时元数据与变更日志
+        if data.get("source_database"):
+            self.set_source_database(source)
+        if old_target is not None and old_target != (table, idx, metric):
+            with self._mutex:
+                self._runtime_meta.pop(old_target, None)
+        if measurement_id is None and not existing_bound:
+            ver = self.version_for(table, idx, metric)
+        else:
+            ver = self.bump_version(table, idx, metric)
+        self.set_runtime_meta(
+            table,
+            idx,
+            metric,
+            valid=recomputed_valid,
+            reason=recomputed_reason,
+            collected_at=None if point_changed else utc_now(),
+        )
+        after = dict(
+            measurement_id=mid,
+            device_id=did,
+            model_table=table,
+            model_idx=idx,
+            metric=metric,
+            kind=kind,
+            name=metric,
+            unit="",
+            weight=weight,
+            max_age_seconds=self._max_age_seconds,
+            notuse=notuse,
+            se_enabled=0,
+            source_database=source,
+            rtu_id=rtu,
+            pnt_no=point,
+            max_value=final_max,
+            min_value=final_min,
+            enabled=0 if notuse else 1,
+            scale=1.0,
+            offset=0.0,
+            version=ver,
+        )
+        self._record_change("mapping", mid, {}, after)
         self.bump_config_epoch()
         return after
 
@@ -2021,7 +2120,9 @@ class DeviceStore:
                 {_quote_col(metric + '_notuse')}=1,
                 {_quote_col(metric + '_weight')}=1,
                 {_quote_col(metric + '_rtu')}=NULL,
-                {_quote_col(metric + '_pnt')}=NULL
+                {_quote_col(metric + '_pnt')}=NULL,
+                {_quote_col(metric + '_max')}=NULL,
+                {_quote_col(metric + '_min')}=NULL
             WHERE idx=?""",
             (QUAL_UNCONFIGURED, idx),
         )
@@ -2062,8 +2163,11 @@ class DeviceStore:
             if target is None:
                 raise ApiError(409, "属性不存在或已被修改")
             table, idx, metric = target
-            if version is not None and int(version) != self.version_for(table, idx, metric):
-                raise ApiError(409, "属性不存在或已被修改")
+            if version is not None:
+                if type(version) is not int or version < 1:
+                    raise ApiError(400, "版本号必须为正整数")
+                if version != self.version_for(table, idx, metric):
+                    raise ApiError(409, "属性不存在或已被修改")
             self._clear_binding_cell(con, table, idx, metric)
             pruned = self._prune_unused_metric_column(con, table, metric)
         # 仅在 SQLite 事务成功提交后清理内存缓存并记入变更历史，避免回滚后内存脏状态
@@ -2077,6 +2181,8 @@ class DeviceStore:
                         self._id_to_meas.pop(mid, None)
                     self._versions.pop(key, None)
                     self._runtime_meta.pop(key, None)
+            else:
+                self.bump_version(table, idx, metric)
         self._record_change(
             "mapping_delete",
             int(measurement_id),
@@ -2086,14 +2192,20 @@ class DeviceStore:
         self.bump_config_epoch()
 
     def overview(self):
-        categories_map = defaultdict(int)
-        device_count = 0
-        bound_count = 0
-        valid_count = 0
-        with self._mutex:
-            meta_snapshot = dict(self._runtime_meta)
+        source_db = self.default_source_database()
         with self.connection() as con:
             con.execute("BEGIN")
+            data_ver = con.execute("PRAGMA data_version").fetchone()[0]
+            with self._mutex:
+                cache_key = (data_ver, self._config_epoch, self._refresh_seq, source_db, self._interval_seconds)
+                cached = self._overview_cache
+                if cached is not None and cached[0] == cache_key:
+                    return dict(cached[1])
+                meta_snapshot = dict(self._runtime_meta)
+            categories_map = defaultdict(int)
+            device_count = 0
+            bound_count = 0
+            valid_count = 0
             cur = con.cursor()
             cur.row_factory = None
             step = len(SUFFIXES)
@@ -2129,23 +2241,24 @@ class DeviceStore:
         with self._mutex:
             last = dict(self._refresh_history[0]) if self._refresh_history else None
             interval = self._interval_seconds
-        source_db = self.default_source_database()
-        return dict(
-            counts=dict(
-                device=device_count,
-                device_measurement=bound_count,
-                scada_point_mapping=bound_count,
-                valid=valid_count,
-            ),
-            last_refresh=last,
-            categories=[
-                dict(category=cat, count=cnt)
-                for cat, cnt in sorted(categories_map.items())
-            ],
-            category_labels=CATEGORIES,
-            interval_seconds=interval,
-            sources=[source_db] if source_db else [],
-        )
+            result = dict(
+                counts=dict(
+                    device=device_count,
+                    device_measurement=bound_count,
+                    scada_point_mapping=bound_count,
+                    valid=valid_count,
+                ),
+                last_refresh=last,
+                categories=[
+                    dict(category=cat, count=cnt)
+                    for cat, cnt in sorted(categories_map.items())
+                ],
+                category_labels=CATEGORIES,
+                interval_seconds=interval,
+                sources=[source_db] if source_db else [],
+            )
+            self._overview_cache = (cache_key, result)
+            return dict(result)
 
     def history(self):
         with self._mutex:
@@ -2240,10 +2353,14 @@ class Collector:
                                 )
                                 self.last_error = "; ".join(result["errors"].values())
                             except Exception as exc:
+                                LOG.exception("device collector cycle failed")
                                 self.last_error = str(exc)
                                 plan_cache.clear()
                                 if writer is not None:
-                                    writer.close()
+                                    try:
+                                        writer.close()
+                                    except Exception:
+                                        pass
                                     writer = None
                                 if not sample_due:
                                     self._wake.wait(1)
@@ -2260,11 +2377,14 @@ class Collector:
                             for entry in source_cache.values():
                                 try:
                                     entry[0].close()
-                                except sqlite3.Error:
+                                except Exception:
                                     pass
                             source_cache.clear()
                             if writer is not None:
-                                writer.close()
+                                try:
+                                    writer.close()
+                                except Exception:
+                                    pass
                         finally:
                             self._lease.release()
 

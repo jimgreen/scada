@@ -467,13 +467,33 @@
       }
     }
 
+    function sliceSamplesByTime(samples, start, end) {
+      const len = samples.length;
+      if (!len) return [];
+      let lo = 0, hi = len;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (samples[mid].time < start) lo = mid + 1;
+        else hi = mid;
+      }
+      const first = lo;
+      lo = first;
+      hi = len;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (samples[mid].time <= end) lo = mid + 1;
+        else hi = mid;
+      }
+      return samples.slice(first, lo);
+    }
+
     function draw() {
       frame = 0;
       if (!canDraw()) return;
       const {start, end} = timeRange();
       const allSeries = [...series.values()];
       const visible = allSeries.filter(item => item.visible.checked);
-      const datasets = visible.map(item => ({item, data:item.samples.filter(point => point.time >= start && point.time <= end)}));
+      const datasets = visible.map(item => ({item, data:sliceSamplesByTime(item.samples, start, end)}));
       empty.textContent = !series.size ? (management ? '请在测点页面加入实时曲线' : '右键表格中的测点行设为采样点')
         : !visible.length ? '当前曲线均已隐藏'
         : datasets.some(({data}) => data.some(point => point.value !== null)) ? '' : '当前时段暂无样本';
@@ -976,7 +996,9 @@
       const after = lastSample;
       let nextDelay = pollDelayMs();
       try {
-        const result = await historyApi('?after_ms=' + after, {signal:AbortSignal.timeout(12000)});
+        const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(12000) : undefined;
+        const result = await historyApi('?after_ms=' + after, signal ? {signal} : {});
         if (version !== settingsVersion) { nextDelay = 0; return; }
         const prevDataSig = serverSettings ? dataSignature(JSON.parse(serverSettings)) : '';
         const nextDataSig = dataSignature(result.settings);
@@ -1338,7 +1360,13 @@
         syncCheckboxes();
         scheduleDraw();
       });
-      removeButton.addEventListener('click', () => remove(item));
+      removeButton.addEventListener('click', async () => {
+        if (typeof window.scadaConfirm === 'function' && !(await window.scadaConfirm(
+          '确认移除采样点“' + item.name + '”？',
+          { title: '确认移除', confirmText: '确认移除', danger: true }
+        ))) return;
+        remove(item);
+      });
       if (!restoring) {
         lastSample = 0;
         if (displayState !== 'hidden') panel.open = true;

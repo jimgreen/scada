@@ -97,7 +97,10 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
                     200, dict(item=store.save_measurement(self._body(), int(parts[2])))
                 )
             if method == "DELETE":
-                store.delete_measurement(int(parts[2]), self._body()["version"])
+                body = self._body()
+                if "version" not in body or type(body["version"]) is not int or body["version"] < 1:
+                    raise ApiError(400, "删除量测需要正整数 version 字段")
+                store.delete_measurement(int(parts[2]), body["version"])
                 return self._json(200, dict(deleted=True))
         if parts == ["api", "history"] and method == "GET":
             return self._json(200, store.history())
@@ -107,8 +110,9 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
                 raise ApiError(400, "需要 interval_seconds 字段")
             return self._json(200, collector.set_interval(body["interval_seconds"]))
         if len(parts) == 3 and parts[:2] == ["api", "collector"] and method == "POST":
-            body = self._body()
             if parts[2] == "start":
+                content_len = int(self.headers.get("Content-Length") or "0")
+                body = self._body() if content_len > 0 else {}
                 return self._json(200, collector.start(body.get("interval_seconds")))
             if parts[2] == "stop":
                 collector.close()
@@ -179,7 +183,7 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
         except ApiError as exc:
             audit.exception()
             self._json(exc.status, dict(error=dict(message=exc.message, code=exc.code)))
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
             audit.exception()
             self._json(400, dict(error=dict(message="参数无效：" + str(exc))))
         except sqlite3.Error as exc:

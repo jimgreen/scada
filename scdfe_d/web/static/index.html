@@ -1,20 +1,21 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_d · 设备量测</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/point-trend.css"></head>
 <body><header></header><main>
 <p id="alert" role="alert" hidden></p>
-<section id="overview-stats" class="stats" aria-label="采集概况" hidden><div><strong id="device-count">—</strong><span>设备</span></div><div><strong id="property-count">—</strong><span>量测属性</span></div><div><strong id="mapping-count">—</strong><span>点表映射</span></div><div><strong id="valid-count">—</strong><span>可用量测</span></div></section>
+<section id="overview-stats" class="stats stats-compact" aria-label="采集概况" hidden><div><span>设备</span><strong id="device-count">—</strong></div><div><span>量测属性</span><strong id="property-count">—</strong></div><div><span>点表映射</span><strong id="mapping-count">—</strong></div><div><span>可用量测</span><strong id="valid-count">—</strong></div></section>
 <section id="overview" class="panel" hidden>
-<div class="toolbar">
-<h2>设备量测采集</h2><span id="collector-state" class="badge">未启动</span>
+<div class="toolbar overview-bar">
+<span id="collector-state" class="badge">未启动</span>
 <form id="interval-form" class="interval-form">
 <label>采集周期（秒）<input id="interval" type="number" min="1" max="60" step="1" value="5" required disabled aria-describedby="interval-effective interval-feedback interval-error"></label>
 <button type="submit" id="interval-save" disabled>保存周期</button>
 <span id="interval-effective" class="muted"></span>
 <span id="interval-feedback" class="muted" role="status"></span>
 </form>
+<span id="last-refresh" class="muted"></span>
 <div class="actions"><button id="collect-once" disabled>采集一次</button><button id="collect-start" class="primary" disabled>启动采集</button><button id="collect-stop" disabled>停止采集</button></div>
 </div>
 <div id="interval-error" class="error" role="alert" hidden></div>
-<div id="last-refresh" class="muted"></div><div id="collector-error" role="alert"></div>
+<div id="collector-error" role="alert"></div>
 <div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>设备量测</th></tr></thead><tbody id="category-rows"></tbody></table></div>
 </section>
 <section id="measure-panel" class="panel flexible" hidden>
@@ -56,7 +57,7 @@
   </form>
 </dialog>
 <dialog id="mapping-editor"><form id="mapping-form"><div class="toolbar"><h2 id="editor-title">属性映射</h2><button type="button" id="editor-close" class="actions" aria-label="关闭映射编辑">×</button></div>
-<div class="editor-grid"><section><h3>目标设备属性</h3><label>设备<select id="edit-device" required></select></label><div class="two"><label>属性名<input id="edit-metric" required pattern="[a-z][a-z0-9_]{0,47}" placeholder="p / q / v / soc"></label><label>点类型<select id="edit-kind"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option></select></label></div><label>属性名称<input id="edit-name" required></label><div class="two"><label>单位<input id="edit-unit"></label><label>权重<input id="edit-weight" type="number" min="0.000001" step="any" value="1" required></label><label>量测下限<input id="edit-min" type="number" step="any" placeholder="留空不设限"></label><label>量测上限<input id="edit-max" type="number" step="any" placeholder="留空不设限"></label><label>比例<input id="edit-scale" type="number" step="any" value="1" required></label><label>偏移<input id="edit-offset" type="number" step="any" value="0" required></label></div><label>超时阈值（秒）<input id="edit-age" type="number" min="0.1" step="any" value="120" required></label><div class="toolbar"><label class="check"><input id="edit-enabled" type="checkbox" checked>启用采集映射</label><label class="check"><input id="edit-notuse" type="checkbox">禁用量测（notuse）</label></div></section>
+<div class="editor-grid"><section><h3>目标设备属性</h3><label>设备<select id="edit-device" required></select></label><div class="two"><label>属性名<input id="edit-metric" required pattern="[a-z][a-z0-9_]{0,47}" placeholder="p / q / v / soc"></label><label>点类型<select id="edit-kind"><option value="yc">遥测 YC</option><option value="yx">遥信 YX</option></select></label></div><label>属性名称<input id="edit-name" required></label><div class="two"><label>单位<input id="edit-unit"></label><label>权重<input id="edit-weight" type="number" min="0.000001" step="any" value="1" required></label><label>量测下限<input id="edit-min" type="number" step="any" placeholder="留空不设限"></label><label>量测上限<input id="edit-max" type="number" step="any" placeholder="留空不设限"></label><label>比例<input id="edit-scale" type="number" step="any" value="1" required></label><label>偏移<input id="edit-offset" type="number" step="any" value="0" required></label></div><label>超时阈值（秒）<input id="edit-age" type="number" min="0.1" step="any" value="120" required></label><div class="toolbar"><label class="check"><input id="edit-enabled" type="checkbox" checked>启用采集映射</label><label class="check"><input id="edit-notuse" type="checkbox">禁用量测</label></div></section>
 <section class="source-section"><h3>源 SCADA 测点</h3><label>源数据库<span class="source-path"><input id="edit-source" required placeholder="realtime/qinling/sqldb/fes/scdfe_c.sqlite3"><button type="button" id="browse-source">浏览</button></span></label><div class="two"><label>RTU 编号<input id="edit-rtu" type="number" min="1" required></label><label>点号<input id="edit-point" type="number" min="1" required></label></div><div class="toolbar"><input id="source-search" type="search" placeholder="按测点名称查找" aria-label="按源测点名称查找"><button type="button" id="find-source">查找测点</button></div><p id="source-message" class="muted" role="status"></p><div class="table-wrap source-results"><table><thead><tr><th>RTU / 点号</th><th>测点名称</th><th></th></tr></thead><tbody id="source-rows"></tbody></table></div><div class="pager"><button type="button" id="source-prev">上一页</button><span id="source-page"></span><button type="button" id="source-next">下一页</button></div></section></div>
 <p id="editor-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="editor-cancel">取消</button><button id="editor-save" type="submit" class="primary">保存映射</button></div></form></dialog>
 <dialog id="device-editor"><form id="device-form"><h2>新增设备</h2><label>设备名称<input id="device-name" required maxlength="200"></label><label>设备类型<select id="device-category"></select></label><p id="device-error" class="error" role="alert" hidden></p><div class="dialog-actions"><button type="button" id="device-cancel">取消</button><button type="submit" class="primary">创建</button></div></form></dialog>

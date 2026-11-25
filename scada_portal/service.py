@@ -5,6 +5,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 import math
 from pathlib import Path
 import sqlite3
@@ -12,6 +13,8 @@ import threading
 import time
 from typing import Any
 import xml.etree.ElementTree as ET
+
+LOG = logging.getLogger("scada.portal.service")
 
 from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
@@ -310,15 +313,41 @@ class PortalService:
         self._sampler_thread: threading.Thread | None = None
         self._history_lock = threading.Lock()
         self._energy_accum_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
         self._last_sample_ts: float | None = None
         # 运行期实时累计（用于微电网总览能量微增量）
         self._session_kwh: dict[str, float] = defaultdict(float)
-        self._svg_topo_cache: tuple[int, dict[str, Any]] | None = None
-        self._model_params_cache: tuple[int, dict[str, list[dict[str, Any]]]] | None = None
+        self._svg_topo_cache: tuple[tuple[int, int], dict[str, Any]] | None = None
+        self._model_params_cache: tuple[tuple[int, int], tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]] | None = None
+        # 高频只读短 TTL 快照缓存，消除同周期多次重复全库扫表
+        self._d_schema_cache: tuple[int, list[tuple[str, list[str], dict[str, str], list[str]]]] | None = None
+        self._devices_cache: tuple[float, tuple[int, int, int, int], list[dict[str, Any]]] | None = None
+        self._comm_cache: tuple[float, tuple[int, int, int, int], dict[str, Any]] | None = None
+        self._log_files_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
         self._init_history_db()
         if enable_sampler:
             self.start_sampler()
+
+    @staticmethod
+    def _db_file_sig(db_path: Path) -> tuple[int, int, int, int]:
+        """获取 SQLite 主文件与 WAL 文件的 (mtime_ns, size) 指纹，用于缓存一致性校验。"""
+        try:
+            st = db_path.stat()
+            main_sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            main_sig = (0, 0)
+        wal_path = Path(str(db_path) + "-wal")
+        try:
+            wst = wal_path.stat()
+            wal_sig = (wst.st_mtime_ns, wst.st_size)
+        except OSError:
+            wal_sig = (0, 0)
+        return (main_sig[0], main_sig[1], wal_sig[0], wal_sig[1])
+
+    def _invalidate_devices_cache(self) -> None:
+        with self._cache_lock:
+            self._devices_cache = None
 
     @staticmethod
     def _resolve_svg(explicit: Path | str | None, model_dir: Path, scene_name: str) -> Path:
@@ -336,7 +365,7 @@ class PortalService:
     def _open_readonly(self, db_path: Path):
         if not db_path.is_file():
             raise FileNotFoundError(f"数据库不存在：{db_path}")
-        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10.0)
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=10.0)
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=10000")
@@ -414,6 +443,7 @@ class PortalService:
                     f'UPDATE "{table_name}" SET "{max_col}"=?, "{min_col}"=?, "{qual_col}"=? WHERE idx=?',
                     (max_num, min_num, new_qual, int(idx)),
                 )
+        self._invalidate_devices_cache()
         return {
             "table_name": table_name,
             "idx": int(idx),
@@ -425,9 +455,17 @@ class PortalService:
         }
 
     @contextmanager
-    def _open_history(self):
-        conn = sqlite3.connect(self.history_db, timeout=15.0)
+    def _open_history(self, *, readonly: bool = False):
+        if readonly:
+            if not self.history_db.is_file():
+                raise FileNotFoundError(f"历史库不存在：{self.history_db}")
+            conn = sqlite3.connect(f"{self.history_db.as_uri()}?mode=ro", uri=True, timeout=15.0)
+        else:
+            conn = sqlite3.connect(self.history_db, timeout=15.0)
         try:
+            conn.execute("PRAGMA busy_timeout=10000")
+            if not readonly:
+                conn.execute("PRAGMA synchronous=NORMAL")
             yield conn
         finally:
             conn.close()
@@ -463,7 +501,7 @@ class PortalService:
         try:
             self.sample_once()
         except Exception:
-            pass
+            LOG.warning("SCADA Portal initial sample_once failed", exc_info=True)
         self._sampler_thread = threading.Thread(
             target=self._sampler_loop, name="scada-portal-sampler", daemon=True
         )
@@ -477,10 +515,11 @@ class PortalService:
     def _sampler_loop(self) -> None:
         prune_counter = 0
         while not self._stop_event.wait(self.sample_interval_sec):
+            prune_counter += 1
             try:
                 self.sample_once(prune=(prune_counter % 60 == 0))
-                prune_counter += 1
             except Exception:
+                LOG.warning("SCADA Portal background sample_once failed", exc_info=True)
                 continue
 
     def sample_once(self, *, prune: bool = False) -> int:
@@ -534,33 +573,53 @@ class PortalService:
             conn.commit()
         return len(rows_to_insert)
 
-    # -------------------- 设备全量快照读取 --------------------
-    def _read_all_devices(self) -> list[dict[str, Any]]:
+    # -------------------- 设备全量快照读取（带 schema 缓存与短 TTL 快照缓存） --------------------
+    def _read_all_devices(self, *, use_cache: bool = True) -> list[dict[str, Any]]:
         if not self.d_db.is_file():
             return []
+        now_mono = time.monotonic()
+        sig = self._db_file_sig(self.d_db)
+        if use_cache:
+            with self._cache_lock:
+                cached = self._devices_cache
+                if cached is not None and (now_mono - cached[0]) < 0.8 and cached[1] == sig:
+                    return cached[2]
+
         devices: list[dict[str, Any]] = []
         with self._open_readonly(self.d_db) as conn:
-            tables = [
-                r[0]
-                for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
-                if r[0] not in _D_SKIP_TABLES and not r[0].startswith("rtdb_web_")
-            ]
-            for table in tables:
-                cols = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-                col_names = [c[1] for c in cols]
-                col_types = {c[1]: (c[2] or "").upper() for c in cols}
-                if "idx" not in col_names or "name" not in col_names:
-                    continue
-                metrics = [cn[:-4] for cn in col_names if cn.endswith("_rtu")]
-                if not metrics:
-                    continue
-                # 构建查询列
-                select_cols = ["idx", "name"]
-                for m in metrics:
-                    for suf in SUFFIXES:
-                        cname = f"{m}{suf}"
-                        if cname in col_types:
-                            select_cols.append(cname)
+            conn.execute("BEGIN")
+            schema_ver = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+            table_specs = None
+            with self._cache_lock:
+                if self._d_schema_cache is not None and self._d_schema_cache[0] == schema_ver:
+                    table_specs = self._d_schema_cache[1]
+            if table_specs is None:
+                table_specs = []
+                tables = [
+                    r[0]
+                    for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+                    if r[0] not in _D_SKIP_TABLES and not r[0].startswith("rtdb_web_")
+                ]
+                for table in tables:
+                    cols = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+                    col_names = [c[1] for c in cols]
+                    col_types = {c[1]: (c[2] or "").upper() for c in cols}
+                    if "idx" not in col_names or "name" not in col_names:
+                        continue
+                    metrics = [cn[:-4] for cn in col_names if cn.endswith("_rtu")]
+                    if not metrics:
+                        continue
+                    select_cols = ["idx", "name"]
+                    for m in metrics:
+                        for suf in SUFFIXES:
+                            cname = f"{m}{suf}"
+                            if cname in col_types:
+                                select_cols.append(cname)
+                    table_specs.append((table, metrics, col_types, select_cols))
+                with self._cache_lock:
+                    self._d_schema_cache = (schema_ver, table_specs)
+
+            for table, metrics, col_types, select_cols in table_specs:
                 quoted = ", ".join(f'"{c}"' for c in select_cols)
                 rows = conn.execute(f'SELECT {quoted} FROM "{table}" ORDER BY idx').fetchall()
                 for row in rows:
@@ -635,6 +694,8 @@ class PortalService:
                         "position": pos_val,
                         "metrics": m_list,
                     })
+        with self._cache_lock:
+            self._devices_cache = (time.monotonic(), sig, devices)
         return devices
 
     # -------------------- 1. 主页面实时能源聚合 --------------------
@@ -774,30 +835,16 @@ class PortalService:
         }
 
     def _count_comm_points(self) -> dict[str, int]:
-        """统计 scdfe_c 四遥点表（YC/YX/YT/YK）配置总数。"""
-        counts = {"yc": 0, "yx": 0, "yt": 0, "yk": 0}
-        if not self.c_db.is_file():
-            return counts
-        try:
-            with self._open_readonly(self.c_db) as conn:
-                for kind, tbl in KIND_TABLES.items():
-                    row = conn.execute(
-                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                        (tbl,),
-                    ).fetchone()
-                    if row is not None:
-                        cnt = conn.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()
-                        counts[kind] = int(cnt[0]) if cnt else 0
-        except sqlite3.Error:
-            pass
-        return counts
+        """复用通信快照统计 scdfe_c 四遥点表（YC/YX/YT/YK）配置总数。"""
+        return dict(self._read_comm_snapshot()["point_totals"])
 
     def get_energy_flow(self) -> dict[str, Any]:
         """聚合交直流微电网与氢能全景能量流实时快照。"""
         devices = self._read_all_devices()
-        comm_rtus = self.get_comm_rtus()["items"]
-        comm_channels = self.get_comm_channels()["items"]
-        point_counts = self._count_comm_points()
+        comm_snap = self._read_comm_snapshot()
+        comm_rtus = comm_snap["rtus"]
+        comm_channels = comm_snap["channels"]
+        point_counts = comm_snap["point_totals"]
         model_params, _ = self._read_model_params()
 
         # 统计设备量测质量分布与最新源时标
@@ -999,23 +1046,35 @@ class PortalService:
                     ac_es_socs.append(sv)
             elif t == "HydroSource":
                 if "flow" in m_map:
-                    elec_flow = _to_float(m_map["flow"]["value"])
+                    fv = _to_float(m_map["flow"]["value"])
+                    if fv is not None:
+                        elec_flow = (elec_flow or 0.0) + fv
                 if "pressure" in m_map:
-                    elec_pressure = _to_float(m_map["pressure"]["value"])
+                    pv = _to_float(m_map["pressure"]["value"])
+                    if pv is not None:
+                        elec_pressure = pv if elec_pressure is None else (elec_pressure + pv) / 2.0
             elif t == "HydroLoad":
                 if "flow" in m_map:
-                    fc_flow = _to_float(m_map["flow"]["value"])
+                    fv = _to_float(m_map["flow"]["value"])
+                    if fv is not None:
+                        fc_flow = (fc_flow or 0.0) + fv
                 if "pressure" in m_map:
-                    fc_pressure = _to_float(m_map["pressure"]["value"])
+                    pv = _to_float(m_map["pressure"]["value"])
+                    if pv is not None:
+                        fc_pressure = pv if fc_pressure is None else (fc_pressure + pv) / 2.0
             elif t == "HydroStorage":
                 if "soc" in m_map:
                     sv = _to_float(m_map["soc"]["display_value"])
                     if sv is not None:
                         h2_socs.append(sv)
                 if "pressure" in m_map:
-                    h2_pressure = _to_float(m_map["pressure"]["value"])
+                    pv = _to_float(m_map["pressure"]["value"])
+                    if pv is not None:
+                        h2_pressure = pv if h2_pressure is None else (h2_pressure + pv) / 2.0
                 if "flow" in m_map:
-                    h2_flow = _to_float(m_map["flow"]["value"])
+                    fv = _to_float(m_map["flow"]["value"])
+                    if fv is not None:
+                        h2_flow = (h2_flow or 0.0) + fv
             elif t == "ACWindGen" and "wind_speed" in m_map:
                 ws = _to_float(m_map["wind_speed"]["value"])
                 if ws is not None:
@@ -1025,7 +1084,8 @@ class PortalService:
                 if irr is not None:
                     irradiances.append(irr)
 
-            if "temperature" in m_map:
+            # 仅采信气象/光伏/风电扩展表的环境温度，避免将变流器柜温误作环境气温
+            if t in {"ACWindGen", "ACPVGen", "DCPVGen"} and "temperature" in m_map:
                 tv = _to_float(m_map["temperature"]["value"])
                 if tv is not None:
                     temperatures.append(tv)
@@ -1786,39 +1846,59 @@ class PortalService:
         hours: float = 24.0,
         start_ms: int | None = None,
         end_ms: int | None = None,
+        metric: str | None = None,
     ) -> dict[str, Any]:
         now_ms = int(time.time() * 1000)
+        if (start_ms is None) != (end_ms is None):
+            raise ValueError("start_ms 与 end_ms 须同时指定")
         if start_ms is not None and end_ms is not None:
             since_ms = int(start_ms)
             until_ms = int(end_ms)
-            if until_ms <= since_ms:
-                raise ValueError("曲线结束时间必须大于开始时间")
+            if since_ms < 0 or until_ms <= since_ms:
+                raise ValueError("曲线时间区间无效，结束时间必须大于开始时间")
+            if until_ms - since_ms > 31 * 24 * 3600 * 1000:
+                raise ValueError("单次查询时间跨度不能超过 31 天")
             span_hours = round((until_ms - since_ms) / 3600000.0, 4)
         else:
-            span_hours = max(1 / 60.0, min(24.0, float(hours)))
+            hours_f = float(hours)
+            if not math.isfinite(hours_f) or hours_f <= 0:
+                raise ValueError("曲线时间窗口 hours 必须为有限正数")
+            span_hours = max(1 / 60.0, min(24.0, hours_f))
             since_ms = now_ms - int(span_hours * 3600 * 1000)
             until_ms = now_ms
         series_map: dict[str, list[list[float]]] = defaultdict(list)
 
-        with self._history_lock, self._open_history() as conn:
-            rows = conn.execute(
-                "SELECT metric, ts_ms, value FROM device_daily_samples "
-                "WHERE table_name=? AND idx=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
-                (table_name, idx, since_ms, until_ms),
-            ).fetchall()
-        for metric, ts_ms, val in rows:
-            series_map[metric].append([int(ts_ms), round(float(val), 4)])
+        # 使用只读连接并发查询 WAL，不与后台采样线程争抢 _history_lock
+        metric_filter = str(metric).strip() if metric else None
+        if self.history_db.is_file():
+            with self._open_history(readonly=True) as conn:
+                if metric_filter:
+                    rows = conn.execute(
+                        "SELECT metric, ts_ms, value FROM device_daily_samples "
+                        "WHERE table_name=? AND idx=? AND metric=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
+                        (table_name, idx, metric_filter, since_ms, until_ms),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT metric, ts_ms, value FROM device_daily_samples "
+                        "WHERE table_name=? AND idx=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
+                        (table_name, idx, since_ms, until_ms),
+                    ).fetchall()
+        else:
+            rows = []
+        for m_name, ts_ms, val in rows:
+            series_map[m_name].append([int(ts_ms), round(float(val), 4)])
 
         # 若历史点数超出 720 点，均匀降采样保留首尾保证绘制流畅
         max_pts = 720
         series: list[dict[str, Any]] = []
-        for metric, pts in sorted(series_map.items()):
+        for m_name, pts in sorted(series_map.items()):
             if len(pts) > max_pts:
                 step = (len(pts) - 1) / (max_pts - 1)
                 pts = [pts[int(round(i * step))] for i in range(max_pts)]
-            label, unit = METRIC_META.get(metric, (metric, ""))
+            label, unit = METRIC_META.get(m_name, (m_name, ""))
             series.append({
-                "metric": metric,
+                "metric": m_name,
                 "label": label,
                 "unit": unit,
                 "points": pts,
@@ -1835,80 +1915,107 @@ class PortalService:
             "series": series,
         }
 
-    # -------------------- 4. 通信图（RTU / 通道 / 四遥） --------------------
-    def get_comm_rtus(self) -> dict[str, Any]:
+    # -------------------- 4. 通信图（单连接合并读取 + 短 TTL 快照缓存） --------------------
+    def _read_comm_snapshot(self) -> dict[str, Any]:
+        """单连接一次读取 RTU、通道参数、运行态与四遥点数，并做 1.5s 短 TTL 缓存。"""
+        empty = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "rtus": [],
+            "channels": [],
+            "point_totals": {"yc": 0, "yx": 0, "yt": 0, "yk": 0},
+        }
         if not self.c_db.is_file():
-            return {"items": [], "total": 0}
-        with self._open_readonly(self.c_db) as conn:
-            rtus = [
-                dict(r)
-                for r in conn.execute(
-                    "SELECT rtu_id, channel_id, channel_type, name, process_enable, status, refresh_time "
-                    "FROM fes_rtu_define ORDER BY rtu_id"
-                ).fetchall()
-            ]
-            runtime_rows = {
-                int(r["channel_id"]): dict(r)
-                for r in conn.execute(
-                    "SELECT * FROM fes_channel_runtime_status WHERE service_name='scdfe_c'"
-                ).fetchall()
-            }
-            # 统计各 RTU 四遥点数
-            point_counts: dict[int, dict[str, int]] = defaultdict(lambda: {"yc": 0, "yx": 0, "yk": 0, "yt": 0})
-            for kind, tbl in KIND_TABLES.items():
-                for rtu_id, cnt in conn.execute(
-                    f'SELECT rtu_id, COUNT(*) FROM "{tbl}" GROUP BY rtu_id'
-                ).fetchall():
-                    point_counts[int(rtu_id)][kind] = int(cnt)
+            return empty
+        now_mono = time.monotonic()
+        sig = self._db_file_sig(self.c_db)
+        with self._cache_lock:
+            cached = self._comm_cache
+            if cached is not None and (now_mono - cached[0]) < 1.5 and cached[1] == sig:
+                return cached[2]
 
-        items: list[dict[str, Any]] = []
-        for rtu in rtus:
-            rid = int(rtu["rtu_id"])
-            cid = int(rtu["channel_id"]) if rtu.get("channel_id") is not None else 0
-            rt = runtime_rows.get(cid, {})
-            diag = {}
-            if rt.get("diagnostic_json"):
-                try:
-                    diag = json.loads(rt["diagnostic_json"])
-                except Exception:
-                    diag = {}
-            items.append({
-                "rtu_id": rid,
-                "channel_id": cid,
-                "channel_type": rtu.get("channel_type") or "",
-                "name": rtu.get("name") or f"RTU-{rid}",
-                "process_enable": int(rtu.get("process_enable") or 0),
-                "state": rt.get("state") or "stopped",
-                "connection_state": rt.get("connection_state") or "disconnected",
-                "process_pid": rt.get("process_pid") or 0,
-                "heartbeat_time": _iso_from_ms(rt.get("process_heartbeat_time")),
-                "refresh_time": _iso_from_ms(rtu.get("refresh_time")),
-                "rx_count": int(rt.get("rx_count") or 0),
-                "tx_count": int(rt.get("tx_count") or 0),
-                "error_count": int(rt.get("error_count") or 0),
-                "last_error": rt.get("last_error") or rt.get("process_error") or "",
-                "updated_yc": int(diag.get("updated_yc") or 0),
-                "updated_yx": int(diag.get("updated_yx") or 0),
-                "point_counts": point_counts[rid],
-            })
-        return {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "items": items, "total": len(items)}
-
-    def get_comm_channels(self) -> dict[str, Any]:
-        if not self.c_db.is_file():
-            return {"items": [], "total": 0}
-        rtu_data = self.get_comm_rtus()["items"]
-        rtu_by_ch = {(r["channel_type"], r["channel_id"]): r for r in rtu_data}
-        items: list[dict[str, Any]] = []
         with self._open_readonly(self.c_db) as conn:
+            conn.execute("BEGIN")
             existing = {
                 r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
             }
+            rtus = (
+                [
+                    dict(r)
+                    for r in conn.execute(
+                        "SELECT rtu_id, channel_id, channel_type, name, process_enable, status, refresh_time "
+                        "FROM fes_rtu_define ORDER BY rtu_id"
+                    ).fetchall()
+                ]
+                if "fes_rtu_define" in existing
+                else []
+            )
+            runtime_by_proto: dict[tuple[str, int], dict[str, Any]] = {}
+            runtime_by_cid: dict[int, dict[str, Any]] = {}
+            if "fes_channel_runtime_status" in existing:
+                for r in conn.execute(
+                    "SELECT * FROM fes_channel_runtime_status WHERE service_name='scdfe_c'"
+                ).fetchall():
+                    rd = dict(r)
+                    cid_val = int(rd["channel_id"]) if rd.get("channel_id") is not None else 0
+                    proto_val = str(rd.get("protocol") or rd.get("channel_type") or "")
+                    if proto_val:
+                        runtime_by_proto[(proto_val, cid_val)] = rd
+                    runtime_by_cid.setdefault(cid_val, rd)
+
+            point_counts: dict[int, dict[str, int]] = defaultdict(lambda: {"yc": 0, "yx": 0, "yk": 0, "yt": 0})
+            point_totals = {"yc": 0, "yx": 0, "yk": 0, "yt": 0}
+            for kind, tbl in KIND_TABLES.items():
+                if tbl not in existing:
+                    continue
+                for rtu_id, cnt in conn.execute(
+                    f'SELECT rtu_id, COUNT(*) FROM "{tbl}" GROUP BY rtu_id'
+                ).fetchall():
+                    c_int = int(cnt)
+                    if rtu_id is not None:
+                        point_counts[int(rtu_id)][kind] = c_int
+                    point_totals[kind] += c_int
+
+            rtu_items: list[dict[str, Any]] = []
+            for rtu in rtus:
+                rid = int(rtu["rtu_id"])
+                cid = int(rtu["channel_id"]) if rtu.get("channel_id") is not None else 0
+                ch_type = str(rtu.get("channel_type") or "")
+                rt = runtime_by_proto.get((ch_type, cid)) or runtime_by_cid.get(cid) or {}
+                diag = {}
+                if rt.get("diagnostic_json"):
+                    try:
+                        diag = json.loads(rt["diagnostic_json"])
+                    except Exception:
+                        diag = {}
+                rtu_items.append({
+                    "rtu_id": rid,
+                    "channel_id": cid,
+                    "channel_type": ch_type,
+                    "name": rtu.get("name") or f"RTU-{rid}",
+                    "process_enable": int(rtu.get("process_enable") or 0),
+                    "state": rt.get("state") or "stopped",
+                    "connection_state": rt.get("connection_state") or "disconnected",
+                    "process_pid": rt.get("process_pid") or 0,
+                    "heartbeat_time": _iso_from_ms(rt.get("process_heartbeat_time")),
+                    "refresh_time": _iso_from_ms(rtu.get("refresh_time")),
+                    "rx_count": int(rt.get("rx_count") or 0),
+                    "tx_count": int(rt.get("tx_count") or 0),
+                    "error_count": int(rt.get("error_count") or 0),
+                    "last_error": rt.get("last_error") or rt.get("process_error") or "",
+                    "updated_yc": int(diag.get("updated_yc") or 0),
+                    "updated_yx": int(diag.get("updated_yx") or 0),
+                    "point_counts": point_counts[rid],
+                })
+
+            rtu_by_ch = {(r["channel_type"], r["channel_id"]): r for r in rtu_items}
+            ch_items: list[dict[str, Any]] = []
             for ch_type, tbl in CHANNEL_PARAMETER_TABLES.items():
                 if tbl not in existing:
                     continue
                 for row in conn.execute(f'SELECT * FROM "{tbl}" ORDER BY channel_id').fetchall():
                     d = dict(row)
-                    cid = int(d.get("channel_id") or d.get("id") or 0)
+                    raw_cid = d.get("channel_id") if d.get("channel_id") is not None else d.get("id")
+                    cid = int(raw_cid) if raw_cid is not None else 0
                     rtu_info = rtu_by_ch.get((ch_type, cid), {})
                     endpoint = ""
                     if d.get("remote_host"):
@@ -1919,7 +2026,7 @@ class PortalService:
                         endpoint = str(d.get("opc_name"))
                     elif d.get("interface"):
                         endpoint = f"{d.get('interface')}:{d.get('channel') or ''}"
-                    items.append({
+                    ch_items.append({
                         "channel_id": cid,
                         "channel_type": ch_type,
                         "parameter_table": tbl,
@@ -1935,7 +2042,24 @@ class PortalService:
                         "last_error": rtu_info.get("last_error", ""),
                         "parameters": {k: v for k, v in d.items() if not k.startswith("_")},
                     })
-        return {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "items": items, "total": len(items)}
+
+        snap = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "rtus": rtu_items,
+            "channels": ch_items,
+            "point_totals": point_totals,
+        }
+        with self._cache_lock:
+            self._comm_cache = (time.monotonic(), sig, snap)
+        return snap
+
+    def get_comm_rtus(self) -> dict[str, Any]:
+        snap = self._read_comm_snapshot()
+        return {"timestamp": snap["timestamp"], "items": snap["rtus"], "total": len(snap["rtus"])}
+
+    def get_comm_channels(self) -> dict[str, Any]:
+        snap = self._read_comm_snapshot()
+        return {"timestamp": snap["timestamp"], "items": snap["channels"], "total": len(snap["channels"])}
 
     def get_comm_points(
         self,
@@ -1987,9 +2111,15 @@ class PortalService:
             "offset": offset,
         }
 
-    # -------------------- 5. 运行日志与报文日志 --------------------
+    # -------------------- 5. 运行日志与报文日志（带 3s 短 TTL 目录缓存） --------------------
     def list_log_files(self, *, record: str = "runtime") -> dict[str, Any]:
-        root = packet_log_directory(self.log_dir) if record == "packet" else self.log_dir
+        rec_key = "packet" if record == "packet" else "runtime"
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = self._log_files_cache.get(rec_key)
+            if cached is not None and (now_mono - cached[0]) < 3.0:
+                return cached[1]
+        root = packet_log_directory(self.log_dir) if rec_key == "packet" else self.log_dir
         items: list[dict[str, Any]] = []
         if root.is_dir():
             for entry, rel in log_entries(root, "scdfe_c-"):
@@ -2009,13 +2139,16 @@ class PortalService:
                 })
         items.sort(key=lambda x: (x["hour"], x["filename"]), reverse=True)
         processes = sorted({x["process"] for x in items})
-        return {
-            "record": record,
+        result = {
+            "record": rec_key,
             "directory": str(root),
             "processes": processes,
             "items": items[:200],
             "total": len(items),
         }
+        with self._cache_lock:
+            self._log_files_cache[rec_key] = (time.monotonic(), result)
+        return result
 
     def read_logs(
         self,

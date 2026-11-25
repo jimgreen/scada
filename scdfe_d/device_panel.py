@@ -3,9 +3,10 @@
 import math
 
 from core.common import ApiError
-from scdfe_d.measurement_layout import SUFFIXES
+from scdfe_d.measurement_layout import QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN, SUFFIXES
 from scdfe_d.service import (
     CATEGORIES,
+    _check_limit_status,
     _is_valid_point_config,
     _parse_limit_number,
     category_for,
@@ -238,28 +239,48 @@ def update_parameters(store, payload):
         }
         updates = list(_parameter_changes(items, current))
         physical_values = {}
+        pending_meta = []
         dev_idx = detail["device"]["idx"]
         for mid, before, after in updates:
             row = current[mid]
             metric = row["metric"]
             if before["notuse"] != after["notuse"]:
                 physical_values[metric + "_notuse"] = after["notuse"]
-                store.set_runtime_meta(
-                    table,
-                    dev_idx,
-                    metric,
-                    valid=0,
-                    reason="notuse" if after["notuse"] else "definition_changed",
-                    collected_at=row["collected_at"],
+                pending_meta.append(
+                    (
+                        metric,
+                        0,
+                        "notuse" if after["notuse"] else "definition_changed",
+                        row["collected_at"],
+                    )
                 )
             if before["weight"] != after["weight"]:
                 physical_values[metric + "_weight"] = after["weight"]
+            limits_changed = False
             if before["max_value"] != after["max_value"]:
                 physical_values[metric + "_max"] = after["max_value"]
+                limits_changed = True
             if before["min_value"] != after["min_value"]:
                 physical_values[metric + "_min"] = after["min_value"]
-            store.bump_version(table, dev_idx, metric)
-            store._audit(con, "measurement_parameters", mid, before, after)
+                limits_changed = True
+            # 若仅修改上下限且当前通信正常，立即依据现有实测值重算质量码，确保页面与库内一致
+            if (
+                limits_changed
+                and row.get("quality") in (QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN)
+                and row.get("value") is not None
+            ):
+                limit_hit = _check_limit_status(
+                    row["value"], after["max_value"], after["min_value"]
+                )
+                if limit_hit is not None:
+                    new_qual, new_reason = limit_hit
+                    new_valid = 0
+                else:
+                    new_qual = QUAL_OK
+                    new_reason = "notuse" if after["notuse"] else ""
+                    new_valid = 0 if after["notuse"] else 1
+                physical_values[metric + "_qual"] = new_qual
+                pending_meta.append((metric, new_valid, new_reason, row["collected_at"]))
         if physical_values:
             fields = ",".join(
                 '"' + key.replace('"', '""') + '"=?' for key in physical_values
@@ -268,7 +289,22 @@ def update_parameters(store, payload):
                 f"UPDATE {store._table_name(table)} SET {fields} WHERE idx=?",
                 (*physical_values.values(), dev_idx),
             )
-        result = _read_device(store, con, table, idx)
+    # 仅在 SQLite 事务提交成功后更新内存版本号、运行时状态与变更审计，避免回滚脏状态
     if updates:
+        for metric, valid_flag, reason_text, collected_at in pending_meta:
+            store.set_runtime_meta(
+                table,
+                dev_idx,
+                metric,
+                valid=valid_flag,
+                reason=reason_text,
+                collected_at=collected_at,
+            )
+        for mid, before, after in updates:
+            row = current[mid]
+            store.bump_version(table, dev_idx, row["metric"])
+            store._audit(None, "measurement_parameters", mid, before, after)
         store.bump_config_epoch()
-    return result
+    with store.connection() as con:
+        con.execute("BEGIN")
+        return _read_device(store, con, table, idx)

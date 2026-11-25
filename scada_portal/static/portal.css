@@ -1955,6 +1955,44 @@ tbody tr:hover {
   --hud-title-shadow: 0 0 14px rgba(0, 229, 255, 0.55);
 }
 
+/* 精密暗黑（低饱和克制专业控制室） */
+html[data-theme="precision-dark"] {
+  --hud-glass: rgba(17, 24, 39, 0.88);
+  --hud-glass-strong: rgba(17, 24, 39, 0.94);
+  --hud-glass-hover: rgba(30, 41, 59, 0.96);
+  --hud-glass-active: linear-gradient(90deg, rgba(56, 189, 248, 0.24), rgba(56, 189, 248, 0.10));
+  --hud-topbar-bg: linear-gradient(180deg, rgba(11, 15, 25, 0.94) 0%, rgba(11, 15, 25, 0.72) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(17, 24, 39, 0.94) 100%);
+  --hud-border: rgba(255, 255, 255, 0.11);
+  --hud-border-strong: rgba(56, 189, 248, 0.48);
+  --hud-text: #f8fafc;
+  --hud-muted: #94a3b8;
+  --hud-value: #34d399;
+  --hud-kpi-value: #38bdf8;
+  --hud-icon-bg: rgba(56, 189, 248, 0.12);
+  --hud-icon-fg: #38bdf8;
+  --hud-title-shadow: none;
+}
+
+/* 毛玻璃拟态（深蓝晶透磨砂） */
+html[data-theme="glassmorphism"] {
+  --hud-glass: rgba(15, 23, 42, 0.62);
+  --hud-glass-strong: rgba(15, 23, 42, 0.76);
+  --hud-glass-hover: rgba(30, 41, 59, 0.78);
+  --hud-glass-active: linear-gradient(90deg, rgba(99, 102, 241, 0.34), rgba(56, 189, 248, 0.22));
+  --hud-topbar-bg: linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.42) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(99, 102, 241, 0.22) 0%, rgba(15, 23, 42, 0.68) 100%);
+  --hud-border: rgba(255, 255, 255, 0.18);
+  --hud-border-strong: rgba(129, 140, 248, 0.6);
+  --hud-text: #f8fafc;
+  --hud-muted: #cbd5e1;
+  --hud-value: #34d399;
+  --hud-kpi-value: #818cf8;
+  --hud-icon-bg: rgba(129, 140, 248, 0.16);
+  --hud-icon-fg: #818cf8;
+  --hud-title-shadow: 0 0 10px rgba(129, 140, 248, 0.45);
+}
+
 /* 科幻·赛博紫 */
 html[data-theme="sci-fi-purple"] {
   --hud-glass: rgba(16, 10, 34, 0.72);
@@ -2673,6 +2711,75 @@ html[data-theme="editorial"] .ef-bus-bar {
   height: 1px;
   margin: 4px 0;
   background: var(--border-strong, rgba(255, 255, 255, 0.12));
+}
+
+/* 浅色主题下调深全景流向 SVG 线条与图标色阶，保证白底清晰可读 */
+html[data-theme="minimalist-light"] .ef-line.c-wind,
+html[data-theme="bento-grid"] .ef-line.c-wind,
+html[data-theme="editorial"] .ef-line.c-wind,
+html[data-theme="minimalist-light"] .ef-ring.c-wind,
+html[data-theme="bento-grid"] .ef-ring.c-wind,
+html[data-theme="editorial"] .ef-ring.c-wind,
+html[data-theme="minimalist-light"] .ef-ico.c-wind,
+html[data-theme="bento-grid"] .ef-ico.c-wind,
+html[data-theme="editorial"] .ef-ico.c-wind,
+html[data-theme="minimalist-light"] .ef-line.c-dcac,
+html[data-theme="bento-grid"] .ef-line.c-dcac,
+html[data-theme="editorial"] .ef-line.c-dcac,
+html[data-theme="minimalist-light"] .ef-ring.c-dcac,
+html[data-theme="bento-grid"] .ef-ring.c-dcac,
+html[data-theme="editorial"] .ef-ring.c-dcac,
+html[data-theme="minimalist-light"] .ef-line.c-h2,
+html[data-theme="bento-grid"] .ef-line.c-h2,
+html[data-theme="editorial"] .ef-line.c-h2,
+html[data-theme="minimalist-light"] .ef-ring.c-h2,
+html[data-theme="bento-grid"] .ef-ring.c-h2,
+html[data-theme="editorial"] .ef-ring.c-h2,
+html[data-theme="minimalist-light"] .ef-gauge-arc,
+html[data-theme="bento-grid"] .ef-gauge-arc,
+html[data-theme="editorial"] .ef-gauge-arc {
+  stroke: #0284c7;
+}
+html[data-theme="minimalist-light"] .ef-line.c-storage,
+html[data-theme="bento-grid"] .ef-line.c-storage,
+html[data-theme="editorial"] .ef-line.c-storage,
+html[data-theme="minimalist-light"] .ef-ring.c-storage,
+html[data-theme="bento-grid"] .ef-ring.c-storage,
+html[data-theme="editorial"] .ef-ring.c-storage,
+html[data-theme="minimalist-light"] .ef-ico.c-storage,
+html[data-theme="bento-grid"] .ef-ico.c-storage,
+html[data-theme="editorial"] .ef-ico.c-storage {
+  stroke: #0d9488;
+}
+html[data-theme="minimalist-light"] .ef-line.c-pv,
+html[data-theme="bento-grid"] .ef-line.c-pv,
+html[data-theme="editorial"] .ef-line.c-pv,
+html[data-theme="minimalist-light"] .ef-ring.c-pv,
+html[data-theme="bento-grid"] .ef-ring.c-pv,
+html[data-theme="editorial"] .ef-ring.c-pv,
+html[data-theme="minimalist-light"] .ef-ico.c-pv,
+html[data-theme="bento-grid"] .ef-ico.c-pv,
+html[data-theme="editorial"] .ef-ico.c-pv {
+  stroke: #d97706;
+}
+html[data-theme="minimalist-light"] .ef-line.c-diesel,
+html[data-theme="bento-grid"] .ef-line.c-diesel,
+html[data-theme="editorial"] .ef-line.c-diesel,
+html[data-theme="minimalist-light"] .ef-ring.c-diesel,
+html[data-theme="bento-grid"] .ef-ring.c-diesel,
+html[data-theme="editorial"] .ef-ring.c-diesel {
+  stroke: #dc2626;
+}
+html[data-theme="minimalist-light"] .ef-line.c-load,
+html[data-theme="bento-grid"] .ef-line.c-load,
+html[data-theme="editorial"] .ef-line.c-load,
+html[data-theme="minimalist-light"] .ef-ring.c-load,
+html[data-theme="bento-grid"] .ef-ring.c-load,
+html[data-theme="editorial"] .ef-ring.c-load,
+html[data-theme="minimalist-light"] .ef-ico.c-load,
+html[data-theme="bento-grid"] .ef-ico.c-load,
+html[data-theme="editorial"] .ef-ico.c-load {
+  stroke: #7c3aed;
 }
 
 @media (max-width: 1120px) {

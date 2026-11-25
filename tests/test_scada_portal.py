@@ -400,6 +400,57 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual((data["quality"], data["quality_label"]), (0, "正常"))
 
+    def test_energy_flow_single_metric_trend_and_http_guards(self):
+        # 1. 全景流向实时聚合与 SPA 路由
+        status, _, page = http_get(self.httpd.server_port, "/energy-flow")
+        self.assertEqual(status, 200)
+        self.assertIn("view-energyflow", page.decode("utf-8"))
+
+        status, _, ef_raw = http_get(self.httpd.server_port, "/api/energy-flow")
+        self.assertEqual(status, 200)
+        ef = json.loads(ef_raw.decode("utf-8"))
+        self.assertIn("summary", ef)
+        self.assertIn("nodes", ef)
+        self.assertIn("sources", ef)
+        self.assertGreaterEqual(ef["summary"]["total_load_kw"], 0.0)
+
+        # 2. 单指标趋势查询与单边时间窗/超大整数防御
+        status, _, tr_raw = http_get(self.httpd.server_port, "/api/devices/ACGenerator/1/trend?hours=1&metric=p")
+        self.assertEqual(status, 200)
+        tr = json.loads(tr_raw.decode("utf-8"))
+        self.assertTrue(all(s["metric"] == "p" for s in tr["series"]))
+
+        status, _, _ = http_get(self.httpd.server_port, "/api/devices/ACGenerator/1/trend?start_ms=1000")
+        self.assertEqual(status, 400)
+
+        status, _, _ = http_get(self.httpd.server_port, "/api/comm/points?rtu_id=9999999999999999999999")
+        self.assertEqual(status, 400)
+
+        # 3. 不支持的 HTTP 方法返回 JSON 405
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+        conn.request("POST", "/api/overview")
+        resp = conn.getresponse()
+        body_405 = json.loads(resp.read().decode("utf-8"))
+        conn.close()
+        self.assertEqual(resp.status, 405)
+        self.assertIn("error", body_405)
+
+        # 4. 静态资源支持 ETag / 304 协商缓存
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+        conn.request("GET", "/static/portal.css")
+        resp200 = conn.getresponse()
+        resp200.read()
+        etag = resp200.getheader("ETag")
+        conn.close()
+        self.assertEqual(resp200.status, 200)
+        self.assertTrue(etag)
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+        conn.request("GET", "/static/portal.css", headers={"If-None-Match": etag})
+        resp304 = conn.getresponse()
+        resp304.read()
+        conn.close()
+        self.assertEqual(resp304.status, 304)
+
 
 if __name__ == "__main__":
     unittest.main()
