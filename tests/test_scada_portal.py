@@ -136,6 +136,8 @@ class ScadaPortalTests(unittest.TestCase):
             cols.append(f'"{m}_weight" REAL DEFAULT 1.0')
             cols.append(f'"{m}_rtu" INTEGER')
             cols.append(f'"{m}_pnt" INTEGER')
+            cols.append(f'"{m}_max" REAL')
+            cols.append(f'"{m}_min" REAL')
         conn.execute(f'CREATE TABLE "{table}" ({", ".join(cols)})')
 
     def _seed_d_db(self):
@@ -308,6 +310,41 @@ class ScadaPortalTests(unittest.TestCase):
         lread = json.loads(lr_body.decode("utf-8"))
         self.assertEqual(len(lread["items"]), 1)
         self.assertIn("秦岭站", lread["items"][0]["text"])
+
+    def test_update_device_limits_and_reject_invalid_range(self):
+        def http_put(path: str, payload: dict) -> tuple[int, dict]:
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+            body = json.dumps(payload).encode("utf-8")
+            conn.request("PUT", path, body=body, headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode("utf-8"))
+            conn.close()
+            return resp.status, data
+
+        # 1. 上限 <= 下限应返回 400 拒绝修改
+        for bad_max, bad_min in ((20.0, 20.0), (10.0, 30.0)):
+            status, data = http_put(
+                "/api/devices/ACGenerator/1/limits",
+                {"metric": "p", "max_value": bad_max, "min_value": bad_min},
+            )
+            self.assertEqual(status, 400)
+            self.assertIn("上限必须大于下限", data["error"])
+
+        # 2. 合法上下限（当前值 45.2 > 40.0）即时更新为状态 3（越上限）
+        status, data = http_put(
+            "/api/devices/ACGenerator/1/limits",
+            {"metric": "p", "max_value": 40.0, "min_value": 0.0},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((data["max_value"], data["min_value"], data["quality"], data["quality_label"]), (40.0, 0.0, 3, "越上限"))
+
+        # 3. 调整为合理范围 [0, 100] 后恢复状态 0（正常）
+        status, data = http_put(
+            "/api/devices/ACGenerator/1/limits",
+            {"metric": "p", "max_value": 100.0, "min_value": 0.0},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((data["quality"], data["quality_label"]), (0, "正常"))
 
 
 if __name__ == "__main__":

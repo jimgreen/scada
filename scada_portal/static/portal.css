@@ -1234,6 +1234,138 @@ input[type="search"], select {
   color: var(--text-secondary, #7da2c4);
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge.over {
+  background: rgba(249, 115, 22, 0.22);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.48);
+}
+
+.badge.under {
+  background: rgba(99, 102, 241, 0.22);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.48);
+}
+
+.badge.muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--text-secondary, #94a3b8);
+  border: 1px solid rgba(148, 163, 184, 0.34);
+}
+
+html[data-theme="minimalist-light"] .badge.over,
+html[data-theme="bento-grid"] .badge.over,
+html[data-theme="editorial"] .badge.over {
+  background: #fff0e5;
+  color: #c2410c;
+  border-color: #fdba74;
+}
+
+html[data-theme="minimalist-light"] .badge.under,
+html[data-theme="bento-grid"] .badge.under,
+html[data-theme="editorial"] .badge.under {
+  background: #eef2ff;
+  color: #4338ca;
+  border-color: #a5b4fc;
+}
+
+html[data-theme] .metric-box button.m-limit-btn {
+  padding: 1px 6px !important;
+  font-size: 10px !important;
+  line-height: 1.4 !important;
+  border-radius: 4px !important;
+  border: 1px solid rgba(125, 162, 196, 0.32) !important;
+  background: transparent !important;
+  color: var(--accent, #38bdf8) !important;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme] .metric-box button.m-limit-btn:hover {
+  border-color: var(--accent, #00e5ff) !important;
+  background: rgba(0, 229, 255, 0.12) !important;
+}
+
+.limit-dialog {
+  width: min(360px, 92vw);
+  padding: 16px 18px;
+  border-radius: var(--radius-card, 8px);
+  border: var(--border, 1px solid rgba(0, 229, 255, 0.35));
+  background: var(--bg-surface, #081121);
+  color: var(--text-primary, #e6f7ff);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+.limit-dialog::backdrop {
+  background: rgba(2, 8, 20, 0.62);
+}
+
+.limit-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.limit-dialog-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.limit-dialog-meta {
+  font-size: 12px;
+  color: var(--text-secondary, #7da2c4);
+  margin-bottom: 12px;
+}
+
+.limit-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.limit-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary, #7da2c4);
+}
+
+.limit-fields input {
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: var(--border, 1px solid rgba(125, 162, 196, 0.35));
+  background: var(--bg-subtle, #0d1b33);
+  color: var(--text-primary, #e6f7ff);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.limit-fields input.limit-invalid {
+  border-color: var(--danger, #ff4d6d) !important;
+  box-shadow: 0 0 0 1px rgba(255, 77, 109, 0.35);
+}
+
+.limit-error {
+  margin-top: 10px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: rgba(255, 77, 109, 0.14);
+  border: 1px solid rgba(255, 77, 109, 0.45);
+  color: var(--danger, #ff6b81);
+  font-size: 12px;
+}
+
+.limit-dialog-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .trend-card {

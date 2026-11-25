@@ -16,12 +16,15 @@
   if (pointTrend) pointTrendHost.hidden = false;
   const pointKinds = ['', 'yc', 'yx'];
   const reasons = {
-    bad_quality: '源质量不合格', stale: '数据超时', missing_point: '测点缺失',
-    source_error: '源库不可用', disabled: '映射停用', notuse: '量测禁用',
-    invalid_value: '数据无效', missing_time: '无源时标', future_time: '源时标超前',
+    bad_quality: '通信异常（源质量不合格）', stale: '通信异常（数据超时）', missing_point: '通信异常（测点缺失）',
+    source_error: '通信异常（源库不可用）', comm_error: '通信异常', disabled: '映射停用', notuse: '量测禁用',
+    invalid_value: '通信异常（数据无效）', missing_time: '通信异常（无源时标）', future_time: '通信异常（源时标超前）',
     uncollected: '尚未采集', definition_changed: '定义已修改，等待采集',
-    unmapped: '未绑定', unbound: '未绑定', no_mapping: '未绑定',
+    unmapped: '无配置', unbound: '无配置', no_mapping: '无配置', invalid_config: '无配置',
+    over_upper_limit: '越上限', under_lower_limit: '越下限',
   };
+  const qualityLabels = { 0: '0 · 正常', 1: '1 · 无配置', 2: '2 · 通信异常', 3: '3 · 越上限', 4: '4 · 越下限' };
+  const qualityText = value => value == null ? '—' : (qualityLabels[Number(value)] ?? number(value));
 
   let overview;
   let catalog;
@@ -48,11 +51,26 @@
   let intervalNotice = '';
   const drafts = new Map();
   const chosen = new Set();
-  const parameters = ['enabled', 'notuse', 'weight', 'max_age_seconds'];
+  const parameters = ['enabled', 'notuse', 'weight', 'max_age_seconds', 'min_value', 'max_value'];
+  const optionalLimitFields = new Set(['min_value', 'max_value']);
   const scopeFields = ['category', 'table', 'idx', 'device_id'];
 
   const number = value => value == null ? '—'
     : Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(10))) : String(value);
+  const parseLimitInput = value => {
+    if (value == null || String(value).trim() === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+  const limitRangeError = (maxRaw, minRaw) => {
+    const hi = parseLimitInput(maxRaw);
+    const lo = parseLimitInput(minRaw);
+    if (Number.isNaN(hi) || Number.isNaN(lo)) return '量测上下限必须为有限数值或留空';
+    if (hi !== null && lo !== null && hi <= lo) return '量测上限必须大于下限，无法修改';
+    return '';
+  };
+  const formatLimitRange = row => (row.min_value == null && row.max_value == null)
+    ? '—' : number(row.min_value) + ' ~ ' + number(row.max_value);
   const time = value => {
     if (!value) return '—';
     const date = new Date(value);
@@ -61,7 +79,7 @@
   const option = (value, label) => '<option value="' + html(value) + '">' + html(label) + '</option>';
   const kindLabel = value => value === 'yx' ? '遥信 YX' : value === 'yc' ? '遥测 YC' : '—';
   const attached = row => row.measurement_id != null;
-  const bound = row => Boolean(row.source_database && row.rtu_id != null && row.pnt_no != null);
+  const bound = row => Boolean(row.source_database && Number(row.rtu_id) > 0 && Number(row.pnt_no) > 0);
   const configurable = row => attached(row) && bound(row);
   const attrs = (row, field) => 'data-id="' + html(row.measurement_id) + '" data-param="' + field + '"';
   const parameterValue = (row, field) => drafts.get(row.measurement_id)?.[field] ?? row[field];
@@ -317,11 +335,37 @@
 
   function statusMarkup(row) {
     const mapped = bound(row);
-    const valid = Boolean(row.valid && row.enabled && !row.notuse);
-    const label = !mapped ? '未绑定' : !row.enabled ? '映射停用' : row.notuse ? '量测禁用'
-      : valid ? '可用' : (reasons[row.reason] || row.reason || '不可用');
-    const color = !mapped ? 'unbound' : valid ? 'good' : 'bad';
-    return '<span class="measure-status ' + color + '">' + html(label) + '</span>';
+    const q = row.quality == null ? null : Number(row.quality);
+    let label = '异常';
+    let color = 'comm';
+    let title = reasons[row.reason] || row.reason || '';
+    if (!mapped || q === 1 || row.reason === 'unmapped' || row.reason === 'invalid_config') {
+      label = '无配置';
+      color = 'unbound';
+    } else if (q === 2 || ['bad_quality', 'stale', 'missing_point', 'source_error', 'comm_error', 'invalid_value', 'missing_time', 'future_time'].includes(row.reason)) {
+      label = '通信异常';
+      color = 'comm';
+    } else if (q === 3 || row.reason === 'over_upper_limit') {
+      label = '越上限';
+      color = 'over';
+    } else if (q === 4 || row.reason === 'under_lower_limit') {
+      label = '越下限';
+      color = 'under';
+    } else if (!row.enabled) {
+      label = '映射停用';
+      color = 'unbound';
+    } else if (row.notuse) {
+      label = '量测禁用';
+      color = 'unbound';
+    } else if (row.valid || q === 0) {
+      label = '正常';
+      color = 'good';
+    } else {
+      label = reasons[row.reason] || row.reason || '不可用';
+      color = 'comm';
+    }
+    const tip = title && title !== label ? ' title="' + html(title) + '"' : '';
+    return '<span class="measure-status ' + color + '"' + tip + '>' + html(label) + '</span>';
   }
 
   function quantityMarkup(row, includeDevice) {
@@ -366,8 +410,9 @@
     return '<tr>'
       + quantityMarkup(row, !detail) + '<td>' + kindLabel(row.kind) + '</td>'
       + '<td class="quantity-value">' + html(number(row.value)) + (row.unit ? ' ' + html(row.unit) : '') + '</td>'
+      + '<td class="limit-range">' + html(formatLimitRange(row)) + '</td>'
       + '<td>' + html(time(row.source_time_ms)) + '</td><td>' + html(time(row.collected_at)) + '</td>'
-      + '<td>' + html(number(row.quality)) + '</td><td>' + statusMarkup(row) + '</td>'
+      + '<td>' + html(qualityText(row.quality)) + '</td><td>' + statusMarkup(row) + '</td>'
       + '<td>' + html(number(row.previous_value)) + '</td>' + sourceMarkup(row) + '</tr>';
   }
 
@@ -383,14 +428,17 @@
       const prior = previous[index];
       const cells = body.rows[index].cells;
       if (row.value !== prior.value) cells[2 + liveColumnOffset].textContent = number(row.value) + (row.unit ? ' ' + row.unit : '');
-      if (row.source_time_ms !== prior.source_time_ms) cells[3 + liveColumnOffset].textContent = time(row.source_time_ms);
-      if (row.collected_at !== prior.collected_at) cells[4 + liveColumnOffset].textContent = time(row.collected_at);
-      if (row.quality !== prior.quality) cells[5 + liveColumnOffset].textContent = number(row.quality);
-      if (['enabled', 'notuse', 'valid', 'reason'].some(field => row[field] !== prior[field])
-          || bound(row) !== bound(prior)) cells[6 + liveColumnOffset].innerHTML = statusMarkup(row);
-      if (row.previous_value !== prior.previous_value) cells[7 + liveColumnOffset].textContent = number(row.previous_value);
+      if (row.min_value !== prior.min_value || row.max_value !== prior.max_value) {
+        cells[3 + liveColumnOffset].textContent = formatLimitRange(row);
+      }
+      if (row.source_time_ms !== prior.source_time_ms) cells[4 + liveColumnOffset].textContent = time(row.source_time_ms);
+      if (row.collected_at !== prior.collected_at) cells[5 + liveColumnOffset].textContent = time(row.collected_at);
+      if (row.quality !== prior.quality) cells[6 + liveColumnOffset].textContent = qualityText(row.quality);
+      if (['enabled', 'notuse', 'valid', 'reason', 'quality'].some(field => row[field] !== prior[field])
+          || bound(row) !== bound(prior)) cells[7 + liveColumnOffset].innerHTML = statusMarkup(row);
+      if (row.previous_value !== prior.previous_value) cells[8 + liveColumnOffset].textContent = number(row.previous_value);
       if (row.rtu_id !== prior.rtu_id || row.pnt_no !== prior.pnt_no || bound(row) !== bound(prior)) {
-        cells[8 + liveColumnOffset].textContent = bound(row) ? row.rtu_id + ' / ' + row.pnt_no : '—';
+        cells[9 + liveColumnOffset].textContent = bound(row) ? row.rtu_id + ' / ' + row.pnt_no : '—';
       }
     });
     return true;
@@ -400,7 +448,7 @@
     const identity = quantityMarkup(row, false) + '<td>' + kindLabel(row.kind) + '</td>' + sourceMarkup(row);
     if (!configurable(row)) {
       const destination = new URLSearchParams({ table: detail.device.table, idx: detail.device.idx, metric: row.metric });
-      return '<tr><td></td>' + identity + '<td colspan="4"><a href="/mappings?' + html(destination.toString())
+      return '<tr><td></td>' + identity + '<td colspan="6"><a href="/mappings?' + html(destination.toString())
         + '">绑定测点后配置</a></td></tr>';
     }
     const label = html(row.name || row.metric);
@@ -411,12 +459,20 @@
       + ' class="parameter-field" type="number" step="any" min="' + min + '" required aria-label="'
       + label + ' · ' + heading + '" value="' + html(parameterValue(row, field)) + '"'
       + (saving ? ' disabled' : '') + '></td>';
+    const minVal = parameterValue(row, 'min_value');
+    const maxVal = parameterValue(row, 'max_value');
+    const limitInvalid = Boolean(limitRangeError(maxVal, minVal));
+    const limitField = (field, heading, val) => '<td><input ' + attrs(row, field)
+      + ' class="parameter-field' + (limitInvalid ? ' limit-invalid' : '') + '" type="number" step="any" placeholder="—"'
+      + ' aria-label="' + label + ' · ' + heading + '" value="' + html(val == null ? '' : val) + '"'
+      + (saving ? ' disabled' : '') + '></td>';
     const selection = '<td class="parameter-check"><input type="checkbox" data-choose="' + html(row.measurement_id)
       + '" aria-label="选择 ' + label + '"' + (chosen.has(row.measurement_id) ? ' checked' : '')
       + (saving ? ' disabled' : '') + '></td>';
     return '<tr' + (drafts.has(row.measurement_id) ? ' class="changed"' : '') + '>' + selection + identity
       + checkbox('enabled', '采集映射启用') + checkbox('notuse', '禁用量测')
-      + numberField('weight', '权重', '0') + numberField('max_age_seconds', '超时阈值（秒）', '0') + '</tr>';
+      + numberField('weight', '权重', '0') + numberField('max_age_seconds', '超时阈值（秒）', '0')
+      + limitField('min_value', '量测下限', minVal) + limitField('max_value', '量测上限', maxVal) + '</tr>';
   }
 
   function renderRows(items, total, limit) {
@@ -429,8 +485,8 @@
     const headers = mappingMode
       ? ['目标设备量测', '类型', '源数据库', 'RTU / 点号', '变换', '映射状态', '操作']
       : parameterMode
-        ? ['<input id="choose-all" type="checkbox" aria-label="选择当前显示的可配置量测" title="全选当前显示的可配置量测">', '量测属性', '类型', 'RTU / 点号', '启用采集映射', '禁用量测', '量测权重', '超时阈值（秒）']
-        : ['量测属性', '类型', '实时值', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
+        ? ['<input id="choose-all" type="checkbox" aria-label="选择当前显示的可配置量测" title="全选当前显示的可配置量测">', '量测属性', '类型', 'RTU / 点号', '启用采集映射', '禁用量测', '量测权重', '超时阈值（秒）', '下限', '上限']
+        : ['量测属性', '类型', '实时值', '上下限', '源时间', '采集时间', '质量', '状态', '前次值', 'RTU / 点号'];
     const renderer = mappingMode ? mappingRow : parameterMode ? configRow : liveRow;
     if (!$('#measure-head').firstElementChild) {
       $('#measure-head').innerHTML = '<tr>' + headers.map(label => '<th scope="col">' + label + '</th>').join('') + '</tr>';
@@ -513,11 +569,35 @@
     return loadRows();
   }
 
+  function validateDraftLimits() {
+    if (!detail) return { message: '', invalidIds: new Set() };
+    const invalidIds = new Set();
+    let firstMessage = '';
+    for (const row of detail.items) {
+      if (!drafts.has(row.measurement_id)) continue;
+      const err = limitRangeError(parameterValue(row, 'max_value'), parameterValue(row, 'min_value'));
+      if (err) {
+        invalidIds.add(row.measurement_id);
+        if (!firstMessage) firstMessage = (row.name || row.metric) + '：' + err;
+      }
+    }
+    return { message: firstMessage, invalidIds };
+  }
+
   function updateParameterButtons() {
-    $('#save-parameters').disabled = saving || !drafts.size;
+    const { message: limitAlert, invalidIds } = validateDraftLimits();
+    for (const input of $('#measure-rows').querySelectorAll('input[data-param="min_value"], input[data-param="max_value"]')) {
+      input.classList.toggle('limit-invalid', invalidIds.has(Number(input.dataset.id)));
+    }
+    if (limitAlert) error('#alert', limitAlert);
+    else if ($('#alert').textContent.includes('上限必须大于下限') || $('#alert').textContent.includes('上下限必须为有限数值')) {
+      error('#alert', '');
+    }
+    $('#save-parameters').disabled = saving || !drafts.size || Boolean(limitAlert);
     $('#discard-parameters').disabled = saving || !drafts.size;
     for (const selector of ['#category', '#model-table', '#device', '#refresh']) $(selector).disabled = saving || !!drafts.size;
     $('#parameter-status').textContent = saving ? '正在保存…'
+      : limitAlert ? '存在非法上下限，请修正后保存'
       : drafts.size ? drafts.size + ' 项未保存 · 保存或撤销后可切换设备' : parameterNotice;
     $('#draft-filter').hidden = !drafts.size;
     const selectable = rows.filter(configurable).length;
@@ -533,8 +613,16 @@
   function setDraft(row, changes) {
     const next = { ...drafts.get(row.measurement_id) };
     for (const [field, value] of Object.entries(changes)) {
-      if (value !== '' && Number(value) === Number(row[field])) delete next[field];
-      else next[field] = value;
+      if (optionalLimitFields.has(field)) {
+        const curNorm = row[field] == null ? null : Number(row[field]);
+        const newNorm = value == null || String(value).trim() === '' ? null : Number(value);
+        if (curNorm === newNorm) delete next[field];
+        else next[field] = value == null ? '' : value;
+      } else if (value !== '' && Number(value) === Number(row[field])) {
+        delete next[field];
+      } else {
+        next[field] = value;
+      }
     }
     if (Object.keys(next).length) drafts.set(row.measurement_id, next);
     else drafts.delete(row.measurement_id);
@@ -577,6 +665,7 @@
     const changes = {};
     for (const field of parameters) {
       const input = $('#bulk-' + field);
+      if (!input) continue;
       if (input.validity.badInput) {
         error('#bulk-parameter-error', '请输入有效数字');
         return;
@@ -593,6 +682,22 @@
       error('#bulk-parameter-error', '请选择至少一项要修改的参数');
       return;
     }
+    if ('max_value' in changes || 'min_value' in changes) {
+      if ('max_value' in changes && 'min_value' in changes && changes.max_value <= changes.min_value) {
+        error('#bulk-parameter-error', '量测上限必须大于下限，无法修改');
+        return;
+      }
+      for (const row of rows) {
+        if (!configurable(row) || !chosen.has(row.measurement_id)) continue;
+        const nextMax = 'max_value' in changes ? changes.max_value : parameterValue(row, 'max_value');
+        const nextMin = 'min_value' in changes ? changes.min_value : parameterValue(row, 'min_value');
+        const err = limitRangeError(nextMax, nextMin);
+        if (err) {
+          error('#bulk-parameter-error', (row.name || row.metric) + '：' + err);
+          return;
+        }
+      }
+    }
     for (const row of rows) {
       if (configurable(row) && chosen.has(row.measurement_id)) setDraft(row, changes);
     }
@@ -608,6 +713,14 @@
       const values = { measurement_id: row.measurement_id, version: row.version };
       for (const field of parameters) {
         const value = parameterValue(row, field);
+        if (optionalLimitFields.has(field)) {
+          const parsed = parseLimitInput(value);
+          if (Number.isNaN(parsed)) {
+            throw new Error((row.name || row.metric) + '：量测上下限必须为有限数值或留空');
+          }
+          values[field] = parsed;
+          continue;
+        }
         if (value == null || value === '' || !Number.isFinite(Number(value))
             || (field === 'weight' && Number(value) <= 0)
             || (field === 'max_age_seconds' && Number(value) <= 0)) {
@@ -615,6 +728,8 @@
         }
         values[field] = Number(value);
       }
+      const rangeErr = limitRangeError(values.max_value, values.min_value);
+      if (rangeErr) throw new Error((row.name || row.metric) + '：' + rangeErr);
       return values;
     });
     saving = true;
@@ -659,7 +774,8 @@
     $('#edit-device').value = row?.device_id || detail?.device.device_id || $('#device').value || devices[0]?.device_id || '';
     const fields = [
       ['metric', 'metric', ''], ['kind', 'kind', kind || 'yc'], ['name', 'name', ''], ['unit', 'unit', ''],
-      ['weight', 'weight', 1], ['scale', 'scale', 1], ['offset', 'offset', 0], ['age', 'max_age_seconds', 120],
+      ['weight', 'weight', 1], ['min', 'min_value', ''], ['max', 'max_value', ''],
+      ['scale', 'scale', 1], ['offset', 'offset', 0], ['age', 'max_age_seconds', 120],
       ['source', 'source_database', catalog.sources[0] || ''], ['rtu', 'rtu_id', ''], ['point', 'pnt_no', ''],
     ];
     for (const [id, key, fallback] of fields) {
@@ -929,12 +1045,20 @@
     error('#editor-error', '');
     $('#editor-save').disabled = true;
     try {
+      const minVal = parseLimitInput($('#edit-min').value);
+      const maxVal = parseLimitInput($('#edit-max').value);
+      const rangeErr = limitRangeError(maxVal, minVal);
+      if (rangeErr) {
+        error('#editor-error', rangeErr);
+        return;
+      }
       const data = {
         device_id: Number($('#edit-device').value), metric: $('#edit-metric').value.trim(), kind: $('#edit-kind').value,
         name: $('#edit-name').value.trim(), unit: $('#edit-unit').value.trim(),
         source_database: $('#edit-source').value.trim(), rtu_id: Number($('#edit-rtu').value),
         pnt_no: Number($('#edit-point').value), scale: Number($('#edit-scale').value),
         offset: Number($('#edit-offset').value), weight: Number($('#edit-weight').value),
+        max_value: maxVal, min_value: minVal,
         max_age_seconds: Number($('#edit-age').value), notuse: Number($('#edit-notuse').checked),
         enabled: Number($('#edit-enabled').checked), se_enabled: editing?.se_enabled || 0,
       };

@@ -86,6 +86,106 @@
     return data;
   }
 
+  async function apiPut(url, body) {
+    const resp = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    return data;
+  }
+
+  function qualityBadge(m) {
+    const q = m.quality == null ? null : Number(m.quality);
+    if (q === 0 && !m.disabled) return '<span class="badge ok">正常</span>';
+    if (q === 1) return '<span class="badge muted">无配置</span>';
+    if (q === 2) return '<span class="badge danger">通信异常</span>';
+    if (q === 3) return '<span class="badge over">越上限</span>';
+    if (q === 4) return '<span class="badge under">越下限</span>';
+    if (m.disabled) return '<span class="badge muted">禁用</span>';
+    return `<span class="badge danger">${esc(m.quality_label || "异常")}</span>`;
+  }
+
+  function fmtLimitCompact(val) {
+    if (val === null || val === undefined || Number.isNaN(Number(val))) return "—";
+    return String(Number(Number(val).toPrecision(6)));
+  }
+
+  let limitTarget = null;
+
+  function validatePortalLimitDialog() {
+    const minEl = $("#limit-min");
+    const maxEl = $("#limit-max");
+    const errEl = $("#limit-error");
+    const saveBtn = $("#limit-save");
+    if (!minEl || !maxEl || !errEl || !saveBtn) return { ok: false, minVal: null, maxVal: null };
+    const rawMin = minEl.value.trim();
+    const rawMax = maxEl.value.trim();
+    const minVal = rawMin === "" ? null : Number(rawMin);
+    const maxVal = rawMax === "" ? null : Number(rawMax);
+    let msg = "";
+    if ((minVal !== null && !Number.isFinite(minVal)) || (maxVal !== null && !Number.isFinite(maxVal))) {
+      msg = "量测上下限必须为有限数值或留空";
+    } else if (minVal !== null && maxVal !== null && maxVal <= minVal) {
+      msg = "量测上限必须大于下限，无法修改";
+    }
+    const invalid = Boolean(msg);
+    minEl.classList.toggle("limit-invalid", invalid);
+    maxEl.classList.toggle("limit-invalid", invalid);
+    errEl.textContent = msg;
+    errEl.hidden = !invalid;
+    saveBtn.disabled = invalid;
+    return { ok: !invalid, minVal, maxVal };
+  }
+
+  function openLimitDialog(dev, metricItem) {
+    const dlg = $("#limit-dialog");
+    if (!dlg) return;
+    limitTarget = { dev, metric: metricItem };
+    $("#limit-dialog-title").textContent = `${metricItem.label} · 上下限`;
+    $("#limit-dialog-meta").textContent = `${dev.name} (${dev.table_name}#${dev.idx} · ${metricItem.metric})`;
+    $("#limit-min").value = metricItem.min_value == null ? "" : String(metricItem.min_value);
+    $("#limit-max").value = metricItem.max_value == null ? "" : String(metricItem.max_value);
+    validatePortalLimitDialog();
+    dlg.showModal();
+  }
+
+  function bindLimitDialog() {
+    const dlg = $("#limit-dialog");
+    const form = $("#limit-form");
+    if (!dlg || !form || form.dataset.bound) return;
+    form.dataset.bound = "1";
+    $("#limit-min")?.addEventListener("input", validatePortalLimitDialog);
+    $("#limit-max")?.addEventListener("input", validatePortalLimitDialog);
+    $("#limit-close")?.addEventListener("click", () => dlg.close());
+    $("#limit-cancel")?.addEventListener("click", () => dlg.close());
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!limitTarget) return;
+      const check = validatePortalLimitDialog();
+      if (!check.ok) return;
+      const saveBtn = $("#limit-save");
+      const errEl = $("#limit-error");
+      saveBtn.disabled = true;
+      try {
+        const { dev, metric } = limitTarget;
+        await apiPut(
+          `/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/limits`,
+          { metric: metric.metric, max_value: check.maxVal, min_value: check.minVal }
+        );
+        dlg.close();
+        await loadDevices();
+      } catch (err) {
+        errEl.textContent = err.message || "保存失败";
+        errEl.hidden = false;
+      } finally {
+        validatePortalLimitDialog();
+      }
+    });
+  }
+
   function setConnection(ok, text) {
     const pill = $("#conn-pill");
     const label = $("#conn-text");
@@ -978,20 +1078,31 @@
       focusSvgDevice(dev.dev_id);
     };
     grid.innerHTML = (dev.metrics || [])
-      .map((m) => {
+      .map((m, idx) => {
         const valStr = m.kind === "yx"
           ? (m.metric === "position" ? (m.value ? "合闸" : "分闸") : (m.value ? "运行" : "停运"))
           : fmtNum(m.display_value, 2);
-        const qBadge = m.valid ? '<span class="badge ok">正常</span>' : '<span class="badge danger">无效</span>';
+        const qBadge = qualityBadge(m);
+        const hasLimits = m.min_value != null || m.max_value != null;
+        const limitBtn = m.kind === "yc"
+          ? `<button type="button" class="m-limit-btn" data-limit-idx="${idx}" title="点击修改上下限">${hasLimits ? `${esc(fmtLimitCompact(m.min_value))} ~ ${esc(fmtLimitCompact(m.max_value))}` : "设限"}</button>`
+          : `<span>${esc(m.metric)}</span>`;
         return (
           `<div class="metric-box">` +
           `<div class="m-label"><span>${esc(m.label)}</span>${qBadge}</div>` +
           `<div class="metric-val">${esc(valStr)}<small>${esc(m.unit || "")}</small></div>` +
-          `<div class="m-foot"><span>RTU ${m.rtu_id ?? "-"} / #${m.point_no ?? "-"}</span><span>${esc(m.metric)}</span></div>` +
+          `<div class="m-foot"><span>RTU ${m.rtu_id ?? "-"} / #${m.point_no ?? "-"}</span>${limitBtn}</div>` +
           `</div>`
         );
       })
       .join("");
+    bindLimitDialog();
+    grid.querySelectorAll(".m-limit-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const m = (dev.metrics || [])[Number(btn.dataset.limitIdx)];
+        if (m) openLimitDialog(dev, m);
+      });
+    });
   }
 
   async function loadDeviceTrend(dev) {

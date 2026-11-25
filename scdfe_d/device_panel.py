@@ -4,7 +4,12 @@ import math
 
 from core.common import ApiError
 from scdfe_d.measurement_layout import SUFFIXES
-from scdfe_d.service import CATEGORIES, category_for
+from scdfe_d.service import (
+    CATEGORIES,
+    _is_valid_point_config,
+    _parse_limit_number,
+    category_for,
+)
 
 
 def device_catalog(store):
@@ -83,10 +88,19 @@ def _read_device(store, con, table, idx, *, live=False):
         if fields_in_group != [metric + suffix for suffix in SUFFIXES]:
             raise ApiError(409, "设备量测字段分组不完整")
         kind = next((k for m, k in metrics if m == metric), "yc")
-        value, quality, previous, source_time, notuse, weight, rtu, point = (
-            wide[field] for field in fields_in_group
-        )
-        mapped = rtu is not None and point is not None
+        (
+            value,
+            quality,
+            previous,
+            source_time,
+            notuse,
+            weight,
+            rtu,
+            point,
+            max_value,
+            min_value,
+        ) = (wide[field] for field in fields_in_group)
+        mapped = _is_valid_point_config(rtu, point)
         meta = store.runtime_meta_for(table, idx, metric) if mapped else None
         valid, reason, collected_at = store._infer_status(
             value, quality, source_time, notuse, rtu, point, meta
@@ -110,6 +124,8 @@ def _read_device(store, con, table, idx, *, live=False):
             notuse=notuse,
             rtu_id=rtu,
             pnt_no=point,
+            max_value=max_value,
+            min_value=min_value,
         )
         if not live:
             item.update(
@@ -118,7 +134,7 @@ def _read_device(store, con, table, idx, *, live=False):
                 max_age_seconds=store._max_age_seconds if mapped else None,
                 scale=1.0 if mapped else None,
                 offset=0.0 if mapped else None,
-                source_quality=(quality & 127) if (mapped and quality is not None) else None,
+                source_quality=quality if (mapped and quality is not None) else None,
                 weight=weight,
             )
         items.append(item)
@@ -141,20 +157,28 @@ def _positive(value, label):
     return number
 
 
+def _optional_limit(value, label):
+    if value is None or value == "":
+        return None
+    parsed = _parse_limit_number(value)
+    if parsed is None:
+        raise ApiError(400, f"{label}必须是有限数值或留空")
+    return parsed
+
+
 def _parameter_changes(changes, current):
     required = {"measurement_id", "version", "enabled", "notuse", "weight"}
+    optional = {"max_age_seconds", "max_value", "min_value"}
     seen = set()
     for change in changes:
-        if not isinstance(change, dict) or not required <= change.keys() <= required | {
-            "max_age_seconds"
-        }:
+        if not isinstance(change, dict) or not required <= change.keys() <= required | optional:
             raise ApiError(400, "量测参数字段不完整或包含未知字段")
         mid, version = change["measurement_id"], change["version"]
         if type(mid) is not int or type(version) is not int or mid in seen:
             raise ApiError(400, "量测编号、版本无效或重复")
         seen.add(mid)
         row = current.get(mid)
-        if row is None or row["rtu_id"] is None or row["pnt_no"] is None:
+        if row is None or not _is_valid_point_config(row["rtu_id"], row["pnt_no"]):
             raise ApiError(400, "只能修改当前设备已绑定量测的参数")
         if version != row["version"]:
             raise ApiError(409, "量测定义已修改，请刷新后重试", code="version_conflict")
@@ -168,11 +192,30 @@ def _parameter_changes(changes, current):
         before = {
             "notuse": 1 if row["notuse"] else 0,
             "weight": float(row["weight"] if row["weight"] is not None else 1.0),
+            "max_value": row.get("max_value"),
+            "min_value": row.get("min_value"),
         }
         after = {
             "notuse": effective_notuse,
             "weight": _positive(change["weight"], "量测权重"),
+            "max_value": (
+                _optional_limit(change["max_value"], "量测上限")
+                if "max_value" in change
+                else row.get("max_value")
+            ),
+            "min_value": (
+                _optional_limit(change["min_value"], "量测下限")
+                if "min_value" in change
+                else row.get("min_value")
+            ),
         }
+        if (
+            ("max_value" in change or "min_value" in change)
+            and after["max_value"] is not None
+            and after["min_value"] is not None
+            and after["max_value"] <= after["min_value"]
+        ):
+            raise ApiError(400, f"{row['metric']}：量测上限必须大于下限，无法修改")
         if "max_age_seconds" in change:
             _positive(change["max_age_seconds"], "量测超时阈值")
         if before != after:
@@ -201,7 +244,6 @@ def update_parameters(store, payload):
             metric = row["metric"]
             if before["notuse"] != after["notuse"]:
                 physical_values[metric + "_notuse"] = after["notuse"]
-                physical_values[metric + "_qual"] = (row["quality"] or 0) | 128
                 store.set_runtime_meta(
                     table,
                     dev_idx,
@@ -212,6 +254,10 @@ def update_parameters(store, payload):
                 )
             if before["weight"] != after["weight"]:
                 physical_values[metric + "_weight"] = after["weight"]
+            if before["max_value"] != after["max_value"]:
+                physical_values[metric + "_max"] = after["max_value"]
+            if before["min_value"] != after["min_value"]:
+                physical_values[metric + "_min"] = after["min_value"]
             store.bump_version(table, dev_idx, metric)
             store._audit(con, "measurement_parameters", mid, before, after)
         if physical_values:

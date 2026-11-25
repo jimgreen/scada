@@ -18,7 +18,8 @@ from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
 from core.web_database import DEFAULT_WORKSPACE_ROOT
 from core.log_query import LOG_PATTERNS, search_logs
 from core.common import CHANNEL_PARAMETER_TABLES, KIND_TABLES
-from scdfe_d.measurement_layout import SUFFIXES
+from scdfe_d.measurement_layout import QUAL_LABELS, QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN, SUFFIXES
+from scdfe_d.service import _check_limit_status, _parse_limit_number
 
 # 秦岭站正式开站投运基准日（2024-02-07 建站开站）
 STATION_COMMISSION_DATE = datetime(2024, 2, 7, tzinfo=timezone.utc)
@@ -220,6 +221,86 @@ class PortalService:
             conn.close()
 
     @contextmanager
+    def _open_readwrite(self, db_path: Path):
+        if not db_path.is_file():
+            raise FileNotFoundError(f"数据库不存在：{db_path}")
+        conn = sqlite3.connect(db_path, timeout=10.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=10000")
+            yield conn
+        finally:
+            conn.close()
+
+    def update_device_measurement_limits(
+        self,
+        table_name: str,
+        idx: int,
+        metric: str,
+        max_value: Any,
+        min_value: Any,
+    ) -> dict[str, Any]:
+        """更新 scdfe_d 设备宽表中指定量测的上下限，若上限<=下限则拒绝修改。"""
+        if not isinstance(table_name, str) or not table_name or table_name in _D_SKIP_TABLES or table_name.startswith("rtdb_"):
+            raise ValueError("设备表名不合法")
+        if not isinstance(metric, str) or not metric:
+            raise ValueError("量测属性名不能为空")
+
+        def _parse_opt(raw: Any, label: str) -> float | None:
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                return None
+            num = _parse_limit_number(raw)
+            if num is None:
+                raise ValueError(f"{label}必须为有限数值或留空")
+            return num
+
+        max_num = _parse_opt(max_value, "量测上限")
+        min_num = _parse_opt(min_value, "量测下限")
+        if max_num is not None and min_num is not None and max_num <= min_num:
+            raise ValueError("量测上限必须大于下限，无法修改")
+
+        with self._open_readwrite(self.d_db) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone()
+            if not exists:
+                raise FileNotFoundError(f"设备表不存在：{table_name}")
+            cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()}
+            max_col = f"{metric}_max"
+            min_col = f"{metric}_min"
+            qual_col = f"{metric}_qual"
+            if not {metric, max_col, min_col, qual_col} <= cols:
+                raise ValueError(f"设备表 {table_name} 不存在量测 {metric} 或上下限字段")
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    f'SELECT "{metric}", "{qual_col}" FROM "{table_name}" WHERE idx=?',
+                    (int(idx),),
+                ).fetchone()
+                if row is None:
+                    raise FileNotFoundError(f"设备不存在：{table_name}#{idx}")
+                val, old_qual = row[0], row[1]
+                new_qual = old_qual
+                # 若当前处于正常/越限态（通信正常），即时按新上下限重算状态码
+                if old_qual in (QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN) and val is not None:
+                    hit = _check_limit_status(val, max_num, min_num)
+                    new_qual = hit[0] if hit is not None else QUAL_OK
+                conn.execute(
+                    f'UPDATE "{table_name}" SET "{max_col}"=?, "{min_col}"=?, "{qual_col}"=? WHERE idx=?',
+                    (max_num, min_num, new_qual, int(idx)),
+                )
+        return {
+            "table_name": table_name,
+            "idx": int(idx),
+            "metric": metric,
+            "max_value": max_num,
+            "min_value": min_num,
+            "quality": new_qual,
+            "quality_label": QUAL_LABELS.get(new_qual, str(new_qual) if new_qual is not None else "—"),
+        }
+
+    @contextmanager
     def _open_history(self):
         conn = sqlite3.connect(self.history_db, timeout=15.0)
         try:
@@ -370,7 +451,14 @@ class PortalService:
                     for m in metrics:
                         rtu_id = row_dict.get(f"{m}_rtu")
                         pnt_no = row_dict.get(f"{m}_pnt")
-                        if rtu_id is None and pnt_no is None:
+                        if not (
+                            isinstance(rtu_id, int)
+                            and not isinstance(rtu_id, bool)
+                            and rtu_id > 0
+                            and isinstance(pnt_no, int)
+                            and not isinstance(pnt_no, bool)
+                            and pnt_no > 0
+                        ):
                             continue
                         bound_cnt += 1
                         kind = "yx" if col_types.get(m) == "INTEGER" else "yc"
@@ -378,6 +466,8 @@ class PortalService:
                         qual = row_dict.get(f"{m}_qual")
                         notuse = bool(row_dict.get(f"{m}_notuse"))
                         src_time = row_dict.get(f"{m}_time")
+                        max_val = row_dict.get(f"{m}_max")
+                        min_val = row_dict.get(f"{m}_min")
                         is_valid = (not notuse) and (qual == 0) and (val is not None)
                         if is_valid:
                             valid_cnt += 1
@@ -397,6 +487,9 @@ class PortalService:
                             "value": val,
                             "display_value": disp_val,
                             "quality": qual,
+                            "quality_label": QUAL_LABELS.get(qual, str(qual) if qual is not None else "—"),
+                            "max_value": max_val,
+                            "min_value": min_val,
                             "valid": is_valid,
                             "disabled": notuse,
                             "source_time": src_time,

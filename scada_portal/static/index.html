@@ -526,5 +526,24 @@
         </section>
       </main>
     </div>
+
+    <dialog id="limit-dialog" class="limit-dialog" aria-labelledby="limit-dialog-title">
+      <form id="limit-form" novalidate>
+        <div class="limit-dialog-head">
+          <h3 id="limit-dialog-title">量测上下限</h3>
+          <button type="button" class="btn secondary" id="limit-close" aria-label="关闭">×</button>
+        </div>
+        <div class="limit-dialog-meta" id="limit-dialog-meta"></div>
+        <div class="limit-fields">
+          <label>下限（min）<input id="limit-min" type="number" step="any" placeholder="留空不设限" /></label>
+          <label>上限（max）<input id="limit-max" type="number" step="any" placeholder="留空不设限" /></label>
+        </div>
+        <div class="limit-error" id="limit-error" role="alert" hidden></div>
+        <div class="limit-dialog-actions">
+          <button type="button" class="btn secondary" id="limit-cancel">取消</button>
+          <button type="submit" class="btn primary" id="limit-save">保存</button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

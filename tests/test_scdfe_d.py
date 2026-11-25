@@ -87,6 +87,8 @@ class DeviceTests(unittest.TestCase):
                     "p_weight",
                     "p_rtu",
                     "p_pnt",
+                    "p_max",
+                    "p_min",
                 ],
             )
         self.assertEqual(row[:3], (12, 0, 10))
@@ -178,7 +180,7 @@ class DeviceTests(unittest.TestCase):
         self.assertIn("c.sqlite3", result["errors"])
         self.assertEqual(self.row()["value"], 10)
         self.assertEqual(self.row()["valid"], 0)
-        self.assertEqual(self.row()["quality"] & 128, 128)
+        self.assertEqual(self.row()["quality"], 2)
 
     def test_mapping_columns_drive_collection(self):
         self.store.collect_once()
@@ -257,7 +259,7 @@ class DeviceTests(unittest.TestCase):
                 c.execute(
                     "SELECT pressure,pressure_qual,pressure_notuse,pressure_pnt FROM HydroNode"
                 ).fetchone()[:],
-                (None, 128, 1, None),
+                (None, 1, 1, None),
             )
             self.assertEqual(
                 c.execute(
@@ -281,8 +283,143 @@ class DeviceTests(unittest.TestCase):
         with self.store.connection() as c:
             self.assertEqual(
                 c.execute("SELECT soc_notuse,soc_qual FROM ACStorageGen").fetchone()[:],
-                (1, 128),
+                (1, 0),
             )
+
+    def test_realtime_quality_states_for_config_comm_and_limits(self):
+        # 1. 正常采集，未配置上下限时状态为 0
+        self.store.collect_once()
+        self.assertEqual((self.row()["quality"], self.row()["valid"]), (0, 1))
+
+        # 2. 配置有效上下限 [5, 15]，当前值 10 正常（0）
+        with self.store.connection() as c:
+            c.execute("UPDATE Manual_generator SET p_max=15, p_min=5 WHERE idx=1")
+        self.store.collect_once()
+        self.assertEqual((self.row()["quality"], self.row()["valid"]), (0, 1))
+
+        # 3. 越上限（p=16 > p_max=15）-> 状态 3
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET value=16, refresh_time=refresh_time+1")
+        self.store.collect_once()
+        self.assertEqual(
+            (self.row()["quality"], self.row()["valid"], self.row()["reason"]),
+            (3, 0, "over_upper_limit"),
+        )
+
+        # 4. 越下限（p=4 < p_min=5）-> 状态 4
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET value=4, refresh_time=refresh_time+1")
+        self.store.collect_once()
+        self.assertEqual(
+            (self.row()["quality"], self.row()["valid"], self.row()["reason"]),
+            (4, 0, "under_lower_limit"),
+        )
+
+        # 5. 边界值（p == p_min 或 p == p_max）不越限 -> 状态 0
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET value=5, refresh_time=refresh_time+1")
+        self.store.collect_once()
+        self.assertEqual((self.row()["quality"], self.row()["valid"]), (0, 1))
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET value=15, refresh_time=refresh_time+1")
+        self.store.collect_once()
+        self.assertEqual((self.row()["quality"], self.row()["valid"]), (0, 1))
+
+        # 6. 上限 <= 下限时判定上下限无效，不触发越限 -> 状态 0
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET value=999, refresh_time=refresh_time+1")
+        for upper, lower in ((10, 10), (5, 15), (15, None), (None, 5)):
+            with self.store.connection() as c:
+                c.execute(
+                    "UPDATE Manual_generator SET p_max=?, p_min=? WHERE idx=1",
+                    (upper, lower),
+                )
+            self.store.collect_once()
+            self.assertEqual(
+                (self.row()["quality"], self.row()["valid"]),
+                (0, 1),
+                f"upper={upper}, lower={lower} 应判定上下限无效",
+            )
+
+        # 7. 通信异常（源质量非 0 / 超时 / 缺测点）-> 状态 2
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET status=128")
+        self.store.collect_once()
+        self.assertEqual(self.row()["quality"], 2)
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET status=0, refresh_time=1")
+        self.store.collect_once()
+        self.assertEqual(self.row()["quality"], 2)
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute("UPDATE fes_yc_define SET status=0, refresh_time=?", (int(time.time() * 1000),))
+
+        # 8. 无配置（rtu=0 / 负数 / NULL 或 pnt=0 / 负数 / NULL）-> 状态 1
+        for bad_rtu, bad_pnt in ((0, 1), (-1, 1), (1, 0), (1, -3), (None, 1), (1, None)):
+            with self.store.connection() as c:
+                c.execute(
+                    "UPDATE Manual_generator SET p_rtu=?, p_pnt=?, p_qual=0 WHERE idx=1",
+                    (bad_rtu, bad_pnt),
+                )
+            self.store.collect_once()
+            with self.store.connection() as c:
+                qual = c.execute(
+                    "SELECT p_qual FROM Manual_generator WHERE idx=1"
+                ).fetchone()[0]
+            self.assertEqual(qual, 1, f"rtu={bad_rtu}, pnt={bad_pnt} 应置为状态 1")
+
+        # 9. 以 _max/_min 结尾的指标名（如 battery_temp_max）与上下限列不冲突
+        self.store.save_measurement(
+            dict(
+                device_id=self.device["device_id"],
+                metric="battery_temp_max",
+                kind="yc",
+                source_database="c.sqlite3",
+                rtu_id=1,
+                pnt_no=1,
+                max_value=60.0,
+                min_value=-20.0,
+            )
+        )
+        with closing(sqlite3.connect(self.source)) as c, c:
+            c.execute(
+                "UPDATE fes_yc_define SET value=75.0, status=0, refresh_time=?",
+                (int(time.time() * 1000),),
+            )
+        self.store.collect_once()
+        with self.store.connection() as c:
+            q_bt = c.execute(
+                "SELECT battery_temp_max_qual FROM Manual_generator WHERE idx=1"
+            ).fetchone()[0]
+            # 10. 所有 *_qual 列的 RTDB 显示类型必须配置为菜单类型（N选1）
+            qual_meta = c.execute(
+                "SELECT eng_name, disp_type, disp_menu FROM rtdb_schema_columns "
+                "WHERE table_name='Manual_generator' AND eng_name LIKE '%\\_qual' ESCAPE '\\'"
+            ).fetchall()
+        self.assertEqual(q_bt, 3)
+        self.assertEqual(len(qual_meta), 2)
+        for eng_name, disp_type, disp_menu in qual_meta:
+            self.assertEqual(disp_type, "菜单类型", eng_name)
+            self.assertEqual(
+                json.loads(disp_menu),
+                {"0": "正常", "1": "无配置", "2": "通信异常", "3": "越上限", "4": "越下限"},
+            )
+
+        # 11. 保存上下限时若 上限 <= 下限 拒绝修改
+        for bad_max, bad_min in ((10.0, 10.0), (5.0, 10.0)):
+            with self.assertRaises(ApiError) as ctx:
+                self.store.save_measurement(
+                    dict(
+                        device_id=self.device["device_id"],
+                        metric="battery_temp_max",
+                        kind="yc",
+                        source_database="c.sqlite3",
+                        rtu_id=1,
+                        pnt_no=1,
+                        max_value=bad_max,
+                        min_value=bad_min,
+                    )
+                )
+            self.assertEqual(ctx.exception.status, 400)
 
     def test_removing_last_binding_removes_quantity_columns_and_registry_entries(self):
         self.store.delete_measurement(

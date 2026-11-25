@@ -22,6 +22,15 @@ from core.scdfe_control import InstanceLock
 from core.common import ApiError
 from scdfe_d.measurement_layout import (
     EXTENSION_METRICS,
+    LEGACY_SUFFIXES,
+    QUAL_COMM_ERROR,
+    QUAL_DISP_MENU,
+    QUAL_DISP_TYPE,
+    QUAL_OK,
+    QUAL_OVER_MAX,
+    QUAL_UNCONFIGURED,
+    QUAL_UNDER_MIN,
+    RESERVED_METRIC_SUFFIXES,
     SUFFIXES,
     UNBOUND_PROFILES,
     measurement_columns,
@@ -29,7 +38,7 @@ from scdfe_d.measurement_layout import (
 )
 
 APPLICATION_ID = int.from_bytes(b"SDFD", "big")
-SCHEMA_USER_VERSION = 4
+SCHEMA_USER_VERSION = 5
 DEFAULT_INTERVAL_SECONDS = 5
 MIN_INTERVAL_SECONDS = 1
 MAX_INTERVAL_SECONDS = 60
@@ -74,9 +83,61 @@ LEGACY_AUX_TABLES = frozenset(
 
 _TABLE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9_]{0,63}$")
 _METRIC_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
-_INVALID_QUALITY_REASONS = frozenset(
-    {"disabled", "source_error", "missing_point", "invalid_value"}
-)
+
+
+def _parse_positive_int(value):
+    """解析合法的正整数配置值（RTU/点号）；不合法或 <= 0 返回 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value < 2**63 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or int(value) != value:
+            return None
+        iv = int(value)
+        return iv if 0 < iv < 2**63 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            iv = int(text)
+        except ValueError:
+            return None
+        return iv if 0 < iv < 2**63 else None
+    return None
+
+
+def _is_valid_point_config(rtu, pnt):
+    """校验量测点位配置是否有效（rtu 与 pnt 均须为正整数，0 或非法均判定为无配置）。"""
+    return _parse_positive_int(rtu) is not None and _parse_positive_int(pnt) is not None
+
+
+def _parse_limit_number(value):
+    """解析上下限数值；NULL、非数字或非有限值返回 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _check_limit_status(value, max_val, min_val):
+    """根据量测上下限判定越限状态；若上限<=下限或任一未有效定义则判定限值无效返回 None。"""
+    upper = _parse_limit_number(max_val)
+    lower = _parse_limit_number(min_val)
+    if upper is None or lower is None or upper <= lower:
+        return None
+    num = _parse_limit_number(value)
+    if num is None:
+        return None
+    if num > upper:
+        return QUAL_OVER_MAX, "over_upper_limit"
+    if num < lower:
+        return QUAL_UNDER_MIN, "under_lower_limit"
+    return None
 
 
 def utc_now():
@@ -132,8 +193,31 @@ def _quote_col(name):
     return '"' + name.replace('"', '""') + '"'
 
 
+def _match_suffix_layout(rest, suffixes):
+    """尝试按指定后缀元组解析设备宽表剩余列，成功返回 [(metric, kind), ...]，否则返回 None。"""
+    step = len(suffixes)
+    if len(rest) % step != 0:
+        return None
+    metrics = []
+    for offset in range(0, len(rest), step):
+        group = rest[offset : offset + step]
+        metric = group[0][1]
+        if (
+            not _METRIC_NAME_RE.fullmatch(metric)
+            or metric in {"idx", "name"}
+            or metric.endswith(RESERVED_METRIC_SUFFIXES)
+        ):
+            return None
+        if [row[1] for row in group] != [metric + suffix for suffix in suffixes]:
+            return None
+        col_type = str(group[0][2] or "").upper()
+        kind = "yx" if col_type == "INTEGER" else "yc"
+        metrics.append((metric, kind))
+    return metrics
+
+
 def parse_device_table_columns(columns_info):
-    """校验并解析设备宽表列定义，返回 [(metric, kind), ...]；结构不合法返回 None。"""
+    """校验并解析设备宽表列定义（兼容现行 10 列与旧版 8 列），返回 [(metric, kind), ...]。"""
     if len(columns_info) < 2:
         return None
     if columns_info[0][1] != "idx" or columns_info[1][1] != "name":
@@ -141,25 +225,51 @@ def parse_device_table_columns(columns_info):
     if not columns_info[0][5]:
         return None
     rest = columns_info[2:]
-    if len(rest) % len(SUFFIXES) != 0:
-        return None
-    metrics = []
-    step = len(SUFFIXES)
-    for offset in range(0, len(rest), step):
-        group = rest[offset : offset + step]
-        metric = group[0][1]
-        if (
-            not _METRIC_NAME_RE.fullmatch(metric)
-            or metric in {"idx", "name"}
-            or metric.endswith(SUFFIXES[1:])
-        ):
-            return None
-        if [row[1] for row in group] != [metric + suffix for suffix in SUFFIXES]:
-            return None
-        col_type = str(group[0][2] or "").upper()
-        kind = "yx" if col_type == "INTEGER" else "yc"
-        metrics.append((metric, kind))
-    return metrics
+    if not rest:
+        return []
+    matched = _match_suffix_layout(rest, SUFFIXES)
+    if matched is not None:
+        return matched
+    return _match_suffix_layout(rest, LEGACY_SUFFIXES)
+
+
+def table_has_limit_columns(columns_info):
+    """检查设备宽表是否已采用含 _max/_min 的 10 列标准结构。"""
+    if len(columns_info) <= 2:
+        return True
+    return _match_suffix_layout(columns_info[2:], SUFFIXES) is not None
+
+
+class _DeviceSchemaCatalog:
+    """为 RTDB 嵌入元数据提供设备宽表量测状态列（*_qual）的菜单选项（N选1）显示提示。"""
+
+    def __init__(self, table_schemas):
+        self._schemas = dict(table_schemas)
+
+    def names(self):
+        return list(self._schemas.keys())
+
+    def get(self, table_name):
+        metrics = self._schemas.get(table_name, ())
+        columns = [
+            {
+                "eng_name": f"{metric}_qual",
+                "data_type": "int",
+                "disp_type": QUAL_DISP_TYPE,
+                "disp_menu": QUAL_DISP_MENU,
+            }
+            for metric, _ in metrics
+        ]
+        return {"head": {}, "columns": columns}
+
+
+def _sync_device_rtdb_schema(con):
+    """同步全部设备宽表的 RTDB 嵌入元数据，确保所有量测状态列配置为菜单类型（N选1）。"""
+    discovered = discover_device_tables(con)
+    dev_tables = [t for t, _ in discovered]
+    catalog = _DeviceSchemaCatalog(discovered)
+    sync_embedded_schema(con, catalog=catalog, include_tables=dev_tables)
+    return dev_tables
 
 
 # RTDB Web 编辑工具写入的伴随表前缀（不影响设备宽表语义，校验与发现时放行）。
@@ -248,7 +358,7 @@ def validate_database(path):
                 metric_slots += cnt * len(metrics)
                 if cnt and metrics:
                     expr = " + ".join(
-                        f'(CASE WHEN {_quote_col(m + "_rtu")} IS NOT NULL AND {_quote_col(m + "_pnt")} IS NOT NULL THEN 1 ELSE 0 END)'
+                        f'(CASE WHEN {_quote_col(m + "_rtu")} > 0 AND {_quote_col(m + "_pnt")} > 0 THEN 1 ELSE 0 END)'
                         for m, _ in metrics
                     )
                     bound_count += con.execute(
@@ -307,8 +417,7 @@ def drop_legacy_tables(db_path, *, vacuum=True):
                 if table in existing:
                     con.execute(f'DROP TABLE "{table}"')
                     removed_tables.append(table)
-            dev_tables = [t for t, _ in discover_device_tables(con)]
-            sync_embedded_schema(con, include_tables=dev_tables)
+            dev_tables = _sync_device_rtdb_schema(con)
             con.execute(f"PRAGMA application_id={APPLICATION_ID}")
             con.execute(f"PRAGMA user_version={SCHEMA_USER_VERSION}")
         if vacuum:
@@ -377,10 +486,38 @@ class DeviceStore:
             if not existing or not self._schema_ready(init_con):
                 with init_con:
                     init_con.execute("BEGIN IMMEDIATE")
-                    dev_tables = [t for t, _ in discover_device_tables(init_con)]
-                    sync_embedded_schema(init_con, include_tables=dev_tables)
+                    self._upgrade_legacy_device_tables(init_con)
+                    _sync_device_rtdb_schema(init_con)
                     init_con.execute(f"PRAGMA application_id={APPLICATION_ID}")
                     init_con.execute(f"PRAGMA user_version={SCHEMA_USER_VERSION}")
+
+    @staticmethod
+    def _upgrade_legacy_device_tables(con):
+        """将旧版 8 列设备宽表无损升级为含 _max/_min 的 10 列标准分组结构。"""
+        upgraded = []
+        for table, metrics in discover_device_tables(con):
+            quoted = _quote_table(table)
+            info = con.execute(f"PRAGMA table_info({quoted})").fetchall()
+            if table_has_limit_columns(info):
+                continue
+            keep_cols = ["idx", "name"]
+            defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
+            for metric, kind in metrics:
+                for col, col_type, default in measurement_columns(metric, kind):
+                    defs.append(f'"{col}" {col_type}{default}')
+                for suf in LEGACY_SUFFIXES:
+                    keep_cols.append(metric + suf)
+            tmp_name = f"__upgrade_limits_{table}"
+            tmp_quoted = f'"{tmp_name}"'
+            cols_sql = ", ".join(_quote_col(c) for c in keep_cols)
+            con.execute(f"CREATE TABLE {tmp_quoted} ({', '.join(defs)})")
+            con.execute(
+                f"INSERT INTO {tmp_quoted}({cols_sql}) SELECT {cols_sql} FROM {quoted}"
+            )
+            con.execute(f"DROP TABLE {quoted}")
+            con.execute(f"ALTER TABLE {tmp_quoted} RENAME TO {quoted}")
+            upgraded.append(table)
+        return upgraded
 
     @staticmethod
     def _schema_ready(con):
@@ -392,7 +529,21 @@ class DeviceStore:
             r[0]
             for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        return RTDB_METADATA_TABLES <= tables
+        if not (RTDB_METADATA_TABLES <= tables):
+            return False
+        for table, _ in discover_device_tables(con):
+            info = con.execute(f"PRAGMA table_info({_quote_table(table)})").fetchall()
+            if not table_has_limit_columns(info):
+                return False
+        bad_qual_meta = con.execute(
+            "SELECT 1 FROM rtdb_schema_columns "
+            "WHERE eng_name LIKE '%\\_qual' ESCAPE '\\' "
+            "AND (disp_type != ? OR disp_menu != ?) LIMIT 1",
+            (QUAL_DISP_TYPE, QUAL_DISP_MENU),
+        ).fetchone()
+        if bad_qual_meta is not None:
+            return False
+        return True
 
     def _open_connection(self):
         con = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
@@ -659,9 +810,10 @@ class DeviceStore:
 
     @staticmethod
     def _infer_status(value, qual, stamp, notuse, rtu, pnt, cached_meta=None):
-        """根据设备宽表字段与内存采集元信息推导 valid 与中文状态原因码。"""
-        if rtu is None or pnt is None:
-            return 0, "unmapped", None
+        """根据设备宽表字段与内存采集元信息推导 valid 与状态原因码。"""
+        if not _is_valid_point_config(rtu, pnt):
+            reason = "unmapped" if (rtu is None and pnt is None) else "invalid_config"
+            return 0, reason, None
         if cached_meta is not None:
             return (
                 cached_meta["valid"],
@@ -670,10 +822,23 @@ class DeviceStore:
             )
         if notuse:
             return 0, "notuse", None
+        if qual is not None:
+            q_int = int(qual)
+            if q_int == QUAL_UNCONFIGURED:
+                return 0, "invalid_config", None
+            if q_int == QUAL_COMM_ERROR:
+                return 0, "comm_error", None
+            if q_int == QUAL_OVER_MAX:
+                return 0, "over_upper_limit", None
+            if q_int == QUAL_UNDER_MIN:
+                return 0, "under_lower_limit", None
+            if q_int == QUAL_OK:
+                if value is None and (stamp is None or stamp <= 0):
+                    return 0, "uncollected", None
+                return 1, "", None
+            return 0, "bad_quality", None
         if value is None and (stamp is None or stamp <= 0):
             return 0, "uncollected", None
-        if qual is not None and (int(qual) & 128) == 0 and int(qual) == 0:
-            return 1, "", None
         return 0, "bad_quality", None
 
     def source_path(self, value):
@@ -892,7 +1057,7 @@ class DeviceStore:
             raise ApiError(400, "源数据库不存在、不可读取或结构不合法") from exc
 
     def _scan_bindings(self, con):
-        """直接扫描全部设备宽表，提取所有已绑定 (rtu, pnt) 字段及其当前值。"""
+        """扫描全部设备宽表的全部量测槽位（含无配置槽位），提取配置、当前值与上下限。"""
         schemas = self._get_table_schemas(con)
         cur = con.cursor()
         cur.row_factory = None
@@ -907,37 +1072,43 @@ class DeviceStore:
                 idx = row[0]
                 base = 2
                 for metric, kind in metrics:
-                    rtu = row[base + 6]
-                    pnt = row[base + 7]
-                    if rtu is not None and pnt is not None:
-                        rtu_i = int(rtu)
-                        pnt_i = int(pnt)
-                        bindings.append(
-                            (
-                                table,
-                                idx,
-                                metric,
-                                kind,
-                                rtu_i,
-                                pnt_i,
-                                1 if row[base + 4] else 0,
-                                row[base],
-                                row[base + 1],
-                                row[base + 2],
-                                row[base + 3],
-                            )
+                    rtu_raw = row[base + 6]
+                    pnt_raw = row[base + 7]
+                    max_val = row[base + 8]
+                    min_val = row[base + 9]
+                    rtu_i = _parse_positive_int(rtu_raw)
+                    pnt_i = _parse_positive_int(pnt_raw)
+                    bindings.append(
+                        (
+                            table,
+                            idx,
+                            metric,
+                            kind,
+                            rtu_raw,
+                            pnt_raw,
+                            rtu_i,
+                            pnt_i,
+                            1 if row[base + 4] else 0,
+                            row[base],
+                            row[base + 1],
+                            row[base + 2],
+                            row[base + 3],
+                            max_val,
+                            min_val,
                         )
+                    )
+                    if rtu_i is not None and pnt_i is not None:
                         requested_sets[kind].add((rtu_i, pnt_i))
                     base += step
         requested = {k: frozenset(pts) for k, pts in requested_sets.items() if pts}
         return bindings, requested
 
     def collect_once(self, *, _writer=None, _source_cache=None, _plan_cache=None):
-        """直接从设备宽表读取 (rtu, pnt) 映射，只读源库并将变化字段直接 UPDATE 回各设备表。"""
+        """根据量测配置、源库通信状态及上下限，实时更新设备宽表量测值与状态码（0/1/2/3/4）。"""
         started = utc_now()
         source_name = self.default_source_database()
 
-        # 第一阶段：获取各设备表绑定与当前值（命中 data_version 缓存时零 SQL 扫描）。
+        # 第一阶段：获取各设备表全部量测槽位与当前值（命中 data_version 缓存时零 SQL 扫描）。
         bindings = None
         requested_kinds = None
         plan_key = None
@@ -985,6 +1156,7 @@ class DeviceStore:
         source_failed = source_name in errors
 
         def evaluate(current_bindings):
+            configured_cnt = 0
             valid_cnt = 0
             changes_by_row = defaultdict(dict)
             next_bindings = []
@@ -996,6 +1168,8 @@ class DeviceStore:
                     idx,
                     metric,
                     kind,
+                    rtu_raw,
+                    pnt_raw,
                     rtu_id,
                     pnt_no,
                     notuse,
@@ -1003,28 +1177,94 @@ class DeviceStore:
                     old_qual,
                     old_pre,
                     old_time,
+                    max_val,
+                    min_val,
                 ) = entry
                 cell_key = (table, idx, metric)
                 prev_binding = self._last_bound_points.get(cell_key)
+
+                # 1. 量测无配置（rtu=0/NULL/非法 或 pnt=0/NULL/非法） -> 状态 1
+                if rtu_id is None or pnt_no is None:
+                    if prev_binding is not None:
+                        val = None
+                        pre = None
+                        stamp = None
+                    else:
+                        val = old_val
+                        pre = old_pre
+                        stamp = old_time
+                    out_qual = QUAL_UNCONFIGURED
+                    reason = (
+                        "unmapped"
+                        if (rtu_raw is None and pnt_raw is None)
+                        else "invalid_config"
+                    )
+                    runtime_updates[cell_key] = {
+                        "valid": 0,
+                        "reason": reason,
+                        "collected_at": collected_at,
+                    }
+                    if (
+                        val != old_val
+                        or out_qual != old_qual
+                        or pre != old_pre
+                        or stamp != old_time
+                    ):
+                        row_updates = changes_by_row[(table, idx)]
+                        if val != old_val:
+                            row_updates[metric] = val
+                        if out_qual != old_qual:
+                            row_updates[metric + "_qual"] = out_qual
+                        if pre != old_pre:
+                            row_updates[metric + "_pre"] = pre
+                        if stamp != old_time:
+                            row_updates[metric + "_time"] = stamp
+                        next_bindings.append(
+                            (
+                                table,
+                                idx,
+                                metric,
+                                kind,
+                                rtu_raw,
+                                pnt_raw,
+                                rtu_id,
+                                pnt_no,
+                                notuse,
+                                val,
+                                out_qual,
+                                pre,
+                                stamp,
+                                max_val,
+                                min_val,
+                            )
+                        )
+                    else:
+                        next_bindings.append(entry)
+                    continue
+
+                configured_cnt += 1
                 rebound = prev_binding is not None and prev_binding != (rtu_id, pnt_no)
                 if rebound:
                     val = None
-                    qual = 128
                     pre = None
                     stamp = None
                 else:
                     val = old_val
-                    qual = old_qual
                     pre = old_pre
                     stamp = old_time
+
+                # 2. 量测通信异常（无法从 scdfe_c 正常获取有效数据） -> 状态 2
                 reason = ""
+                out_qual = QUAL_OK
                 if source_failed:
                     reason = "source_error"
+                    out_qual = QUAL_COMM_ERROR
                 else:
                     pts = source_points.get(kind)
                     point = pts.get((rtu_id, pnt_no)) if pts else None
                     if point is None:
                         reason = "missing_point"
+                        out_qual = QUAL_COMM_ERROR
                     else:
                         try:
                             new_raw = float(point[0])
@@ -1045,26 +1285,35 @@ class DeviceStore:
                             ):
                                 pre = old_val
                             val = new_val
-                            qual = new_qual
                             stamp = new_stamp
-                            if qual:
+                            if new_qual:
                                 reason = "bad_quality"
+                                out_qual = QUAL_COMM_ERROR
                             elif stamp <= 0:
                                 reason = "missing_time"
+                                out_qual = QUAL_COMM_ERROR
                             elif stamp > future_limit:
                                 reason = "future_time"
+                                out_qual = QUAL_COMM_ERROR
                             elif now_ms - stamp > max_age_ms:
                                 reason = "stale"
+                                out_qual = QUAL_COMM_ERROR
+                            else:
+                                # 3/4. 通信正常时按上下限判定越限（上限<=下限时判定上下限无效）
+                                limit_hit = _check_limit_status(val, max_val, min_val)
+                                if limit_hit is not None:
+                                    out_qual, reason = limit_hit
+                                else:
+                                    out_qual = QUAL_OK
                         except (ValueError, TypeError, OverflowError):
                             reason = "invalid_value"
-                if reason in _INVALID_QUALITY_REASONS:
-                    qual = (qual or 0) | 128
+                            out_qual = QUAL_COMM_ERROR
+
                 if not reason and notuse:
                     reason = "notuse"
                 valid = 0 if reason else 1
                 valid_cnt += valid
-                out_qual = (qual or 0) if valid else (qual or 0) | 128
-                runtime_updates[(table, idx, metric)] = {
+                runtime_updates[cell_key] = {
                     "valid": valid,
                     "reason": reason,
                     "collected_at": collected_at,
@@ -1090,6 +1339,8 @@ class DeviceStore:
                             idx,
                             metric,
                             kind,
+                            rtu_raw,
+                            pnt_raw,
                             rtu_id,
                             pnt_no,
                             notuse,
@@ -1097,13 +1348,15 @@ class DeviceStore:
                             out_qual,
                             pre,
                             stamp,
+                            max_val,
+                            min_val,
                         )
                     )
                 else:
                     next_bindings.append(entry)
-            return valid_cnt, changes_by_row, next_bindings, runtime_updates
+            return configured_cnt, valid_cnt, changes_by_row, next_bindings, runtime_updates
 
-        valid_count, changes, next_bindings, runtime_updates = evaluate(bindings)
+        total_count, valid_count, changes, next_bindings, runtime_updates = evaluate(bindings)
 
         # 第三阶段：仅当存在设备字段变化时开启写事务，直接按设备表批量 UPDATE。
         if changes:
@@ -1128,6 +1381,7 @@ class DeviceStore:
                             else:
                                 bindings, requested_kinds = new_bindings, new_requested
                                 (
+                                    total_count,
                                     valid_count,
                                     changes,
                                     next_bindings,
@@ -1150,7 +1404,9 @@ class DeviceStore:
         with self._mutex:
             self._runtime_meta = runtime_updates
             self._last_bound_points = {
-                (e[0], e[1], e[2]): (e[4], e[5]) for e in next_bindings
+                (e[0], e[1], e[2]): (e[6], e[7])
+                for e in next_bindings
+                if e[6] is not None and e[7] is not None
             }
             self._refresh_seq += 1
             refresh_id = self._refresh_seq
@@ -1159,7 +1415,7 @@ class DeviceStore:
                     refresh_id=refresh_id,
                     started_at=started,
                     finished_at=finished,
-                    total_count=len(bindings),
+                    total_count=total_count,
                     valid_count=valid_count,
                     se_valid_count=0,
                     source_database=json.dumps(
@@ -1170,7 +1426,7 @@ class DeviceStore:
             )
         return dict(
             refresh_id=refresh_id,
-            total_count=len(bindings),
+            total_count=total_count,
             valid_count=valid_count,
             updated_rows=len(changes),
             errors=errors,
@@ -1239,8 +1495,7 @@ class DeviceStore:
                     con.execute(f'ALTER TABLE {quoted} ADD COLUMN "{col}" {col_type}{default}')
                 schema_changed = True
         if schema_changed:
-            dev_tables = [t for t, _ in discover_device_tables(con)]
-            sync_embedded_schema(con, include_tables=dev_tables)
+            _sync_device_rtdb_schema(con)
         return schema_changed
 
     def create_device(self, data):
@@ -1356,8 +1611,7 @@ class DeviceStore:
                         "ON CONFLICT(idx) DO UPDATE SET name=excluded.name WHERE name IS NOT excluded.name",
                         rows,
                     )
-            dev_tables = [t for t, _ in discover_device_tables(con)]
-            sync_embedded_schema(con, include_tables=dev_tables)
+            _sync_device_rtdb_schema(con)
             self._record_change(
                 "model_import",
                 None,
@@ -1422,7 +1676,7 @@ class DeviceStore:
                     base = 2
                     for metric, _ in metrics:
                         rtu, pnt = row[base + 6], row[base + 7]
-                        if rtu is not None and pnt is not None:
+                        if _is_valid_point_config(rtu, pnt):
                             bound_cnt += 1
                             meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, _, _ = self._infer_status(
@@ -1529,6 +1783,8 @@ class DeviceStore:
                                     did = self.device_id_for(table, idx)
                                 pre = row[base + 2]
                                 weight = row[base + 5]
+                                max_val = row[base + 8]
+                                min_val = row[base + 9]
                                 mid = self.measurement_id_for(table, idx, metric)
                                 page_items.append(
                                     dict(
@@ -1549,6 +1805,8 @@ class DeviceStore:
                                         source_database=source_db,
                                         rtu_id=rtu,
                                         pnt_no=pnt,
+                                        max_value=max_val,
+                                        min_value=min_val,
                                         model_table=table,
                                         model_idx=idx,
                                         enabled=1,
@@ -1583,17 +1841,25 @@ class DeviceStore:
             or kind not in ("yc", "yx")
         ):
             raise ApiError(400, "属性名须为小写英文字母/数字/下划线，点类型须为 YC/YX")
-        if metric in ("idx", "name") or metric.endswith(SUFFIXES[1:]):
+        if metric in ("idx", "name") or metric.endswith(RESERVED_METRIC_SUFFIXES):
             raise ApiError(400, "属性名不能使用量测元数据后缀")
 
         source = data.get("source_database") or self.default_source_database()
-        rtu = int(data["rtu_id"])
-        point = int(data["pnt_no"])
-        if rtu <= 0 or point < 0:
-            raise ApiError(400, "RTU 编号必须为正整数，点号必须为非负整数")
+        rtu = _parse_positive_int(data.get("rtu_id"))
+        point = _parse_positive_int(data.get("pnt_no"))
+        if rtu is None or point is None:
+            raise ApiError(400, "RTU 编号和点号必须为正整数")
         weight = float(data.get("weight", 1.0))
         notuse = int(data.get("notuse", 0))
         enabled = int(data.get("enabled", 1))
+        has_max = "max_value" in data
+        has_min = "min_value" in data
+        max_val = _parse_limit_number(data.get("max_value")) if has_max else None
+        min_val = _parse_limit_number(data.get("min_value")) if has_min else None
+        if has_max and data.get("max_value") is not None and max_val is None:
+            raise ApiError(400, "量测上限必须为有限数值或留空")
+        if has_min and data.get("min_value") is not None and min_val is None:
+            raise ApiError(400, "量测下限必须为有限数值或留空")
         if not math.isfinite(weight) or weight <= 0:
             raise ApiError(400, "量测权重必须为正数")
         if notuse not in (0, 1) or enabled not in (0, 1):
@@ -1646,37 +1912,62 @@ class DeviceStore:
                 old_tbl, old_idx, old_metric = old_target
                 self._clear_binding_cell(con, old_tbl, old_idx, old_metric)
 
-            # 若设备表尚无此量测列组，通过 ALTER TABLE 自动追加 8 列
+            # 若设备表尚无此量测列组，通过 ALTER TABLE 自动追加 10 列
             self._ensure_device_table(con, table, [(metric, kind)])
             # 重新读取当前行的该字段旧值
             cur_vals = con.execute(
-                f"SELECT {_quote_col(metric + '_rtu')}, {_quote_col(metric + '_pnt')}, {_quote_col(metric + '_qual')} FROM {quoted} WHERE idx=?",
+                f"SELECT {_quote_col(metric + '_rtu')}, {_quote_col(metric + '_pnt')}, {_quote_col(metric + '_qual')}, "
+                f"{_quote_col(metric + '_max')}, {_quote_col(metric + '_min')} FROM {quoted} WHERE idx=?",
                 (idx,),
             ).fetchone()
+            final_max = max_val if has_max else cur_vals[3]
+            final_min = min_val if has_min else cur_vals[4]
+            if (
+                (has_max or has_min)
+                and final_max is not None
+                and final_min is not None
+                and float(final_max) <= float(final_min)
+            ):
+                raise ApiError(400, "量测上限必须大于下限，无法修改")
             point_changed = cur_vals[0] != rtu or cur_vals[1] != point
             if point_changed:
                 con.execute(
                     f"""UPDATE {quoted} SET
                         {_quote_col(metric)}=NULL,
-                        {_quote_col(metric + '_qual')}=128,
+                        {_quote_col(metric + '_qual')}=?,
                         {_quote_col(metric + '_pre')}=NULL,
                         {_quote_col(metric + '_time')}=NULL,
                         {_quote_col(metric + '_notuse')}=?,
                         {_quote_col(metric + '_weight')}=?,
                         {_quote_col(metric + '_rtu')}=?,
-                        {_quote_col(metric + '_pnt')}=?
+                        {_quote_col(metric + '_pnt')}=?,
+                        {_quote_col(metric + '_max')}=?,
+                        {_quote_col(metric + '_min')}=?
                     WHERE idx=?""",
-                    (notuse, weight, rtu, point, idx),
+                    (
+                        QUAL_COMM_ERROR,
+                        notuse,
+                        weight,
+                        rtu,
+                        point,
+                        final_max,
+                        final_min,
+                        idx,
+                    ),
                 )
             else:
-                new_qual = (cur_vals[2] or 0) | 128
+                new_qual = cur_vals[2]
+                if new_qual is None or new_qual == QUAL_UNCONFIGURED:
+                    new_qual = QUAL_COMM_ERROR
                 con.execute(
                     f"""UPDATE {quoted} SET
                         {_quote_col(metric + '_qual')}=?,
                         {_quote_col(metric + '_notuse')}=?,
-                        {_quote_col(metric + '_weight')}=?
+                        {_quote_col(metric + '_weight')}=?,
+                        {_quote_col(metric + '_max')}=?,
+                        {_quote_col(metric + '_min')}=?
                     WHERE idx=?""",
-                    (new_qual, notuse, weight, idx),
+                    (new_qual, notuse, weight, final_max, final_min, idx),
                 )
             mid = self.measurement_id_for(table, idx, metric)
             did = self.device_id_for(table, idx, con=con)
@@ -1708,6 +1999,8 @@ class DeviceStore:
                 source_database=source,
                 rtu_id=rtu,
                 pnt_no=point,
+                max_value=final_max,
+                min_value=final_min,
                 enabled=1,
                 scale=1.0,
                 offset=0.0,
@@ -1722,7 +2015,7 @@ class DeviceStore:
         con.execute(
             f"""UPDATE {quoted} SET
                 {_quote_col(metric)}=NULL,
-                {_quote_col(metric + '_qual')}=128,
+                {_quote_col(metric + '_qual')}=?,
                 {_quote_col(metric + '_pre')}=NULL,
                 {_quote_col(metric + '_time')}=NULL,
                 {_quote_col(metric + '_notuse')}=1,
@@ -1730,7 +2023,7 @@ class DeviceStore:
                 {_quote_col(metric + '_rtu')}=NULL,
                 {_quote_col(metric + '_pnt')}=NULL
             WHERE idx=?""",
-            (idx,),
+            (QUAL_UNCONFIGURED, idx),
         )
 
     def _prune_unused_metric_column(self, con, table, metric) -> bool:
@@ -1759,8 +2052,7 @@ class DeviceStore:
         con.execute(f"INSERT INTO {tmp_quoted}({cols_sql}) SELECT {cols_sql} FROM {quoted}")
         con.execute(f"DROP TABLE {quoted}")
         con.execute(f"ALTER TABLE {tmp_quoted} RENAME TO {quoted}")
-        dev_tables = [t for t, _ in discover_device_tables(con)]
-        sync_embedded_schema(con, include_tables=dev_tables)
+        _sync_device_rtdb_schema(con)
         return True
 
     def delete_measurement(self, measurement_id, version=None):
@@ -1820,7 +2112,7 @@ class DeviceStore:
                     base = 2
                     for metric, _ in metrics:
                         rtu, pnt = row[base + 6], row[base + 7]
-                        if rtu is not None and pnt is not None:
+                        if _is_valid_point_config(rtu, pnt):
                             bound_count += 1
                             meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, _, _ = self._infer_status(

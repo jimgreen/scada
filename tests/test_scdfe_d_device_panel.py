@@ -75,11 +75,20 @@ class DeviceParameterHTTPTests(unittest.TestCase):
             notuse=1,
             weight=2.5,
             max_age_seconds=90,
+            max_value=50.0,
+            min_value=0.0,
         )
         payload = dict(table="Manual_generator", idx=1, items=[update])
         endpoint = "/api/device-parameters"
         invalid = dict(payload, items=[update, dict(update, measurement_id=999_999)])
         self.assertEqual(self.call(base, endpoint, "PUT", invalid)[0], 400)
+        # 上限 <= 下限时拒绝修改（返回 400 且原值保持不变）
+        for bad_max, bad_min in ((10.0, 10.0), (5.0, 20.0)):
+            bad_limit_payload = dict(
+                payload,
+                items=[dict(update, max_value=bad_max, min_value=bad_min)],
+            )
+            self.assertEqual(self.call(base, endpoint, "PUT", bad_limit_payload)[0], 400)
         self.assertEqual(
             self.call(base, route)[1]["items"][0]["version"], row["version"]
         )
@@ -87,17 +96,17 @@ class DeviceParameterHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         (saved,) = result["items"]
         self.assertEqual(
-            (saved["notuse"], saved["weight"], saved["valid"], saved["quality"]),
-            (1, 2.5, 0, 128),
+            (saved["notuse"], saved["weight"], saved["valid"], saved["quality"], saved["max_value"], saved["min_value"]),
+            (1, 2.5, 0, 0, 50.0, 0.0),
         )
         self.assertEqual(self.call(base, endpoint, "PUT", payload)[0], 409)
         self.assertEqual(self.call(base, "/api/collector/once", "POST", {})[0], 200)
         self.assertEqual(self.call(base, route)[1]["items"][0]["reason"], "notuse")
         with self.store.connection() as con:
             physical = con.execute(
-                "SELECT p_notuse,p_weight,p_qual FROM Manual_generator WHERE idx=1"
+                "SELECT p_notuse,p_weight,p_qual,p_max,p_min FROM Manual_generator WHERE idx=1"
             ).fetchone()
-            self.assertEqual(tuple(physical), (1, 2.5, 128))
+            self.assertEqual(tuple(physical), (1, 2.5, 0, 50.0, 0.0))
 
     def test_device_detail_reports_unmapped_quantity_on_another_member(self):
         other = self.store.create_device(dict(name="发电机 2", category="generator"))
@@ -110,7 +119,7 @@ class DeviceParameterHTTPTests(unittest.TestCase):
         (row,) = result["items"]
         self.assertEqual(
             (row["metric"], row["measurement_id"], row["quality"], row["reason"]),
-            ("p", None, 128, "unmapped"),
+            ("p", None, 1, "unmapped"),
         )
         self.assertEqual(
             self.call(base, "/api/device-measurements?table=Manual_generator&idx=99")[

@@ -11,12 +11,16 @@ body{margin:0}button,input,select{font:inherit;color:inherit;border:1px solid #c
 .workbench .filters #definition-actions { margin-left:auto; }
 .quantity-identity { white-space:normal; min-width:130px; }
 .quantity-identity small { display:block; margin-top:4px; color:#718397; }
-.measure-status { padding:3px 7px; background:#fff2e9; border-radius:4px; font-size:11px; }
-.measure-status.good { background:#eaf5ef; }
+.measure-status { padding:3px 7px; background:#fff2e9; border-radius:4px; font-size:11px; font-weight:600; display:inline-block; }
+.measure-status.good { background:#eaf5ef; color:#178168; }
 .measure-status.unbound { background:#eef3f7; color:#5f7487; }
+.measure-status.comm { background:#fdecec; color:#b3322e; }
+.measure-status.over { background:#fff0e5; color:#c2410c; }
+.measure-status.under { background:#eef2ff; color:#4338ca; }
 .quantity-value { font-variant-numeric:tabular-nums; font-weight:600; }
-.parameter-field { width:88px; padding:6px 8px; }
-.parameter-field:invalid { border-color:#b3453b; }
+.limit-range { font-variant-numeric:tabular-nums; color:#58718a; }
+.parameter-field { width:84px; padding:6px 8px; }
+.parameter-field:invalid, .parameter-field.limit-invalid { border-color:#c62828; background:#fff5f5; color:#a22c36; }
 .parameter-check { text-align:center; }
 .parameter-check input { width:16px; height:16px; vertical-align:middle; }
 tr.changed td { background:#fcf8e8; }

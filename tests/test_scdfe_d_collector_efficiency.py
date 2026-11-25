@@ -56,7 +56,7 @@ class CollectorWriteTests(unittest.TestCase):
             data = connection.execute(
                 "SELECT p,p_qual,p_pre,p_time,p_pnt FROM Manual_generator"
             ).fetchone()
-            self.assertEqual(tuple(data), (None, 128, None, None, 99))
+            self.assertEqual(tuple(data), (None, 2, None, None, 99))
 
     def test_cached_source_and_plan_cache_detect_source_and_config_changes(self):
         # 将源库改造为带复合主键 + WAL 模式，贴近生产 scdfe_c 库结构

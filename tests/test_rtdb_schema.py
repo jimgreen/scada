@@ -48,5 +48,13 @@ class EmbeddedSchemaTests(unittest.TestCase):
                                         source_database='source.sqlite3', rtu_id=1, pnt_no=6))
             with store.connection() as connection:
                 self.assertEqual(fields(connection, device['model_table']), [
-                    'idx', 'name', 'p', 'p_qual', 'p_pre', 'p_time', 'p_notuse', 'p_weight', 'p_rtu', 'p_pnt',
+                    'idx', 'name', 'p', 'p_qual', 'p_pre', 'p_time', 'p_notuse', 'p_weight', 'p_rtu', 'p_pnt', 'p_max', 'p_min',
                 ])
+                disp = connection.execute(
+                    "SELECT disp_type, disp_menu FROM rtdb_schema_columns WHERE table_name=? AND eng_name='p_qual'",
+                    (device['model_table'],),
+                ).fetchone()
+                self.assertEqual(
+                    tuple(disp),
+                    ('菜单类型', '{"0":"正常","1":"无配置","2":"通信异常","3":"越上限","4":"越下限"}'),
+                )

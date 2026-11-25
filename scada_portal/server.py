@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import logging
 from pathlib import Path
 import sys
@@ -168,6 +169,42 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
             return self._json(400, {"error": str(exc)})
         except Exception as exc:
             LOG.exception("Portal API error on %s", path)
+            return self._json(500, {"error": f"内部错误：{exc}"})
+
+    def do_PUT(self):
+        parsed = urlsplit(self.path)
+        path = unquote(parsed.path)
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+            if length < 0 or length > 65536:
+                return self._json(400, {"error": "请求体大小超出限制"})
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return self._json(400, {"error": f"请求体 JSON 格式错误：{exc}"})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "请求体须为 JSON 对象"})
+
+            parts = [p for p in path.split("/") if p]
+            if len(parts) == 5 and parts[:2] == ["api", "devices"] and parts[4] == "limits":
+                table_name = parts[2]
+                idx = int(parts[3])
+                result = self.service.update_device_measurement_limits(
+                    table_name,
+                    idx,
+                    str(body.get("metric") or ""),
+                    body.get("max_value"),
+                    body.get("min_value"),
+                )
+                return self._json(200, result)
+            return self._json(404, {"error": "接口路径不存在"})
+        except FileNotFoundError as exc:
+            return self._json(404, {"error": str(exc)})
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
+        except Exception as exc:
+            LOG.exception("Portal PUT error on %s", path)
             return self._json(500, {"error": f"内部错误：{exc}"})
 
 
