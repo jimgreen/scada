@@ -59,14 +59,12 @@
     if (savedTab) selectTab(savedTab, false);
   } catch (_) { /* ignore */ }
 
-  // ==================== 横向/纵向可拖拽分隔条 ====================
+  // ==================== 纵向可拖拽分隔条与配置状态弹窗 ====================
   const LAYOUT_KEY = 'scada_diag_layout_v1:' + location.pathname;
-  const layout = { asideWidth: 360, asideHidden: false, detailHeight: 230, yMode: 'split' };
+  const layout = { detailHeight: 230, yMode: 'split' };
   try {
     const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
     if (saved && typeof saved === 'object') {
-      if (Number.isFinite(saved.asideWidth)) layout.asideWidth = Math.max(220, Math.min(720, saved.asideWidth));
-      if (typeof saved.asideHidden === 'boolean') layout.asideHidden = saved.asideHidden;
       if (Number.isFinite(saved.detailHeight)) layout.detailHeight = Math.max(120, Math.min(600, saved.detailHeight));
       if (['split', 'timings-hidden', 'details-hidden'].includes(saved.yMode)) layout.yMode = saved.yMode;
     }
@@ -75,25 +73,30 @@
     try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (_) { /* ignore */ }
   };
 
-  const aside = $('diag-aside');
-  const splitX = $('diag-split-x');
-  const btnXToggle = $('diag-x-toggle');
   const timingsPane = $('diag-pane-timings');
   const detailsPane = $('diag-pane-details');
   const splitY = $('diag-split-y');
   const btnYUp = $('diag-y-up');
   const btnYDown = $('diag-y-down');
+  const statusDialog = $('diag-status-dialog');
+  const btnStatusOpen = $('diag-status-open');
+  const btnStatusClose = $('diag-status-close');
+  const btnDialogRecheck = $('diag-dialog-recheck');
+
+  if (statusDialog) {
+    btnStatusOpen?.addEventListener('click', () => {
+      if (!statusDialog.open) statusDialog.showModal();
+    });
+    btnStatusClose?.addEventListener('click', () => {
+      if (statusDialog.open) statusDialog.close();
+    });
+    statusDialog.addEventListener('click', event => {
+      if (event.target === statusDialog) statusDialog.close();
+    });
+    btnDialogRecheck?.addEventListener('click', () => load(true));
+  }
 
   function applyLayout(persist = false) {
-    if (aside && splitX) {
-      aside.classList.toggle('diag-pane-hidden', layout.asideHidden);
-      splitX.classList.toggle('is-collapsed', layout.asideHidden);
-      if (!layout.asideHidden) aside.style.width = `${Math.round(layout.asideWidth)}px`;
-      if (btnXToggle) {
-        btnXToggle.classList.toggle('is-active', layout.asideHidden);
-        btnXToggle.title = layout.asideHidden ? '展开右侧状态栏' : '折叠右侧状态栏';
-      }
-    }
     if (timingsPane && detailsPane && splitY) {
       timingsPane.classList.toggle('diag-pane-hidden', layout.yMode === 'timings-hidden');
       detailsPane.classList.toggle('diag-pane-hidden', layout.yMode === 'details-hidden');
@@ -103,61 +106,6 @@
       if (btnYDown) btnYDown.classList.toggle('is-active', layout.yMode === 'details-hidden');
     }
     if (persist) saveLayout();
-  }
-
-  if (splitX && aside) {
-    btnXToggle?.addEventListener('click', event => {
-      event.stopPropagation();
-      layout.asideHidden = !layout.asideHidden;
-      applyLayout(true);
-    });
-    splitX.addEventListener('dblclick', event => {
-      if (event.target.closest('button')) return;
-      layout.asideHidden = false;
-      layout.asideWidth = 360;
-      applyLayout(true);
-    });
-    let dragX = null;
-    splitX.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || event.target.closest('button')) return;
-      dragX = { x: event.clientX, width: layout.asideHidden ? 0 : aside.getBoundingClientRect().width, hidden: layout.asideHidden };
-      splitX.classList.add('is-dragging');
-      document.body.classList.add('diag-resizing-x');
-      splitX.setPointerCapture?.(event.pointerId);
-      event.preventDefault();
-    });
-    splitX.addEventListener('pointermove', event => {
-      if (!dragX) return;
-      const dx = event.clientX - dragX.x;
-      const wsWidth = $('diag-workspace')?.getBoundingClientRect().width || window.innerWidth;
-      const maxW = Math.max(240, wsWidth - 320);
-      if (dragX.hidden) {
-        if (dx < -14) {
-          dragX.hidden = layout.asideHidden = false;
-          layout.asideWidth = Math.max(220, Math.min(maxW, -dx));
-          applyLayout(false);
-        }
-        return;
-      }
-      const nextW = dragX.width - dx;
-      if (nextW < 90) {
-        layout.asideHidden = true;
-        applyLayout(false);
-        return;
-      }
-      layout.asideHidden = false;
-      layout.asideWidth = Math.max(220, Math.min(maxW, nextW));
-      applyLayout(false);
-    });
-    const endX = () => {
-      if (!dragX) return;
-      dragX = null;
-      splitX.classList.remove('is-dragging');
-      document.body.classList.remove('diag-resizing-x');
-      saveLayout();
-    };
-    splitX.addEventListener('pointerup', endX);
-    splitX.addEventListener('pointercancel', endX);
   }
 
   if (splitY && timingsPane && detailsPane) {
@@ -246,6 +194,7 @@
     if (busy) { pendingCheck ||= checks; return; }
     busy = true;
     $('refresh').disabled = true;
+    if (btnDialogRecheck) btnDialogRecheck.disabled = true;
     try {
       const response = await fetch('/api/diagnostics' + (checks ? '?checks=1' : ''), {
         cache: 'no-store',
@@ -348,7 +297,19 @@
         setHTML('checks', data.checks.map(x =>
           `<div class="diag-issue ${x.severity === 'error' ? 'error' : ''}"><strong>${esc(x.name || '通道 ' + (x.channels || []).join('、'))}</strong> · ${esc(x.message)}</div>`
         ).join('') || '<p>未发现本次检查可识别的问题；对端可达性及规约通信仍需实际验证。</p>');
-        $('checked-at').textContent = '检查于 ' + new Date(data.checked_at).toLocaleString();
+        const checkedText = '检查于 ' + new Date(data.checked_at).toLocaleString();
+        $('checked-at').textContent = checkedText;
+        const badgeChecks = $('badge-checks');
+        if (badgeChecks) {
+          const checkCount = data.checks.length;
+          const hasError = data.checks.some(x => x.severity === 'error');
+          badgeChecks.textContent = String(checkCount);
+          badgeChecks.classList.toggle('has-items', checkCount > 0 && !hasError);
+          badgeChecks.classList.toggle('has-errors', hasError);
+        }
+        if (btnStatusOpen) {
+          btnStatusOpen.title = `${checkedText} · 共 ${data.checks.length} 项配置问题`;
+        }
       }
       $('message').dataset.error = 'false';
       $('message').textContent = '更新于 ' + new Date().toLocaleTimeString();
@@ -358,6 +319,7 @@
     } finally {
       busy = false;
       $('refresh').disabled = false;
+      if (btnDialogRecheck) btnDialogRecheck.disabled = false;
       if (pendingCheck) { pendingCheck = false; load(true); }
     }
   }

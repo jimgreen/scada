@@ -54,24 +54,62 @@ body[data-point-trends]:not(.workbench) > main {
 .trend-list-status { min-height: 1.35em; margin: 6px 0 0; flex: 0 0 auto; }
 .trend-list-error { color: var(--danger, #a22b34); margin: 0 0 8px; font-size: 13px; flex: 0 0 auto; }
 
-.trend-point-list button, .trend-cell-input, .trend-cell-select {
+.trend-point-list button {
   box-sizing: border-box;
-  min-height: 28px;
+  min-height: 24px;
   border: var(--border, 1px solid #cfdce6);
   border-radius: var(--radius-btn, 5px);
   color: var(--text-primary, #164a55);
   background: var(--bg-surface, white);
-  padding: 3px 8px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+/* 采样管理表：输入框与下拉框无缝内嵌单元格，去除独立外框 */
+.trend-list-table td.trend-input-cell,
+.trend-list-table td.trend-select-cell {
+  padding: 0 !important;
+  vertical-align: stretch;
+}
+.trend-list-table td.trend-interval-cell { min-width: 6.5em; }
+.trend-list-table td.trend-retention-cell { min-width: 8.5em; }
+.trend-list-table td.trend-select-cell { min-width: 7.5em; }
+.trend-cell-input,
+.trend-cell-select {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary, #164a55);
   font: inherit;
 }
-.trend-cell-input { font-variant-numeric: tabular-nums; padding: 2px 6px; }
-.trend-cell-select { padding: 2px 6px; min-width: 6.8em; }
-.trend-interval-input { width: 5.2em; }
-.trend-retention-input { width: 7.2em; }
+.trend-cell-input { font-variant-numeric: tabular-nums; }
+.trend-cell-select { cursor: pointer; }
+.trend-cell-input:hover:not(:disabled):not(:focus),
+.trend-cell-select:hover:not(:disabled):not(:focus) {
+  background: var(--bg-hover, rgba(8, 127, 140, 0.06));
+}
+.trend-cell-input:focus,
+.trend-cell-select:focus {
+  outline: none;
+  background: var(--bg-subtle, rgba(8, 127, 140, 0.08));
+  box-shadow: inset 0 0 0 1.5px var(--accent, #087f8c);
+}
+.trend-cell-input:invalid {
+  background: var(--danger-soft, rgba(220, 38, 38, 0.12));
+  color: var(--danger, #a22b34);
+  box-shadow: inset 0 0 0 1.5px var(--danger, #a22b34);
+}
 .trend-point-list button:not(:disabled) { cursor: pointer; }
 .trend-point-list button:not(:disabled):hover { background: var(--bg-hover, #edf7f8); }
 .trend-point-list :disabled { opacity: .55; }
-.trend-point-list :focus-visible { outline: 2px solid var(--accent, #087f8c); outline-offset: 1px; }
+.trend-point-list button:focus-visible { outline: 2px solid var(--accent, #087f8c); outline-offset: 1px; }
 
 .trend-list-table {
   flex: 1 1 0;
@@ -83,14 +121,14 @@ body[data-point-trends]:not(.workbench) > main {
 }
 .trend-list-table table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .trend-list-table th, .trend-list-table td {
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-bottom: var(--border, 1px solid #e4edf2);
   text-align: start;
   white-space: nowrap;
 }
-.trend-list-table th { position: sticky; top: 0; z-index: 1; color: var(--text-secondary, #355665); background: var(--bg-surface-2, #f2f7f9); }
+.trend-list-table th { position: sticky; top: 0; z-index: 1; color: var(--text-secondary, #355665); background: var(--bg-subtle, #f2f7f9); }
 .trend-list-table tr:last-child td { border-bottom: 0; }
-.trend-list-table tbody tr:nth-child(even) { background: var(--bg-surface-2, #f9fbfc); }
+.trend-list-table tbody tr:nth-child(even) { background: var(--table-stripe, var(--bg-subtle, #f9fbfc)); }
 .trend-list-table .trend-list-name { min-width: 12em; white-space: normal; overflow-wrap: anywhere; }
 .trend-list-table .trend-list-empty { padding: 16px 10px; color: var(--text-secondary, #566c7e); white-space: normal; text-align: center; }
 .trend-list-value { min-width: 8.5em; font-variant-numeric: tabular-nums; }

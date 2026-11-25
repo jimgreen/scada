@@ -455,15 +455,15 @@
     const checkbox = (field, heading) => '<td class="parameter-check"><input ' + attrs(row, field)
       + ' type="checkbox" aria-label="' + label + ' · ' + heading + '"'
       + (parameterValue(row, field) ? ' checked' : '') + (saving ? ' disabled' : '') + '></td>';
-    const numberField = (field, heading, min) => '<td><input ' + attrs(row, field)
-      + ' class="parameter-field" type="number" step="any" min="' + min + '" required aria-label="'
+    const numberField = (field, heading, min) => '<td class="parameter-cell"><input ' + attrs(row, field)
+      + ' class="parameter-field cell-inline-control" type="number" step="any" min="' + min + '" required aria-label="'
       + label + ' · ' + heading + '" value="' + html(parameterValue(row, field)) + '"'
       + (saving ? ' disabled' : '') + '></td>';
     const minVal = parameterValue(row, 'min_value');
     const maxVal = parameterValue(row, 'max_value');
     const limitInvalid = Boolean(limitRangeError(maxVal, minVal));
-    const limitField = (field, heading, val) => '<td><input ' + attrs(row, field)
-      + ' class="parameter-field' + (limitInvalid ? ' limit-invalid' : '') + '" type="number" step="any" placeholder="—"'
+    const limitField = (field, heading, val) => '<td class="parameter-cell"><input ' + attrs(row, field)
+      + ' class="parameter-field cell-inline-control' + (limitInvalid ? ' limit-invalid' : '') + '" type="number" step="any" placeholder="—"'
       + ' aria-label="' + label + ' · ' + heading + '" value="' + html(val == null ? '' : val) + '"'
       + (saving ? ' disabled' : '') + '></td>';
     const selection = '<td class="parameter-check"><input type="checkbox" data-choose="' + html(row.measurement_id)

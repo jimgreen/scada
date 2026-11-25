@@ -269,9 +269,12 @@
     const panel = make('details', {class:'point-trend'});
     panel.open = management;
     panel.innerHTML =
-      '<summary><strong>实时曲线</strong><span class="point-trend-count"></span><span class="point-trend-meta"></span></summary>' +
-      '<div class="point-trend-body">' +
+      '<summary>' +
+        '<span class="point-trend-head-title"><strong>实时曲线</strong><span class="point-trend-count"></span></span>' +
         '<div class="point-trend-toolbar"></div>' +
+        '<span class="point-trend-meta"></span>' +
+      '</summary>' +
+      '<div class="point-trend-body">' +
         '<div class="point-trend-chart" tabindex="0"><canvas role="img" aria-label="已选测点实时值双轴曲线"></canvas>' +
           '<div class="point-trend-empty"></div><div class="point-trend-cursor" hidden></div>' +
           '<div class="point-trend-tooltip" hidden></div></div>' +
@@ -283,6 +286,11 @@
     const summary = find('.point-trend-count');
     const metaStatus = find('.point-trend-meta');
     const toolbar = find('.point-trend-toolbar');
+    // 工具栏整合进 summary 同行：拦截点击与键盘确认冒泡，避免操作控件时误折叠曲线面板。
+    toolbar.addEventListener('click', event => event.stopPropagation());
+    toolbar.addEventListener('keydown', event => {
+      if (event.key === ' ' || event.key === 'Enter') event.stopPropagation();
+    });
     const chart = find('.point-trend-chart');
     const canvas = find('canvas');
     const empty = find('.point-trend-empty');

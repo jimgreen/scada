@@ -24,9 +24,16 @@
 <label>设备<select id="device"><option value="">全部设备</option></select></label>
 <input id="search" type="search" placeholder="按属性名称过滤" aria-label="按属性名称过滤">
 <label class="check"><input id="only-invalid" type="checkbox">仅不可用</label>
+</div>
+<div class="toolbar measure-bar">
+<div class="type-tabs" role="group" aria-label="量测类型"><button id="tab-all" aria-pressed="true" class="active">全部</button><button id="tab-yc" aria-pressed="false">遥测 YC</button><button id="tab-yx" aria-pressed="false">遥信 YX</button></div>
+<span class="muted" id="table-hint"></span>
+<div class="actions measure-bar-actions">
+<label class="check" id="live-refresh"><input id="auto-refresh" type="checkbox" checked>5 秒刷新</label>
 <div class="actions" id="definition-actions"><button id="import-model">导入设备模型</button><button id="new-device">新增设备</button><button id="new-measurement" class="primary">新增属性映射</button></div>
-<button id="refresh">刷新</button></div>
-<div class="toolbar type-tabs" role="group" aria-label="量测类型"><button id="tab-all" aria-pressed="true" class="active">全部</button><button id="tab-yc" aria-pressed="false">遥测 YC</button><button id="tab-yx" aria-pressed="false">遥信 YX</button><span class="muted" id="table-hint"></span><label class="check actions" id="live-refresh"><input id="auto-refresh" type="checkbox" checked>5 秒刷新</label></div>
+<button id="refresh">刷新</button>
+</div>
+</div>
 <div class="toolbar" id="parameter-selection" hidden><span id="parameter-selection-count" class="muted" aria-live="polite"></span><button id="bulk-parameters" disabled>批量设置</button><label id="draft-filter" class="check" hidden><input id="only-draft" type="checkbox">仅看待保存</label></div>
 <div class="table-wrap"><table><thead id="measure-head"></thead><tbody id="measure-rows"></tbody></table></div>
 <div class="pager"><span id="page-summary"></span><div class="actions" id="page-actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div>

@@ -9,6 +9,7 @@
       <span id="note" class="muted" hidden></span>
     </div>
     <div class="diag-toolbar-right">
+      <button id="diag-status-open" type="button" class="diag-status-trigger" title="查看配置检查、数据库等待与 WAL、SOE 连接进度">配置与状态 <span class="diag-badge" id="badge-checks">0</span></button>
       <label class="diag-auto"><input id="auto" type="checkbox" checked> 5 秒刷新</label>
       <button id="refresh" type="button">刷新并检查配置</button>
     </div>
@@ -47,22 +48,32 @@
         </div>
       </section>
     </div>
-    <div class="diag-splitter diag-splitter-x" id="diag-split-x" role="separator" aria-orientation="vertical" aria-label="拖动调整左右分栏宽度" title="拖动调整左右宽度 · 双击复位">
-      <button type="button" class="diag-split-btn" id="diag-x-toggle" title="折叠或展开右侧状态栏" aria-label="折叠或展开右侧状态栏"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5 8 6l-3.5 3.5"/></svg></button>
-    </div>
-    <aside class="diag-aside" id="diag-aside" aria-label="运行状态与配置检查">
-      <section class="diag-side-card diag-side-checks">
-        <div class="diag-side-head"><h3 title="按当前定义静态检查端口与运行模式，不主动连接对端">配置检查</h3><span id="checked-at" class="muted"></span></div>
-        <div id="checks" class="diag-side-scroll"></div>
-      </section>
-      <section class="diag-side-card diag-side-compact">
-        <div class="diag-side-head"><h3 title="提交耗时可能包含自动检查点；WAL 大小不等于未提交数据量">数据库等待与 WAL</h3></div>
-        <div id="database-wait" class="muted diag-side-text"></div>
-      </section>
-      <section class="diag-side-card diag-side-compact">
-        <div class="diag-side-head"><h3>SOE 连接进度</h3></div>
-        <div id="soe-progress" class="muted diag-side-text"></div>
-      </section>
-    </aside>
   </div>
-</section></main></body></html>
+</section></main>
+<dialog id="diag-status-dialog" class="diag-status-dialog" aria-labelledby="diag-status-dialog-title">
+  <div class="diag-dialog-head">
+    <div class="diag-dialog-title-group">
+      <h3 id="diag-status-dialog-title">配置检查与运行状态</h3>
+      <span id="checked-at" class="muted"></span>
+    </div>
+    <div class="diag-dialog-actions">
+      <button id="diag-dialog-recheck" type="button">重新检查</button>
+      <button id="diag-status-close" type="button" class="icon-button diag-dialog-close" aria-label="关闭">×</button>
+    </div>
+  </div>
+  <div class="diag-dialog-body">
+    <section class="diag-dialog-section">
+      <div class="diag-side-head"><h4 title="按当前定义静态检查端口与运行模式，不主动连接对端">配置检查</h4></div>
+      <div id="checks" class="diag-side-scroll"></div>
+    </section>
+    <section class="diag-dialog-section">
+      <div class="diag-side-head"><h4 title="提交耗时可能包含自动检查点；WAL 大小不等于未提交数据量">数据库等待与 WAL</h4></div>
+      <div id="database-wait" class="muted diag-side-text"></div>
+    </section>
+    <section class="diag-dialog-section">
+      <div class="diag-side-head"><h4>SOE 连接进度</h4></div>
+      <div id="soe-progress" class="muted diag-side-text"></div>
+    </section>
+  </div>
+</dialog>
+</body></html>

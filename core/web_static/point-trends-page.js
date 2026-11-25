@@ -75,10 +75,11 @@
     const id = element.insertCell();
 
     const intervalCell = element.insertCell();
+    intervalCell.className = 'trend-input-cell trend-interval-cell';
     const intervalInput = numberCellInput({
       min: 1, max: 3600, value: item.intervalSeconds ?? 1,
       ariaLabel: '采样周期（秒） · ' + item.name,
-      className: 'trend-cell-input trend-interval-input',
+      className: 'trend-cell-input trend-interval-input cell-inline-control',
       onCommit: input => {
         const current = state.series.find(entry => entry.key === item.key);
         const parsed = input.valueAsNumber;
@@ -94,10 +95,11 @@
     intervalCell.append(intervalInput);
 
     const retentionCell = element.insertCell();
+    retentionCell.className = 'trend-input-cell trend-retention-cell';
     const retentionInput = numberCellInput({
       min: 1, max: 100000, value: item.retentionPoints ?? 10000,
       ariaLabel: '后台留存（点数） · ' + item.name,
-      className: 'trend-cell-input trend-retention-input',
+      className: 'trend-cell-input trend-retention-input cell-inline-control',
       onCommit: input => {
         const current = state.series.find(entry => entry.key === item.key);
         const parsed = input.valueAsNumber;
@@ -117,8 +119,9 @@
     const time = element.insertCell();
     time.className = 'trend-list-time';
     const stateCell = element.insertCell();
+    stateCell.className = 'trend-select-cell';
     const stateSelect = document.createElement('select');
-    stateSelect.className = 'trend-cell-select';
+    stateSelect.className = 'trend-cell-select cell-inline-control';
     stateSelect.setAttribute('aria-label', '曲线状态 · ' + item.name);
     for (const [val, text] of [['hidden', '隐藏'], ['left', '左轴显示'], ['right', '右轴显示']]) {
       stateSelect.add(new Option(text, val));
