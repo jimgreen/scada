@@ -57,8 +57,12 @@
     compareMode: false,
     ctrlDrafts: new Map(), // `${table}:${idx}:${control}` -> rawString
     // 告警中心状态
+    alarmScope: "active", // "active" | "history"
     alarmType: "",
+    alarmGroupRtu: true,
+    alarmExpandedRtus: new Set(),
     alarmItems: [],
+    collectorRunning: null,
     // 通信图状态
     commTab: "overview",
     commPointKind: "yc",
@@ -180,6 +184,15 @@
     return '<span class="badge muted">空闲</span>';
   }
 
+  function updateCollectorBadge(running) {
+    if (running === undefined || running === null) return;
+    state.collectorRunning = Boolean(running);
+    const el = $("#dev-collector-badge");
+    if (!el) return;
+    el.textContent = state.collectorRunning ? "转发在线" : "转发离线";
+    el.className = "badge " + (state.collectorRunning ? "ok" : "danger");
+  }
+
   async function dispatchPortalControl(dev, ctrl, rawValue) {
     if (!dev || !ctrl) return;
     const isYk = ctrl.kind === "yk";
@@ -207,7 +220,10 @@
     const actionDesc = isYk
       ? (parsedValue === 1 ? "合 / 启 (1)" : "分 / 停 (0)")
       : `${parsedValue}${ctrl.unit ? " " + ctrl.unit : ""}`;
-    const msg = `目标设备：${dev.name}（${dev.table_name} #${dev.idx}）\n指令属性：${ctrl.label || ctrl.control} [${ctrl.control}] · RTU ${ctrl.rtu_id} / #${ctrl.point_no}\n下发目标值：${actionDesc}\n确认立即写入并下发指令？`;
+    const warnLine = state.collectorRunning === false
+      ? "\n⚠ 提示：scdfe_d 后台转发线程当前未运行，指令将暂存宽表待启动后转发。"
+      : "";
+    const msg = `目标设备：${dev.name}（${dev.table_name} #${dev.idx}）\n指令属性：${ctrl.label || ctrl.control} [${ctrl.control}] · RTU ${ctrl.rtu_id} / #${ctrl.point_no}\n下发目标值：${actionDesc}${warnLine}\n确认立即写入并下发指令？`;
     const ok = typeof window.scadaConfirm === "function"
       ? await window.scadaConfirm(msg, {
           title: isYk ? "确认下发遥控指令" : "确认下发遥调指令",
@@ -217,12 +233,17 @@
       : false;
     if (!ok) return;
     const key = `${dev.table_name}:${dev.idx}:${ctrl.control}`;
-    await apiPost(
+    const res = await apiPost(
       `/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/control`,
       { control: ctrl.control, value: parsedValue }
     );
     state.ctrlDrafts.delete(key);
-    setConnection(true, `已下发 ${dev.name} · ${ctrl.label || ctrl.control} = ${actionDesc}`);
+    updateCollectorBadge(res.collector_running);
+    if (res.warning) {
+      setConnection(false, res.warning);
+    } else {
+      setConnection(true, `已下发 ${dev.name} · ${ctrl.label || ctrl.control} = ${actionDesc}`);
+    }
     if (state.view === "devices") await loadDevices();
     else if (state.view === "powerflow") await loadPowerflow();
   }
@@ -520,6 +541,7 @@
     const h = data.health || {};
     lastRealtimeEnergy = rt;
     updateAlarmBadge(h.alarm_unacked);
+    updateCollectorBadge(h.collector_running);
 
     $("#kpi-days").textContent = k.running_days ?? "--";
     $("#kpi-load-total").textContent = fmtNum(k.load_total_wkwh, 1);
@@ -2804,9 +2826,10 @@
     if ($("#health-gen")) $("#health-gen").textContent = `${fmtNum(s.total_gen_kw, 1)} kW`;
     if ($("#health-load")) $("#health-load").textContent = `${fmtNum(s.total_load_kw, 1)} kW`;
     updateAlarmBadge(s.alarm_unacked);
+    updateCollectorBadge(s.collector_running);
   }
 
-  // ==================== 3.5 告警与越限中心 ====================
+  // ==================== 3.5 告警与越限中心（支持按 RTU 折叠、历史回溯与导出 CSV） ====================
   let alarmReqSeq = 0;
 
   function alarmTypeBadge(type) {
@@ -2816,57 +2839,190 @@
     return '<span class="badge danger">通信异常</span>';
   }
 
+  function renderAlarmDetailRow(a, idx, childClass = "") {
+    const isHist = state.alarmScope === "history";
+    const valStr = a.value == null || a.value === ""
+      ? "—"
+      : `${typeof a.value === "number" ? fmtNum(a.value, 2) : esc(a.value)}${a.unit ? " " + esc(a.unit) : ""}`;
+    const stateBadge = isHist
+      ? (a.state === "recovered"
+          ? `<span class="badge ok">已恢复</span>`
+          : (a.acked ? '<span class="badge muted">已确认</span>' : '<span class="badge danger">活动中</span>'))
+      : (a.acked ? '<span class="badge muted">已确认</span>' : '<span class="badge danger">未确认</span>');
+    const timeText = isHist
+      ? `${fmtTime(a.first_seen_ms)}${a.recovered_ms ? " → " + fmtTime(a.recovered_ms) : ""}`
+      : fmtTime(a.time_ms || a.time_iso);
+    const ackBtn = (!isHist && !a.acked)
+      ? `<button type="button" class="btn secondary" data-alarm-ack="${idx}">确认</button>`
+      : "";
+    return `<tr class="${a.acked ? "alarm-row-acked " : ""}${childClass}">` +
+      `<td>${alarmTypeBadge(a.type)}</td>` +
+      `<td><strong>${esc(a.device_name)}</strong> <small class="muted">${esc(a.table_name)} #${a.idx}</small></td>` +
+      `<td>${esc(a.attr_label)} <small class="muted">${esc(a.attr)}</small></td>` +
+      `<td class="num">${valStr}</td>` +
+      `<td>${esc(a.detail)}</td>` +
+      `<td class="num">RTU ${a.rtu_id ?? "-"} / #${a.point_no ?? "-"}</td>` +
+      `<td>${esc(timeText)}</td>` +
+      `<td>${stateBadge}</td>` +
+      `<td><span class="alarm-ops">${ackBtn}` +
+      `<button type="button" class="btn secondary" data-alarm-loc="${idx}">定位</button>` +
+      `<button type="button" class="btn secondary" data-alarm-dev="${idx}">曲线</button>` +
+      `</span></td></tr>`;
+  }
+
+  function exportAlarmsCsv() {
+    if (!state.alarmItems.length) {
+      setConnection(false, "当前无可导出的告警记录");
+      return;
+    }
+    const isHist = state.alarmScope === "history";
+    const escCsv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = isHist
+      ? ["类型", "设备", "表名", "索引", "属性", "值", "详情", "RTU", "点号", "状态", "首次触发", "恢复时间", "确认时间"]
+      : ["类型", "设备", "表名", "索引", "属性", "值", "详情", "RTU", "点号", "状态", "时间", "确认时间"];
+    const rows = state.alarmItems.map((a) => isHist
+      ? [a.title, a.device_name, a.table_name, a.idx, a.attr, a.value, a.detail, a.rtu_id, a.point_no, a.state, fmtTime(a.first_seen_ms), fmtTime(a.recovered_ms), a.acked_at || ""]
+      : [a.title, a.device_name, a.table_name, a.idx, a.attr, a.value, a.detail, a.rtu_id, a.point_no, a.acked ? "已确认" : "未确认", fmtTime(a.time_ms || a.time_iso), a.acked_at || ""]);
+    const csv = "\uFEFF" + [header.map(escCsv).join(","), ...rows.map((r) => r.map(escCsv).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scada-alarms-${state.alarmScope}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function loadAlarms() {
     const seq = ++alarmReqSeq;
+    const isHist = state.alarmScope === "history";
+    const groupWrap = $("#alarm-group-wrap");
+    const ackAllBtn = $("#alarm-ack-all");
+    const ackSel = $("#alarm-ack-filter");
+    if (groupWrap) groupWrap.hidden = isHist;
+    if (ackAllBtn) ackAllBtn.hidden = isHist;
+    if (ackSel && ackSel.dataset.mode !== state.alarmScope) {
+      ackSel.dataset.mode = state.alarmScope;
+      ackSel.innerHTML = isHist
+        ? '<option value="">全部状态</option><option value="active">活动中</option><option value="recovered">已恢复</option>'
+        : '<option value="">全部状态</option><option value="0">未确认</option><option value="1">已确认</option>';
+    }
+
     const qs = new URLSearchParams();
     if (state.alarmType) qs.set("type", state.alarmType);
-    const ackVal = $("#alarm-ack-filter")?.value || "";
-    if (ackVal !== "") qs.set("acked", ackVal);
+    const statusVal = ackSel?.value || "";
+    if (statusVal !== "") qs.set(isHist ? "state" : "acked", statusVal);
     const kw = ($("#alarm-search")?.value || "").trim();
     if (kw) qs.set("search", kw);
-    const data = await api("/api/alarms?" + qs.toString());
+
+    const endpoint = isHist ? "/api/alarms/history?" : "/api/alarms?";
+    const data = await api(endpoint + qs.toString());
     if (seq !== alarmReqSeq) return;
-    const sm = data.summary || {};
-    updateAlarmBadge(sm.unacked);
     state.alarmItems = data.items || [];
 
     const sumEl = $("#alarm-summary");
-    if (sumEl) {
-      sumEl.innerHTML =
-        `<div class="comm-stat-item"><span class="cs-lbl">告警</span><strong>${sm.total ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">未确认</span><strong style="color:var(--danger,#f43f5e)">${sm.unacked ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">越限</span><strong>${(sm.over_max ?? 0) + (sm.under_min ?? 0)}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">通信</span><strong>${sm.comm_error ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">指令</span><strong>${sm.control_failed ?? 0}</strong></div>`;
+    if (isHist) {
+      const recCnt = state.alarmItems.filter((a) => a.state === "recovered").length;
+      const actCnt = state.alarmItems.filter((a) => a.state === "active").length;
+      if (sumEl) {
+        sumEl.innerHTML =
+          `<div class="comm-stat-item"><span class="cs-lbl">历史记录</span><strong>${data.total ?? state.alarmItems.length}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">活动中</span><strong style="color:var(--danger,#f43f5e)">${actCnt}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">已恢复</span><strong style="color:var(--ok,#34d399)">${recCnt}</strong></div>`;
+      }
+    } else {
+      const sm = data.summary || {};
+      updateAlarmBadge(sm.unacked);
+      if (sumEl) {
+        sumEl.innerHTML =
+          `<div class="comm-stat-item"><span class="cs-lbl">告警</span><strong>${sm.total ?? 0}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">未确认</span><strong style="color:var(--danger,#f43f5e)">${sm.unacked ?? 0}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">越限</span><strong>${(sm.over_max ?? 0) + (sm.under_min ?? 0)}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">通信</span><strong>${sm.comm_error ?? 0}</strong></div>` +
+          `<div class="comm-stat-item"><span class="cs-lbl">指令</span><strong>${sm.control_failed ?? 0}</strong></div>`;
+      }
     }
 
     const tbody = $("#alarm-tbody");
     if (!tbody) return;
     if (!state.alarmItems.length) {
-      tbody.innerHTML = '<tr><td colspan="9" class="empty-hint">当前筛选条件下无活动告警</td></tr>';
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-hint">${isHist ? "暂无历史告警记录" : "当前筛选条件下无活动告警"}</td></tr>`;
       return;
     }
-    tbody.innerHTML = state.alarmItems.map((a, idx) => {
-      const valStr = a.value == null ? "—" : `${fmtNum(a.value, 2)}${a.unit ? " " + esc(a.unit) : ""}`;
-      const ackBadge = a.acked
-        ? '<span class="badge muted">已确认</span>'
-        : '<span class="badge danger">未确认</span>';
-      return `<tr class="${a.acked ? "alarm-row-acked" : ""}">` +
-        `<td>${alarmTypeBadge(a.type)}</td>` +
-        `<td><strong>${esc(a.device_name)}</strong> <small class="muted">${esc(a.table_name)} #${a.idx}</small></td>` +
-        `<td>${esc(a.attr_label)} <small class="muted">${esc(a.attr)}</small></td>` +
-        `<td class="num">${valStr}</td>` +
-        `<td>${esc(a.detail)}</td>` +
-        `<td class="num">RTU ${a.rtu_id ?? "-"} / #${a.point_no ?? "-"}</td>` +
-        `<td>${esc(fmtTime(a.time_ms || a.time_iso))}</td>` +
-        `<td>${ackBadge}</td>` +
-        `<td><span class="alarm-ops">` +
-        (a.acked ? "" : `<button type="button" class="btn secondary" data-alarm-ack="${idx}">确认</button>`) +
-        `<button type="button" class="btn secondary" data-alarm-loc="${idx}">定位</button>` +
-        `<button type="button" class="btn secondary" data-alarm-dev="${idx}">曲线</button>` +
-        `</span></td></tr>`;
-    }).join("");
 
+    const htmlRows = [];
+    if (!isHist && state.alarmGroupRtu) {
+      // 高优告警（越限 / 指令失败）始终置顶平铺；同 RTU 批量通信异常（>=5 条）折叠聚合防刷屏
+      const commByRtu = new Map();
+      state.alarmItems.forEach((a, idx) => {
+        if (a.type === "comm_error") {
+          const rkey = String(a.rtu_id ?? "unknown");
+          if (!commByRtu.has(rkey)) commByRtu.set(rkey, []);
+          commByRtu.get(rkey).push({ a, idx });
+        } else {
+          htmlRows.push(renderAlarmDetailRow(a, idx));
+        }
+      });
+      for (const [rkey, entries] of commByRtu.entries()) {
+        if (entries.length < 5) {
+          entries.forEach(({ a, idx }) => htmlRows.push(renderAlarmDetailRow(a, idx)));
+          continue;
+        }
+        const expanded = state.alarmExpandedRtus.has(rkey);
+        const unackedEntries = entries.filter(({ a }) => !a.acked);
+        const devSet = new Set(entries.map(({ a }) => a.dev_id));
+        const latestMs = Math.max(...entries.map(({ a }) => Number(a.time_ms || 0)));
+        const ackBadge = unackedEntries.length
+          ? `<span class="badge danger">未确认 ${unackedEntries.length}</span>`
+          : '<span class="badge muted">全部已确认</span>';
+        htmlRows.push(
+          `<tr class="alarm-group-row" data-alarm-rtu-toggle="${esc(rkey)}">` +
+          `<td><span class="alarm-group-toggle">${expanded ? "▾" : "▸"}</span>${alarmTypeBadge("comm_error")}</td>` +
+          `<td><strong>RTU ${esc(rkey)} 批量通信异常</strong> <small class="muted">${devSet.size} 台设备</small></td>` +
+          `<td>共 ${entries.length} 项量测</td>` +
+          `<td class="num">—</td>` +
+          `<td>通信质量异常或数据超时（点击${expanded ? "收起" : "展开"}明细）</td>` +
+          `<td class="num">RTU ${esc(rkey)}</td>` +
+          `<td>${esc(latestMs ? fmtTime(latestMs) : "--")}</td>` +
+          `<td>${ackBadge}</td>` +
+          `<td><span class="alarm-ops">` +
+          (unackedEntries.length ? `<button type="button" class="btn secondary" data-alarm-rtu-ack="${esc(rkey)}">确认本组</button>` : "") +
+          `<button type="button" class="btn secondary" data-alarm-rtu-btn="${esc(rkey)}">${expanded ? "收起" : "展开"}</button>` +
+          `</span></td></tr>`
+        );
+        if (expanded) {
+          entries.slice(0, 100).forEach(({ a, idx }) => htmlRows.push(renderAlarmDetailRow(a, idx, "alarm-child-row")));
+          if (entries.length > 100) {
+            htmlRows.push(`<tr class="alarm-child-row"><td colspan="9" class="muted">仅展示前 100 条明细（该组共 ${entries.length} 条，可用搜索框精确定位或导出 CSV）</td></tr>`);
+          }
+        }
+      }
+    } else {
+      state.alarmItems.forEach((a, idx) => htmlRows.push(renderAlarmDetailRow(a, idx)));
+    }
+    tbody.innerHTML = htmlRows.join("");
+
+    tbody.querySelectorAll("[data-alarm-rtu-toggle]").forEach((tr) => {
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("[data-alarm-rtu-ack]")) return;
+        const rk = tr.dataset.alarmRtuToggle;
+        if (state.alarmExpandedRtus.has(rk)) state.alarmExpandedRtus.delete(rk);
+        else state.alarmExpandedRtus.add(rk);
+        loadAlarms().catch(() => {});
+      });
+    });
+    tbody.querySelectorAll("[data-alarm-rtu-ack]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const rk = btn.dataset.alarmRtuAck;
+        const keys = state.alarmItems
+          .filter((a) => a.type === "comm_error" && String(a.rtu_id ?? "unknown") === rk && !a.acked)
+          .map((a) => a.key);
+        if (!keys.length) return;
+        await apiPost("/api/alarms/ack", { keys });
+        await loadAlarms();
+      });
+    });
     tbody.querySelectorAll("[data-alarm-ack]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const a = state.alarmItems[Number(btn.dataset.alarmAck)];
@@ -2896,15 +3052,24 @@
     });
   }
 
-  $$("#alarm-type-tabs .tab-btn").forEach((btn) => {
+  $$("#alarm-scope-tabs .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.alarmType = btn.dataset.alarmType || "";
-      $$("#alarm-type-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      state.alarmScope = btn.dataset.alarmScope || "active";
+      $$("#alarm-scope-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
       loadAlarms().catch(() => {});
     });
   });
+  $("#alarm-type-filter")?.addEventListener("change", (e) => {
+    state.alarmType = e.target.value || "";
+    loadAlarms().catch(() => {});
+  });
+  $("#alarm-group-rtu")?.addEventListener("change", (e) => {
+    state.alarmGroupRtu = Boolean(e.target.checked);
+    loadAlarms().catch(() => {});
+  });
   $("#alarm-ack-filter")?.addEventListener("change", () => loadAlarms().catch(() => {}));
   $("#alarm-search")?.addEventListener("input", debounce(() => loadAlarms().catch(() => {}), 250));
+  $("#alarm-export-csv")?.addEventListener("click", exportAlarmsCsv);
   $("#alarm-ack-all")?.addEventListener("click", async () => {
     const ok = typeof window.scadaConfirm === "function"
       ? await window.scadaConfirm("确认将当前全部未确认活动告警标记为已确认？", {
@@ -2951,8 +3116,10 @@
   // 全景流向右侧越限/异常项点击直达告警中心
   $$("#view-energyflow [data-jump-alarm]").forEach((el) => {
     el.addEventListener("click", () => {
+      state.alarmScope = "active";
       state.alarmType = el.dataset.jumpAlarm || "";
-      $$("#alarm-type-tabs .tab-btn").forEach((b) => b.classList.toggle("active", (b.dataset.alarmType || "") === state.alarmType));
+      $$("#alarm-scope-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.alarmScope === "active"));
+      if ($("#alarm-type-filter")) $("#alarm-type-filter").value = state.alarmType;
       switchView("alarms");
     });
   });

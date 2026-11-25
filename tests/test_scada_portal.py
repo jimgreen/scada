@@ -11,6 +11,7 @@ import unittest
 from urllib.parse import quote
 
 from scada_portal.server import make_server
+from scada_portal.service import PortalService
 from scdfe_d.measurement_layout import SUFFIXES
 
 
@@ -482,8 +483,37 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(len(after_ack["items"]), 0)
 
-        # 恢复合理上限
+        # 验证服务重启后仍保留持久化确认状态
+        restarted_svc = PortalService(
+            c_db=self.c_db,
+            d_db=self.d_db,
+            model_db=self.model_db,
+            svg_path=self.svg_path,
+            log_dir=self.log_dir,
+            history_db=self.hist_db,
+            enable_sampler=False,
+        )
+        restarted_unacked = restarted_svc.get_alarms(alarm_type="over_max", acked="0")
+        self.assertEqual(len(restarted_unacked["items"]), 0)
+        restarted_all = restarted_svc.get_alarms(alarm_type="over_max")
+        self.assertEqual(len(restarted_all["items"]), 1)
+        self.assertTrue(restarted_all["items"][0]["acked"])
+
+        # 恢复合理上限，验证历史告警自动标记为 recovered 且保留 acked=True
         http_json("PUT", "/api/devices/ACGenerator/1/limits", {"metric": "p", "max_value": 100.0, "min_value": 0.0})
+        st_hist, hist = http_json("GET", "/api/alarms/history?type=over_max&state=recovered")
+        self.assertEqual(st_hist, 200)
+        matched = [item for item in hist["items"] if item["key"] == target_key]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["state"], "recovered")
+        self.assertTrue(matched[0]["acked"])
+        self.assertIsNotNone(matched[0]["recovered_ms"])
+
+        # 健康检查应透出转发线程在线状态（单测未启动采集锁故为 False）
+        st_h, health = http_json("GET", "/api/health")
+        self.assertEqual(st_h, 200)
+        self.assertIn("collector_running", health)
+        self.assertFalse(health["collector_running"])
 
         # 2. 为 ACGenerator 增加控调列并测试门户就地控调写库
         con = sqlite3.connect(self.d_db)
@@ -508,44 +538,48 @@ class ScadaPortalTests(unittest.TestCase):
         # 越限应拒绝（400）
         st_bad, _ = http_json("POST", "/api/devices/ACGenerator/1/control", {"control": "p_set", "value": 150.0})
         self.assertEqual(st_bad, 400)
-        # 合法值应写入待回执状态
+        # 合法值应写入待回执状态并提示后台转发未启动
         st_ok, disp = http_json("POST", "/api/devices/ACGenerator/1/control", {"control": "p_set", "value": 55.5})
         self.assertEqual(st_ok, 200)
         self.assertEqual(disp["cmd_status"], 1)
         self.assertAlmostEqual(disp["value"], 55.5)
+        self.assertFalse(disp["collector_running"])
+        self.assertTrue(disp["warning"])
 
         # 3. 跨设备曲线对比接口
         st_cmp, cmp_data = http_json("GET", "/api/trends/compare?targets=ACGenerator:1:p,ACGenerator:2:p&hours=24")
         self.assertEqual(st_cmp, 200)
         self.assertEqual(len(cmp_data["series"]), 2)
 
-        # 3.5 校验日曲线历史库自动具备完整 RTDB 原生内置结构定义
+        # 3.5 校验日曲线与告警历史库自动具备完整 RTDB 原生内置结构定义
         hcon = sqlite3.connect(self.httpd.service.history_db)
         try:
             htables = {r[0] for r in hcon.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            self.assertTrue({"rtdb_schema_database", "rtdb_schema_tables", "rtdb_schema_columns"} <= htables)
+            self.assertTrue(
+                {"device_daily_samples", "alarm_events", "rtdb_schema_database", "rtdb_schema_tables", "rtdb_schema_columns"}
+                <= htables
+            )
             fmt = hcon.execute("SELECT storage_format FROM rtdb_schema_database WHERE version=1").fetchone()
             self.assertEqual(fmt[0], "native")
-            trow = hcon.execute(
-                "SELECT chn_name FROM rtdb_schema_tables WHERE table_name='device_daily_samples'"
-            ).fetchone()
-            self.assertEqual(trow[0], "设备日曲线采样")
+            tmap = dict(hcon.execute("SELECT table_name, chn_name FROM rtdb_schema_tables").fetchall())
+            self.assertEqual(tmap.get("device_daily_samples"), "设备日曲线采样")
+            self.assertEqual(tmap.get("alarm_events"), "告警事件记录")
         finally:
             hcon.close()
 
-        # 4. 门户控调日志源（scdfe_d/logs）
-        d_log_day = self.d_db.parent / "logs" / "2026" / "11" / "26" / "01"
-        d_log_day.mkdir(parents=True, exist_ok=True)
-        (d_log_day / "scdfe_d-control-20261126-01.log").write_text(
-            "01:15:00 [日志] 监视转发指令 设备=ACGenerator.风机1 属性=p_set(YT) 新值=55.5\n",
-            encoding="utf-8",
-        )
+        # 4. 门户指令审计日志源（scdfe_d/logs 自动落盘）
         st_lf, lf = http_json("GET", "/api/logs/files?record=control")
         self.assertEqual(st_lf, 200)
-        self.assertEqual(lf["total"], 1)
+        self.assertGreaterEqual(lf["total"], 1)
         st_lr, lr = http_json("GET", "/api/logs/read?record=control&keyword=55.5")
         self.assertEqual(st_lr, 200)
-        self.assertEqual(len(lr["items"]), 1)
+        self.assertTrue(any("门户下发指令" in item["text"] for item in lr["items"]))
+        # 确认告警与修改限值也应写出审计日志到 scdfe_d/logs
+        d_web_logs = list((self.d_db.parent / "logs").rglob("scdfe_d-web-*.log"))
+        self.assertTrue(d_web_logs)
+        web_log_text = "\n".join(p.read_text(encoding="utf-8") for p in d_web_logs)
+        self.assertIn("门户修改量测上下限", web_log_text)
+        self.assertIn("门户确认告警", web_log_text)
 
 
 if __name__ == "__main__":

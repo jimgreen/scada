@@ -17,7 +17,8 @@ import xml.etree.ElementTree as ET
 LOG = logging.getLogger("scada.portal.service")
 
 from core.log_paths import log_entries, packet_log_directory
-from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
+from core.scdfe_control import InstanceLock, LOG_LEVEL_CODES, LOG_PATTERN, log_directory
+from core.scdfe_logger import ScdfeLogger
 from core.web_database import DEFAULT_WORKSPACE_ROOT
 from core.log_query import LOG_PATTERNS, search_logs
 from core.rtdb_schema import sync_embedded_schema
@@ -284,21 +285,50 @@ class _PortalHistorySchemaCatalog:
     """为 scada_portal_history.sqlite3 提供 RTDB 嵌入结构中文表名与字段说明。"""
 
     def names(self) -> list[str]:
-        return ["device_daily_samples"]
+        return ["device_daily_samples", "alarm_events"]
 
     def get(self, table_name: str) -> dict[str, Any]:
-        if table_name != "device_daily_samples":
-            return {}
-        return {
-            "head": {"chn_name": "设备日曲线采样"},
-            "columns": [
-                {"eng_name": "ts_ms", "chn_name": "采样时间(ms)"},
-                {"eng_name": "table_name", "chn_name": "设备表名"},
-                {"eng_name": "idx", "chn_name": "设备索引"},
-                {"eng_name": "metric", "chn_name": "量测属性"},
-                {"eng_name": "value", "chn_name": "量测值"},
-            ],
-        }
+        if table_name == "device_daily_samples":
+            return {
+                "head": {"chn_name": "设备日曲线采样"},
+                "columns": [
+                    {"eng_name": "ts_ms", "chn_name": "采样时间(ms)"},
+                    {"eng_name": "table_name", "chn_name": "设备表名"},
+                    {"eng_name": "idx", "chn_name": "设备索引"},
+                    {"eng_name": "metric", "chn_name": "量测属性"},
+                    {"eng_name": "value", "chn_name": "量测值"},
+                ],
+            }
+        if table_name == "alarm_events":
+            return {
+                "head": {"chn_name": "告警事件记录"},
+                "columns": [
+                    {"eng_name": "alarm_key", "chn_name": "告警主键"},
+                    {"eng_name": "alarm_type", "chn_name": "告警类型"},
+                    {"eng_name": "severity", "chn_name": "严重级别"},
+                    {"eng_name": "title", "chn_name": "告警标题"},
+                    {"eng_name": "dev_id", "chn_name": "设备标识"},
+                    {"eng_name": "table_name", "chn_name": "设备表名"},
+                    {"eng_name": "idx", "chn_name": "设备索引"},
+                    {"eng_name": "device_name", "chn_name": "设备名称"},
+                    {"eng_name": "category", "chn_name": "设备分类"},
+                    {"eng_name": "attr", "chn_name": "属性名"},
+                    {"eng_name": "attr_label", "chn_name": "属性标签"},
+                    {"eng_name": "unit", "chn_name": "单位"},
+                    {"eng_name": "value_text", "chn_name": "触发值"},
+                    {"eng_name": "detail", "chn_name": "告警详情"},
+                    {"eng_name": "rtu_id", "chn_name": "RTU编号"},
+                    {"eng_name": "point_no", "chn_name": "点号"},
+                    {"eng_name": "fingerprint", "chn_name": "状态指纹"},
+                    {"eng_name": "state", "chn_name": "告警状态"},
+                    {"eng_name": "first_seen_ms", "chn_name": "首次触发(ms)"},
+                    {"eng_name": "last_seen_ms", "chn_name": "最近更新(ms)"},
+                    {"eng_name": "recovered_ms", "chn_name": "恢复时间(ms)"},
+                    {"eng_name": "acked", "chn_name": "已确认"},
+                    {"eng_name": "acked_at", "chn_name": "确认时间"},
+                ],
+            }
+        return {}
 
 
 class PortalService:
@@ -351,6 +381,9 @@ class PortalService:
         self._cache_lock = threading.Lock()
         self._alarm_lock = threading.Lock()
         self._acked_alarms: dict[str, dict[str, Any]] = {}
+        self._alarm_sync_sig: str = ""
+        self._audit_lock = threading.Lock()
+        self._audit_loggers: dict[str, ScdfeLogger] = {}
         self._last_sample_ts: float | None = None
         # 运行期实时累计（用于微电网总览能量微增量）
         self._session_kwh: dict[str, float] = defaultdict(float)
@@ -481,6 +514,11 @@ class PortalService:
                     (max_num, min_num, new_qual, int(idx)),
                 )
         self._invalidate_devices_cache()
+        self._audit_portal_log(
+            "scdfe_d-web",
+            "INFO",
+            f"门户修改量测上下限 设备={table_name}#{idx} 属性={metric} 下限={min_num} 上限={max_num} 状态={new_qual}",
+        )
         return {
             "table_name": table_name,
             "idx": int(idx),
@@ -528,14 +566,53 @@ class PortalService:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_samples_ts ON device_daily_samples(ts_ms)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alarm_events (
+                    alarm_key TEXT PRIMARY KEY,
+                    alarm_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    dev_id TEXT NOT NULL,
+                    table_name TEXT NOT NULL,
+                    idx INTEGER NOT NULL,
+                    device_name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    attr TEXT NOT NULL,
+                    attr_label TEXT NOT NULL,
+                    unit TEXT NOT NULL DEFAULT '',
+                    value_text TEXT NOT NULL DEFAULT '',
+                    detail TEXT NOT NULL DEFAULT '',
+                    rtu_id INTEGER,
+                    point_no INTEGER,
+                    fingerprint TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'active',
+                    first_seen_ms INTEGER NOT NULL,
+                    last_seen_ms INTEGER NOT NULL,
+                    recovered_ms INTEGER,
+                    acked INTEGER NOT NULL DEFAULT 0,
+                    acked_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alarm_events_state_time ON alarm_events(state, last_seen_ms)"
+            )
             # 同步 RTDB 原生内置结构定义，确保 RTDB 打开 sqldb/scada 目录时零告警
             conn.execute("BEGIN IMMEDIATE")
             sync_embedded_schema(
                 conn,
                 catalog=_PortalHistorySchemaCatalog(),
-                include_tables=("device_daily_samples",),
+                include_tables=("device_daily_samples", "alarm_events"),
             )
             conn.commit()
+            # 启动时恢复持久化的活动告警确认记录，重启不丢失
+            rows = conn.execute(
+                "SELECT alarm_key, fingerprint, acked_at FROM alarm_events WHERE state='active' AND acked=1"
+            ).fetchall()
+            with self._alarm_lock:
+                for key, fp, acked_at in rows:
+                    self._acked_alarms[str(key)] = {"fp": str(fp or ""), "acked_at": acked_at}
 
     def start_sampler(self) -> None:
         if self._sampler_thread is not None and self._sampler_thread.is_alive():
@@ -936,6 +1013,7 @@ class PortalService:
                 "valid_measurements": total_valid,
                 "rtu_total": len(comm_rtus),
                 "rtu_online": online_rtus,
+                "collector_running": self.is_collector_running(),
                 **self._summarize_alarm_counts(devices),
             },
         }
@@ -1251,6 +1329,7 @@ class PortalService:
                 "comm_error_count": comm_err_cnt,
                 "rtu_online": online_rtus,
                 "rtu_total": len(comm_rtus),
+                "collector_running": self.is_collector_running(),
                 **self._summarize_alarm_counts(devices),
             },
             "dc_bus": {
@@ -2311,7 +2390,102 @@ class PortalService:
             return {"items": [], "has_more": False, "scanned_files": 0, "order": "hour_file_desc_line_desc"}
         return search_logs(self.log_dir, query, family="c", packet_directory=packet_dir)
 
-    # -------------------- 6. 告警中心、就地控调写库与跨设备曲线对比 --------------------
+    # -------------------- 6. 告警中心持久化、转发状态检测、操作审计与曲线对比 --------------------
+    def is_collector_running(self) -> bool:
+        """检测 scdfe_d 后台采集与指令监视线程是否正在持有实例锁运行。"""
+        try:
+            return self.d_db.is_file() and InstanceLock.held(self.d_db, "device-collector")
+        except Exception:
+            return False
+
+    def _audit_portal_log(self, process_name: str, level: str, message: str) -> None:
+        """将门户写操作（指令下发、改限值、告警确认）安全写入按小时轮转运行日志。"""
+        try:
+            with self._audit_lock:
+                logger = self._audit_loggers.get(process_name)
+                if logger is None:
+                    logger = ScdfeLogger(self.d_log_dir, process_name=process_name)
+                    self._audit_loggers[process_name] = logger
+            if level == "WARNING":
+                logger.alarm(message)
+            elif level == "ERROR":
+                logger.error(message)
+            else:
+                logger.normal(message)
+        except Exception:
+            LOG.debug("portal audit log skipped: %s", message, exc_info=True)
+
+    def _persist_alarm_snapshot(self, alarms: list[dict[str, Any]], active_fps: dict[str, str]) -> None:
+        """当活动告警集合或其指纹变化时，批量同步至 alarm_events 表并标记已恢复告警。"""
+        sig = "|".join(f"{k}={active_fps[k]}" for k in sorted(active_fps))
+        with self._alarm_lock:
+            if sig == self._alarm_sync_sig:
+                return
+            self._alarm_sync_sig = sig
+        now_ms = int(time.time() * 1000)
+        try:
+            with self._history_lock, self._open_history() as conn:
+                existing_active = {
+                    r[0]
+                    for r in conn.execute("SELECT alarm_key FROM alarm_events WHERE state='active'").fetchall()
+                }
+                recovered_keys = existing_active - set(active_fps)
+                if recovered_keys:
+                    conn.executemany(
+                        "UPDATE alarm_events SET state='recovered', recovered_ms=?, last_seen_ms=? WHERE alarm_key=?",
+                        [(now_ms, now_ms, k) for k in recovered_keys],
+                    )
+                if alarms:
+                    rows = [
+                        (
+                            a["key"],
+                            a["type"],
+                            a["severity"],
+                            a["title"],
+                            a["dev_id"],
+                            a["table_name"],
+                            int(a["idx"]),
+                            a["device_name"],
+                            a["category"],
+                            a["attr"],
+                            a["attr_label"],
+                            a["unit"],
+                            "" if a["value"] is None else str(a["value"]),
+                            a["detail"],
+                            a["rtu_id"],
+                            a["point_no"],
+                            active_fps.get(a["key"], ""),
+                            now_ms,
+                            now_ms,
+                            1 if a.get("acked") else 0,
+                            a.get("acked_at"),
+                        )
+                        for a in alarms
+                    ]
+                    conn.executemany(
+                        """
+                        INSERT INTO alarm_events(
+                            alarm_key, alarm_type, severity, title, dev_id, table_name, idx,
+                            device_name, category, attr, attr_label, unit, value_text, detail,
+                            rtu_id, point_no, fingerprint, state, first_seen_ms, last_seen_ms,
+                            recovered_ms, acked, acked_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,NULL,?,?)
+                        ON CONFLICT(alarm_key) DO UPDATE SET
+                            value_text=excluded.value_text,
+                            detail=excluded.detail,
+                            fingerprint=excluded.fingerprint,
+                            state='active',
+                            last_seen_ms=excluded.last_seen_ms,
+                            recovered_ms=NULL,
+                            first_seen_ms=CASE WHEN alarm_events.state='recovered' THEN excluded.first_seen_ms ELSE alarm_events.first_seen_ms END,
+                            acked=CASE WHEN alarm_events.state='recovered' OR alarm_events.fingerprint!=excluded.fingerprint THEN 0 ELSE alarm_events.acked END,
+                            acked_at=CASE WHEN alarm_events.state='recovered' OR alarm_events.fingerprint!=excluded.fingerprint THEN NULL ELSE alarm_events.acked_at END
+                        """,
+                        rows,
+                    )
+                conn.commit()
+        except Exception:
+            LOG.debug("failed to persist alarm_events", exc_info=True)
     def _collect_raw_alarms(self, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
         alarms: list[dict[str, Any]] = []
         active_fps: dict[str, str] = {}
@@ -2410,6 +2584,7 @@ class PortalService:
                 item["acked"] = is_acked
                 item["acked_at"] = rec.get("acked_at") if is_acked else None
                 item.pop("_fp", None)
+        self._persist_alarm_snapshot(alarms, active_fps)
         return alarms
 
     def _summarize_alarm_counts(self, devices: list[dict[str, Any]]) -> dict[str, int]:
@@ -2475,6 +2650,7 @@ class PortalService:
         wanted = set(keys or [])
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         acked_cnt = 0
+        acked_rows: list[tuple[str, str]] = []
         with self._alarm_lock:
             for dev in devices:
                 table = dev["table_name"]
@@ -2493,6 +2669,7 @@ class PortalService:
                     if ack_all or key in wanted:
                         fp = f"{atype}|{m.get('source_time')}|{m.get('max_value')}|{m.get('min_value')}"
                         self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
+                        acked_rows.append((now_iso, key))
                         acked_cnt += 1
                 for c in dev.get("controls") or ():
                     if c.get("cmd_status") != CTRL_STATUS_FAILED:
@@ -2502,8 +2679,91 @@ class PortalService:
                     if ack_all or key in wanted:
                         fp = f"{atype}|{c.get('cmd_time')}|{c.get('cmd_ack_time')}|{c.get('value')}"
                         self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
+                        acked_rows.append((now_iso, key))
                         acked_cnt += 1
+        if acked_rows:
+            try:
+                with self._history_lock, self._open_history() as conn:
+                    conn.executemany(
+                        "UPDATE alarm_events SET acked=1, acked_at=? WHERE alarm_key=?",
+                        acked_rows,
+                    )
+                    conn.commit()
+            except Exception:
+                LOG.debug("failed to persist alarm ack", exc_info=True)
+            self._audit_portal_log(
+                "scdfe_d-web",
+                "INFO",
+                f"门户确认告警 数量={acked_cnt} 全部确认={bool(ack_all)}",
+            )
         return {"acked_count": acked_cnt, "acked_at": now_iso}
+
+    def get_alarm_history(
+        self,
+        *,
+        alarm_type: str | None = None,
+        state: str | None = None,
+        search: str | None = None,
+        limit: int = 300,
+    ) -> dict[str, Any]:
+        """从 scada_portal_history.sqlite3 检索持久化告警历史（含已恢复与已确认记录）。"""
+        # 查询前刷新一次最新活动告警快照，确保刚触发或恢复的状态同步入库
+        self._collect_raw_alarms(self._read_all_devices())
+        limit = max(10, min(1000, int(limit)))
+        where: list[str] = []
+        params: list[Any] = []
+        if alarm_type and alarm_type in {"over_max", "under_min", "comm_error", "control_failed"}:
+            where.append("alarm_type=?")
+            params.append(alarm_type)
+        if state in {"active", "recovered"}:
+            where.append("state=?")
+            params.append(state)
+        if search and search.strip():
+            needle = f"%{search.strip()}%"
+            where.append("(device_name LIKE ? OR attr LIKE ? OR attr_label LIKE ? OR table_name LIKE ?)")
+            params.extend([needle, needle, needle, needle])
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        items: list[dict[str, Any]] = []
+        total = 0
+        if self.history_db.is_file():
+            with self._open_history(readonly=True) as conn:
+                conn.row_factory = sqlite3.Row
+                total = int(conn.execute(f"SELECT COUNT(*) FROM alarm_events{where_sql}", params).fetchone()[0])
+                rows = conn.execute(
+                    f"SELECT * FROM alarm_events{where_sql} ORDER BY last_seen_ms DESC LIMIT ?",
+                    [*params, limit],
+                ).fetchall()
+                for r in rows:
+                    d = dict(r)
+                    items.append({
+                        "key": d["alarm_key"],
+                        "type": d["alarm_type"],
+                        "severity": d["severity"],
+                        "title": d["title"],
+                        "dev_id": d["dev_id"],
+                        "table_name": d["table_name"],
+                        "idx": d["idx"],
+                        "device_name": d["device_name"],
+                        "category": d["category"],
+                        "attr": d["attr"],
+                        "attr_label": d["attr_label"],
+                        "unit": d["unit"],
+                        "value": d["value_text"],
+                        "detail": d["detail"],
+                        "rtu_id": d["rtu_id"],
+                        "point_no": d["point_no"],
+                        "state": d["state"],
+                        "first_seen_ms": d["first_seen_ms"],
+                        "last_seen_ms": d["last_seen_ms"],
+                        "recovered_ms": d["recovered_ms"],
+                        "acked": bool(d["acked"]),
+                        "acked_at": d["acked_at"],
+                    })
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "items": items,
+            "total": total,
+        }
 
     def dispatch_device_control(
         self,
@@ -2590,11 +2850,19 @@ class PortalService:
         with self._cache_lock:
             self._devices_cache = None
 
+        collector_ok = self.is_collector_running()
+        dev_name = row_dict.get("name") or f"{table_name}-{idx}"
+        self._audit_portal_log(
+            "scdfe_d-control",
+            "INFO" if collector_ok else "WARNING",
+            f"门户下发指令 设备={table_name}.{dev_name}(idx={idx}) 属性={control}({kind.upper()}) "
+            f"RTU={int(rtu)} 点号={int(pnt)} 值={norm_val} 时标={cmd_ms} 转发在线={collector_ok}",
+        )
         label, unit = CONTROL_META.get(control, (control, ""))
         return {
             "table_name": table_name,
             "idx": int(idx),
-            "device_name": row_dict.get("name") or f"{table_name}-{idx}",
+            "device_name": dev_name,
             "control": control,
             "label": label,
             "unit": unit,
@@ -2605,6 +2873,8 @@ class PortalService:
             "status_label": CTRL_STATUS_LABELS[CTRL_STATUS_PENDING],
             "rtu_id": int(rtu),
             "point_no": int(pnt),
+            "collector_running": collector_ok,
+            "warning": "" if collector_ok else "scdfe_d 后台转发线程未启动，指令已写入宽表待启动后转发",
         }
 
     def compare_trends(

@@ -233,6 +233,7 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                     "svg_ready": self.service.svg_path.is_file(),
                     "c_db_ready": self.service.c_db.is_file(),
                     "d_db_ready": self.service.d_db.is_file(),
+                    "collector_running": self.service.is_collector_running(),
                 })
             if path == "/api/overview":
                 return self._json(200, self.service.get_overview())
@@ -269,6 +270,14 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                     acked=query.get("acked"),
                     category=query.get("category"),
                     search=query.get("search"),
+                ))
+            if path == "/api/alarms/history":
+                limit_val = _parse_int(query.get("limit"), "limit", default=300, min_val=10, max_val=1000)
+                return self._json(200, self.service.get_alarm_history(
+                    alarm_type=query.get("type"),
+                    state=query.get("state"),
+                    search=query.get("search"),
+                    limit=limit_val,
                 ))
             if path == "/api/trends/compare":
                 raw_targets = query.get("targets", "").strip()

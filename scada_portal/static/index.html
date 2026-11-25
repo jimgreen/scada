@@ -690,7 +690,7 @@
                 <div class="dev-ctrl-live-strip" id="dev-ctrl-live-strip"></div>
                 <div class="dev-control-panel dev-control-panel-full" id="dev-control-panel">
                   <div class="dev-ctrl-head">
-                    <span>就地指令（YK / YT）</span>
+                    <span>就地指令（YK / YT） <span class="badge" id="dev-collector-badge"></span></span>
                     <small id="dev-ctrl-hint"></small>
                   </div>
                   <div class="dev-ctrl-table-wrap">
@@ -708,21 +708,27 @@
         <!-- ==================== 3.5 告警与越限中心 ==================== -->
         <section id="view-alarms" class="portal-view" hidden>
           <div class="view-toolbar view-toolbar-single">
-            <div class="tab-bar" id="alarm-type-tabs" role="tablist" aria-label="告警类型">
-              <button type="button" class="tab-btn active" data-alarm-type="">全部</button>
-              <button type="button" class="tab-btn" data-alarm-type="over_max">越上限</button>
-              <button type="button" class="tab-btn" data-alarm-type="under_min">越下限</button>
-              <button type="button" class="tab-btn" data-alarm-type="comm_error">通信异常</button>
-              <button type="button" class="tab-btn" data-alarm-type="control_failed">指令失败</button>
+            <div class="tab-bar" id="alarm-scope-tabs" role="tablist" aria-label="告警范围">
+              <button type="button" class="tab-btn active" data-alarm-scope="active">活动告警</button>
+              <button type="button" class="tab-btn" data-alarm-scope="history">历史告警</button>
             </div>
+            <select id="alarm-type-filter" aria-label="告警类型">
+              <option value="">全部类型</option>
+              <option value="over_max">越上限</option>
+              <option value="under_min">越下限</option>
+              <option value="comm_error">通信异常</option>
+              <option value="control_failed">指令失败</option>
+            </select>
             <div class="comm-summary comm-summary-inline" id="alarm-summary"></div>
             <div class="toolbar-right">
+              <label class="chk" id="alarm-group-wrap"><input type="checkbox" id="alarm-group-rtu" checked /> 按 RTU 折叠</label>
               <select id="alarm-ack-filter" aria-label="确认状态">
                 <option value="">全部状态</option>
                 <option value="0">未确认</option>
                 <option value="1">已确认</option>
               </select>
               <input id="alarm-search" type="search" placeholder="搜索设备或属性…" aria-label="搜索告警" />
+              <button type="button" class="btn secondary" id="alarm-export-csv">导出 CSV</button>
               <button type="button" class="btn secondary" id="alarm-ack-all">全部确认</button>
             </div>
           </div>
@@ -730,7 +736,7 @@
             <div class="table-wrap">
               <table>
                 <thead>
-                  <tr>
+                  <tr id="alarm-thead-row">
                     <th>类型</th>
                     <th>设备</th>
                     <th>属性</th>

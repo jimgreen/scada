@@ -3170,5 +3170,20 @@ html[data-theme] .ctrl-inline-input.limit-invalid {
 }
 #comm-point-search,
 #alarm-search {
-  width: 150px;
+  width: 145px;
+}
+.alarm-group-row {
+  background: var(--bg-subtle, rgba(0, 229, 255, 0.06)) !important;
+  cursor: pointer;
+}
+.alarm-group-row td {
+  font-weight: 600;
+}
+.alarm-group-toggle {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent, #38bdf8);
+}
+.alarm-child-row td:first-child {
+  padding-left: 22px;
 }
