@@ -14,6 +14,10 @@
   const controlMode = controlDispatchMode || controlMappingMode;
   const logsMode = mode === '/logs';
   const deviceMode = mappingMode || queryMode || parameterMode;
+  const jumpPortalLink = $('#jump-portal-link');
+  if (jumpPortalLink) {
+    jumpPortalLink.href = location.protocol + '//' + location.hostname + ':8981/';
+  }
   const pointTrendHost = $('#point-trend');
   const pointTrend = queryMode && pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
   const liveColumnOffset = 0;
@@ -174,8 +178,25 @@
       : '尚未执行采集';
     $('#category-rows').innerHTML = overview.categories.map(row => '<tr><td>'
       + html(overview.category_labels[row.category] || row.category) + '</td><td>' + html(row.count)
-      + '</td><td><a href="/measurements?category=' + encodeURIComponent(row.category)
-      + '">查看量测 →</a></td></tr>').join('') || '<tr><td colspan="3" class="empty">暂无设备。</td></tr>';
+      + '</td><td class="quantity-value">' + html(row.valid_count ?? 0) + ' / ' + html(row.bound_count ?? 0)
+      + '</td><td class="quantity-value">' + html(row.control_count ?? 0)
+      + (row.control_pending ? ' <span class="ctrl-status s-1">待回执 ' + html(row.control_pending) + '</span>' : '')
+      + '</td><td><span class="cat-links"><a href="/measurements?category=' + encodeURIComponent(row.category)
+      + '">量测 →</a>'
+      + ((row.control_count ?? 0) > 0 ? '<a href="/controls?category=' + encodeURIComponent(row.category) + '">控调 →</a>' : '')
+      + '</span></td></tr>').join('') || '<tr><td colspan="5" class="empty">暂无设备。</td></tr>';
+    const recentCtrls = overview.recent_controls || [];
+    const recentWrap = $('#overview-recent-ctrl');
+    if (recentWrap) {
+      recentWrap.hidden = !recentCtrls.length;
+      if (recentCtrls.length) {
+        $('#overview-ctrl-rows').innerHTML = recentCtrls.map(r => '<tr><td>' + html(time(r.at))
+          + '</td><td>' + html(r.source === 'db_watch' ? '库监视' : 'Web')
+          + '</td><td class="name">' + html(r.device_name || r.model_table)
+          + '</td><td><code>' + html(r.control) + '</code></td><td class="quantity-value">' + html(number(r.value))
+          + '</td><td><span class="ctrl-status s-' + html(r.cmd_status) + '">' + html(r.status_label) + '</span></td></tr>').join('');
+      }
+    }
   }
 
   async function controlCollector(action) {
@@ -800,7 +821,7 @@
   async function refresh() {
     if (deviceMode) await loadRows();
     else if (controlMode) await loadControls();
-    else if (logsMode) await loadLogs({ append: false });
+    else if (logsMode) await loadLogsView({ append: false });
     else if (mode === '/history') await loadHistory();
     else await summary();
   }
@@ -961,6 +982,115 @@
   let logSeq = 0;
   let logCursor = null;
   let logItems = [];
+  let logTab = 'files'; // 'files' | 'controls' | 'refreshes' | 'changes'
+
+  function renderHistoryTableInto(headSel, bodySel, data, tab) {
+    if (tab === 'controls') {
+      const headers = ['时间', '来源', '设备', '属性', '类型', 'RTU / 点号', '设定值', '状态', '详情'];
+      $(headSel).innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
+      const items = data.controls || [];
+      $(bodySel).innerHTML = items.map(row => '<tr><td>' + html(time(row.at))
+        + '</td><td>' + html(row.source === 'db_watch' ? '库监视' : 'Web')
+        + '</td><td class="name">' + html(row.device_name || row.model_table)
+        + '</td><td><code>' + html(row.control) + '</code></td><td><span class="ctrl-kind-tag ' + html(row.kind) + '">' + html((row.kind || '').toUpperCase())
+        + '</span></td><td>' + html(row.rtu_id == null ? '—' : row.rtu_id + ' / ' + row.pnt_no)
+        + '</td><td class="quantity-value">' + html(number(row.value))
+        + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
+        + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
+        || emptyRow(headers, '暂无控调流水记录');
+      return;
+    }
+    const changes = tab === 'changes';
+    const headers = changes ? ['时间', '对象', '编号', '修改内容']
+      : ['批次', '开始时间', '完成时间', '属性数', '可用数', '异常'];
+    $(headSel).innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
+    $(bodySel).innerHTML = (data[tab] || []).map(row => changes
+      ? '<tr><td>' + html(time(row.changed_at)) + '</td><td>' + html(row.entity) + '</td><td>' + html(number(row.entity_id))
+        + '</td><td class="wrap">' + html(row.after_json) + '</td></tr>'
+      : '<tr><td>' + html(row.refresh_id) + '</td><td>' + html(time(row.started_at)) + '</td><td>'
+        + html(time(row.finished_at)) + '</td><td>' + html(row.total_count) + '</td><td>' + html(row.valid_count)
+        + '</td><td class="wrap">' + html(row.error || '—') + '</td></tr>').join('')
+      || emptyRow(headers, '暂无记录');
+  }
+
+  async function loadLogsView({ append = false } = {}) {
+    const isFileTab = logTab === 'files';
+    $('#log-process').hidden = !isFileTab;
+    $('#log-level').hidden = !isFileTab;
+    $('#log-file').hidden = !isFileTab;
+    $('#log-search').hidden = !isFileTab;
+    $('#log-export').hidden = !isFileTab;
+    $('#logs-file-wrap').hidden = !isFileTab;
+    $('#logs-file-pager').hidden = !isFileTab;
+    $('#logs-history-wrap').hidden = isFileTab;
+    if (isFileTab) {
+      await loadLogs({ append });
+      return;
+    }
+    const data = await api('/api/history');
+    renderHistoryTableInto('#logs-history-head', '#logs-history-rows', data, logTab);
+    const cnt = (data[logTab] || []).length;
+    $('#log-meta').textContent = '内存记录 ' + cnt + ' 条';
+  }
+
+  async function runSyncBindings(scope) {
+    const preview = await api('/api/sync-bindings', 'POST', { scope, dry_run: true });
+    if (!preview.to_add && !preview.to_update) {
+      error('#alert', '源库 ' + preview.source_database + ' 扫描完成（' + preview.total_source + ' 点），所有可匹配点位均已最新，无需变更。');
+      return;
+    }
+    const sampleLines = (preview.preview || []).slice(0, 6).map(
+      op => (op.action === 'add' ? '[新增] ' : '[更新] ') + op.table + '.' + op.device_name + '.' + op.attr
+        + ' (' + op.kind.toUpperCase() + ' RTU ' + op.rtu_id + '/' + op.pnt_no + ')'
+    ).join('\n');
+    const ok = await confirmDanger(
+      '确认一键同步绑定',
+      '源库：' + preview.source_database + '\n'
+        + '扫描源点：' + preview.total_source + ' 条 · 预计新增 ' + preview.to_add + ' 条 · 更新 ' + preview.to_update
+        + ' 条 · 已一致 ' + preview.unchanged + ' 条 · 未匹配 ' + preview.unmatched + ' 条\n'
+        + (sampleLines ? '\n示例：\n' + sampleLines : ''),
+      '确认执行同步',
+    );
+    if (!ok) return;
+    const res = await api('/api/sync-bindings', 'POST', { scope, dry_run: false });
+    error('#alert', '');
+    if (controlMode) await loadControls();
+    else await refresh();
+    if (res.to_add || res.to_update) {
+      $('#alert').hidden = false;
+      $('#alert').textContent = '同步完成：新增 ' + res.to_add + ' 条，更新 ' + res.to_update + ' 条。';
+    }
+  }
+
+  function downloadCsv(filename, header, rowList) {
+    const escCsv = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const lines = [header.map(escCsv).join(',')].concat(rowList.map(r => r.map(escCsv).join(',')));
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function exportMappingsCsv(isControl) {
+    if (isControl) {
+      const data = await api('/api/controls?limit=500&page=1');
+      downloadCsv(
+        'scdfe_d-control-mappings.csv',
+        ['设备表', '索引', '设备名称', '控调属性', '类型', 'RTU', '点号', '下限', '上限', '禁用'],
+        (data.items || []).map(r => [r.model_table, r.model_idx, r.device_name, r.control, r.kind, r.rtu_id, r.pnt_no, r.min_value ?? '', r.max_value ?? '', r.notuse]),
+      );
+      return;
+    }
+    const data = await api('/api/measurements?limit=200&page=1');
+    downloadCsv(
+      'scdfe_d-measurement-mappings.csv',
+      ['设备表', '索引', '设备名称', '量测属性', '类型', 'RTU', '点号', '权重', '下限', '上限', '禁用'],
+      (data.items || []).map(r => [r.model_table, r.model_idx, r.device_name, r.metric, r.kind, r.rtu_id, r.pnt_no, r.weight, r.min_value ?? '', r.max_value ?? '', r.notuse]),
+    );
+  }
 
   async function loadControlCatalog() {
     catalog = await api('/api/device-catalog');
@@ -1224,19 +1354,29 @@
     $('#parameter-actions').hidden = !parameterMode;
     $('#parameter-selection').hidden = !parameterMode;
     $('#live-refresh').hidden = !queryMode;
+    const viewSwitch = $('#measure-view-switch');
+    if (viewSwitch) {
+      viewSwitch.hidden = !(queryMode || parameterMode);
+      $('#switch-live-view')?.classList.toggle('active', queryMode);
+      $('#switch-param-view')?.classList.toggle('active', parameterMode);
+    }
     if (controlMode) {
       $('#ctrl-status').hidden = !controlDispatchMode;
       $('#ctrl-live-wrap').hidden = !controlDispatchMode;
       $('#new-control').hidden = !controlMappingMode;
+      $('#sync-ctrl-bindings').hidden = !controlMappingMode;
+      $('#export-ctrl-csv').hidden = !controlMappingMode;
       $('#control-history-drawer').hidden = !controlDispatchMode;
       await loadControlCatalog();
+      const ctrlReq = new URLSearchParams(location.search);
+      if (ctrlReq.get('category') && $('#ctrl-category')) $('#ctrl-category').value = ctrlReq.get('category');
       await loadControls();
       ready = true;
       return;
     }
     if (logsMode) {
       await loadLogFiles();
-      await loadLogs({ append: false });
+      await loadLogsView({ append: false });
       ready = true;
       return;
     }
@@ -1670,8 +1810,29 @@
     }
   });
 
-  // 运行日志事件绑定
-  const reloadLogs = run(async () => { await loadLogs({ append: false }); });
+  // 量测查询 <-> 批量调参 无缝互切（保留当前设备上下文）
+  $('#switch-live-view')?.addEventListener('click', () => {
+    if (!queryMode) location.href = '/measurements' + location.search;
+  });
+  $('#switch-param-view')?.addEventListener('click', () => {
+    if (!parameterMode) location.href = '/parameters' + location.search;
+  });
+  $('#sync-meas-bindings')?.addEventListener('click', run(() => runSyncBindings('measurements')));
+  $('#export-meas-csv')?.addEventListener('click', run(() => exportMappingsCsv(false)));
+  $('#sync-ctrl-bindings')?.addEventListener('click', run(() => runSyncBindings('controls')));
+  $('#export-ctrl-csv')?.addEventListener('click', run(() => exportMappingsCsv(true)));
+
+  // 运行日志与记录 4 分段切换事件绑定
+  for (const btn of document.querySelectorAll('#logs-section-tabs [data-log-tab]')) {
+    btn.addEventListener('click', run(async () => {
+      logTab = btn.dataset.logTab || 'files';
+      for (const b of document.querySelectorAll('#logs-section-tabs [data-log-tab]')) {
+        b.classList.toggle('active', b === btn);
+      }
+      await loadLogsView({ append: false });
+    }));
+  }
+  const reloadLogs = run(async () => { await loadLogsView({ append: false }); });
   $('#log-process').addEventListener('change', reloadLogs);
   $('#log-level').addEventListener('change', reloadLogs);
   $('#log-file').addEventListener('change', reloadLogs);
@@ -1681,8 +1842,8 @@
     logTimer = setTimeout(reloadLogs, 250);
   });
   $('#log-refresh').addEventListener('click', run(async () => {
-    await loadLogFiles();
-    await loadLogs({ append: false });
+    if (logTab === 'files') await loadLogFiles();
+    await loadLogsView({ append: false });
   }));
   $('#log-more').addEventListener('click', run(async () => {
     await loadLogs({ append: true });

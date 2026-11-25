@@ -129,10 +129,62 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
         return candidate
 
     def _method_not_allowed(self):
-        self._json(405, {"error": "不支持该 HTTP 请求方法"}, {"Allow": "GET, HEAD, PUT"})
+        self._json(405, {"error": "不支持该 HTTP 请求方法"}, {"Allow": "GET, HEAD, POST, PUT"})
+
+    def _read_json_body(self) -> dict:
+        length = _parse_int(self.headers.get("Content-Length"), "Content-Length", default=0, min_val=0)
+        if length > 65536:
+            raise OverflowError("请求体大小超出限制")
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("请求体 JSON 格式错误") from exc
+        if not isinstance(body, dict):
+            raise ValueError("请求体须为 JSON 对象")
+        return body
 
     def do_POST(self):
-        self._method_not_allowed()
+        parsed = urlsplit(self.path)
+        parts = [unquote(p) for p in parsed.path.split("/") if p]
+        path = "/" + "/".join(parts) if parts else "/"
+        try:
+            if path == "/api/alarms/ack":
+                body = self._read_json_body()
+                keys = body.get("keys")
+                if keys is not None and (not isinstance(keys, list) or not all(isinstance(k, str) for k in keys)):
+                    raise ValueError("keys 必须为字符串数组")
+                ack_all = bool(body.get("ack_all"))
+                return self._json(200, self.service.ack_alarms(keys=keys, ack_all=ack_all))
+            if len(parts) == 5 and parts[:2] == ["api", "devices"] and parts[4] == "control":
+                body = self._read_json_body()
+                ctrl = body.get("control")
+                if not isinstance(ctrl, str) or not ctrl.strip():
+                    raise ValueError("控调属性名不能为空")
+                if "value" not in body:
+                    raise ValueError("下发指令需要 value 字段")
+                table_name = parts[2]
+                idx = _parse_int(parts[3], "idx", min_val=0)
+                result = self.service.dispatch_device_control(
+                    table_name, idx, ctrl.strip(), body.get("value")
+                )
+                return self._json(200, result)
+            return self._method_not_allowed()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            LOG.debug("Client disconnected during POST %s", path)
+            return
+        except FileNotFoundError as exc:
+            return self._json(404, {"error": str(exc)})
+        except OverflowError as exc:
+            return self._json(413, {"error": str(exc)})
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
+        except sqlite3.Error:
+            LOG.exception("Portal DB error on POST %s", path)
+            return self._json(503, {"error": "数据库繁忙或暂不可用，请重试"})
+        except Exception:
+            LOG.exception("Portal POST error on %s", path)
+            return self._json(500, {"error": "服务器内部错误，请查看运行日志"})
 
     def do_DELETE(self):
         self._method_not_allowed()
@@ -160,7 +212,7 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
 
         try:
             # 静态页面与前端资源
-            if path in {"/", "/index.html", "/energy-flow", "/powerflow", "/devices", "/comm", "/logs"}:
+            if path in {"/", "/index.html", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs"}:
                 return self._serve_file(STATIC_DIR / "index.html")
             if path.startswith("/static/"):
                 rel = path.removeprefix("/static/")
@@ -211,6 +263,24 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                         table_name, idx, hours=hours, start_ms=start_ms, end_ms=end_ms, metric=metric
                     ),
                 )
+            if path == "/api/alarms":
+                return self._json(200, self.service.get_alarms(
+                    alarm_type=query.get("type"),
+                    acked=query.get("acked"),
+                    category=query.get("category"),
+                    search=query.get("search"),
+                ))
+            if path == "/api/trends/compare":
+                raw_targets = query.get("targets", "").strip()
+                targets = []
+                if raw_targets:
+                    for item in raw_targets.split(","):
+                        seg = item.strip().split(":")
+                        if len(seg) != 3 or not seg[0] or not seg[2]:
+                            raise ValueError("对比曲线目标格式应为 Table:idx:metric")
+                        targets.append((seg[0], _parse_int(seg[1], "idx", min_val=0), seg[2]))
+                hours = _parse_float(query.get("hours"), "hours", default=24.0)
+                return self._json(200, self.service.compare_trends(targets, hours=hours))
             if path == "/api/comm/rtus":
                 return self._json(200, self.service.get_comm_rtus())
             if path == "/api/comm/channels":

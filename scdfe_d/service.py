@@ -2392,7 +2392,9 @@ class DeviceStore:
                 if cached is not None and cached[0] == cache_key:
                     return dict(cached[1])
                 meta_snapshot = dict(self._runtime_meta)
-            categories_map = defaultdict(int)
+            categories_map = defaultdict(
+                lambda: dict(count=0, bound_count=0, valid_count=0, control_count=0, control_pending=0)
+            )
             device_count = 0
             bound_count = 0
             valid_count = 0
@@ -2403,20 +2405,22 @@ class DeviceStore:
             for table, metrics, controls, metric_offsets, control_offsets in self._get_table_layouts(con):
                 quoted = _quote_table(table)
                 cat = category_for(table)
+                cat_stat = categories_map[cat]
                 if not metrics and not controls:
                     cnt = cur.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]
                     device_count += cnt
-                    categories_map[cat] += cnt
+                    cat_stat["count"] += cnt
                     continue
                 for row in cur.execute(f"SELECT * FROM {quoted}"):
                     idx = row[0]
                     device_count += 1
-                    categories_map[cat] += 1
+                    cat_stat["count"] += 1
                     for metric, _ in metrics:
                         base = metric_offsets[metric]
                         rtu, pnt = row[base + 6], row[base + 7]
                         if _is_valid_point_config(rtu, pnt):
                             bound_count += 1
+                            cat_stat["bound_count"] += 1
                             meta = meta_snapshot.get((table, int(idx), str(metric)))
                             valid, _, _ = self._infer_status(
                                 row[base],
@@ -2428,13 +2432,16 @@ class DeviceStore:
                                 meta,
                             )
                             valid_count += valid
+                            cat_stat["valid_count"] += valid
                     for ctrl, _ in controls:
                         cbase = control_offsets[ctrl]
                         crtu, cpnt = row[cbase + 5], row[cbase + 6]
                         if _is_valid_point_config(crtu, cpnt):
                             control_count += 1
+                            cat_stat["control_count"] += 1
                             if row[cbase + 2] == CTRL_STATUS_PENDING:
                                 control_pending += 1
+                                cat_stat["control_pending"] += 1
         with self._mutex:
             last = dict(self._refresh_history[0]) if self._refresh_history else None
             interval = self._interval_seconds
@@ -2448,9 +2455,10 @@ class DeviceStore:
                     control_pending=control_pending,
                 ),
                 last_refresh=last,
+                recent_controls=[dict(r) for r in list(self._control_history)[:8]],
                 categories=[
-                    dict(category=cat, count=cnt)
-                    for cat, cnt in sorted(categories_map.items())
+                    dict(category=cat, **stats)
+                    for cat, stats in sorted(categories_map.items())
                 ],
                 category_labels=CATEGORIES,
                 interval_seconds=interval,
@@ -2647,6 +2655,224 @@ class DeviceStore:
     def control_history(self):
         with self._mutex:
             return dict(items=[dict(r) for r in self._control_history])
+
+    def sync_bindings_from_source(
+        self,
+        *,
+        scope="all",
+        rtu_id=None,
+        dry_run=True,
+        source_database=None,
+    ):
+        """按 <TableName>.<DeviceName>.<attr> 规范从 scdfe_c 自动匹配并同步四遥映射（支持预览与执行）。"""
+        if scope not in ("all", "measurements", "controls"):
+            raise ApiError(400, "同步范围必须为 all、measurements 或 controls")
+        rtu_filter = _parse_positive_int(rtu_id) if rtu_id not in (None, "") else None
+        if rtu_id not in (None, "") and rtu_filter is None:
+            raise ApiError(400, "RTU 编号必须为正整数")
+        source_db = source_database or self.default_source_database()
+        kinds = (
+            ("yc", "yx")
+            if scope == "measurements"
+            else (("yk", "yt") if scope == "controls" else ("yc", "yx", "yk", "yt"))
+        )
+
+        src_points = []
+        with self.source(source_db) as src_con:
+            for kind in kinds:
+                tbl = f"fes_{kind}_define"
+                cols = {r[1] for r in src_con.execute(f"PRAGMA table_info({tbl})")}
+                if not {"rtu_id", "pnt_no", "name"} <= cols:
+                    continue
+                has_eng = kind == "yt" and {"eng_min", "eng_max"} <= cols
+                extra = ", eng_min, eng_max" if has_eng else ", NULL AS eng_min, NULL AS eng_max"
+                if rtu_filter is not None:
+                    rows = src_con.execute(
+                        f"SELECT rtu_id, pnt_no, name{extra} FROM {tbl} WHERE rtu_id=? ORDER BY pnt_no",
+                        (rtu_filter,),
+                    ).fetchall()
+                else:
+                    rows = src_con.execute(
+                        f"SELECT rtu_id, pnt_no, name{extra} FROM {tbl} ORDER BY rtu_id, pnt_no"
+                    ).fetchall()
+                for r in rows:
+                    src_points.append(
+                        (kind, int(r[0]), int(r[1]), str(r[2] or ""), r[3], r[4])
+                    )
+
+        to_add = []
+        to_update = []
+        unchanged = 0
+        unmatched = 0
+
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE" if not dry_run else "BEGIN")
+            layouts = self._get_table_layouts(con)
+            dev_lookup = {}
+            existing_bindings = {}
+            table_existing_metrics = {}
+            table_existing_controls = {}
+            for table, metrics, controls, m_off, c_off in layouts:
+                table_existing_metrics[table] = dict(metrics)
+                table_existing_controls[table] = dict(controls)
+                quoted = _quote_table(table)
+                dev_lookup[table] = {}
+                cur = con.cursor()
+                cur.row_factory = None
+                for row in cur.execute(f"SELECT * FROM {quoted}"):
+                    idx, dname = int(row[0]), str(row[1] or "")
+                    dev_lookup[table][dname] = idx
+                    for m, _ in metrics:
+                        b = m_off[m]
+                        existing_bindings[(table, idx, "m", m)] = (row[b + 6], row[b + 7])
+                    for c, _ in controls:
+                        b = c_off[c]
+                        existing_bindings[(table, idx, "c", c)] = (row[b + 5], row[b + 6])
+
+            add_metrics_by_table = defaultdict(set)
+            add_controls_by_table = defaultdict(set)
+            plan_ops = []
+            seen_target = set()
+
+            for kind, rtu, pnt, full_name, eng_min, eng_max in src_points:
+                parts = full_name.split(".")
+                if len(parts) < 3:
+                    unmatched += 1
+                    continue
+                table_name = parts[0]
+                attr = parts[-1]
+                dev_name = ".".join(parts[1:-1])
+                if (
+                    table_name not in dev_lookup
+                    or not _METRIC_NAME_RE.fullmatch(attr)
+                    or attr in ("idx", "name")
+                    or attr.endswith(RESERVED_METRIC_SUFFIXES)
+                ):
+                    unmatched += 1
+                    continue
+                idx = dev_lookup[table_name].get(dev_name)
+                if idx is None:
+                    unmatched += 1
+                    continue
+                is_ctrl = kind in ("yk", "yt")
+                # 防止同名跨类冲突
+                if is_ctrl and attr in table_existing_metrics[table_name]:
+                    unmatched += 1
+                    continue
+                if not is_ctrl and attr in table_existing_controls[table_name]:
+                    unmatched += 1
+                    continue
+                slot_key = (table_name, idx, "c" if is_ctrl else "m", attr)
+                if slot_key in seen_target:
+                    continue
+                seen_target.add(slot_key)
+                cur_pair = existing_bindings.get(slot_key)
+                cur_bound = cur_pair is not None and _is_valid_point_config(cur_pair[0], cur_pair[1])
+                if cur_bound and int(cur_pair[0]) == rtu and int(cur_pair[1]) == pnt:
+                    unchanged += 1
+                    continue
+                lo = _parse_limit_number(eng_min) if kind == "yt" else None
+                hi = _parse_limit_number(eng_max) if kind == "yt" else None
+                if not (lo is not None and hi is not None and hi > lo):
+                    lo, hi = None, None
+                op = dict(
+                    action="update" if cur_bound else "add",
+                    table=table_name,
+                    idx=idx,
+                    device_name=dev_name,
+                    attr=attr,
+                    kind=kind,
+                    rtu_id=rtu,
+                    pnt_no=pnt,
+                    min_value=lo,
+                    max_value=hi,
+                )
+                if cur_bound:
+                    to_update.append(op)
+                else:
+                    to_add.append(op)
+                plan_ops.append(op)
+                if is_ctrl:
+                    add_controls_by_table[table_name].add((attr, kind))
+                else:
+                    add_metrics_by_table[table_name].add((attr, kind))
+
+            if not dry_run and plan_ops:
+                all_tables = sorted(set(add_metrics_by_table) | set(add_controls_by_table))
+                for tbl in all_tables:
+                    self._ensure_device_table(
+                        con,
+                        tbl,
+                        initial_metrics=sorted(add_metrics_by_table.get(tbl, ())),
+                        initial_controls=sorted(add_controls_by_table.get(tbl, ())),
+                        sync_schema=False,
+                    )
+                for op in plan_ops:
+                    quoted = _quote_table(op["table"])
+                    attr = op["attr"]
+                    if op["kind"] in ("yk", "yt"):
+                        con.execute(
+                            f"""UPDATE {quoted} SET
+                                {_quote_col(attr + '_cmd_status')}=COALESCE({_quote_col(attr + '_cmd_status')}, ?),
+                                {_quote_col(attr + '_cmd_notuse')}=0,
+                                {_quote_col(attr + '_cmd_rtu')}=?,
+                                {_quote_col(attr + '_cmd_pnt')}=?,
+                                {_quote_col(attr + '_cmd_max')}=COALESCE(?, {_quote_col(attr + '_cmd_max')}),
+                                {_quote_col(attr + '_cmd_min')}=COALESCE(?, {_quote_col(attr + '_cmd_min')})
+                            WHERE idx=?""",
+                            (
+                                CTRL_STATUS_IDLE,
+                                op["rtu_id"],
+                                op["pnt_no"],
+                                op["max_value"],
+                                op["min_value"],
+                                op["idx"],
+                            ),
+                        )
+                    else:
+                        con.execute(
+                            f"""UPDATE {quoted} SET
+                                {_quote_col(attr + '_qual')}=?,
+                                {_quote_col(attr + '_notuse')}=0,
+                                {_quote_col(attr + '_rtu')}=?,
+                                {_quote_col(attr + '_pnt')}=?
+                            WHERE idx=?""",
+                            (QUAL_COMM_ERROR, op["rtu_id"], op["pnt_no"], op["idx"]),
+                        )
+                _sync_device_rtdb_schema(con)
+
+        if not dry_run and plan_ops:
+            self._record_change(
+                "sync_bindings",
+                None,
+                {},
+                dict(
+                    scope=scope,
+                    source_database=source_db,
+                    added=len(to_add),
+                    updated=len(to_update),
+                    unchanged=unchanged,
+                ),
+            )
+            self._emit_file_log(
+                "control",
+                "INFO",
+                f"一键同步绑定完成 范围={scope} 源库={source_db} 新增={len(to_add)} 更新={len(to_update)} 未变={unchanged}",
+            )
+            self.bump_config_epoch()
+
+        return dict(
+            dry_run=bool(dry_run),
+            scope=scope,
+            source_database=source_db,
+            total_source=len(src_points),
+            matched=len(to_add) + len(to_update) + unchanged,
+            to_add=len(to_add),
+            to_update=len(to_update),
+            unchanged=unchanged,
+            unmatched=unmatched,
+            preview=(to_add + to_update)[:30],
+        )
 
     @staticmethod
     def _normalize_control_value(kind, raw_value, max_val=None, min_val=None):

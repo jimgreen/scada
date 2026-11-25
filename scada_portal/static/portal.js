@@ -46,11 +46,18 @@
     // 设备图状态
     devCategories: [],
     devCategory: "",
+    devFilter: "all", // "all" | "alarm" | "running"
     devItems: [],
     devSelected: null, // { table_name, idx, dev_id }
     trendData: null,
     trendHidden: new Set(),
     trendHoverX: null,
+    compareTargets: [], // [{ key, table_name, idx, metric, label }]
+    compareMode: false,
+    ctrlDrafts: new Map(), // `${table}:${idx}:${control}` -> rawString
+    // 告警中心状态
+    alarmType: "",
+    alarmItems: [],
     // 通信图状态
     commTab: "overview",
     commPointKind: "yc",
@@ -143,6 +150,80 @@
 
   function apiPut(url, body, opts) {
     return fetchJson(url, { ...(opts || {}), method: "PUT", body });
+  }
+
+  function apiPost(url, body, opts) {
+    return fetchJson(url, { ...(opts || {}), method: "POST", body });
+  }
+
+  // 动态同步顶栏跳转 scdfe_d（同主机 8980 端口）
+  const jumpDLink = $("#portal-jump-d");
+  if (jumpDLink) {
+    jumpDLink.href = `${location.protocol}//${location.hostname}:8980/`;
+  }
+
+  function updateAlarmBadge(unacked) {
+    const badge = $("#nav-alarm-badge");
+    if (!badge) return;
+    const count = Number(unacked || 0);
+    badge.hidden = count <= 0;
+    badge.textContent = count > 99 ? "99+" : String(count);
+  }
+
+  function ctrlStatusBadge(c) {
+    const st = Number(c.cmd_status ?? 0);
+    if (c.disabled || st === 5) return '<span class="badge muted">控制禁用</span>';
+    if (st === 1) return '<span class="badge warn">待回执</span>';
+    if (st === 2) return '<span class="badge ok">执行成功</span>';
+    if (st === 3) return '<span class="badge danger">执行失败</span>';
+    return '<span class="badge muted">空闲</span>';
+  }
+
+  async function dispatchPortalControl(dev, ctrl, rawValue) {
+    if (!dev || !ctrl) return;
+    const isYk = ctrl.kind === "yk";
+    let parsedValue;
+    if (isYk) {
+      parsedValue = Number(rawValue);
+    } else {
+      const txt = String(rawValue ?? "").trim();
+      if (!txt) {
+        setConnection(false, "请输入有效的遥调设定值");
+        return;
+      }
+      parsedValue = Number(txt);
+      if (!Number.isFinite(parsedValue)) {
+        setConnection(false, "遥调设定值必须为有限数值");
+        return;
+      }
+      if (ctrl.max_value != null && ctrl.min_value != null && Number(ctrl.max_value) > Number(ctrl.min_value)) {
+        if (parsedValue > Number(ctrl.max_value) || parsedValue < Number(ctrl.min_value)) {
+          setConnection(false, `设定值 ${parsedValue} 超出限值 [${ctrl.min_value}, ${ctrl.max_value}]`);
+          return;
+        }
+      }
+    }
+    const actionDesc = isYk
+      ? (parsedValue === 1 ? "合 / 启 (1)" : "分 / 停 (0)")
+      : `${parsedValue}${ctrl.unit ? " " + ctrl.unit : ""}`;
+    const msg = `目标设备：${dev.name}（${dev.table_name} #${dev.idx}）\n控调属性：${ctrl.label || ctrl.control} [${ctrl.control}] · RTU ${ctrl.rtu_id} / #${ctrl.point_no}\n下发目标值：${actionDesc}\n确认立即写入并下发指令？`;
+    const ok = typeof window.scadaConfirm === "function"
+      ? await window.scadaConfirm(msg, {
+          title: isYk ? "确认下发遥控指令" : "确认下发遥调指令",
+          confirmText: "确认下发",
+          danger: true,
+        })
+      : false;
+    if (!ok) return;
+    const key = `${dev.table_name}:${dev.idx}:${ctrl.control}`;
+    await apiPost(
+      `/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/control`,
+      { control: ctrl.control, value: parsedValue }
+    );
+    state.ctrlDrafts.delete(key);
+    setConnection(true, `已下发 ${dev.name} · ${ctrl.label || ctrl.control} = ${actionDesc}`);
+    if (state.view === "devices") await loadDevices();
+    else if (state.view === "powerflow") await loadPowerflow();
   }
 
   function qualityBadge(m) {
@@ -253,7 +334,7 @@
 
   // ==================== 视图切换与路由 ====================
   function switchView(view, updateHash = true) {
-    const valid = ["home", "energyflow", "powerflow", "devices", "comm", "logs"];
+    const valid = ["home", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
     if (!valid.includes(view)) view = "home";
     state.view = view;
     document.body.classList.toggle("view-home", view === "home");
@@ -437,6 +518,7 @@
     const rt = data.realtime || {};
     const h = data.health || {};
     lastRealtimeEnergy = rt;
+    updateAlarmBadge(h.alarm_unacked);
 
     $("#kpi-days").textContent = k.running_days ?? "--";
     $("#kpi-load-total").textContent = fmtNum(k.load_total_wkwh, 1);
@@ -1026,6 +1108,56 @@
     $("#pf-dev-pop-metrics").innerHTML = params.length
       ? buildKvTableHtml(params)
       : '<div class="empty-hint">暂无设备模型参数</div>';
+
+    // 潮流图设备弹窗就地控调区（存在 YK/YT 时展示）
+    const ctrlHost = $("#pf-dev-pop-controls");
+    if (ctrlHost) {
+      const ctrls = dev.controls || [];
+      if (!ctrls.length) {
+        ctrlHost.hidden = true;
+        ctrlHost.innerHTML = "";
+      } else {
+        ctrlHost.hidden = false;
+        ctrlHost.innerHTML =
+          '<div class="pf-pop-controls-title">就地控调（YK / YT）</div>' +
+          ctrls.map((c, ci) => {
+            const disabled = Boolean(c.disabled);
+            const key = `${dev.table_name}:${dev.idx}:${c.control}`;
+            const draft = state.ctrlDrafts.has(key) ? state.ctrlDrafts.get(key) : (c.value == null ? "" : String(c.value));
+            const ops = c.kind === "yk"
+              ? `<span class="ctrl-btn-group"><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="1"${disabled ? " disabled" : ""}>合/启</button><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="0"${disabled ? " disabled" : ""}>分/停</button></span>`
+              : `<span class="ctrl-btn-group"><input class="ctrl-inline-input pf-pop-ctrl-yt" type="number" step="any" data-pf-yt-input="${ci}" value="${esc(draft)}" placeholder="${esc(c.unit || "设定值")}"${disabled ? " disabled" : ""}><button type="button" class="btn primary" data-pf-yt-send="${ci}"${disabled ? " disabled" : ""}>下发</button></span>`;
+            return `<div class="pf-pop-ctrl-row"><span class="pf-pop-ctrl-name" title="${esc(c.control)}">${esc(c.label || c.control)}</span>${ctrlStatusBadge(c)}${ops}</div>`;
+          }).join("");
+        ctrlHost.querySelectorAll("[data-pf-yt-input]").forEach((inp) => {
+          inp.addEventListener("input", () => {
+            const c = ctrls[Number(inp.dataset.pfYtInput)];
+            if (c) state.ctrlDrafts.set(`${dev.table_name}:${dev.idx}:${c.control}`, inp.value);
+          });
+          inp.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const c = ctrls[Number(inp.dataset.pfYtInput)];
+              dispatchPortalControl(dev, c, inp.value).catch((err) => setConnection(false, err.message));
+            }
+          });
+        });
+        ctrlHost.querySelectorAll("[data-pf-yk]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const c = ctrls[Number(btn.dataset.pfYk)];
+            dispatchPortalControl(dev, c, Number(btn.dataset.val)).catch((err) => setConnection(false, err.message));
+          });
+        });
+        ctrlHost.querySelectorAll("[data-pf-yt-send]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const ci = Number(btn.dataset.pfYtSend);
+            const c = ctrls[ci];
+            const inp = ctrlHost.querySelector(`[data-pf-yt-input="${ci}"]`);
+            dispatchPortalControl(dev, c, inp ? inp.value : c?.value).catch((err) => setConnection(false, err.message));
+          });
+        });
+      }
+    }
   }
 
   function showDevicePopover(devId, clientX, clientY, highlight = false) {
@@ -1651,6 +1783,14 @@
       return loadDevices();
     }
     state.devItems = data.items || [];
+    const filteredDevs = state.devItems.filter((d) => {
+      if (state.devFilter === "alarm") return Number(d.alarm_count || 0) > 0;
+      if (state.devFilter === "running") {
+        if (d.position !== null) return Boolean(d.position);
+        return d.run !== 0;
+      }
+      return true;
+    });
 
     // 渲染设备类别标签
     const tabsEl = $("#dev-cat-tabs");
@@ -1670,26 +1810,26 @@
 
     const curCat = state.devCategories.find((c) => c.key === state.devCategory);
     $("#dev-list-title").textContent = curCat ? curCat.label : "设备列表";
-    $("#dev-list-count").textContent = String(state.devItems.length);
+    $("#dev-list-count").textContent = String(filteredDevs.length);
 
     // 选中默认或保持原选中设备
     let activeDev = state.devSelected
-      ? state.devItems.find((d) => d.dev_id === state.devSelected.dev_id)
+      ? filteredDevs.find((d) => d.dev_id === state.devSelected.dev_id)
       : null;
-    if (!activeDev && state.devItems.length) {
-      activeDev = state.devItems[0];
+    if (!activeDev && filteredDevs.length) {
+      activeDev = filteredDevs[0];
       state.devSelected = { table_name: activeDev.table_name, idx: activeDev.idx, dev_id: activeDev.dev_id };
       state.trendHidden.clear();
     }
 
     const listEl = $("#dev-list");
-    if (!state.devItems.length) {
+    if (!filteredDevs.length) {
       listEl.innerHTML = '<div class="empty-hint">无匹配设备</div>';
       renderDeviceDetail(null);
       return;
     }
 
-    listEl.innerHTML = state.devItems
+    listEl.innerHTML = filteredDevs
       .map((d) => {
         const selected = activeDev && d.dev_id === activeDev.dev_id;
         const okBadge =
@@ -1698,9 +1838,12 @@
             : d.run === 0
               ? '<span class="badge warn">停运</span>'
               : '<span class="badge ok">运行</span>';
+        const alarmDot = Number(d.alarm_count || 0) > 0
+          ? `<span class="dev-alarm-dot" title="当前 ${d.alarm_count} 项告警"></span>`
+          : "";
         return (
           `<button type="button" class="dev-item ${selected ? "selected" : ""}" data-dev-id="${esc(d.dev_id)}">` +
-          `<div class="dev-item-top"><strong title="${esc(d.name)}">${esc(d.name)}</strong>${okBadge}</div>` +
+          `<div class="dev-item-top"><strong title="${esc(d.name)}">${alarmDot}${esc(d.name)}</strong>${okBadge}</div>` +
           `<div class="dev-item-sub"><span>${esc(d.table_name)} #${d.idx}</span><span class="num">${esc(primaryMetricSummary(d))}</span></div>` +
           `</button>`
         );
@@ -1709,40 +1852,216 @@
 
     listEl.querySelectorAll(".dev-item").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const dev = state.devItems.find((x) => x.dev_id === btn.dataset.devId);
+        const dev = filteredDevs.find((x) => x.dev_id === btn.dataset.devId);
         if (!dev) return;
         state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
         state.trendHidden.clear();
         listEl.querySelectorAll(".dev-item").forEach((el) => el.classList.toggle("selected", el === btn));
         renderDeviceDetail(dev);
-        loadDeviceTrend(dev);
+        if (state.compareMode && state.compareTargets.length) loadCompareTrends();
+        else loadDeviceTrend(dev);
       });
     });
 
     renderDeviceDetail(activeDev);
-    if (activeDev) await loadDeviceTrend(activeDev);
+    if (state.compareMode && state.compareTargets.length) await loadCompareTrends();
+    else if (activeDev) await loadDeviceTrend(activeDev);
+  }
+
+  function pickPrimaryMetric(dev) {
+    const order = ["p", "i_p", "ac_p", "dc_p", "soc", "uab", "u", "pressure", "flow", "ia", "i"];
+    for (const key of order) {
+      const m = (dev?.metrics || []).find((x) => x.metric === key && x.kind === "yc");
+      if (m) return m;
+    }
+    return (dev?.metrics || []).find((x) => x.kind === "yc") || null;
+  }
+
+  function updateCompareBarUI() {
+    const bar = $("#compare-pill-bar");
+    const badge = $("#compare-count-badge");
+    const toggleBtn = $("#compare-toggle-btn");
+    const titleEl = $("#trend-title-text");
+    if (!bar) return;
+    const cnt = state.compareTargets.length;
+    bar.hidden = cnt === 0;
+    if (badge) badge.textContent = `对比 ${cnt}`;
+    if (toggleBtn) {
+      toggleBtn.textContent = state.compareMode ? "返回单设备" : "同图对比";
+      toggleBtn.classList.toggle("primary", state.compareMode);
+    }
+    if (titleEl) {
+      titleEl.textContent = state.compareMode ? `多设备曲线对比（${cnt} 项）` : "设备日曲线";
+    }
+  }
+
+  async function loadCompareTrends() {
+    if (!state.compareTargets.length) {
+      state.compareMode = false;
+      updateCompareBarUI();
+      return;
+    }
+    const seq = ++trendReqSeq;
+    const hours = Number($("#trend-hours")?.value || 24);
+    const targetsParam = state.compareTargets.map((t) => t.key).join(",");
+    const data = await api(`/api/trends/compare?targets=${encodeURIComponent(targetsParam)}&hours=${hours}`);
+    if (seq !== trendReqSeq) return;
+    state.trendData = data;
+    updateCompareBarUI();
+    renderTrendChips();
+    drawTrendChart();
+  }
+
+  function exportTrendCsv() {
+    const series = (state.trendData?.series || []).filter((s) => !state.trendHidden.has(s.key || s.metric));
+    if (!series.length) {
+      setConnection(false, "当前无可导出的曲线数据");
+      return;
+    }
+    const tsSet = new Set();
+    const maps = series.map((s) => {
+      const m = new Map();
+      (s.points || []).forEach(([t, v]) => {
+        tsSet.add(t);
+        m.set(t, v);
+      });
+      return m;
+    });
+    const sortedTs = Array.from(tsSet).sort((a, b) => a - b);
+    const header = ["时间", ...series.map((s) => `${s.label}${s.unit ? " (" + s.unit + ")" : ""}`)];
+    const csvRows = [header.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(",")];
+    for (const ts of sortedTs) {
+      const row = [fmtTime(ts), ...maps.map((m) => (m.has(ts) ? String(m.get(ts)) : ""))];
+      csvRows.push(row.join(","));
+    }
+    const blob = new Blob(["\uFEFF" + csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scada-trend-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderDeviceControls(dev) {
+    const panel = $("#dev-control-panel");
+    const tbody = $("#dev-ctrl-body");
+    const hint = $("#dev-ctrl-hint");
+    if (!panel || !tbody) return;
+    const ctrls = dev?.controls || [];
+    if (!dev || !ctrls.length) {
+      panel.hidden = true;
+      tbody.innerHTML = "";
+      return;
+    }
+    panel.hidden = false;
+    if (hint) hint.textContent = `${ctrls.length} 项控调 · RTU ${ctrls[0].rtu_id}`;
+    tbody.innerHTML = ctrls.map((c, ci) => {
+      const disabled = Boolean(c.disabled);
+      const key = `${dev.table_name}:${dev.idx}:${c.control}`;
+      const draft = state.ctrlDrafts.has(key) ? state.ctrlDrafts.get(key) : (c.value == null ? "" : String(c.value));
+      const valCell = c.kind === "yt"
+        ? `<td class="ctrl-cell-input"><input class="ctrl-inline-input" type="number" step="any" data-dev-yt-input="${ci}" value="${esc(draft)}" placeholder="${esc(c.unit ? "设定(" + c.unit + ")" : "输入设定值")}"${disabled ? " disabled" : ""}></td>`
+        : `<td class="num">${c.value == null ? "—" : (Number(c.value) === 1 ? "1 · 合/启" : "0 · 分/停")}</td>`;
+      const limStr = (c.min_value == null && c.max_value == null) ? "—" : `${fmtLimitCompact(c.min_value)} ~ ${fmtLimitCompact(c.max_value)}`;
+      const opCell = c.kind === "yk"
+        ? `<span class="ctrl-btn-group"><button type="button" class="btn secondary" data-dev-yk="${ci}" data-val="1"${disabled ? " disabled" : ""}>合/启 (1)</button><button type="button" class="btn secondary" data-dev-yk="${ci}" data-val="0"${disabled ? " disabled" : ""}>分/停 (0)</button></span>`
+        : `<span class="ctrl-btn-group"><button type="button" class="btn primary" data-dev-yt-send="${ci}"${disabled ? " disabled" : ""}>下发</button></span>`;
+      return `<tr>` +
+        `<td><strong>${esc(c.label || c.control)}</strong> <small class="muted">${esc(c.control)}${c.unit ? " · " + esc(c.unit) : ""}</small></td>` +
+        `<td><span class="badge">${esc(c.kind.toUpperCase())}</span></td>` +
+        valCell +
+        `<td class="num">${esc(limStr)}</td>` +
+        `<td>${ctrlStatusBadge(c)}</td>` +
+        `<td>${opCell}</td>` +
+        `</tr>`;
+    }).join("");
+
+    tbody.querySelectorAll("[data-dev-yt-input]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const c = ctrls[Number(inp.dataset.devYtInput)];
+        if (!c) return;
+        state.ctrlDrafts.set(`${dev.table_name}:${dev.idx}:${c.control}`, inp.value);
+        const raw = inp.value.trim();
+        const v = raw === "" ? null : Number(raw);
+        const bad = raw !== "" && (!Number.isFinite(v) || (
+          c.max_value != null && c.min_value != null && Number(c.max_value) > Number(c.min_value)
+          && (v > Number(c.max_value) || v < Number(c.min_value))
+        ));
+        inp.classList.toggle("limit-invalid", bad);
+      });
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const c = ctrls[Number(inp.dataset.devYtInput)];
+          dispatchPortalControl(dev, c, inp.value).catch((err) => setConnection(false, err.message));
+        }
+      });
+    });
+    tbody.querySelectorAll("[data-dev-yk]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const c = ctrls[Number(btn.dataset.devYk)];
+        dispatchPortalControl(dev, c, Number(btn.dataset.val)).catch((err) => setConnection(false, err.message));
+      });
+    });
+    tbody.querySelectorAll("[data-dev-yt-send]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const ci = Number(btn.dataset.devYtSend);
+        const c = ctrls[ci];
+        const inp = tbody.querySelector(`[data-dev-yt-input="${ci}"]`);
+        dispatchPortalControl(dev, c, inp ? inp.value : c?.value).catch((err) => setConnection(false, err.message));
+      });
+    });
   }
 
   function renderDeviceDetail(dev) {
     const grid = $("#dev-metric-grid");
     const locBtn = $("#dev-locate-svg");
+    const cmpBtn = $("#dev-add-compare");
+    renderDeviceControls(dev);
     if (!dev) {
       $("#dev-detail-name").textContent = "请选择左侧设备";
       $("#dev-detail-meta").textContent = "";
       grid.innerHTML = "";
       locBtn.disabled = true;
+      if (cmpBtn) cmpBtn.disabled = true;
       state.trendData = null;
       drawTrendChart();
       return;
     }
     $("#dev-detail-name").textContent = dev.name;
-    $("#dev-detail-meta").textContent = `${dev.table_name} · 编号 #${dev.idx} · 有效量测 ${dev.valid_count}/${dev.bound_count}`;
+    $("#dev-detail-meta").textContent = `${dev.table_name} · 编号 #${dev.idx} · 有效量测 ${dev.valid_count}/${dev.bound_count}` +
+      (dev.control_count ? ` · 控调 ${dev.control_count}` : "");
     locBtn.disabled = false;
     locBtn.onclick = async () => {
       switchView("powerflow");
       await loadPowerflow();
       focusSvgDevice(dev.dev_id);
     };
+    const primary = pickPrimaryMetric(dev);
+    if (cmpBtn) {
+      cmpBtn.disabled = !primary;
+      cmpBtn.onclick = () => {
+        if (!primary) return;
+        const key = `${dev.table_name}:${dev.idx}:${primary.metric}`;
+        if (!state.compareTargets.some((t) => t.key === key)) {
+          if (state.compareTargets.length >= 8) {
+            setConnection(false, "最多同时对比 8 条曲线");
+            return;
+          }
+          state.compareTargets.push({
+            key,
+            table_name: dev.table_name,
+            idx: dev.idx,
+            metric: primary.metric,
+            label: `${dev.name} · ${primary.label}`,
+          });
+        }
+        state.compareMode = true;
+        updateCompareBarUI();
+        loadCompareTrends().catch((err) => setConnection(false, err.message));
+      };
+    }
     grid.innerHTML = (dev.metrics || [])
       .map((m, idx) => {
         const valStr = m.kind === "yx"
@@ -1804,10 +2123,11 @@
     const palette = chartPalette();
     el.innerHTML = series
       .map((s, idx) => {
+        const skey = s.key || s.metric;
         const color = palette.colors[idx % palette.colors.length];
-        const hidden = state.trendHidden.has(s.metric);
+        const hidden = state.trendHidden.has(skey);
         return (
-          `<button type="button" class="series-chip ${hidden ? "muted" : ""}" data-metric="${esc(s.metric)}">` +
+          `<button type="button" class="series-chip ${hidden ? "muted" : ""}" data-metric="${esc(skey)}">` +
           `<span class="chip-dot" style="background:${color}"></span>` +
           `<span>${esc(s.label)}${s.unit ? " (" + esc(s.unit) + ")" : ""}</span>` +
           `</button>`
@@ -1847,7 +2167,7 @@
     const allSeries = state.trendData?.series || [];
     const visible = allSeries
       .map((s, idx) => ({ ...s, color: pal.colors[idx % pal.colors.length] }))
-      .filter((s) => !state.trendHidden.has(s.metric) && s.points && s.points.length);
+      .filter((s) => !state.trendHidden.has(s.key || s.metric) && s.points && s.points.length);
 
     if (!visible.length) {
       ctx.fillStyle = pal.axis;
@@ -2028,7 +2348,8 @@
     drawTrendChart();
   });
   $("#trend-hours")?.addEventListener("change", () => {
-    if (state.devSelected) loadDeviceTrend(state.devSelected).catch(() => {});
+    if (state.compareMode && state.compareTargets.length) loadCompareTrends().catch(() => {});
+    else if (state.devSelected) loadDeviceTrend(state.devSelected).catch(() => {});
   });
   $("#dev-search")?.addEventListener("input", debounce(() => loadDevices().catch(() => {}), 250));
 
@@ -2445,12 +2766,160 @@
     $("#ef-qual-ok").textContent = `${s.valid_measurements ?? 0}`;
     $("#ef-qual-limit").textContent = `${s.over_limit_count ?? 0} / ${s.under_limit_count ?? 0}`;
     $("#ef-qual-comm").textContent = `${s.comm_error_count ?? 0}`;
-    // 同步刷新左侧边栏健康摘要，无需额外重复请求 /api/overview
+    // 同步刷新左侧边栏健康摘要与告警徽标，无需额外重复请求 /api/overview
     if ($("#health-rtus")) $("#health-rtus").textContent = `${s.rtu_online ?? 0} / ${s.rtu_total ?? 0}`;
     if ($("#health-points")) $("#health-points").textContent = `${s.valid_measurements ?? 0} / ${s.bound_measurements ?? 0}`;
     if ($("#health-gen")) $("#health-gen").textContent = `${fmtNum(s.total_gen_kw, 1)} kW`;
     if ($("#health-load")) $("#health-load").textContent = `${fmtNum(s.total_load_kw, 1)} kW`;
+    updateAlarmBadge(s.alarm_unacked);
   }
+
+  // ==================== 3.5 告警与越限中心 ====================
+  let alarmReqSeq = 0;
+
+  function alarmTypeBadge(type) {
+    if (type === "over_max") return '<span class="badge over">越上限</span>';
+    if (type === "under_min") return '<span class="badge under">越下限</span>';
+    if (type === "control_failed") return '<span class="badge danger">控调失败</span>';
+    return '<span class="badge danger">通信异常</span>';
+  }
+
+  async function loadAlarms() {
+    const seq = ++alarmReqSeq;
+    const qs = new URLSearchParams();
+    if (state.alarmType) qs.set("type", state.alarmType);
+    const ackVal = $("#alarm-ack-filter")?.value || "";
+    if (ackVal !== "") qs.set("acked", ackVal);
+    const kw = ($("#alarm-search")?.value || "").trim();
+    if (kw) qs.set("search", kw);
+    const data = await api("/api/alarms?" + qs.toString());
+    if (seq !== alarmReqSeq) return;
+    const sm = data.summary || {};
+    updateAlarmBadge(sm.unacked);
+    state.alarmItems = data.items || [];
+
+    const sumEl = $("#alarm-summary");
+    if (sumEl) {
+      sumEl.innerHTML =
+        `<div class="comm-stat-item"><span class="cs-lbl">活动告警</span><strong>${sm.total ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">未确认</span><strong style="color:var(--danger,#f43f5e)">${sm.unacked ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">越上限</span><strong>${sm.over_max ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">越下限</span><strong>${sm.under_min ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">通信异常</span><strong>${sm.comm_error ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">控调失败</span><strong>${sm.control_failed ?? 0}</strong></div>`;
+    }
+
+    const tbody = $("#alarm-tbody");
+    if (!tbody) return;
+    if (!state.alarmItems.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="empty-hint">当前筛选条件下无活动告警</td></tr>';
+      return;
+    }
+    tbody.innerHTML = state.alarmItems.map((a, idx) => {
+      const valStr = a.value == null ? "—" : `${fmtNum(a.value, 2)}${a.unit ? " " + esc(a.unit) : ""}`;
+      const ackBadge = a.acked
+        ? '<span class="badge muted">已确认</span>'
+        : '<span class="badge danger">未确认</span>';
+      return `<tr class="${a.acked ? "alarm-row-acked" : ""}">` +
+        `<td>${alarmTypeBadge(a.type)}</td>` +
+        `<td><strong>${esc(a.device_name)}</strong> <small class="muted">${esc(a.table_name)} #${a.idx}</small></td>` +
+        `<td>${esc(a.attr_label)} <small class="muted">${esc(a.attr)}</small></td>` +
+        `<td class="num">${valStr}</td>` +
+        `<td>${esc(a.detail)}</td>` +
+        `<td class="num">RTU ${a.rtu_id ?? "-"} / #${a.point_no ?? "-"}</td>` +
+        `<td>${esc(fmtTime(a.time_ms || a.time_iso))}</td>` +
+        `<td>${ackBadge}</td>` +
+        `<td><span class="alarm-ops">` +
+        (a.acked ? "" : `<button type="button" class="btn secondary" data-alarm-ack="${idx}">确认</button>`) +
+        `<button type="button" class="btn secondary" data-alarm-loc="${idx}">定位</button>` +
+        `<button type="button" class="btn secondary" data-alarm-dev="${idx}">曲线</button>` +
+        `</span></td></tr>`;
+    }).join("");
+
+    tbody.querySelectorAll("[data-alarm-ack]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = state.alarmItems[Number(btn.dataset.alarmAck)];
+        if (!a) return;
+        await apiPost("/api/alarms/ack", { keys: [a.key] });
+        await loadAlarms();
+      });
+    });
+    tbody.querySelectorAll("[data-alarm-loc]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = state.alarmItems[Number(btn.dataset.alarmLoc)];
+        if (!a) return;
+        switchView("powerflow");
+        await loadPowerflow();
+        focusSvgDevice(a.dev_id);
+      });
+    });
+    tbody.querySelectorAll("[data-alarm-dev]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const a = state.alarmItems[Number(btn.dataset.alarmDev)];
+        if (!a) return;
+        state.devCategory = a.category || "";
+        state.devSelected = { table_name: a.table_name, idx: a.idx, dev_id: a.dev_id };
+        state.compareMode = false;
+        switchView("devices");
+      });
+    });
+  }
+
+  $$("#alarm-type-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.alarmType = btn.dataset.alarmType || "";
+      $$("#alarm-type-tabs .tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      loadAlarms().catch(() => {});
+    });
+  });
+  $("#alarm-ack-filter")?.addEventListener("change", () => loadAlarms().catch(() => {}));
+  $("#alarm-search")?.addEventListener("input", debounce(() => loadAlarms().catch(() => {}), 250));
+  $("#alarm-ack-all")?.addEventListener("click", async () => {
+    const ok = typeof window.scadaConfirm === "function"
+      ? await window.scadaConfirm("确认将当前全部未确认活动告警标记为已确认？", {
+          title: "确认全部告警",
+          confirmText: "全部确认",
+          danger: false,
+        })
+      : false;
+    if (!ok) return;
+    await apiPost("/api/alarms/ack", { ack_all: true });
+    await loadAlarms();
+  });
+
+  // 设备图快滤、多设备对比与 CSV 导出事件绑定
+  $$("#dev-state-tabs .sub-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.devFilter = btn.dataset.devFilter || "all";
+      $$("#dev-state-tabs .sub-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      loadDevices().catch(() => {});
+    });
+  });
+  $("#compare-toggle-btn")?.addEventListener("click", () => {
+    state.compareMode = !state.compareMode;
+    updateCompareBarUI();
+    if (state.compareMode) {
+      loadCompareTrends().catch((err) => setConnection(false, err.message));
+    } else if (state.devSelected) {
+      loadDeviceTrend(state.devSelected).catch(() => {});
+    }
+  });
+  $("#compare-clear-btn")?.addEventListener("click", () => {
+    state.compareTargets = [];
+    state.compareMode = false;
+    updateCompareBarUI();
+    if (state.devSelected) loadDeviceTrend(state.devSelected).catch(() => {});
+  });
+  $("#trend-export-csv")?.addEventListener("click", exportTrendCsv);
+
+  // 全景流向右侧越限/异常项点击直达告警中心
+  $$("#view-energyflow [data-jump-alarm]").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.alarmType = el.dataset.jumpAlarm || "";
+      $$("#alarm-type-tabs .tab-btn").forEach((b) => b.classList.toggle("active", (b.dataset.alarmType || "") === state.alarmType));
+      switchView("alarms");
+    });
+  });
 
   $$("#view-energyflow [data-jump-cat]").forEach((node) => {
     node.setAttribute("tabindex", "0");
@@ -2490,7 +2959,9 @@
         tasks.push(loadEnergyFlow());
       } else {
         if (viewAtStart === "powerflow") tasks.push(loadPowerflow());
-        else if (viewAtStart === "devices") tasks.push(loadDevices());
+        else if (viewAtStart === "devices") {
+          if (!document.activeElement?.matches(".ctrl-inline-input")) tasks.push(loadDevices());
+        } else if (viewAtStart === "alarms") tasks.push(loadAlarms());
         else if (viewAtStart === "comm") tasks.push(loadComm());
         else if (viewAtStart === "logs") tasks.push(loadLogs());
         // 非首页每 3 轮顺带并行刷新一次侧栏健康摘要，避免每次轮询串行重复拉取 /api/overview
@@ -2525,8 +2996,9 @@
     if (e.key === "/") {
       const searchSel = state.view === "powerflow" ? "#pf-search"
         : state.view === "devices" ? "#dev-search"
-          : state.view === "comm" ? "#comm-point-search"
-            : state.view === "logs" ? "#log-keyword" : null;
+          : state.view === "alarms" ? "#alarm-search"
+            : state.view === "comm" ? "#comm-point-search"
+              : state.view === "logs" ? "#log-keyword" : null;
       const input = searchSel ? $(searchSel) : null;
       if (input) {
         e.preventDefault();
@@ -2535,7 +3007,7 @@
       }
       return;
     }
-    const keyViewMap = { "1": "home", "2": "energyflow", "3": "powerflow", "4": "devices", "5": "comm", "6": "logs" };
+    const keyViewMap = { "1": "home", "2": "energyflow", "3": "powerflow", "4": "devices", "5": "alarms", "6": "comm", "7": "logs" };
     if (keyViewMap[e.key]) {
       switchView(keyViewMap[e.key]);
     }
@@ -2581,16 +3053,17 @@
     }).observe($("#hero-stage"));
   }
 
-  // 启动入口（同时支持 #hash 与 /energy-flow 等路径直达）
+  // 启动入口（同时支持 #hash 与 /energy-flow、/alarms 等路径直达）
   const initialHash = location.hash.replace(/^#/, "");
   const pathViewMap = {
     "/energy-flow": "energyflow",
     "/powerflow": "powerflow",
     "/devices": "devices",
+    "/alarms": "alarms",
     "/comm": "comm",
     "/logs": "logs",
   };
-  const validViews = ["home", "energyflow", "powerflow", "devices", "comm", "logs"];
+  const validViews = ["home", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
   const initialView = validViews.includes(initialHash)
     ? initialHash
     : (pathViewMap[location.pathname] || "home");

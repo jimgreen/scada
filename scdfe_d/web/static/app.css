@@ -245,3 +245,10 @@ td.ctrl-input-cell .ctrl-field.limit-invalid {
 .log-lvl.PROCESS { background:var(--success-soft, rgba(23,129,104,.16)); color:var(--success, #178168); }
 .log-lvl.WARNING { background:var(--warn-soft, rgba(217,119,6,.16)); color:var(--warn, #d97706); }
 .log-lvl.ERROR { background:var(--danger-soft, rgba(198,40,40,.16)); color:var(--danger, #c62828); }
+.overview-recent-ctrl { margin-top:10px; display:flex; flex-direction:column; gap:6px; max-height:190px; flex-shrink:0; }
+.recent-ctrl-head { display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:600; }
+.recent-ctrl-head a { font-weight:400; text-decoration:none; }
+.logs-bar .type-tabs { flex:0 0 auto; width:auto; gap:2px; padding:2px !important; }
+.logs-bar .type-tabs button { min-height:24px; padding:2px 8px !important; }
+.cat-links { display:inline-flex; gap:10px; }
+.cat-links a { text-decoration:none; }

@@ -131,6 +131,17 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
             if collector.running:
                 collector._wake.set()
             return self._json(200, result)
+        if parts == ["api", "sync-bindings"] and method == "POST":
+            body = self._body()
+            return self._json(
+                200,
+                store.sync_bindings_from_source(
+                    scope=body.get("scope", "all"),
+                    rtu_id=body.get("rtu_id"),
+                    dry_run=bool(body.get("dry_run", True)),
+                    source_database=body.get("source_database") or None,
+                ),
+            )
         if parts == ["api", "control-history"] and method == "GET":
             return self._json(200, store.control_history())
         if parts == ["api", "logs", "files"] and method == "GET":

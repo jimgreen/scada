@@ -94,13 +94,11 @@ T_PAGES = [
 
 D_PAGES = [
     ('运行管理', [('overview.html', '/', '◉', '设备采集', '设备量测采集状态与启停'),
-                  ('history.html', '/history', '≡', '采集与修改记录', '采集批次和映射修改记录'),
-                  ('logs.html', '/logs', '◷', '运行日志', '查看采集、控调监视与指令下发运行日志'),
+                  ('logs.html', '/logs', '◷', '运行日志与记录', '查看采集/控调运行日志、采集批次与修改记录'),
                   ('diagnostics.html', '/diagnostics', '◴', '运行诊断', '设备采集耗时与源库检查'),
                   POINT_TRENDS_PAGE]),
-    ('设备量测', [('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联'),
-                 ('measurements.html', '/measurements', '▦', '量测查询', '按设备查看实时量测值、时间和状态'),
-                 ('parameters.html', '/parameters', '≡', '参数配置', '按设备调整量测可用状态、权重和超时阈值')]),
+    ('设备量测', [('measurements.html', '/measurements', '▦', '量测与参数', '按设备实时监视量测值或批量调整量测参数'),
+                 ('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联')]),
     ('设备控制', [('controls.html', '/controls', '↗', '控调下发', '实时监控并下发设备遥控与遥调指令'),
                  ('control-mappings.html', '/control-mappings', '▥', '控调定义', '查询和维护设备遥控/遥调与 scdfe_c 测点的关联')]),
 ]
@@ -109,7 +107,14 @@ D_PAGES = [
 def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     """Wrap our trusted static templates; page controls/scripts stay intact."""
     groups = {"s": S_PAGES, "c": C_PAGES, "t": T_PAGES, "d": D_PAGES}[module]
-    active = "communication.html" if module == "t" and filename == "index.html" else filename
+    if module == "t" and filename == "index.html":
+        active = "communication.html"
+    elif module == "d" and filename == "parameters.html":
+        active = "measurements.html"
+    elif module == "d" and filename == "history.html":
+        active = "logs.html"
+    else:
+        active = filename
     page = next((item for _, items in groups for item in items if item[0] == active),
                 (filename, "/api-docs", "?", "接口文档", "通信服务接口说明"))
     links = []
@@ -146,7 +151,12 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
             links.append(f'<a class="nav" href="{href}"{current}>'
                          f'<span aria-hidden="true">{_nav_icon(icon)}</span><b>{label}</b></a>')
     label = {"s": "协议服务", "c": "运行工作台", "t": "四遥转发", "d": "设备量测"}[module]
-    api_link = '<a href="/api-docs">接口文档 ↗</a>' if module in ("s", "c") else ""
+    if module in ("s", "c"):
+        api_link = '<a href="/api-docs">接口文档 ↗</a>'
+    elif module == "d":
+        api_link = '<a id="jump-portal-link" href="http://127.0.0.1:8981/" target="_blank" rel="noopener">监控门户 ↗</a>'
+    else:
+        api_link = ""
     topbar = f'''<a class="workbench-skip" href="#workbench-content">跳到页面内容</a>
 <header class="workbench-topbar">
   <div class="workbench-brand"><span class="brand-icon" aria-hidden="true">S</span>

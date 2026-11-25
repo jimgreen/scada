@@ -451,6 +451,88 @@ class ScadaPortalTests(unittest.TestCase):
         conn.close()
         self.assertEqual(resp304.status, 304)
 
+    def test_alarms_local_control_compare_and_d_logs(self):
+        def http_json(method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+            body = json.dumps(payload).encode("utf-8") if payload is not None else None
+            headers = {"Content-Type": "application/json"} if payload is not None else {}
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            data = json.loads(resp.read().decode("utf-8"))
+            conn.close()
+            return resp.status, data
+
+        # 1. /alarms 页面与活动告警产生/确认闭环
+        status, _, page = http_get(self.httpd.server_port, "/alarms")
+        self.assertEqual(status, 200)
+        self.assertIn("view-alarms", page.decode("utf-8"))
+
+        st, _ = http_json("PUT", "/api/devices/ACGenerator/1/limits", {"metric": "p", "max_value": 40.0, "min_value": 0.0})
+        self.assertEqual(st, 200)
+        st, alarms = http_json("GET", "/api/alarms?type=over_max")
+        self.assertEqual(st, 200)
+        self.assertGreaterEqual(alarms["summary"]["over_max"], 1)
+        self.assertGreaterEqual(alarms["summary"]["unacked"], 1)
+
+        target_key = alarms["items"][0]["key"]
+        st, ack_res = http_json("POST", "/api/alarms/ack", {"keys": [target_key]})
+        self.assertEqual(st, 200)
+        self.assertEqual(ack_res["acked_count"], 1)
+        st, after_ack = http_json("GET", "/api/alarms?type=over_max&acked=0")
+        self.assertEqual(st, 200)
+        self.assertEqual(len(after_ack["items"]), 0)
+
+        # 恢复合理上限
+        http_json("PUT", "/api/devices/ACGenerator/1/limits", {"metric": "p", "max_value": 100.0, "min_value": 0.0})
+
+        # 2. 为 ACGenerator 增加控调列并测试门户就地控调写库
+        con = sqlite3.connect(self.d_db)
+        try:
+            con.executescript(
+                """
+                ALTER TABLE ACGenerator ADD COLUMN p_set REAL;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_time INTEGER;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_status INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_ack_time INTEGER;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_notuse INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_rtu INTEGER;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_pnt INTEGER;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_max REAL;
+                ALTER TABLE ACGenerator ADD COLUMN p_set_cmd_min REAL;
+                UPDATE ACGenerator SET p_set_cmd_rtu=3, p_set_cmd_pnt=1, p_set_cmd_max=100.0, p_set_cmd_min=0.0 WHERE idx=1;
+                """
+            )
+            con.commit()
+        finally:
+            con.close()
+        # 越限应拒绝（400）
+        st_bad, _ = http_json("POST", "/api/devices/ACGenerator/1/control", {"control": "p_set", "value": 150.0})
+        self.assertEqual(st_bad, 400)
+        # 合法值应写入待回执状态
+        st_ok, disp = http_json("POST", "/api/devices/ACGenerator/1/control", {"control": "p_set", "value": 55.5})
+        self.assertEqual(st_ok, 200)
+        self.assertEqual(disp["cmd_status"], 1)
+        self.assertAlmostEqual(disp["value"], 55.5)
+
+        # 3. 跨设备曲线对比接口
+        st_cmp, cmp_data = http_json("GET", "/api/trends/compare?targets=ACGenerator:1:p,ACGenerator:2:p&hours=24")
+        self.assertEqual(st_cmp, 200)
+        self.assertEqual(len(cmp_data["series"]), 2)
+
+        # 4. 门户控调日志源（scdfe_d/logs）
+        d_log_day = self.d_db.parent / "logs" / "2026" / "11" / "26" / "01"
+        d_log_day.mkdir(parents=True, exist_ok=True)
+        (d_log_day / "scdfe_d-control-20261126-01.log").write_text(
+            "01:15:00 [日志] 监视转发指令 设备=ACGenerator.风机1 属性=p_set(YT) 新值=55.5\n",
+            encoding="utf-8",
+        )
+        st_lf, lf = http_json("GET", "/api/logs/files?record=control")
+        self.assertEqual(st_lf, 200)
+        self.assertEqual(lf["total"], 1)
+        st_lr, lr = http_json("GET", "/api/logs/read?record=control&keyword=55.5")
+        self.assertEqual(st_lr, 200)
+        self.assertEqual(len(lr["items"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,10 +16,12 @@
 </div>
 <div id="interval-error" class="error" role="alert" hidden></div>
 <div id="collector-error" role="alert"></div>
-<div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>设备量测</th></tr></thead><tbody id="category-rows"></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>量测有效 / 绑定</th><th>控调点</th><th>操作</th></tr></thead><tbody id="category-rows"></tbody></table></div>
+<div id="overview-recent-ctrl" class="overview-recent-ctrl" hidden><div class="recent-ctrl-head"><span>最近控调流水</span><a href="/controls">进入控调下发 →</a></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th>设定值</th><th>状态</th></tr></thead><tbody id="overview-ctrl-rows"></tbody></table></div></div>
 </section>
 <section id="measure-panel" class="panel flexible" hidden>
 <div class="toolbar filters measure-bar">
+<div class="type-tabs" id="measure-view-switch" role="group" aria-label="量测视图模式" hidden><button type="button" id="switch-live-view">实时监视</button><button type="button" id="switch-param-view">批量调参</button></div>
 <select id="category" aria-label="设备类型" title="设备类型"><option value="">全部类型</option></select>
 <select id="model-table" aria-label="设备表" title="设备表"><option value="">全部设备表</option></select>
 <select id="device" aria-label="设备" title="设备"><option value="">全部设备</option></select>
@@ -29,7 +31,7 @@
 <div class="actions measure-bar-actions">
 <div class="inline-group" id="parameter-selection" hidden><span id="parameter-selection-count" class="muted" aria-live="polite"></span><button id="bulk-parameters" disabled>批量设置</button><label id="draft-filter" class="check" hidden><input id="only-draft" type="checkbox">仅看待保存</label></div>
 <label class="check" id="live-refresh"><input id="auto-refresh" type="checkbox" checked>5s 刷新</label>
-<div class="actions" id="definition-actions"><button id="import-model" title="导入设备模型">导入模型</button><button id="new-device">新增设备</button><button id="new-measurement" class="primary" title="新增属性映射">新增映射</button></div>
+<div class="actions" id="definition-actions"><button id="sync-meas-bindings" title="按表名.设备名.属性从源库自动匹配绑定">同步绑定</button><button id="export-meas-csv" title="导出当前量测映射为 CSV">导出 CSV</button><button id="import-model" title="导入设备模型">导入模型</button><button id="new-device">新增设备</button><button id="new-measurement" class="primary" title="新增属性映射">新增映射</button></div>
 <button id="refresh">刷新</button>
 </div>
 </div>
@@ -48,6 +50,8 @@
 <div class="actions control-bar-actions">
 <span id="ctrl-summary" class="muted" aria-live="polite"></span>
 <label class="check" id="ctrl-live-wrap"><input id="ctrl-auto-refresh" type="checkbox" checked>5s 刷新</label>
+<button id="sync-ctrl-bindings" hidden title="按表名.设备名.属性从 scdfe_c 自动匹配绑定 YK/YT">同步绑定</button>
+<button id="export-ctrl-csv" hidden title="导出控调映射为 CSV">导出 CSV</button>
 <button id="new-control" class="primary" hidden>新增控调映射</button>
 <button id="ctrl-refresh">刷新</button>
 </div>
@@ -61,6 +65,7 @@
 </section>
 <section id="logs-panel" class="panel flexible" hidden>
 <div class="toolbar logs-bar">
+<div class="type-tabs" id="logs-section-tabs" role="group" aria-label="日志与记录切换"><button type="button" class="active" data-log-tab="files">文件日志</button><button type="button" data-log-tab="controls">控调流水</button><button type="button" data-log-tab="refreshes">采集批次</button><button type="button" data-log-tab="changes">定义修改</button></div>
 <select id="log-process" aria-label="进程" title="进程"><option value="">全部进程</option><option value="scdfe_d-control">控调监视 (control)</option><option value="scdfe_d-collector">量测采集 (collector)</option><option value="scdfe_d-web">Web 服务 (web)</option></select>
 <select id="log-level" aria-label="级别" title="级别"><option value="">全部级别</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="PROCESS">PROCESS</option></select>
 <select id="log-file" aria-label="日志文件" title="日志文件"><option value="">全部小时文件</option></select>
@@ -72,8 +77,9 @@
 <button id="log-refresh" class="primary">刷新</button>
 </div>
 </div>
-<div class="table-wrap logs-table-wrap"><table class="logs-table"><thead><tr><th>时间</th><th>级别</th><th>进程</th><th>日志内容</th></tr></thead><tbody id="log-rows"></tbody></table></div>
-<div class="pager"><span id="log-summary"></span><div class="actions"><button id="log-more" hidden>加载更早日志</button></div></div>
+<div class="table-wrap logs-table-wrap" id="logs-file-wrap"><table class="logs-table"><thead><tr><th>时间</th><th>级别</th><th>进程</th><th>日志内容</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+<div class="table-wrap" id="logs-history-wrap" hidden><table><thead id="logs-history-head"></thead><tbody id="logs-history-rows"></tbody></table></div>
+<div class="pager" id="logs-file-pager"><span id="log-summary"></span><div class="actions"><button id="log-more" hidden>加载更早日志</button></div></div>
 </section>
 </main>
 <dialog id="control-editor"><form id="control-form"><div class="toolbar"><h2 id="ctrl-editor-title">控调映射</h2><button type="button" id="ctrl-editor-close" class="actions" aria-label="关闭控调编辑">×</button></div>

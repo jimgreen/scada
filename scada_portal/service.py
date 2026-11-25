@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import json
 import logging
@@ -21,7 +21,19 @@ from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
 from core.web_database import DEFAULT_WORKSPACE_ROOT
 from core.log_query import LOG_PATTERNS, search_logs
 from core.common import CHANNEL_PARAMETER_TABLES, KIND_TABLES
-from scdfe_d.measurement_layout import QUAL_LABELS, QUAL_OK, QUAL_OVER_MAX, QUAL_UNDER_MIN, SUFFIXES
+from scdfe_d.measurement_layout import (
+    CONTROL_META,
+    CTRL_STATUS_FAILED,
+    CTRL_STATUS_IDLE,
+    CTRL_STATUS_LABELS,
+    CTRL_STATUS_PENDING,
+    CTRL_SUFFIXES,
+    QUAL_LABELS,
+    QUAL_OK,
+    QUAL_OVER_MAX,
+    QUAL_UNDER_MIN,
+    SUFFIXES,
+)
 from scdfe_d.service import _check_limit_status, _parse_limit_number
 
 # 秦岭站正式开站投运基准日（2024-02-07 建站开站）
@@ -303,6 +315,7 @@ class PortalService:
         self.model_db = Path(model_db).resolve() if model_db else (model_sqldb_dir / "devices.sqlite3")
         self.svg_path = self._resolve_svg(svg_path, scene_dir / "model", scene_name)
         self.log_dir = Path(log_dir).resolve() if log_dir else (self.c_db.parent / "logs")
+        self.d_log_dir = self.d_db.parent / "logs"
         self.history_db = (
             Path(history_db).resolve()
             if history_db
@@ -314,6 +327,8 @@ class PortalService:
         self._history_lock = threading.Lock()
         self._energy_accum_lock = threading.Lock()
         self._cache_lock = threading.Lock()
+        self._alarm_lock = threading.Lock()
+        self._acked_alarms: dict[str, dict[str, Any]] = {}
         self._last_sample_ts: float | None = None
         # 运行期实时累计（用于微电网总览能量微增量）
         self._session_kwh: dict[str, float] = defaultdict(float)
@@ -611,7 +626,12 @@ class PortalService:
                         for cn in col_names
                         if cn.endswith("_rtu") and not cn.endswith("_cmd_rtu")
                     ]
-                    if not metrics:
+                    controls = [
+                        cn[:-8]
+                        for cn in col_names
+                        if cn.endswith("_cmd_rtu")
+                    ]
+                    if not metrics and not controls:
                         continue
                     select_cols = ["idx", "name"]
                     for m in metrics:
@@ -619,11 +639,16 @@ class PortalService:
                             cname = f"{m}{suf}"
                             if cname in col_types:
                                 select_cols.append(cname)
-                    table_specs.append((table, metrics, col_types, select_cols))
+                    for c in controls:
+                        for suf in CTRL_SUFFIXES:
+                            cname = f"{c}{suf}"
+                            if cname in col_types:
+                                select_cols.append(cname)
+                    table_specs.append((table, metrics, controls, col_types, select_cols))
                 with self._cache_lock:
                     self._d_schema_cache = (schema_ver, table_specs)
 
-            for table, metrics, col_types, select_cols in table_specs:
+            for table, metrics, controls, col_types, select_cols in table_specs:
                 quoted = ", ".join(f'"{c}"' for c in select_cols)
                 rows = conn.execute(f'SELECT {quoted} FROM "{table}" ORDER BY idx').fetchall()
                 for row in rows:
@@ -631,8 +656,10 @@ class PortalService:
                     idx = int(row_dict["idx"])
                     dev_name = str(row_dict["name"] or f"{table}-{idx}")
                     m_list: list[dict[str, Any]] = []
+                    c_list: list[dict[str, Any]] = []
                     bound_cnt = 0
                     valid_cnt = 0
+                    alarm_cnt = 0
                     run_val: int | None = None
                     pos_val: int | None = None
                     for m in metrics:
@@ -659,6 +686,8 @@ class PortalService:
                         is_valid = (not notuse) and (qual == 0) and (val is not None)
                         if is_valid:
                             valid_cnt += 1
+                        if (not notuse) and qual in (2, QUAL_OVER_MAX, QUAL_UNDER_MIN):
+                            alarm_cnt += 1
                         if m == "run" and val is not None:
                             run_val = int(val)
                         if m == "position" and val is not None:
@@ -685,6 +714,46 @@ class PortalService:
                             "rtu_id": rtu_id,
                             "point_no": pnt_no,
                         })
+                    for c in controls:
+                        crtu = row_dict.get(f"{c}_cmd_rtu")
+                        cpnt = row_dict.get(f"{c}_cmd_pnt")
+                        if not (
+                            isinstance(crtu, int)
+                            and not isinstance(crtu, bool)
+                            and crtu > 0
+                            and isinstance(cpnt, int)
+                            and not isinstance(cpnt, bool)
+                            and cpnt > 0
+                        ):
+                            continue
+                        ckind = "yk" if col_types.get(c) == "INTEGER" else "yt"
+                        cval = row_dict.get(c)
+                        ctime = row_dict.get(f"{c}_cmd_time")
+                        cstatus = row_dict.get(f"{c}_cmd_status")
+                        cstatus_i = int(cstatus) if cstatus is not None else CTRL_STATUS_IDLE
+                        cack = row_dict.get(f"{c}_cmd_ack_time")
+                        cnotuse = bool(row_dict.get(f"{c}_cmd_notuse"))
+                        cmax = row_dict.get(f"{c}_cmd_max")
+                        cmin = row_dict.get(f"{c}_cmd_min")
+                        if cstatus_i == CTRL_STATUS_FAILED:
+                            alarm_cnt += 1
+                        clabel, cunit = CONTROL_META.get(c, (c, ""))
+                        c_list.append({
+                            "control": c,
+                            "label": clabel,
+                            "unit": cunit,
+                            "kind": ckind,
+                            "value": cval,
+                            "cmd_time": ctime,
+                            "cmd_status": cstatus_i,
+                            "status_label": CTRL_STATUS_LABELS.get(cstatus_i, str(cstatus_i)),
+                            "cmd_ack_time": cack,
+                            "disabled": cnotuse,
+                            "rtu_id": crtu,
+                            "point_no": cpnt,
+                            "max_value": cmax,
+                            "min_value": cmin,
+                        })
                     category = _classify_device(table, dev_name)
                     devices.append({
                         "dev_id": f"{table}-{idx}",
@@ -694,9 +763,12 @@ class PortalService:
                         "category": category,
                         "bound_count": bound_cnt,
                         "valid_count": valid_cnt,
+                        "control_count": len(c_list),
+                        "alarm_count": alarm_cnt,
                         "run": run_val,
                         "position": pos_val,
                         "metrics": m_list,
+                        "controls": c_list,
                     })
         with self._cache_lock:
             self._devices_cache = (time.monotonic(), sig, devices)
@@ -835,6 +907,7 @@ class PortalService:
                 "valid_measurements": total_valid,
                 "rtu_total": len(comm_rtus),
                 "rtu_online": online_rtus,
+                **self._summarize_alarm_counts(devices),
             },
         }
 
@@ -1149,6 +1222,7 @@ class PortalService:
                 "comm_error_count": comm_err_cnt,
                 "rtu_online": online_rtus,
                 "rtu_total": len(comm_rtus),
+                **self._summarize_alarm_counts(devices),
             },
             "dc_bus": {
                 "voltage_v": dc_voltage,
@@ -1514,7 +1588,10 @@ class PortalService:
                 "position": dev["position"],
                 "valid_count": dev["valid_count"],
                 "bound_count": dev["bound_count"],
+                "control_count": dev.get("control_count", 0),
+                "alarm_count": dev.get("alarm_count", 0),
                 "metrics": dev["metrics"],
+                "controls": dev.get("controls", []),
                 "model_params": model_params_map.get(dev_id, []),
             }
 
@@ -1531,7 +1608,10 @@ class PortalService:
                     "position": None,
                     "valid_count": 0,
                     "bound_count": 0,
+                    "control_count": 0,
+                    "alarm_count": 0,
                     "metrics": [],
+                    "controls": [],
                     "model_params": model_params_map.get(dev_id, []),
                 }
 
@@ -2115,23 +2195,34 @@ class PortalService:
             "offset": offset,
         }
 
-    # -------------------- 5. 运行日志与报文日志（带 3s 短 TTL 目录缓存） --------------------
+    # -------------------- 5. 运行日志与报文日志（支持 scdfe_c / scdfe_d 控调日志） --------------------
     def list_log_files(self, *, record: str = "runtime") -> dict[str, Any]:
-        rec_key = "packet" if record == "packet" else "runtime"
+        rec_key = record if record in ("runtime", "packet", "control") else "runtime"
         now_mono = time.monotonic()
         with self._cache_lock:
             cached = self._log_files_cache.get(rec_key)
             if cached is not None and (now_mono - cached[0]) < 3.0:
                 return cached[1]
-        root = packet_log_directory(self.log_dir) if rec_key == "packet" else self.log_dir
+        if rec_key == "control":
+            root = self.d_log_dir
+            prefix = "scdfe_d-"
+            pat = LOG_PATTERNS["d"]
+        elif rec_key == "packet":
+            root = packet_log_directory(self.log_dir)
+            prefix = "scdfe_c-"
+            pat = LOG_PATTERN
+        else:
+            root = self.log_dir
+            prefix = "scdfe_c-"
+            pat = LOG_PATTERN
         items: list[dict[str, Any]] = []
         if root.is_dir():
-            for entry, rel in log_entries(root, "scdfe_c-"):
+            for entry, rel in log_entries(root, prefix):
                 try:
                     st = entry.stat(follow_symlinks=False)
                 except OSError:
                     continue
-                m = LOG_PATTERN.fullmatch(entry.name)
+                m = pat.fullmatch(entry.name)
                 if not m:
                     continue
                 items.append({
@@ -2165,8 +2256,9 @@ class PortalService:
         keyword: str | None = None,
         limit: int = 300,
     ) -> dict[str, Any]:
+        rec_key = record if record in ("runtime", "packet", "control") else "runtime"
         query: dict[str, Any] = {
-            "record": "packet" if record == "packet" else "runtime",
+            "record": "packet" if rec_key == "packet" else "runtime",
             "limit": str(max(10, min(1000, int(limit)))),
         }
         if filename:
@@ -2175,12 +2267,367 @@ class PortalService:
             query["process"] = process
         if level:
             query["level"] = level
-        if direction:
+        if rec_key == "packet" and direction:
             query["direction"] = direction
         if keyword:
             query["q"] = keyword
+
+        if rec_key == "control":
+            if not self.d_log_dir.is_dir():
+                return {"items": [], "has_more": False, "scanned_files": 0, "order": "hour_file_desc_line_desc"}
+            return search_logs(self.d_log_dir, query, family="d")
 
         packet_dir = packet_log_directory(self.log_dir)
         if not self.log_dir.is_dir() and not packet_dir.is_dir():
             return {"items": [], "has_more": False, "scanned_files": 0, "order": "hour_file_desc_line_desc"}
         return search_logs(self.log_dir, query, family="c", packet_directory=packet_dir)
+
+    # -------------------- 6. 告警中心、就地控调写库与跨设备曲线对比 --------------------
+    def _collect_raw_alarms(self, devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        alarms: list[dict[str, Any]] = []
+        active_fps: dict[str, str] = {}
+        for dev in devices:
+            dev_id = dev["dev_id"]
+            table = dev["table_name"]
+            idx = dev["idx"]
+            name = dev["name"]
+            cat = dev["category"]
+            for m in dev.get("metrics") or ():
+                if m.get("disabled"):
+                    continue
+                q = m.get("quality")
+                if q == QUAL_OVER_MAX:
+                    atype = "over_max"
+                    severity = "high"
+                    title = "越上限"
+                    detail = f"当前值 {m.get('display_value')} > 上限 {m.get('max_value')}"
+                elif q == QUAL_UNDER_MIN:
+                    atype = "under_min"
+                    severity = "high"
+                    title = "越下限"
+                    detail = f"当前值 {m.get('display_value')} < 下限 {m.get('min_value')}"
+                elif q == 2:
+                    atype = "comm_error"
+                    severity = "medium"
+                    title = "通信异常"
+                    detail = f"RTU {m.get('rtu_id')} / #{m.get('point_no')} 质量异常"
+                else:
+                    continue
+                key = f"{table}:{idx}:m:{m['metric']}:{atype}"
+                fp = f"{atype}|{m.get('source_time')}|{m.get('max_value')}|{m.get('min_value')}"
+                active_fps[key] = fp
+                alarms.append({
+                    "key": key,
+                    "type": atype,
+                    "severity": severity,
+                    "title": title,
+                    "dev_id": dev_id,
+                    "table_name": table,
+                    "idx": idx,
+                    "device_name": name,
+                    "category": cat,
+                    "attr": m["metric"],
+                    "attr_label": m.get("label") or m["metric"],
+                    "unit": m.get("unit") or "",
+                    "value": m.get("display_value"),
+                    "max_value": m.get("max_value"),
+                    "min_value": m.get("min_value"),
+                    "rtu_id": m.get("rtu_id"),
+                    "point_no": m.get("point_no"),
+                    "time_ms": m.get("source_time"),
+                    "time_iso": _iso_from_ms(m.get("source_time")),
+                    "detail": detail,
+                    "_fp": fp,
+                })
+            for c in dev.get("controls") or ():
+                if c.get("cmd_status") != CTRL_STATUS_FAILED:
+                    continue
+                atype = "control_failed"
+                key = f"{table}:{idx}:c:{c['control']}:{atype}"
+                fp = f"{atype}|{c.get('cmd_time')}|{c.get('cmd_ack_time')}|{c.get('value')}"
+                active_fps[key] = fp
+                alarms.append({
+                    "key": key,
+                    "type": atype,
+                    "severity": "high",
+                    "title": "控调失败",
+                    "dev_id": dev_id,
+                    "table_name": table,
+                    "idx": idx,
+                    "device_name": name,
+                    "category": cat,
+                    "attr": c["control"],
+                    "attr_label": c.get("label") or c["control"],
+                    "unit": c.get("unit") or "",
+                    "value": c.get("value"),
+                    "max_value": c.get("max_value"),
+                    "min_value": c.get("min_value"),
+                    "rtu_id": c.get("rtu_id"),
+                    "point_no": c.get("point_no"),
+                    "time_ms": c.get("cmd_ack_time") or c.get("cmd_time"),
+                    "time_iso": _iso_from_ms(c.get("cmd_ack_time") or c.get("cmd_time")),
+                    "detail": f"目标值 {c.get('value')} 执行失败或回执超时",
+                    "_fp": fp,
+                })
+
+        with self._alarm_lock:
+            # 清理已恢复的旧确认记录；若已恢复后再次触发且指纹变化则自动复归未确认
+            for k in list(self._acked_alarms):
+                if k not in active_fps:
+                    self._acked_alarms.pop(k, None)
+            for item in alarms:
+                rec = self._acked_alarms.get(item["key"])
+                is_acked = rec is not None and rec.get("fp") == item["_fp"]
+                item["acked"] = is_acked
+                item["acked_at"] = rec.get("acked_at") if is_acked else None
+                item.pop("_fp", None)
+        return alarms
+
+    def _summarize_alarm_counts(self, devices: list[dict[str, Any]]) -> dict[str, int]:
+        alarms = self._collect_raw_alarms(devices)
+        unacked = sum(1 for a in alarms if not a["acked"])
+        return {"alarm_total": len(alarms), "alarm_unacked": unacked}
+
+    def get_alarms(
+        self,
+        *,
+        alarm_type: str | None = None,
+        acked: str | None = None,
+        category: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        devices = self._read_all_devices()
+        all_alarms = self._collect_raw_alarms(devices)
+        summary = {
+            "total": len(all_alarms),
+            "unacked": sum(1 for a in all_alarms if not a["acked"]),
+            "over_max": sum(1 for a in all_alarms if a["type"] == "over_max"),
+            "under_min": sum(1 for a in all_alarms if a["type"] == "under_min"),
+            "comm_error": sum(1 for a in all_alarms if a["type"] == "comm_error"),
+            "control_failed": sum(1 for a in all_alarms if a["type"] == "control_failed"),
+        }
+        items = all_alarms
+        if alarm_type and alarm_type in {"over_max", "under_min", "comm_error", "control_failed"}:
+            items = [a for a in items if a["type"] == alarm_type]
+        if acked == "0":
+            items = [a for a in items if not a["acked"]]
+        elif acked == "1":
+            items = [a for a in items if a["acked"]]
+        if category:
+            items = [a for a in items if a["category"] == category]
+        if search and search.strip():
+            kw = search.strip().lower()
+            items = [
+                a for a in items
+                if kw in str(a["device_name"]).lower()
+                or kw in str(a["attr"]).lower()
+                or kw in str(a["attr_label"]).lower()
+                or kw in str(a["table_name"]).lower()
+            ]
+        sev_rank = {"high": 0, "medium": 1, "low": 2}
+        items.sort(
+            key=lambda a: (
+                1 if a["acked"] else 0,
+                sev_rank.get(a["severity"], 9),
+                -(a["time_ms"] or 0),
+                a["device_name"],
+            )
+        )
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "summary": summary,
+            "items": items[:500],
+            "total": len(items),
+        }
+
+    def ack_alarms(self, *, keys: list[str] | None = None, ack_all: bool = False) -> dict[str, Any]:
+        devices = self._read_all_devices()
+        # 重新计算当前活动告警指纹
+        wanted = set(keys or [])
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        acked_cnt = 0
+        with self._alarm_lock:
+            for dev in devices:
+                table = dev["table_name"]
+                idx = dev["idx"]
+                for m in dev.get("metrics") or ():
+                    if m.get("disabled"):
+                        continue
+                    q = m.get("quality")
+                    atype = (
+                        "over_max" if q == QUAL_OVER_MAX
+                        else ("under_min" if q == QUAL_UNDER_MIN else ("comm_error" if q == 2 else None))
+                    )
+                    if not atype:
+                        continue
+                    key = f"{table}:{idx}:m:{m['metric']}:{atype}"
+                    if ack_all or key in wanted:
+                        fp = f"{atype}|{m.get('source_time')}|{m.get('max_value')}|{m.get('min_value')}"
+                        self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
+                        acked_cnt += 1
+                for c in dev.get("controls") or ():
+                    if c.get("cmd_status") != CTRL_STATUS_FAILED:
+                        continue
+                    atype = "control_failed"
+                    key = f"{table}:{idx}:c:{c['control']}:{atype}"
+                    if ack_all or key in wanted:
+                        fp = f"{atype}|{c.get('cmd_time')}|{c.get('cmd_ack_time')}|{c.get('value')}"
+                        self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
+                        acked_cnt += 1
+        return {"acked_count": acked_cnt, "acked_at": now_iso}
+
+    def dispatch_device_control(
+        self,
+        table_name: str,
+        idx: int,
+        control: str,
+        raw_value: Any,
+    ) -> dict[str, Any]:
+        """在门户侧校验并写入设备宽表控调字段，触发 scdfe_d 亚秒级监视并下发至 scdfe_c。"""
+        if not self.d_db.is_file():
+            raise FileNotFoundError(f"未找到设备实时库：{self.d_db}")
+        if not table_name or not table_name.isidentifier():
+            raise ValueError("设备表名不合法")
+        if not control or not control.isidentifier():
+            raise ValueError("控调属性名不合法")
+        if raw_value is None or isinstance(raw_value, bool):
+            raise ValueError("控调目标值不能为空或布尔值")
+
+        with closing(sqlite3.connect(self.d_db, timeout=10)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("BEGIN IMMEDIATE")
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone()
+            if not exists:
+                raise FileNotFoundError(f"设备表不存在：{table_name}")
+            col_info = conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+            col_types = {c[1]: str(c[2] or "").upper() for c in col_info}
+            required_cols = [control + s for s in CTRL_SUFFIXES]
+            if any(c not in col_types for c in required_cols):
+                raise ValueError(f"设备表 {table_name} 不存在控调字段组：{control}")
+            kind = "yk" if col_types[control] == "INTEGER" else "yt"
+            quoted_cols = ", ".join(f'"{c}"' for c in ["name", *required_cols])
+            row = conn.execute(
+                f'SELECT {quoted_cols} FROM "{table_name}" WHERE idx=?',
+                (int(idx),),
+            ).fetchone()
+            if row is None:
+                raise FileNotFoundError(f"设备不存在：{table_name}#{idx}")
+            row_dict = dict(row)
+            rtu = row_dict.get(f"{control}_cmd_rtu")
+            pnt = row_dict.get(f"{control}_cmd_pnt")
+            if not (isinstance(rtu, int) and rtu > 0 and isinstance(pnt, int) and pnt > 0):
+                raise ValueError("该控调属性尚未绑定有效的 RTU / 点号")
+            if row_dict.get(f"{control}_cmd_notuse"):
+                raise ValueError("该控调属性已禁用闭锁，禁止下发")
+
+            if kind == "yk":
+                try:
+                    num = float(raw_value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("遥控目标值必须为 0 或 1") from exc
+                if not math.isfinite(num) or num not in (0.0, 1.0):
+                    raise ValueError("遥控目标值必须为 0（分/停）或 1（合/启）")
+                norm_val: int | float = int(num)
+            else:
+                try:
+                    num = float(raw_value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("遥调设定值必须为有限数值") from exc
+                if not math.isfinite(num):
+                    raise ValueError("遥调设定值必须为有限数值")
+                upper = _parse_limit_number(row_dict.get(f"{control}_cmd_max"))
+                lower = _parse_limit_number(row_dict.get(f"{control}_cmd_min"))
+                if upper is not None and lower is not None and upper > lower:
+                    if num > upper:
+                        raise ValueError(f"设定值 {num} 超过上限 {upper}")
+                    if num < lower:
+                        raise ValueError(f"设定值 {num} 低于下限 {lower}")
+                norm_val = num
+
+            old_time = int(row_dict.get(f"{control}_cmd_time") or 0)
+            cmd_ms = max(int(time.time() * 1000), old_time + 1)
+            conn.execute(
+                f'UPDATE "{table_name}" SET "{control}"=?, "{control}_cmd_time"=?, '
+                f'"{control}_cmd_status"=?, "{control}_cmd_ack_time"=NULL WHERE idx=?',
+                (norm_val, cmd_ms, CTRL_STATUS_PENDING, int(idx)),
+            )
+            conn.commit()
+
+        with self._cache_lock:
+            self._devices_cache = None
+
+        label, unit = CONTROL_META.get(control, (control, ""))
+        return {
+            "table_name": table_name,
+            "idx": int(idx),
+            "device_name": row_dict.get("name") or f"{table_name}-{idx}",
+            "control": control,
+            "label": label,
+            "unit": unit,
+            "kind": kind,
+            "value": norm_val,
+            "cmd_time": cmd_ms,
+            "cmd_status": CTRL_STATUS_PENDING,
+            "status_label": CTRL_STATUS_LABELS[CTRL_STATUS_PENDING],
+            "rtu_id": int(rtu),
+            "point_no": int(pnt),
+        }
+
+    def compare_trends(
+        self,
+        targets: list[tuple[str, int, str]],
+        *,
+        hours: float = 24.0,
+    ) -> dict[str, Any]:
+        """批量查询最多 8 条跨设备/跨指标历史曲线用于同图叠加对比。"""
+        if not targets:
+            raise ValueError("请至少指定一条对比曲线")
+        if len(targets) > 8:
+            raise ValueError("单次最多同时对比 8 条曲线")
+        hours_f = float(hours)
+        if not math.isfinite(hours_f) or hours_f <= 0:
+            raise ValueError("时间窗口 hours 必须为有限正数")
+        span_hours = max(1 / 60.0, min(24.0, hours_f))
+        now_ms = int(time.time() * 1000)
+        since_ms = now_ms - int(span_hours * 3600 * 1000)
+
+        dev_names = {(d["table_name"], d["idx"]): d["name"] for d in self._read_all_devices()}
+        series: list[dict[str, Any]] = []
+        max_pts = 720
+        if self.history_db.is_file():
+            with self._open_history(readonly=True) as conn:
+                for table_name, idx, metric in targets:
+                    rows = conn.execute(
+                        "SELECT ts_ms, value FROM device_daily_samples "
+                        "WHERE table_name=? AND idx=? AND metric=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
+                        (table_name, int(idx), metric, since_ms, now_ms),
+                    ).fetchall()
+                    pts = [[int(ts), round(float(v), 4)] for ts, v in rows]
+                    if len(pts) > max_pts:
+                        step = (len(pts) - 1) / (max_pts - 1)
+                        pts = [pts[int(round(i * step))] for i in range(max_pts)]
+                    mlabel, unit = METRIC_META.get(metric, (metric, ""))
+                    dname = dev_names.get((table_name, int(idx)), f"{table_name}#{idx}")
+                    series.append({
+                        "key": f"{table_name}:{idx}:{metric}",
+                        "table_name": table_name,
+                        "idx": int(idx),
+                        "device_name": dname,
+                        "metric": metric,
+                        "label": f"{dname} · {mlabel}",
+                        "unit": unit,
+                        "points": pts,
+                        "latest": pts[-1][1] if pts else None,
+                    })
+        return {
+            "hours": span_hours,
+            "since_ms": since_ms,
+            "end_ms": now_ms,
+            "now_ms": now_ms,
+            "series": series,
+        }

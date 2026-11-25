@@ -413,6 +413,25 @@ class TestScdfeDControls(unittest.TestCase):
             st_lr, lr = _http_json(base, "/api/logs/read?process=scdfe_d-control&q=66.5")
             self.assertEqual(st_lr, 200)
             self.assertGreaterEqual(len(lr["items"]), 1)
+
+            # 一键同步绑定：先预览再执行（用 ACGenerator 表和匹配名称的设备验证）
+            with server.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                server.store._ensure_device_table(con, "ACGenerator")
+                con.execute('INSERT INTO "ACGenerator"(idx, name) VALUES(1, ?)', ("柴发-1",))
+            st_pre, pre = _http_json(base, "/api/sync-bindings", "POST", {"scope": "controls", "dry_run": True})
+            self.assertEqual(st_pre, 200)
+            self.assertTrue(pre["dry_run"])
+            self.assertEqual(pre["to_add"], 2)
+
+            st_run, applied = _http_json(base, "/api/sync-bindings", "POST", {"scope": "controls", "dry_run": False})
+            self.assertEqual(st_run, 200)
+            self.assertEqual(applied["to_add"], 2)
+
+            st_re, re_pre = _http_json(base, "/api/sync-bindings", "POST", {"scope": "controls", "dry_run": True})
+            self.assertEqual(st_re, 200)
+            self.assertEqual(re_pre["to_add"], 0)
+            self.assertEqual(re_pre["unchanged"], 2)
         finally:
             server.shutdown()
             server.server_close()

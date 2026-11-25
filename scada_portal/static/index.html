@@ -57,6 +57,7 @@
       </div>
 
       <div class="header-tools">
+        <a class="portal-cross-link" id="portal-jump-d" href="http://127.0.0.1:8980/" target="_blank" rel="noopener">工程配置 ↗</a>
         <span class="live-clock" id="live-clock">--:--:--</span>
       </div>
     </header>
@@ -79,6 +80,11 @@
           <button type="button" class="nav-item" data-view="devices">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M12 16v4M6 12l3-3 3 2 4-4 2 2"/></svg>
             <span>设备图</span>
+          </button>
+          <button type="button" class="nav-item" data-view="alarms">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 19.5h19L12 3Z"/><path d="M12 9.5v4.5M12 17h.01"/></svg>
+            <span>告警中心</span>
+            <span class="nav-badge" id="nav-alarm-badge" hidden>0</span>
           </button>
           <button type="button" class="nav-item" data-view="comm">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><path d="M5.6 18.4a9 9 0 0 1 0-12.8m12.8 0a9 9 0 0 1 0 12.8M8.5 15.5a5 5 0 0 1 0-7m7 0a5 5 0 0 1 0 7"/></svg>
@@ -523,8 +529,8 @@
                 <div class="ef-kv"><span>四遥点表</span><strong id="ef-src-points">--</strong></div>
                 <div class="ef-kv-sep"></div>
                 <div class="ef-kv"><span>正常量测</span><strong class="ef-st-ok" id="ef-qual-ok">--</strong></div>
-                <div class="ef-kv"><span>越上 / 越下限</span><strong class="ef-st-warn" id="ef-qual-limit">--</strong></div>
-                <div class="ef-kv"><span>通信异常</span><strong class="ef-st-err" id="ef-qual-comm">--</strong></div>
+                <div class="ef-kv ef-kv-link" data-jump-alarm="over_max" title="查看越限告警"><span>越上 / 越下限</span><strong class="ef-st-warn" id="ef-qual-limit">--</strong></div>
+                <div class="ef-kv ef-kv-link" data-jump-alarm="comm_error" title="查看通信异常告警"><span>通信异常</span><strong class="ef-st-err" id="ef-qual-comm">--</strong></div>
               </div>
             </aside>
           </div>
@@ -573,6 +579,7 @@
                   <button type="button" class="btn secondary pf-pop-jump" id="pf-jump-device">日曲线 →</button>
                 </div>
                 <div class="pf-pop-metrics" id="pf-dev-pop-metrics"></div>
+                <div class="pf-pop-controls" id="pf-dev-pop-controls" hidden></div>
               </div>
 
               <!-- 量测点鼠标悬浮框（含属性与近1小时/近1天实时曲线） -->
@@ -614,11 +621,16 @@
           </div>
         </section>
 
-        <!-- ==================== 3. 设备图（分类标签 + 实时值 + 日曲线） ==================== -->
+        <!-- ==================== 3. 设备图（分类标签 + 实时值 + 就地控调 + 日曲线/对比） ==================== -->
         <section id="view-devices" class="portal-view" hidden>
           <div class="view-toolbar">
             <div class="tab-bar" id="dev-cat-tabs" role="tablist" aria-label="设备类别"></div>
             <div class="toolbar-right">
+              <div class="sub-tab-bar dev-filter-tabs" id="dev-state-tabs" role="group" aria-label="设备状态筛选">
+                <button type="button" class="sub-tab-btn active" data-dev-filter="all">全部</button>
+                <button type="button" class="sub-tab-btn" data-dev-filter="alarm">仅异常</button>
+                <button type="button" class="sub-tab-btn" data-dev-filter="running">仅运行</button>
+              </div>
               <input id="dev-search" type="search" placeholder="筛选设备名称…" aria-label="筛选设备名称" />
             </div>
           </div>
@@ -639,7 +651,21 @@
                   <small id="dev-detail-meta"></small>
                 </div>
                 <div class="detail-actions">
+                  <button type="button" class="btn secondary" id="dev-add-compare" disabled title="将当前设备主指标加入多设备同图对比">+ 对比</button>
                   <button type="button" class="btn secondary" id="dev-locate-svg" disabled>在潮流图定位</button>
+                </div>
+              </div>
+
+              <div class="dev-control-panel" id="dev-control-panel" hidden>
+                <div class="dev-ctrl-head">
+                  <span>就地控调（YK / YT）</span>
+                  <small id="dev-ctrl-hint"></small>
+                </div>
+                <div class="dev-ctrl-table-wrap">
+                  <table class="dev-ctrl-table">
+                    <thead><tr><th>控调属性</th><th>类型</th><th>设定值</th><th>限值</th><th>状态</th><th>操作</th></tr></thead>
+                    <tbody id="dev-ctrl-body"></tbody>
+                  </table>
                 </div>
               </div>
 
@@ -648,25 +674,71 @@
               <div class="trend-card">
                 <div class="trend-head">
                   <div class="trend-title">
-                    <h3>设备日曲线</h3>
+                    <h3 id="trend-title-text">设备日曲线</h3>
                     <div class="series-chips" id="trend-series-chips"></div>
                   </div>
                   <div class="trend-tools">
-                    <label class="inline-select">
-                      <span>时间窗</span>
-                      <select id="trend-hours" aria-label="曲线时间窗">
-                        <option value="1">近 1 小时</option>
-                        <option value="6">近 6 小时</option>
-                        <option value="12">近 12 小时</option>
-                        <option value="24" selected>近 24 小时</option>
-                      </select>
-                    </label>
+                    <div class="compare-pill-bar" id="compare-pill-bar" hidden>
+                      <span id="compare-count-badge" class="badge">对比 0</span>
+                      <button type="button" class="btn secondary" id="compare-toggle-btn">同图对比</button>
+                      <button type="button" class="btn secondary" id="compare-clear-btn">清空</button>
+                    </div>
+                    <select id="trend-hours" aria-label="曲线时间窗">
+                      <option value="1">近 1 小时</option>
+                      <option value="6">近 6 小时</option>
+                      <option value="12">近 12 小时</option>
+                      <option value="24" selected>近 24 小时</option>
+                    </select>
+                    <button type="button" class="btn secondary" id="trend-export-csv">导出 CSV</button>
                   </div>
                 </div>
                 <div class="trend-canvas-wrap" id="trend-canvas-wrap">
                   <canvas id="trend-canvas"></canvas>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 3.5 告警与越限中心 ==================== -->
+        <section id="view-alarms" class="portal-view" hidden>
+          <div class="view-toolbar">
+            <div class="tab-bar" id="alarm-type-tabs" role="tablist" aria-label="告警类型">
+              <button type="button" class="tab-btn active" data-alarm-type="">全部</button>
+              <button type="button" class="tab-btn" data-alarm-type="over_max">越上限</button>
+              <button type="button" class="tab-btn" data-alarm-type="under_min">越下限</button>
+              <button type="button" class="tab-btn" data-alarm-type="comm_error">通信异常</button>
+              <button type="button" class="tab-btn" data-alarm-type="control_failed">控调失败</button>
+            </div>
+            <div class="toolbar-right">
+              <select id="alarm-ack-filter" aria-label="确认状态">
+                <option value="">全部状态</option>
+                <option value="0">未确认</option>
+                <option value="1">已确认</option>
+              </select>
+              <input id="alarm-search" type="search" placeholder="搜索设备或属性…" aria-label="搜索告警" />
+              <button type="button" class="btn secondary" id="alarm-ack-all">全部确认</button>
+            </div>
+          </div>
+          <div class="comm-summary" id="alarm-summary"></div>
+          <div class="table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>类型</th>
+                    <th>设备</th>
+                    <th>属性</th>
+                    <th class="num">当前值</th>
+                    <th>详情 / 限值</th>
+                    <th>RTU / 点号</th>
+                    <th>时间</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="alarm-tbody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -780,6 +852,7 @@
             <div class="tab-bar" id="log-record-tabs">
               <button type="button" class="tab-btn active" data-log-record="runtime">运行日志</button>
               <button type="button" class="tab-btn" data-log-record="packet">报文日志</button>
+              <button type="button" class="tab-btn" data-log-record="control">控调日志</button>
             </div>
             <div class="toolbar-right">
               <select id="log-process" aria-label="按进程筛选">
