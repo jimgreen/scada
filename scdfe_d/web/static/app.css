@@ -35,6 +35,9 @@ body{margin:0}button,input,select{font:inherit;color:inherit;border:1px solid #c
 .quantity-value { font-variant-numeric:tabular-nums; font-weight:600; }
 .limit-range { font-variant-numeric:tabular-nums; color:var(--text-secondary, #58718a); }
 /* 首页单行紧凑指标条（替代胖 KPI 卡片墙） */
+.stats.stats-compact[hidden] {
+  display:none !important;
+}
 .stats.stats-compact {
   display:flex !important;
   align-items:center;

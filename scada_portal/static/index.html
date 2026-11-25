@@ -647,49 +647,58 @@
                   <small id="dev-detail-meta"></small>
                 </div>
                 <div class="detail-actions">
+                  <div class="sub-tab-bar dev-detail-tabs" id="dev-detail-tabs" role="tablist" aria-label="设备详情视图">
+                    <button type="button" class="sub-tab-btn active" role="tab" aria-selected="true" data-dev-tab="monitor">实时监控</button>
+                    <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-dev-tab="control" id="dev-tab-control-btn" hidden>就地指令 <small id="dev-tab-control-cnt">0</small></button>
+                  </div>
                   <button type="button" class="btn secondary" id="dev-add-compare" disabled title="将当前设备主指标加入多设备同图对比">+ 对比</button>
                   <button type="button" class="btn secondary" id="dev-locate-svg" disabled>在潮流图定位</button>
                 </div>
               </div>
 
-              <div class="dev-control-panel" id="dev-control-panel" hidden>
-                <div class="dev-ctrl-head">
-                  <span>就地控调（YK / YT）</span>
-                  <small id="dev-ctrl-hint"></small>
-                </div>
-                <div class="dev-ctrl-table-wrap">
-                  <table class="dev-ctrl-table">
-                    <thead><tr><th>控调属性</th><th>类型</th><th>设定值</th><th>限值</th><th>状态</th><th>操作</th></tr></thead>
-                    <tbody id="dev-ctrl-body"></tbody>
-                  </table>
+              <div class="dev-tab-pane" id="dev-tab-monitor">
+                <div class="metric-grid" id="dev-metric-grid"></div>
+
+                <div class="trend-card">
+                  <div class="trend-head">
+                    <div class="trend-title">
+                      <h3 id="trend-title-text">设备日曲线</h3>
+                      <div class="series-chips" id="trend-series-chips"></div>
+                    </div>
+                    <div class="trend-tools">
+                      <div class="compare-pill-bar" id="compare-pill-bar" hidden>
+                        <span id="compare-count-badge" class="badge">对比 0</span>
+                        <button type="button" class="btn secondary" id="compare-toggle-btn">同图对比</button>
+                        <button type="button" class="btn secondary" id="compare-clear-btn">清空</button>
+                      </div>
+                      <select id="trend-hours" aria-label="曲线时间窗">
+                        <option value="1">近 1 小时</option>
+                        <option value="6">近 6 小时</option>
+                        <option value="12">近 12 小时</option>
+                        <option value="24" selected>近 24 小时</option>
+                      </select>
+                      <button type="button" class="btn secondary" id="trend-export-csv">导出 CSV</button>
+                    </div>
+                  </div>
+                  <div class="trend-canvas-wrap" id="trend-canvas-wrap">
+                    <canvas id="trend-canvas"></canvas>
+                  </div>
                 </div>
               </div>
 
-              <div class="metric-grid" id="dev-metric-grid"></div>
-
-              <div class="trend-card">
-                <div class="trend-head">
-                  <div class="trend-title">
-                    <h3 id="trend-title-text">设备日曲线</h3>
-                    <div class="series-chips" id="trend-series-chips"></div>
+              <div class="dev-tab-pane" id="dev-tab-control" hidden>
+                <div class="dev-ctrl-live-strip" id="dev-ctrl-live-strip"></div>
+                <div class="dev-control-panel dev-control-panel-full" id="dev-control-panel">
+                  <div class="dev-ctrl-head">
+                    <span>就地指令（YK / YT）</span>
+                    <small id="dev-ctrl-hint"></small>
                   </div>
-                  <div class="trend-tools">
-                    <div class="compare-pill-bar" id="compare-pill-bar" hidden>
-                      <span id="compare-count-badge" class="badge">对比 0</span>
-                      <button type="button" class="btn secondary" id="compare-toggle-btn">同图对比</button>
-                      <button type="button" class="btn secondary" id="compare-clear-btn">清空</button>
-                    </div>
-                    <select id="trend-hours" aria-label="曲线时间窗">
-                      <option value="1">近 1 小时</option>
-                      <option value="6">近 6 小时</option>
-                      <option value="12">近 12 小时</option>
-                      <option value="24" selected>近 24 小时</option>
-                    </select>
-                    <button type="button" class="btn secondary" id="trend-export-csv">导出 CSV</button>
+                  <div class="dev-ctrl-table-wrap">
+                    <table class="dev-ctrl-table">
+                      <thead><tr><th>指令属性</th><th>类型</th><th>设定值</th><th>限值</th><th>状态</th><th>操作</th></tr></thead>
+                      <tbody id="dev-ctrl-body"></tbody>
+                    </table>
                   </div>
-                </div>
-                <div class="trend-canvas-wrap" id="trend-canvas-wrap">
-                  <canvas id="trend-canvas"></canvas>
                 </div>
               </div>
             </div>
@@ -704,7 +713,7 @@
               <button type="button" class="tab-btn" data-alarm-type="over_max">越上限</button>
               <button type="button" class="tab-btn" data-alarm-type="under_min">越下限</button>
               <button type="button" class="tab-btn" data-alarm-type="comm_error">通信异常</button>
-              <button type="button" class="tab-btn" data-alarm-type="control_failed">控调失败</button>
+              <button type="button" class="tab-btn" data-alarm-type="control_failed">指令失败</button>
             </div>
             <div class="comm-summary comm-summary-inline" id="alarm-summary"></div>
             <div class="toolbar-right">

@@ -183,7 +183,7 @@
       + (row.control_pending ? ' <span class="ctrl-status s-1">待回执 ' + html(row.control_pending) + '</span>' : '')
       + '</td><td><span class="cat-links"><a href="/measurements?category=' + encodeURIComponent(row.category)
       + '">量测 →</a>'
-      + ((row.control_count ?? 0) > 0 ? '<a href="/controls?category=' + encodeURIComponent(row.category) + '">控调 →</a>' : '')
+      + ((row.control_count ?? 0) > 0 ? '<a href="/controls?category=' + encodeURIComponent(row.category) + '">指令 →</a>' : '')
       + '</span></td></tr>').join('') || '<tr><td colspan="5" class="empty">暂无设备。</td></tr>';
     const recentCtrls = overview.recent_controls || [];
     const recentWrap = $('#overview-recent-ctrl');
@@ -802,7 +802,7 @@
         + '</td><td class="quantity-value">' + html(number(row.value))
         + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
         + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
-        || emptyRow(headers, '暂无控调流水记录');
+        || emptyRow(headers, '暂无指令流水记录');
       return;
     }
     const changes = historyMode === 'changes';
@@ -997,7 +997,7 @@
         + '</td><td class="quantity-value">' + html(number(row.value))
         + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
         + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
-        || emptyRow(headers, '暂无控调流水记录');
+        || emptyRow(headers, '暂无指令流水记录');
       return;
     }
     const changes = tab === 'changes';
@@ -1079,7 +1079,7 @@
       const data = await api('/api/controls?limit=500&page=1');
       downloadCsv(
         'scdfe_d-control-mappings.csv',
-        ['设备表', '索引', '设备名称', '控调属性', '类型', 'RTU', '点号', '下限', '上限', '禁用'],
+        ['设备表', '索引', '设备名称', '指令属性', '类型', 'RTU', '点号', '下限', '上限', '禁用'],
         (data.items || []).map(r => [r.model_table, r.model_idx, r.device_name, r.control, r.kind, r.rtu_id, r.pnt_no, r.min_value ?? '', r.max_value ?? '', r.notuse]),
       );
       return;
@@ -1111,7 +1111,7 @@
         + ' · YT ' + summaryData.yt + (summaryData.pending ? ' · 待回执 ' + summaryData.pending : '');
     }
     if (controlDispatchMode) {
-      const headers = ['设备', '控调属性', '类型', '当前设定值', '限值', '状态', '指令 / 回执时间', '操作'];
+      const headers = ['设备', '指令属性', '类型', '当前设定值', '限值', '状态', '指令 / 回执时间', '操作'];
       $('#control-head').innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
       $('#control-rows').innerHTML = items.map((row, index) => {
         const disabled = Boolean(row.notuse);
@@ -1140,9 +1140,9 @@
           + '<td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label) + '</span></td>'
           + '<td>' + timeCell + '</td>'
           + '<td>' + opCell + '</td></tr>';
-      }).join('') || emptyRow(headers, '暂无已绑定控调点位');
+      }).join('') || emptyRow(headers, '暂无已绑定指令点位');
     } else {
-      const headers = ['设备', '控调属性', '类型', '源库 / RTU / 点号', '限值范围', '控制状态', '操作'];
+      const headers = ['设备', '指令属性', '类型', '源库 / RTU / 点号', '限值范围', '控制状态', '操作'];
       $('#control-head').innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
       $('#control-rows').innerHTML = items.map((row, index) => '<tr><td class="name">' + html(row.device_name)
         + '<span class="muted">' + html(row.model_table) + ' #' + html(row.model_idx) + '</span></td>'
@@ -1154,10 +1154,10 @@
         + '<td><span class="ctrl-status s-' + (row.notuse ? '5' : '2') + '">' + (row.notuse ? '控制禁用' : '允许控制') + '</span></td>'
         + '<td><span class="ctrl-ops"><button type="button" data-ctrl-edit="' + index + '">编辑</button>'
         + '<button type="button" data-ctrl-delete="' + index + '">删除</button></span></td></tr>').join('')
-        || emptyRow(headers, '暂无控调映射，可点击右上角新增');
+        || emptyRow(headers, '暂无指令映射，可点击右上角新增');
     }
     const pages = Math.max(1, Math.ceil(total / 100));
-    $('#ctrl-page-summary').textContent = '共 ' + total + ' 条控调记录';
+    $('#ctrl-page-summary').textContent = '共 ' + total + ' 条指令记录';
     $('#ctrl-page-number').textContent = ctrlPage + ' / ' + pages;
     $('#ctrl-prev').disabled = ctrlPage <= 1;
     $('#ctrl-next').disabled = ctrlPage >= pages;
@@ -1176,7 +1176,7 @@
       + '</td><td class="quantity-value">' + html(number(row.value))
       + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
       + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
-      || '<tr><td colspan="9" class="empty">暂无控调流水</td></tr>';
+      || '<tr><td colspan="9" class="empty">暂无指令流水</td></tr>';
   }
 
   async function loadControls() {
@@ -1216,7 +1216,7 @@
     const ok = await confirmDanger(
       isYk ? '确认下发遥控指令' : '确认下发遥调指令',
       '目标设备：' + row.device_name + '（' + row.model_table + ' #' + row.model_idx + '）\n'
-        + '控调属性：' + (row.label || row.control) + ' [' + row.control + '] · RTU ' + row.rtu_id + ' / 点号 ' + row.pnt_no + '\n'
+        + '指令属性：' + (row.label || row.control) + ' [' + row.control + '] · RTU ' + row.rtu_id + ' / 点号 ' + row.pnt_no + '\n'
         + '下发目标值：' + actionDesc + '\n'
         + '确认立即写入 scdfe_c 并下发？',
       '确认下发',
@@ -1231,7 +1231,7 @@
     ctrlEditing = row || null;
     error('#ctrl-editor-error', '');
     $('#control-form').reset();
-    $('#ctrl-editor-title').textContent = ctrlEditing ? '编辑控调映射' : '新增控调映射';
+    $('#ctrl-editor-title').textContent = ctrlEditing ? '编辑指令映射' : '新增指令映射';
     $('#ctrl-edit-device').value = row?.device_id || devices[0]?.device_id || '';
     $('#ctrl-edit-attr').value = row?.control || '';
     $('#ctrl-edit-kind').value = row?.kind || ctrlKind || 'yk';
@@ -1283,7 +1283,7 @@
           $('#ctrl-source-message').textContent = '已选：' + item.name + ' · RTU ' + item.rtu_id + ' / 点号 ' + item.pnt_no;
         });
       }
-      $('#ctrl-source-message').textContent = '找到 ' + data.total + ' 个 ' + kindVal.toUpperCase() + ' 控调点';
+      $('#ctrl-source-message').textContent = '找到 ' + data.total + ' 个 ' + kindVal.toUpperCase() + ' 指令点';
       $('#ctrl-source-page').textContent = ctrlSourcePage + ' / ' + Math.max(1, Math.ceil(data.total / 50));
       $('#ctrl-source-prev').disabled = ctrlSourcePage <= 1;
       $('#ctrl-source-next').disabled = ctrlSourcePage * 50 >= data.total;
@@ -1730,8 +1730,8 @@
     if (delBtn) {
       const row = ctrlRows[Number(delBtn.dataset.ctrlDelete)];
       if (row && await confirmDanger(
-        '确认删除控调映射',
-        '删除 ' + row.device_name + ' 的 ' + row.control + '（' + row.kind.toUpperCase() + '）控调映射后不可恢复，确认删除？',
+        '确认删除指令映射',
+        '删除 ' + row.device_name + ' 的 ' + row.control + '（' + row.kind.toUpperCase() + '）指令映射后不可恢复，确认删除？',
         '确认删除',
       )) {
         await api('/api/controls/' + row.control_id, 'DELETE', { version: row.version });

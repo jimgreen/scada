@@ -360,7 +360,7 @@ class TestScdfeDControls(unittest.TestCase):
                 with urlopen(base + route, timeout=5) as resp:
                     body = resp.read().decode("utf-8")
                     self.assertEqual(resp.status, 200)
-                    self.assertIn("控调下发", body)
+                    self.assertIn("指令下发", body)
                     self.assertIn("运行日志", body)
 
             # 源控调点检索

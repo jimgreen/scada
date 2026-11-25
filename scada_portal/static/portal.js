@@ -47,6 +47,7 @@
     devCategories: [],
     devCategory: "",
     devFilter: "all", // "all" | "alarm" | "running"
+    devDetailTab: "monitor", // "monitor" | "control"
     devItems: [],
     devSelected: null, // { table_name, idx, dev_id }
     trendData: null,
@@ -206,7 +207,7 @@
     const actionDesc = isYk
       ? (parsedValue === 1 ? "合 / 启 (1)" : "分 / 停 (0)")
       : `${parsedValue}${ctrl.unit ? " " + ctrl.unit : ""}`;
-    const msg = `目标设备：${dev.name}（${dev.table_name} #${dev.idx}）\n控调属性：${ctrl.label || ctrl.control} [${ctrl.control}] · RTU ${ctrl.rtu_id} / #${ctrl.point_no}\n下发目标值：${actionDesc}\n确认立即写入并下发指令？`;
+    const msg = `目标设备：${dev.name}（${dev.table_name} #${dev.idx}）\n指令属性：${ctrl.label || ctrl.control} [${ctrl.control}] · RTU ${ctrl.rtu_id} / #${ctrl.point_no}\n下发目标值：${actionDesc}\n确认立即写入并下发指令？`;
     const ok = typeof window.scadaConfirm === "function"
       ? await window.scadaConfirm(msg, {
           title: isYk ? "确认下发遥控指令" : "确认下发遥调指令",
@@ -1119,7 +1120,7 @@
       } else {
         ctrlHost.hidden = false;
         ctrlHost.innerHTML =
-          '<div class="pf-pop-controls-title">就地控调（YK / YT）</div>' +
+          '<div class="pf-pop-controls-title">就地指令（YK / YT）</div>' +
           ctrls.map((c, ci) => {
             const disabled = Boolean(c.disabled);
             const key = `${dev.table_name}:${dev.idx}:${c.control}`;
@@ -1943,19 +1944,50 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function applyDevDetailTab(tab) {
+    const ctrlBtn = $("#dev-tab-control-btn");
+    const hasCtrl = Boolean(ctrlBtn && !ctrlBtn.hidden);
+    const nextTab = tab === "control" && hasCtrl ? "control" : "monitor";
+    state.devDetailTab = nextTab;
+    $$("#dev-detail-tabs [data-dev-tab]").forEach((btn) => {
+      const active = btn.dataset.devTab === nextTab;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-selected", String(active));
+    });
+    const monPane = $("#dev-tab-monitor");
+    const ctrlPane = $("#dev-tab-control");
+    if (monPane) monPane.hidden = nextTab !== "monitor";
+    if (ctrlPane) ctrlPane.hidden = nextTab !== "control";
+    if (nextTab === "monitor") {
+      requestAnimationFrame(() => drawTrendChart());
+    }
+  }
+
   function renderDeviceControls(dev) {
-    const panel = $("#dev-control-panel");
     const tbody = $("#dev-ctrl-body");
     const hint = $("#dev-ctrl-hint");
-    if (!panel || !tbody) return;
+    const liveStrip = $("#dev-ctrl-live-strip");
+    const ctrlTabBtn = $("#dev-tab-control-btn");
+    const ctrlTabCnt = $("#dev-tab-control-cnt");
+    if (!tbody) return;
     const ctrls = dev?.controls || [];
+    if (ctrlTabBtn) ctrlTabBtn.hidden = !ctrls.length;
+    if (ctrlTabCnt) ctrlTabCnt.textContent = String(ctrls.length);
     if (!dev || !ctrls.length) {
-      panel.hidden = true;
       tbody.innerHTML = "";
+      if (liveStrip) liveStrip.innerHTML = "";
+      applyDevDetailTab("monitor");
       return;
     }
-    panel.hidden = false;
-    if (hint) hint.textContent = `${ctrls.length} 项控调 · RTU ${ctrls[0].rtu_id}`;
+    if (liveStrip) {
+      liveStrip.innerHTML = (dev.metrics || []).slice(0, 6).map((m) => {
+        const valStr = m.kind === "yx"
+          ? (m.metric === "position" ? (m.value ? "合闸" : "分闸") : (m.value ? "运行" : "停运"))
+          : `${fmtNum(m.display_value, 2)}${m.unit ? " " + m.unit : ""}`;
+        return `<span class="dev-ctrl-live-item"><span>${esc(m.label)}</span><strong>${esc(valStr)}</strong></span>`;
+      }).join("");
+    }
+    if (hint) hint.textContent = `${ctrls.length} 项指令 · RTU ${ctrls[0].rtu_id}`;
     tbody.innerHTML = ctrls.map((c, ci) => {
       const disabled = Boolean(c.disabled);
       const key = `${dev.table_name}:${dev.idx}:${c.control}`;
@@ -2012,6 +2044,7 @@
         dispatchPortalControl(dev, c, inp ? inp.value : c?.value).catch((err) => setConnection(false, err.message));
       });
     });
+    applyDevDetailTab(state.devDetailTab);
   }
 
   function renderDeviceDetail(dev) {
@@ -2031,7 +2064,7 @@
     }
     $("#dev-detail-name").textContent = dev.name;
     $("#dev-detail-meta").textContent = `${dev.table_name} · 编号 #${dev.idx} · 有效量测 ${dev.valid_count}/${dev.bound_count}` +
-      (dev.control_count ? ` · 控调 ${dev.control_count}` : "");
+      (dev.control_count ? ` · 指令 ${dev.control_count}` : "");
     locBtn.disabled = false;
     locBtn.onclick = async () => {
       switchView("powerflow");
@@ -2779,7 +2812,7 @@
   function alarmTypeBadge(type) {
     if (type === "over_max") return '<span class="badge over">越上限</span>';
     if (type === "under_min") return '<span class="badge under">越下限</span>';
-    if (type === "control_failed") return '<span class="badge danger">控调失败</span>';
+    if (type === "control_failed") return '<span class="badge danger">指令失败</span>';
     return '<span class="badge danger">通信异常</span>';
   }
 
@@ -2804,7 +2837,7 @@
         `<div class="comm-stat-item"><span class="cs-lbl">未确认</span><strong style="color:var(--danger,#f43f5e)">${sm.unacked ?? 0}</strong></div>` +
         `<div class="comm-stat-item"><span class="cs-lbl">越限</span><strong>${(sm.over_max ?? 0) + (sm.under_min ?? 0)}</strong></div>` +
         `<div class="comm-stat-item"><span class="cs-lbl">通信</span><strong>${sm.comm_error ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">控调</span><strong>${sm.control_failed ?? 0}</strong></div>`;
+        `<div class="comm-stat-item"><span class="cs-lbl">指令</span><strong>${sm.control_failed ?? 0}</strong></div>`;
     }
 
     const tbody = $("#alarm-tbody");
@@ -2885,7 +2918,12 @@
     await loadAlarms();
   });
 
-  // 设备图快滤、多设备对比与 CSV 导出事件绑定
+  // 设备图快滤、详情分页标签、多设备对比与 CSV 导出事件绑定
+  $$("#dev-detail-tabs [data-dev-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyDevDetailTab(btn.dataset.devTab || "monitor");
+    });
+  });
   $$("#dev-state-tabs .sub-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.devFilter = btn.dataset.devFilter || "all";

@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_d · 设备量测</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/point-trend.css"></head>
 <body><header></header><main>
 <p id="alert" role="alert" hidden></p>
-<section id="overview-stats" class="stats stats-compact" aria-label="采集概况" hidden><div><span>设备</span><strong id="device-count">—</strong></div><div><span>量测属性</span><strong id="property-count">—</strong></div><div><span>点表映射</span><strong id="mapping-count">—</strong></div><div><span>可用量测</span><strong id="valid-count">—</strong></div><div><span>控调点</span><strong id="control-count">—</strong></div></section>
+<section id="overview-stats" class="stats stats-compact" aria-label="采集概况" hidden><div><span>设备</span><strong id="device-count">—</strong></div><div><span>量测属性</span><strong id="property-count">—</strong></div><div><span>点表映射</span><strong id="mapping-count">—</strong></div><div><span>可用量测</span><strong id="valid-count">—</strong></div><div><span>指令点</span><strong id="control-count">—</strong></div></section>
 <section id="overview" class="panel" hidden>
 <div class="toolbar overview-bar">
 <span id="collector-state" class="badge">未启动</span>
@@ -16,8 +16,8 @@
 </div>
 <div id="interval-error" class="error" role="alert" hidden></div>
 <div id="collector-error" role="alert"></div>
-<div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>量测有效 / 绑定</th><th>控调点</th><th>操作</th></tr></thead><tbody id="category-rows"></tbody></table></div>
-<div id="overview-recent-ctrl" class="overview-recent-ctrl" hidden><div class="recent-ctrl-head"><span>最近控调流水</span><a href="/controls">进入控调下发 →</a></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th>设定值</th><th>状态</th></tr></thead><tbody id="overview-ctrl-rows"></tbody></table></div></div>
+<div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>量测有效 / 绑定</th><th>指令点</th><th>操作</th></tr></thead><tbody id="category-rows"></tbody></table></div>
+<div id="overview-recent-ctrl" class="overview-recent-ctrl" hidden><div class="recent-ctrl-head"><span>最近指令流水</span><a href="/controls">进入指令下发 →</a></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th>设定值</th><th>状态</th></tr></thead><tbody id="overview-ctrl-rows"></tbody></table></div></div>
 </section>
 <section id="measure-panel" class="panel flexible" hidden>
 <div class="toolbar filters measure-bar">
@@ -39,34 +39,34 @@
 <div class="pager"><span id="page-summary"></span><div class="actions" id="page-actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div>
 <div class="actions" id="parameter-actions" hidden><span id="parameter-status" aria-live="polite"></span><button id="discard-parameters" disabled>撤销修改</button><button id="save-parameters" class="primary" disabled>保存参数</button></div></div>
 <div id="point-trend" hidden></div></section>
-<section id="history-panel" class="panel flexible" hidden><div class="toolbar history-bar"><h2>采集与修改记录</h2><div class="type-tabs"><button id="show-refreshes" class="active">采集批次</button><button id="show-changes">定义修改</button><button id="show-controls">控调流水</button></div><button id="history-refresh" class="actions">刷新</button></div><div class="table-wrap"><table><thead id="history-head"></thead><tbody id="history-rows"></tbody></table></div></section>
+<section id="history-panel" class="panel flexible" hidden><div class="toolbar history-bar"><h2>采集与修改记录</h2><div class="type-tabs"><button id="show-refreshes" class="active">采集批次</button><button id="show-changes">定义修改</button><button id="show-controls">指令流水</button></div><button id="history-refresh" class="actions">刷新</button></div><div class="table-wrap"><table><thead id="history-head"></thead><tbody id="history-rows"></tbody></table></div></section>
 <section id="control-panel" class="panel flexible" hidden>
 <div class="toolbar filters control-bar">
 <select id="ctrl-category" aria-label="设备类型" title="设备类型"><option value="">全部类型</option></select>
 <select id="ctrl-table" aria-label="设备表" title="设备表"><option value="">全部设备表</option></select>
-<input id="ctrl-search" type="search" placeholder="设备 / 属性" aria-label="搜索设备或控调属性" title="搜索设备或控调属性">
-<div class="type-tabs" role="group" aria-label="控调类型"><button id="ctrl-tab-all" aria-pressed="true" class="active">全部</button><button id="ctrl-tab-yk" aria-pressed="false" title="遥控 YK">YK</button><button id="ctrl-tab-yt" aria-pressed="false" title="遥调 YT">YT</button></div>
+<input id="ctrl-search" type="search" placeholder="设备 / 属性" aria-label="搜索设备或指令属性" title="搜索设备或指令属性">
+<div class="type-tabs" role="group" aria-label="指令类型"><button id="ctrl-tab-all" aria-pressed="true" class="active">全部</button><button id="ctrl-tab-yk" aria-pressed="false" title="遥控 YK">YK</button><button id="ctrl-tab-yt" aria-pressed="false" title="遥调 YT">YT</button></div>
 <select id="ctrl-status" aria-label="执行状态" title="执行状态"><option value="">全部状态</option><option value="0">空闲</option><option value="1">待回执</option><option value="2">执行成功</option><option value="3">执行失败</option><option value="5">控制禁用</option></select>
 <div class="actions control-bar-actions">
 <span id="ctrl-summary" class="muted" aria-live="polite"></span>
 <label class="check" id="ctrl-live-wrap"><input id="ctrl-auto-refresh" type="checkbox" checked>5s 刷新</label>
 <button id="sync-ctrl-bindings" hidden title="按表名.设备名.属性从 scdfe_c 自动匹配绑定 YK/YT">同步绑定</button>
-<button id="export-ctrl-csv" hidden title="导出控调映射为 CSV">导出 CSV</button>
-<button id="new-control" class="primary" hidden>新增控调映射</button>
+<button id="export-ctrl-csv" hidden title="导出指令映射为 CSV">导出 CSV</button>
+<button id="new-control" class="primary" hidden>新增指令映射</button>
 <button id="ctrl-refresh">刷新</button>
 </div>
 </div>
 <div class="table-wrap"><table><thead id="control-head"></thead><tbody id="control-rows"></tbody></table></div>
 <div class="pager"><span id="ctrl-page-summary"></span><div class="actions"><button id="ctrl-prev">上一页</button><span id="ctrl-page-number"></span><button id="ctrl-next">下一页</button></div></div>
 <details id="control-history-drawer" class="control-history-drawer" hidden>
-<summary><span>控调下发与回执流水</span><span id="ctrl-history-count" class="muted"></span></summary>
+<summary><span>指令下发与回执流水</span><span id="ctrl-history-count" class="muted"></span></summary>
 <div class="table-wrap drawer-table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th>类型</th><th>RTU / 点号</th><th>设定值</th><th>状态</th><th>详情</th></tr></thead><tbody id="ctrl-history-rows"></tbody></table></div>
 </details>
 </section>
 <section id="logs-panel" class="panel flexible" hidden>
 <div class="toolbar logs-bar">
-<div class="type-tabs" id="logs-section-tabs" role="group" aria-label="日志与记录切换"><button type="button" class="active" data-log-tab="files">文件日志</button><button type="button" data-log-tab="controls">控调流水</button><button type="button" data-log-tab="refreshes">采集批次</button><button type="button" data-log-tab="changes">定义修改</button></div>
-<select id="log-process" aria-label="进程" title="进程"><option value="">全部进程</option><option value="scdfe_d-control">控调监视 (control)</option><option value="scdfe_d-collector">量测采集 (collector)</option><option value="scdfe_d-web">Web 服务 (web)</option></select>
+<div class="type-tabs" id="logs-section-tabs" role="group" aria-label="日志与记录切换"><button type="button" class="active" data-log-tab="files">文件日志</button><button type="button" data-log-tab="controls">指令流水</button><button type="button" data-log-tab="refreshes">采集批次</button><button type="button" data-log-tab="changes">定义修改</button></div>
+<select id="log-process" aria-label="进程" title="进程"><option value="">全部进程</option><option value="scdfe_d-control">指令监视 (control)</option><option value="scdfe_d-collector">量测采集 (collector)</option><option value="scdfe_d-web">Web 服务 (web)</option></select>
 <select id="log-level" aria-label="级别" title="级别"><option value="">全部级别</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="PROCESS">PROCESS</option></select>
 <select id="log-file" aria-label="日志文件" title="日志文件"><option value="">全部小时文件</option></select>
 <input id="log-search" type="search" placeholder="搜索日志关键词" aria-label="搜索日志关键词" title="搜索日志关键词">
@@ -82,12 +82,12 @@
 <div class="pager" id="logs-file-pager"><span id="log-summary"></span><div class="actions"><button id="log-more" hidden>加载更早日志</button></div></div>
 </section>
 </main>
-<dialog id="control-editor"><form id="control-form"><div class="toolbar"><h2 id="ctrl-editor-title">控调映射</h2><button type="button" id="ctrl-editor-close" class="actions" aria-label="关闭控调编辑">×</button></div>
-<div class="editor-grid"><section><h3>目标设备控调</h3>
+<dialog id="control-editor"><form id="control-form"><div class="toolbar"><h2 id="ctrl-editor-title">指令映射</h2><button type="button" id="ctrl-editor-close" class="actions" aria-label="关闭指令编辑">×</button></div>
+<div class="editor-grid"><section><h3>目标设备指令</h3>
 <label>设备<select id="ctrl-edit-device" required></select></label>
 <div class="two">
-<label>控调属性<input id="ctrl-edit-attr" list="ctrl-attr-presets" required pattern="[a-z][a-z0-9_]{0,47}" placeholder="run_stat / p_set"></label>
-<label>控调类型<select id="ctrl-edit-kind"><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
+<label>指令属性<input id="ctrl-edit-attr" list="ctrl-attr-presets" required pattern="[a-z][a-z0-9_]{0,47}" placeholder="run_stat / p_set"></label>
+<label>指令类型<select id="ctrl-edit-kind"><option value="yk">遥控 YK</option><option value="yt">遥调 YT</option></select></label>
 </div>
 <datalist id="ctrl-attr-presets"><option value="run_stat"><option value="status"><option value="p_set"><option value="q_set"><option value="v_set"><option value="i_set"><option value="p_ac_set"><option value="q_ac_set"><option value="v_ac_set"><option value="p_dc_set"><option value="v_dc_set"><option value="flow_set"></datalist>
 <div class="two">
@@ -96,13 +96,13 @@
 </div>
 <div class="toolbar"><label class="check"><input id="ctrl-edit-notuse" type="checkbox">禁用控制（闭锁）</label></div>
 </section>
-<section class="source-section"><h3>目标 scdfe_c 控调点</h3>
+<section class="source-section"><h3>目标 scdfe_c 指令点</h3>
 <label>源数据库<span class="source-path"><input id="ctrl-edit-source" required placeholder="realtime/qinling/sqldb/fes/scdfe_c.sqlite3"><button type="button" id="ctrl-browse-source">浏览</button></span></label>
 <div class="two">
 <label>RTU 编号<input id="ctrl-edit-rtu" type="number" min="1" required></label>
 <label>点号<input id="ctrl-edit-point" type="number" min="1" required></label>
 </div>
-<div class="toolbar"><input id="ctrl-source-search" type="search" placeholder="按测点名称查找" aria-label="按控调点名称查找"><button type="button" id="ctrl-find-source">查找测点</button></div>
+<div class="toolbar"><input id="ctrl-source-search" type="search" placeholder="按测点名称查找" aria-label="按指令点名称查找"><button type="button" id="ctrl-find-source">查找测点</button></div>
 <p id="ctrl-source-message" class="muted" role="status"></p>
 <div class="table-wrap source-results"><table><thead><tr><th>RTU / 点号</th><th>测点名称</th><th></th></tr></thead><tbody id="ctrl-source-rows"></tbody></table></div>
 <div class="pager"><button type="button" id="ctrl-source-prev">上一页</button><span id="ctrl-source-page"></span><button type="button" id="ctrl-source-next">下一页</button></div>

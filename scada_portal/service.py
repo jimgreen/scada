@@ -2350,7 +2350,7 @@ class PortalService:
                     "key": key,
                     "type": atype,
                     "severity": "high",
-                    "title": "控调失败",
+                    "title": "指令失败",
                     "dev_id": dev_id,
                     "table_name": table,
                     "idx": idx,

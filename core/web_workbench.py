@@ -94,13 +94,13 @@ T_PAGES = [
 
 D_PAGES = [
     ('运行管理', [('overview.html', '/', '◉', '设备采集', '设备量测采集状态与启停'),
-                  ('logs.html', '/logs', '◷', '运行日志与记录', '查看采集/控调运行日志、采集批次与修改记录'),
+                  ('logs.html', '/logs', '◷', '运行日志与记录', '查看采集/指令运行日志、采集批次与修改记录'),
                   ('diagnostics.html', '/diagnostics', '◴', '运行诊断', '设备采集耗时与源库检查'),
                   POINT_TRENDS_PAGE]),
     ('设备量测', [('measurements.html', '/measurements', '▦', '量测与参数', '按设备实时监视量测值或批量调整量测参数'),
                  ('mappings.html', '/mappings', '⇄', '量测定义', '查询和维护设备量测与 SCADA 测点的关联')]),
-    ('设备控制', [('controls.html', '/controls', '↗', '控调下发', '实时监控并下发设备遥控与遥调指令'),
-                 ('control-mappings.html', '/control-mappings', '▥', '控调定义', '查询和维护设备遥控/遥调与 scdfe_c 测点的关联')]),
+    ('设备控制', [('controls.html', '/controls', '↗', '指令下发', '实时监控并下发设备遥控与遥调指令'),
+                 ('control-mappings.html', '/control-mappings', '▥', '指令定义', '查询和维护设备遥控/遥调与 scdfe_c 测点的关联')]),
 ]
 
 
