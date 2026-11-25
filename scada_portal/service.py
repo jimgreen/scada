@@ -20,6 +20,7 @@ from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
 from core.web_database import DEFAULT_WORKSPACE_ROOT
 from core.log_query import LOG_PATTERNS, search_logs
+from core.rtdb_schema import sync_embedded_schema
 from core.common import CHANNEL_PARAMETER_TABLES, KIND_TABLES
 from scdfe_d.measurement_layout import (
     CONTROL_META,
@@ -279,6 +280,27 @@ def _classify_device(table: str, name: str) -> str:
     return "bus"
 
 
+class _PortalHistorySchemaCatalog:
+    """为 scada_portal_history.sqlite3 提供 RTDB 嵌入结构中文表名与字段说明。"""
+
+    def names(self) -> list[str]:
+        return ["device_daily_samples"]
+
+    def get(self, table_name: str) -> dict[str, Any]:
+        if table_name != "device_daily_samples":
+            return {}
+        return {
+            "head": {"chn_name": "设备日曲线采样"},
+            "columns": [
+                {"eng_name": "ts_ms", "chn_name": "采样时间(ms)"},
+                {"eng_name": "table_name", "chn_name": "设备表名"},
+                {"eng_name": "idx", "chn_name": "设备索引"},
+                {"eng_name": "metric", "chn_name": "量测属性"},
+                {"eng_name": "value", "chn_name": "量测值"},
+            ],
+        }
+
+
 class PortalService:
     """统一读取 scdfe_d / scdfe_c SQLite、SVG 接线图与运行日志，并维护 24 小时日曲线。"""
 
@@ -505,6 +527,13 @@ class PortalService:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_samples_ts ON device_daily_samples(ts_ms)"
+            )
+            # 同步 RTDB 原生内置结构定义，确保 RTDB 打开 sqldb/scada 目录时零告警
+            conn.execute("BEGIN IMMEDIATE")
+            sync_embedded_schema(
+                conn,
+                catalog=_PortalHistorySchemaCatalog(),
+                include_tables=("device_daily_samples",),
             )
             conn.commit()
 

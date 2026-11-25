@@ -519,6 +519,20 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertEqual(st_cmp, 200)
         self.assertEqual(len(cmp_data["series"]), 2)
 
+        # 3.5 校验日曲线历史库自动具备完整 RTDB 原生内置结构定义
+        hcon = sqlite3.connect(self.httpd.service.history_db)
+        try:
+            htables = {r[0] for r in hcon.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertTrue({"rtdb_schema_database", "rtdb_schema_tables", "rtdb_schema_columns"} <= htables)
+            fmt = hcon.execute("SELECT storage_format FROM rtdb_schema_database WHERE version=1").fetchone()
+            self.assertEqual(fmt[0], "native")
+            trow = hcon.execute(
+                "SELECT chn_name FROM rtdb_schema_tables WHERE table_name='device_daily_samples'"
+            ).fetchone()
+            self.assertEqual(trow[0], "设备日曲线采样")
+        finally:
+            hcon.close()
+
         # 4. 门户控调日志源（scdfe_d/logs）
         d_log_day = self.d_db.parent / "logs" / "2026" / "11" / "26" / "01"
         d_log_day.mkdir(parents=True, exist_ok=True)
