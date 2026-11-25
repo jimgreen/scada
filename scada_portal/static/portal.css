@@ -2456,6 +2456,18 @@ html[data-theme="editorial"] .ef-card {
 .ef-bus-cap.dc { fill: #38bdf8; }
 .ef-bus-cap.ac { fill: #10b981; }
 
+.ef-bus-bar.dc {
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.45));
+}
+.ef-bus-bar.ac {
+  filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.45));
+}
+html[data-theme="minimalist-light"] .ef-bus-bar,
+html[data-theme="bento-grid"] .ef-bus-bar,
+html[data-theme="editorial"] .ef-bus-bar {
+  filter: none;
+}
+
 .ef-bus-foot {
   font-size: 12px;
   font-weight: 600;

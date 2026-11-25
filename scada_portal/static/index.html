@@ -337,23 +337,23 @@
               <div class="ef-stage">
                 <svg id="ef-svg" viewBox="0 0 920 468" preserveAspectRatio="xMidYMid meet" role="img" aria-label="交直流微电网与氢能实时流向图">
                   <defs>
-                    <linearGradient id="ef-dc-bus-grad" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="ef-dc-bus-grad" gradientUnits="userSpaceOnUse" x1="305" y1="44" x2="305" y2="424">
                       <stop offset="0%" stop-color="#38bdf8" />
                       <stop offset="100%" stop-color="#0284c7" />
                     </linearGradient>
-                    <linearGradient id="ef-ac-bus-grad" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="ef-ac-bus-grad" gradientUnits="userSpaceOnUse" x1="615" y1="44" x2="615" y2="424">
                       <stop offset="0%" stop-color="#34d399" />
                       <stop offset="100%" stop-color="#059669" />
                     </linearGradient>
                   </defs>
 
-                  <!-- 直流 / 交流垂直主母线 -->
+                  <!-- 直流 / 交流垂直主母线（使用圆角矩形避免垂直 line 零宽包围盒导致渐变不可见） -->
                   <text class="ef-bus-cap dc" x="305" y="34" text-anchor="middle" id="ef-svg-dc-cap">DC 750V</text>
-                  <line class="ef-bus-bar dc" x1="305" y1="44" x2="305" y2="424" stroke="url(#ef-dc-bus-grad)" stroke-width="5" stroke-linecap="round" />
+                  <rect class="ef-bus-bar dc" x="302.5" y="44" width="5" height="380" rx="2.5" fill="url(#ef-dc-bus-grad)" />
                   <text class="ef-bus-foot" x="305" y="446" text-anchor="middle">直流母线</text>
 
                   <text class="ef-bus-cap ac" x="615" y="34" text-anchor="middle" id="ef-svg-ac-cap">AC 380V</text>
-                  <line class="ef-bus-bar ac" x1="615" y1="44" x2="615" y2="424" stroke="url(#ef-ac-bus-grad)" stroke-width="5" stroke-linecap="round" />
+                  <rect class="ef-bus-bar ac" x="612.5" y="44" width="5" height="380" rx="2.5" fill="url(#ef-ac-bus-grad)" />
                   <text class="ef-bus-foot" x="615" y="446" text-anchor="middle">交流母线</text>
 
                   <!-- 左侧直流连线 -->
