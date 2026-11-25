@@ -2368,10 +2368,10 @@
     const totalErr = rtus.reduce((s, r) => s + (r.error_count || 0), 0);
 
     $("#comm-summary").innerHTML =
-      `<div class="comm-stat-item"><span class="cs-lbl">RTU 总数</span><strong>${rtus.length}</strong><span class="cs-unit">台</span></div>` +
-      `<div class="comm-stat-item"><span class="cs-lbl">在线连接</span><strong>${online}</strong><span class="cs-unit">/ ${rtus.length}</span></div>` +
-      `<div class="comm-stat-item"><span class="cs-lbl">累计接收帧</span><strong>${totalRx.toLocaleString()}</strong><span class="cs-unit">帧</span></div>` +
-      `<div class="comm-stat-item"><span class="cs-lbl">通信错误</span><strong>${totalErr.toLocaleString()}</strong><span class="cs-unit">次</span></div>`;
+      `<div class="comm-stat-item"><span class="cs-lbl">RTU</span><strong>${rtus.length}</strong></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">在线</span><strong>${online}/${rtus.length}</strong></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">接收帧</span><strong>${totalRx.toLocaleString()}</strong></div>` +
+      `<div class="comm-stat-item"><span class="cs-lbl">错误</span><strong>${totalErr.toLocaleString()}</strong></div>`;
 
     if (!state.commRtuOptionsLoaded) {
       const sel = $("#comm-rtu-filter");
@@ -2639,11 +2639,10 @@
     // 交直流平衡栏与母线电压
     const dcV = Math.round(dc.voltage_v || 750);
     const acV = Math.round(ac.voltage_v || 380);
-    $("#ef-dc-volt").textContent = `直流侧 ${dcV}V`;
-    $("#ef-dc-balance").textContent = `发 ${fmtNum(dc.gen_kw, 1)} / 荷 ${fmtNum(dc.load_kw, 1)} kW`;
-    $("#ef-green-summary").textContent = `绿电 ${fmtNum(s.renewable_kw, 1)} kW · 占比 ${fmtNum(s.green_ratio_pct, 1)}%`;
-    $("#ef-ac-volt").textContent = `交流侧 ${acV}V`;
-    $("#ef-ac-balance").textContent = `发 ${fmtNum(ac.gen_kw, 1)} / 荷 ${fmtNum(ac.load_kw, 1)} kW`;
+    if ($("#ef-dc-volt")) $("#ef-dc-volt").textContent = `DC ${dcV}V`;
+    if ($("#ef-dc-balance")) $("#ef-dc-balance").textContent = `发 ${fmtNum(dc.gen_kw, 1)} / 荷 ${fmtNum(dc.load_kw, 1)} kW`;
+    if ($("#ef-ac-volt")) $("#ef-ac-volt").textContent = `AC ${acV}V`;
+    if ($("#ef-ac-balance")) $("#ef-ac-balance").textContent = `发 ${fmtNum(ac.gen_kw, 1)} / 荷 ${fmtNum(ac.load_kw, 1)} kW`;
     $("#ef-svg-dc-cap").textContent = `DC ${dcV}V`;
     $("#ef-svg-ac-cap").textContent = `AC ${acV}V`;
 
@@ -2801,12 +2800,11 @@
     const sumEl = $("#alarm-summary");
     if (sumEl) {
       sumEl.innerHTML =
-        `<div class="comm-stat-item"><span class="cs-lbl">活动告警</span><strong>${sm.total ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">告警</span><strong>${sm.total ?? 0}</strong></div>` +
         `<div class="comm-stat-item"><span class="cs-lbl">未确认</span><strong style="color:var(--danger,#f43f5e)">${sm.unacked ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">越上限</span><strong>${sm.over_max ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">越下限</span><strong>${sm.under_min ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">通信异常</span><strong>${sm.comm_error ?? 0}</strong></div>` +
-        `<div class="comm-stat-item"><span class="cs-lbl">控调失败</span><strong>${sm.control_failed ?? 0}</strong></div>`;
+        `<div class="comm-stat-item"><span class="cs-lbl">越限</span><strong>${(sm.over_max ?? 0) + (sm.under_min ?? 0)}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">通信</span><strong>${sm.comm_error ?? 0}</strong></div>` +
+        `<div class="comm-stat-item"><span class="cs-lbl">控调</span><strong>${sm.control_failed ?? 0}</strong></div>`;
     }
 
     const tbody = $("#alarm-tbody");
