@@ -285,6 +285,7 @@
             </div>
             <div class="toolbar-right">
               <input id="pf-search" type="search" placeholder="搜索定位设备…" aria-label="搜索定位设备" />
+              <label class="chk"><input type="checkbox" id="pf-show-arrows" checked /> 流动箭头</label>
               <label class="chk"><input type="checkbox" id="pf-show-meas" checked /> 量测值</label>
               <label class="chk"><input type="checkbox" id="pf-show-labels" checked /> 设备名称</label>
               <div class="btn-group">
@@ -303,6 +304,8 @@
               <div class="pf-legend">
                 <span><i class="swatch ok"></i>合闸 / 有效</span>
                 <span><i class="swatch danger"></i>分闸 / 异常</span>
+                <span><i class="swatch flow-ac"></i>交流潮流</span>
+                <span><i class="swatch flow-dc"></i>直流潮流</span>
                 <span id="pf-zoom-label">100%</span>
               </div>
             </div>

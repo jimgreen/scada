@@ -970,6 +970,17 @@ input[type="search"], select {
   display: none;
 }
 
+.pf-stage.hide-arrows g#PowerFlow_Arrows_Layer {
+  display: none;
+}
+
+.pf-arrow-node {
+  pointer-events: none;
+}
+
+.swatch.flow-ac { background: #34f5a8; }
+.swatch.flow-dc { background: #38bdf8; }
+
 .pf-legend {
   position: absolute;
   left: 12px;

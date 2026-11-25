@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from core.log_paths import log_entries, packet_log_directory
 from core.scdfe_control import LOG_LEVEL_CODES, LOG_PATTERN, log_directory
