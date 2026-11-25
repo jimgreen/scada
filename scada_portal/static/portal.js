@@ -215,7 +215,7 @@
 
   // ==================== 视图切换与路由 ====================
   function switchView(view, updateHash = true) {
-    const valid = ["home", "powerflow", "devices", "comm", "logs"];
+    const valid = ["home", "energyflow", "powerflow", "devices", "comm", "logs"];
     if (!valid.includes(view)) view = "home";
     state.view = view;
     document.body.classList.toggle("view-home", view === "home");
@@ -2171,13 +2171,188 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
+  // ==================== 1.5 全景流向（交直流微电网与氢能实时能流） ====================
+  function setFlowLineState(id, mode) {
+    const el = $("#" + id);
+    if (!el) return;
+    el.classList.remove("flow-fwd", "flow-rev", "flow-idle");
+    el.classList.add(mode === "fwd" ? "flow-fwd" : mode === "rev" ? "flow-rev" : "flow-idle");
+  }
+
+  function esStateLabel(st) {
+    if (st === "discharge") return "放电";
+    if (st === "charge") return "充电";
+    return "待机";
+  }
+
+  async function loadEnergyFlow() {
+    const data = await api("/api/energy-flow");
+    const s = data.summary || {};
+    const dc = data.dc_bus || {};
+    const ac = data.ac_bus || {};
+    const n = data.nodes || {};
+    const env = data.environment || {};
+    const src = data.sources || {};
+
+    // 顶部 6 项核心指标
+    $("#ef-kpi-load").textContent = fmtNum(s.total_load_kw, 1);
+    $("#ef-kpi-renew").textContent = fmtNum(s.renewable_kw, 1);
+    $("#ef-kpi-green").textContent = fmtNum(s.green_ratio_pct, 1);
+    $("#ef-kpi-storage").textContent = fmtNum(s.storage_kw, 1);
+    $("#ef-kpi-diesel").textContent = fmtNum(s.diesel_kw, 1);
+    $("#ef-kpi-valid").textContent = String(s.valid_measurements ?? 0);
+    $("#ef-kpi-valid-sub").textContent = `/ ${s.bound_measurements ?? 0}`;
+
+    // 交直流平衡栏与母线电压
+    const dcV = Math.round(dc.voltage_v || 750);
+    const acV = Math.round(ac.voltage_v || 380);
+    $("#ef-dc-volt").textContent = `直流侧 ${dcV}V`;
+    $("#ef-dc-balance").textContent = `发 ${fmtNum(dc.gen_kw, 1)} / 荷 ${fmtNum(dc.load_kw, 1)} kW`;
+    $("#ef-green-summary").textContent = `绿电 ${fmtNum(s.renewable_kw, 1)} kW · 占比 ${fmtNum(s.green_ratio_pct, 1)}%`;
+    $("#ef-ac-volt").textContent = `交流侧 ${acV}V`;
+    $("#ef-ac-balance").textContent = `发 ${fmtNum(ac.gen_kw, 1)} / 荷 ${fmtNum(ac.load_kw, 1)} kW`;
+    $("#ef-svg-dc-cap").textContent = `DC ${dcV}V`;
+    $("#ef-svg-ac-cap").textContent = `AC ${acV}V`;
+
+    // 左侧直流节点
+    const dcWind = n.dc_wind || {};
+    $("#ef-dc-wind-cnt").textContent = `· ${dcWind.count ?? 0}台`;
+    $("#ef-dc-wind-kw").textContent = `${fmtNum(dcWind.p_kw, 1)} kW`;
+    $("#ef-dc-wind-sub").textContent = `在线 ${dcWind.online ?? 0}/${dcWind.count ?? 0}`;
+    setFlowLineState("ef-line-dc-wind", (dcWind.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    const dcPv = n.dc_pv || {};
+    $("#ef-dc-pv-cnt").textContent = `· ${dcPv.count ?? 0}台`;
+    $("#ef-dc-pv-kw").textContent = `${fmtNum(dcPv.p_kw, 1)} kW`;
+    $("#ef-dc-pv-sub").textContent = dcPv.voltage_v != null ? `${fmtNum(dcPv.voltage_v, 1)} V` : `在线 ${dcPv.online ?? 0}/${dcPv.count ?? 0}`;
+    setFlowLineState("ef-line-dc-pv", (dcPv.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    const dcEs = n.dc_storage || {};
+    $("#ef-dc-es-soc").textContent = `· SOC ${dcEs.soc_pct != null ? fmtNum(dcEs.soc_pct, 1) : "--"}%`;
+    $("#ef-dc-es-kw").textContent = `${fmtNum(dcEs.p_kw, 1)} kW`;
+    $("#ef-dc-es-sub").textContent = `${esStateLabel(dcEs.state)} · ${dcEs.count ?? 0}组`;
+    setFlowLineState("ef-line-dc-storage", dcEs.state === "discharge" ? "fwd" : dcEs.state === "charge" ? "rev" : "idle");
+
+    const dcLoad = n.dc_load || {};
+    $("#ef-dc-load-v").textContent = `· ${Math.round(dcLoad.voltage_v || dcV)}V`;
+    $("#ef-dc-load-kw").textContent = `${fmtNum(dcLoad.p_kw, 1)} kW`;
+    $("#ef-dc-load-sub").textContent = `占总负荷 ${fmtNum(dcLoad.share_pct, 1)}%`;
+    setFlowLineState("ef-line-dc-load", (dcLoad.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    // 中间枢纽：DC/AC、电制氢、储氢罐、燃料电池
+    const dcac = n.dcac || {};
+    $("#ef-dcac-cap").textContent = dcac.rated_kw ? `· ${dcac.count || 0}台 ${fmtNum(dcac.rated_kw, 0)} kW` : `· ${dcac.count || 0}台`;
+    $("#ef-dcac-kw").textContent = `${fmtNum(dcac.p_kw, 1)} kW`;
+    if (dcac.direction === "dc_to_ac") {
+      $("#ef-dcac-arrow").textContent = "→";
+      $("#ef-dcac-dir").textContent = "DC → AC";
+      setFlowLineState("ef-line-dcac-l", "fwd");
+      setFlowLineState("ef-line-dcac-r", "fwd");
+    } else if (dcac.direction === "ac_to_dc") {
+      $("#ef-dcac-arrow").textContent = "←";
+      $("#ef-dcac-dir").textContent = "AC → DC";
+      setFlowLineState("ef-line-dcac-l", "rev");
+      setFlowLineState("ef-line-dcac-r", "rev");
+    } else {
+      $("#ef-dcac-arrow").textContent = "⇄";
+      $("#ef-dcac-dir").textContent = "待机";
+      setFlowLineState("ef-line-dcac-l", "idle");
+      setFlowLineState("ef-line-dcac-r", "idle");
+    }
+
+    const elec = n.electrolyzer || {};
+    $("#ef-elec-kw").textContent = `${fmtNum(elec.p_kw, 1)} kW`;
+    $("#ef-elec-flow").textContent = `${elec.flow_nm3h != null ? fmtNum(elec.flow_nm3h, 2) : "--"} Nm³/h`;
+    setFlowLineState("ef-line-elec-ac", (elec.p_kw || 0) > 0.2 ? "fwd" : "idle");
+    setFlowLineState("ef-line-elec-h2", (elec.flow_nm3h || 0) > 0.05 ? "fwd" : "idle");
+
+    const h2 = n.hydro_storage || {};
+    const h2Soc = h2.soc_pct != null ? Math.max(0, Math.min(100, Number(h2.soc_pct))) : 0;
+    const h2Circ = 2 * Math.PI * 32;
+    $("#ef-h2-arc")?.setAttribute("stroke-dasharray", `${(h2Circ * h2Soc / 100).toFixed(2)} ${h2Circ.toFixed(2)}`);
+    $("#ef-h2-soc").textContent = h2.soc_pct != null ? `${fmtNum(h2.soc_pct, 1)}%` : "--%";
+    $("#ef-h2-pres").textContent = h2.pressure_mpa != null ? `${fmtNum(h2.pressure_mpa, 2)} MPa` : "-- MPa";
+    $("#ef-h2-state").textContent = h2.state === "charging"
+      ? `储氢 ${fmtNum(Math.abs(h2.flow_nm3h || 0), 1)} Nm³/h`
+      : h2.state === "discharging"
+        ? `供氢 ${fmtNum(Math.abs(h2.flow_nm3h || 0), 1)} Nm³/h`
+        : "静置";
+
+    const fc = n.fuel_cell || {};
+    $("#ef-fc-kw").textContent = `${fmtNum(fc.p_kw, 1)} kW`;
+    $("#ef-fc-flow").textContent = `${fc.flow_nm3h != null ? fmtNum(fc.flow_nm3h, 2) : "0.00"} Nm³/h`;
+    setFlowLineState("ef-line-h2-fc", (fc.flow_nm3h || 0) > 0.05 || (fc.p_kw || 0) > 0.2 ? "fwd" : "idle");
+    setFlowLineState("ef-line-fc-dc", (fc.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    // 右侧交流节点
+    const acWind = n.ac_wind || {};
+    $("#ef-ac-wind-cnt").textContent = `· ${acWind.count ?? 0}台`;
+    $("#ef-ac-wind-kw").textContent = `${fmtNum(acWind.p_kw, 1)} kW`;
+    $("#ef-ac-wind-sub").textContent = `在线 ${acWind.online ?? 0}/${acWind.count ?? 0}`;
+    setFlowLineState("ef-line-ac-wind", (acWind.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    const acPv = n.ac_pv || {};
+    $("#ef-ac-pv-cnt").textContent = `· ${acPv.count ?? 0}台`;
+    $("#ef-ac-pv-kw").textContent = `${fmtNum(acPv.p_kw, 1)} kW`;
+    $("#ef-ac-pv-sub").textContent = `在线 ${acPv.online ?? 0}/${acPv.count ?? 0}`;
+    setFlowLineState("ef-line-ac-pv", (acPv.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    const acEs = n.ac_storage || {};
+    $("#ef-ac-es-soc").textContent = `· SOC ${acEs.soc_pct != null ? fmtNum(acEs.soc_pct, 1) : "--"}%`;
+    $("#ef-ac-es-kw").textContent = `${fmtNum(acEs.p_kw, 1)} kW`;
+    $("#ef-ac-es-sub").textContent = `${esStateLabel(acEs.state)} · ${acEs.count ?? 0}组`;
+    setFlowLineState("ef-line-ac-storage", acEs.state === "discharge" ? "fwd" : acEs.state === "charge" ? "rev" : "idle");
+
+    const diesel = n.diesel || {};
+    $("#ef-diesel-cnt").textContent = `· ${diesel.count ?? 0}台`;
+    $("#ef-diesel-kw").textContent = `${fmtNum(diesel.p_kw, 1)} kW`;
+    $("#ef-diesel-sub").textContent = `发电 ${diesel.online ?? 0}/${diesel.count ?? 0} 台`;
+    setFlowLineState("ef-line-diesel", (diesel.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    const acLoad = n.ac_load || {};
+    $("#ef-ac-load-v").textContent = `· ${Math.round(acLoad.voltage_v || acV)}V`;
+    $("#ef-ac-load-kw").textContent = `${fmtNum(acLoad.p_kw, 1)} kW`;
+    $("#ef-ac-load-sub").textContent = `占总负荷 ${fmtNum(acLoad.share_pct, 1)}%`;
+    setFlowLineState("ef-line-ac-load", (acLoad.p_kw || 0) > 0.2 ? "fwd" : "idle");
+
+    // 右侧环境与数据源面板
+    const sampleDt = data.latest_sample_time ? new Date(data.latest_sample_time) : new Date();
+    $("#ef-sample-time").textContent = Number.isNaN(sampleDt.getTime())
+      ? "--:--:--"
+      : sampleDt.toLocaleTimeString("zh-CN", { hour12: false });
+    $("#ef-env-wind").textContent = env.wind_speed_ms != null ? `${fmtNum(env.wind_speed_ms, 2)} m/s` : "--";
+    $("#ef-env-irr").textContent = env.irradiance_wm2 != null ? `${fmtNum(env.irradiance_wm2, 1)} W/m²` : "--";
+    $("#ef-env-dcu").textContent = `${fmtNum(env.dc_voltage_v, 1)} V`;
+    $("#ef-env-acu").textContent = `${fmtNum(env.ac_voltage_v, 1)} V`;
+    $("#ef-src-model").textContent = src.model_db || "—";
+    $("#ef-src-d").textContent = src.d_db || "—";
+    $("#ef-src-c").textContent = src.c_db || "—";
+    $("#ef-src-rtu").textContent = `${src.rtu_online ?? 0} / ${src.rtu_total ?? 0}`;
+    const pts = src.points || {};
+    $("#ef-src-points").textContent = `YC:${pts.yc ?? 0} / YX:${pts.yx ?? 0}`;
+    $("#ef-qual-ok").textContent = `${s.valid_measurements ?? 0}`;
+    $("#ef-qual-limit").textContent = `${s.over_limit_count ?? 0} / ${s.under_limit_count ?? 0}`;
+    $("#ef-qual-comm").textContent = `${s.comm_error_count ?? 0}`;
+  }
+
+  $$("#view-energyflow [data-jump-cat]").forEach((node) => {
+    node.addEventListener("click", () => {
+      state.devCategory = node.dataset.jumpCat || "";
+      switchView("devices");
+    });
+  });
+  $$("#view-energyflow [data-ef-view]").forEach((btn) => {
+    btn.addEventListener("click", () => switchView(btn.dataset.efView));
+  });
+
   // ==================== 轮询调度与主题同步 ====================
   async function refreshCurrentView() {
     if (state.refreshing) return;
     state.refreshing = true;
     try {
       await loadOverview();
-      if (state.view === "powerflow") await loadPowerflow();
+      if (state.view === "energyflow") await loadEnergyFlow();
+      else if (state.view === "powerflow") await loadPowerflow();
       else if (state.view === "devices") await loadDevices();
       else if (state.view === "comm") await loadComm();
       else if (state.view === "logs") await loadLogs();
@@ -2229,8 +2404,19 @@
     }).observe($("#hero-stage"));
   }
 
-  // 启动入口
+  // 启动入口（同时支持 #hash 与 /energy-flow 等路径直达）
   const initialHash = location.hash.replace(/^#/, "");
-  switchView(["home", "powerflow", "devices", "comm", "logs"].includes(initialHash) ? initialHash : "home", false);
+  const pathViewMap = {
+    "/energy-flow": "energyflow",
+    "/powerflow": "powerflow",
+    "/devices": "devices",
+    "/comm": "comm",
+    "/logs": "logs",
+  };
+  const validViews = ["home", "energyflow", "powerflow", "devices", "comm", "logs"];
+  const initialView = validViews.includes(initialHash)
+    ? initialHash
+    : (pathViewMap[location.pathname] || "home");
+  switchView(initialView, false);
   resetTimer();
 })();

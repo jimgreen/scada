@@ -97,7 +97,7 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
 
         try:
             # 静态页面与前端资源
-            if path in {"/", "/index.html", "/powerflow", "/devices", "/comm", "/logs"}:
+            if path in {"/", "/index.html", "/energy-flow", "/powerflow", "/devices", "/comm", "/logs"}:
                 return self._serve_file(STATIC_DIR / "index.html")
             if path.startswith("/static/"):
                 rel = path.removeprefix("/static/")
@@ -121,6 +121,8 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 })
             if path == "/api/overview":
                 return self._json(200, self.service.get_overview())
+            if path == "/api/energy-flow":
+                return self._json(200, self.service.get_energy_flow())
             if path == "/api/svg":
                 svg_bytes = self.service.get_svg_bytes()
                 return self._send_bytes(200, "image/svg+xml; charset=utf-8", svg_bytes, {"Cache-Control": "no-cache"})

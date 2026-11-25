@@ -773,6 +773,430 @@ class PortalService:
             },
         }
 
+    def _count_comm_points(self) -> dict[str, int]:
+        """统计 scdfe_c 四遥点表（YC/YX/YT/YK）配置总数。"""
+        counts = {"yc": 0, "yx": 0, "yt": 0, "yk": 0}
+        if not self.c_db.is_file():
+            return counts
+        try:
+            with self._open_readonly(self.c_db) as conn:
+                for kind, tbl in KIND_TABLES.items():
+                    row = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (tbl,),
+                    ).fetchone()
+                    if row is not None:
+                        cnt = conn.execute(f'SELECT COUNT(*) FROM "{tbl}"').fetchone()
+                        counts[kind] = int(cnt[0]) if cnt else 0
+        except sqlite3.Error:
+            pass
+        return counts
+
+    def get_energy_flow(self) -> dict[str, Any]:
+        """聚合交直流微电网与氢能全景能量流实时快照。"""
+        devices = self._read_all_devices()
+        comm_rtus = self.get_comm_rtus()["items"]
+        comm_channels = self.get_comm_channels()["items"]
+        point_counts = self._count_comm_points()
+        model_params, _ = self._read_model_params()
+
+        # 统计设备量测质量分布与最新源时标
+        total_bound = 0
+        total_valid = 0
+        over_limit_cnt = 0
+        under_limit_cnt = 0
+        comm_err_cnt = 0
+        latest_src_ms: float | None = None
+
+        for dev in devices:
+            total_bound += int(dev.get("bound_count") or 0)
+            total_valid += int(dev.get("valid_count") or 0)
+            for m in dev.get("metrics") or ():
+                q = m.get("quality")
+                if q == QUAL_OVER_MAX:
+                    over_limit_cnt += 1
+                elif q == QUAL_UNDER_MIN:
+                    under_limit_cnt += 1
+                elif q == 2:
+                    comm_err_cnt += 1
+                st = _to_float(m.get("source_time"))
+                if st is not None and st > 0:
+                    st_ms = st if st > 1e11 else st * 1000.0
+                    if latest_src_ms is None or st_ms > latest_src_ms:
+                        latest_src_ms = st_ms
+
+        # 判断哪些风机属于经风机变流器汇入直流 750V 侧的直流风电
+        wind_conv_count = sum(
+            1 for d in devices if d["table_name"] == "DCACConverter" and "风机" in str(d["name"])
+        )
+
+        dc_wind_p = 0.0
+        dc_wind_cnt = 0
+        dc_wind_on = 0
+        ac_wind_p = 0.0
+        ac_wind_cnt = 0
+        ac_wind_on = 0
+
+        dc_pv_p = 0.0
+        dc_pv_cnt = 0
+        dc_pv_on = 0
+        dc_pv_u: list[float] = []
+        ac_pv_p = 0.0
+        ac_pv_cnt = 0
+        ac_pv_on = 0
+
+        dc_es_p = 0.0
+        dc_es_cnt = 0
+        dc_es_on = 0
+        dc_es_socs: list[float] = []
+        ac_es_p = 0.0
+        ac_es_cnt = 0
+        ac_es_on = 0
+        ac_es_socs: list[float] = []
+
+        diesel_p = 0.0
+        diesel_cnt = 0
+        diesel_on = 0
+        diesel_rated = 0.0
+
+        dc_load_p = 0.0
+        dc_load_u: list[float] = []
+        ac_load_p = 0.0
+        ac_load_u: list[float] = []
+
+        elec_p = 0.0
+        elec_flow: float | None = None
+        elec_pressure: float | None = None
+        fc_p = 0.0
+        fc_flow: float | None = None
+        fc_pressure: float | None = None
+        h2_socs: list[float] = []
+        h2_pressure: float | None = None
+        h2_flow: float | None = None
+
+        dcac_dc_p = 0.0
+        dcac_ac_p = 0.0
+        dcac_cnt = 0
+        dcac_on = 0
+        dcac_rated = 0.0
+        dcac_dc_u: list[float] = []
+        dcac_ac_u: list[float] = []
+
+        wind_speeds: list[float] = []
+        irradiances: list[float] = []
+        temperatures: list[float] = []
+
+        def _rated_kw(dev_id: str) -> float:
+            for item in model_params.get(dev_id, ()):
+                if item.get("key") == "rated_capacity":
+                    raw = str(item.get("value") or "").split()[0]
+                    val = _to_float(raw)
+                    if val is not None and val > 0:
+                        return val
+            return 0.0
+
+        for dev in devices:
+            t = dev["table_name"]
+            name = str(dev["name"] or "")
+            m_map = {m["metric"]: m for m in dev["metrics"]}
+            p_val = _to_float(m_map["p"]["value"]) if "p" in m_map else None
+            is_on = (dev.get("run") == 1) or (p_val is not None and abs(p_val) > 0.1)
+
+            if t == "ACGenerator":
+                if "风电" in name or "风力" in name:
+                    # 经风机变流器并入直流母线的风机（如“交流风电-1..10”）归入直流侧风电
+                    if wind_conv_count > 0 and "风力发电机" not in name and "风电" in name:
+                        dc_wind_cnt += 1
+                        if is_on:
+                            dc_wind_on += 1
+                        if p_val is not None:
+                            dc_wind_p += p_val
+                    else:
+                        ac_wind_cnt += 1
+                        if is_on:
+                            ac_wind_on += 1
+                        if p_val is not None:
+                            ac_wind_p += p_val
+                elif "光伏" in name:
+                    ac_pv_cnt += 1
+                    if is_on:
+                        ac_pv_on += 1
+                    if p_val is not None:
+                        ac_pv_p += p_val
+                elif "储能" in name:
+                    ac_es_cnt += 1
+                    if is_on:
+                        ac_es_on += 1
+                    if p_val is not None:
+                        ac_es_p += p_val
+                elif "柴油" in name:
+                    diesel_cnt += 1
+                    if p_val is not None and p_val > 0.5:
+                        diesel_on += 1
+                    if p_val is not None:
+                        diesel_p += p_val
+                    diesel_rated += _rated_kw(dev["dev_id"])
+            elif t == "DCGenerator":
+                if "光伏" in name:
+                    dc_pv_cnt += 1
+                    if is_on:
+                        dc_pv_on += 1
+                    if p_val is not None:
+                        dc_pv_p += p_val
+                    u_v = _to_float(m_map["u"]["value"]) if "u" in m_map else None
+                    if u_v is not None and u_v > 0:
+                        dc_pv_u.append(u_v)
+                elif "储能" in name:
+                    dc_es_cnt += 1
+                    if is_on:
+                        dc_es_on += 1
+                    if p_val is not None:
+                        dc_es_p += p_val
+                elif "燃料电池" in name or "氢" in name:
+                    if p_val is not None:
+                        fc_p += p_val
+            elif t == "DCLoad":
+                if p_val is not None:
+                    dc_load_p += p_val
+                u_v = _to_float(m_map["u"]["value"]) if "u" in m_map else None
+                if u_v is not None and u_v > 0:
+                    dc_load_u.append(u_v)
+            elif t == "ACLoad":
+                if "制氢" in name:
+                    if p_val is not None:
+                        elec_p += p_val
+                else:
+                    if p_val is not None:
+                        ac_load_p += p_val
+                    u_v = _to_float(m_map["uab"]["value"]) if "uab" in m_map else None
+                    if u_v is not None and u_v > 0:
+                        ac_load_u.append(u_v)
+            elif t == "DCACConverter":
+                if "风机" not in name:
+                    dcac_cnt += 1
+                    dp = _to_float(m_map["dc_p"]["value"]) if "dc_p" in m_map else None
+                    ap = _to_float(m_map["ac_p"]["value"]) if "ac_p" in m_map else None
+                    if (dev.get("run") == 1) or (dp is not None and abs(dp) > 0.1):
+                        dcac_on += 1
+                    if dp is not None:
+                        dcac_dc_p += dp
+                    if ap is not None:
+                        dcac_ac_p += ap
+                    du = _to_float(m_map["dc_u"]["value"]) if "dc_u" in m_map else None
+                    au = _to_float(m_map["ac_uab"]["value"]) if "ac_uab" in m_map else None
+                    if du is not None and du > 0:
+                        dcac_dc_u.append(du)
+                    if au is not None and au > 0:
+                        dcac_ac_u.append(au)
+                    dcac_rated += _rated_kw(dev["dev_id"])
+            elif t == "DCStorageGen" and "soc" in m_map:
+                sv = _to_float(m_map["soc"]["display_value"])
+                if sv is not None:
+                    dc_es_socs.append(sv)
+            elif t == "ACStorageGen" and "soc" in m_map:
+                sv = _to_float(m_map["soc"]["display_value"])
+                if sv is not None:
+                    ac_es_socs.append(sv)
+            elif t == "HydroSource":
+                if "flow" in m_map:
+                    elec_flow = _to_float(m_map["flow"]["value"])
+                if "pressure" in m_map:
+                    elec_pressure = _to_float(m_map["pressure"]["value"])
+            elif t == "HydroLoad":
+                if "flow" in m_map:
+                    fc_flow = _to_float(m_map["flow"]["value"])
+                if "pressure" in m_map:
+                    fc_pressure = _to_float(m_map["pressure"]["value"])
+            elif t == "HydroStorage":
+                if "soc" in m_map:
+                    sv = _to_float(m_map["soc"]["display_value"])
+                    if sv is not None:
+                        h2_socs.append(sv)
+                if "pressure" in m_map:
+                    h2_pressure = _to_float(m_map["pressure"]["value"])
+                if "flow" in m_map:
+                    h2_flow = _to_float(m_map["flow"]["value"])
+            elif t == "ACWindGen" and "wind_speed" in m_map:
+                ws = _to_float(m_map["wind_speed"]["value"])
+                if ws is not None:
+                    wind_speeds.append(ws)
+            elif t in {"ACPVGen", "DCPVGen"} and "irradiance" in m_map:
+                irr = _to_float(m_map["irradiance"]["value"])
+                if irr is not None:
+                    irradiances.append(irr)
+
+            if "temperature" in m_map:
+                tv = _to_float(m_map["temperature"]["value"])
+                if tv is not None:
+                    temperatures.append(tv)
+
+        total_ac_load_kw = ac_load_p + elec_p
+        total_load_kw = dc_load_p + total_ac_load_kw
+        renewable_kw = max(0.0, dc_wind_p) + max(0.0, dc_pv_p) + max(0.0, ac_wind_p) + max(0.0, ac_pv_p) + max(0.0, fc_p)
+        storage_kw = dc_es_p + ac_es_p
+        total_gen_kw = renewable_kw + max(0.0, dc_es_p) + max(0.0, ac_es_p) + max(0.0, diesel_p)
+        green_ratio_pct = (renewable_kw / total_gen_kw * 100.0) if total_gen_kw > 1e-6 else 0.0
+
+        dc_bus_gen_kw = max(0.0, dc_wind_p) + max(0.0, dc_pv_p) + max(0.0, dc_es_p) + max(0.0, fc_p)
+        dc_bus_load_kw = dc_load_p + max(0.0, -dc_es_p)
+        ac_bus_gen_kw = max(0.0, ac_wind_p) + max(0.0, ac_pv_p) + max(0.0, ac_es_p) + max(0.0, diesel_p)
+        ac_bus_load_kw = total_ac_load_kw + max(0.0, -ac_es_p)
+
+        dc_voltage = (
+            round(sum(dc_load_u) / len(dc_load_u), 1) if dc_load_u
+            else (round(sum(dcac_dc_u) / len(dcac_dc_u), 1) if dcac_dc_u else 750.0)
+        )
+        ac_voltage = (
+            round(sum(ac_load_u) / len(ac_load_u), 1) if ac_load_u
+            else (round(sum(dcac_ac_u) / len(dcac_ac_u), 1) if dcac_ac_u else 380.0)
+        )
+
+        # DCAC 变流器方向：dc_p > 0 表示从直流母线流出并送往交流母线（DC -> AC）
+        dcac_flow_kw = dcac_dc_p if abs(dcac_dc_p) >= 0.05 else -dcac_ac_p
+        dcac_dir = "dc_to_ac" if dcac_flow_kw > 0.2 else ("ac_to_dc" if dcac_flow_kw < -0.2 else "idle")
+
+        def _es_state(p_kw: float) -> str:
+            if p_kw > 0.2:
+                return "discharge"
+            if p_kw < -0.2:
+                return "charge"
+            return "idle"
+
+        online_rtus = sum(1 for r in comm_rtus if r.get("connection_state") == "connected")
+        now_utc = datetime.now(timezone.utc)
+        now_ms = now_utc.timestamp() * 1000.0
+        age_sec = round(max(0.0, (now_ms - latest_src_ms) / 1000.0), 1) if latest_src_ms is not None else None
+
+        return {
+            "timestamp": now_utc.isoformat(timespec="seconds"),
+            "latest_sample_time": _iso_from_ms(latest_src_ms),
+            "sample_age_sec": age_sec,
+            "summary": {
+                "total_load_kw": round(total_load_kw, 1),
+                "renewable_kw": round(renewable_kw, 1),
+                "green_ratio_pct": round(green_ratio_pct, 1),
+                "storage_kw": round(storage_kw, 1),
+                "diesel_kw": round(diesel_p, 1),
+                "total_gen_kw": round(total_gen_kw, 1),
+                "valid_measurements": total_valid,
+                "bound_measurements": total_bound,
+                "over_limit_count": over_limit_cnt,
+                "under_limit_count": under_limit_cnt,
+                "comm_error_count": comm_err_cnt,
+                "rtu_online": online_rtus,
+                "rtu_total": len(comm_rtus),
+            },
+            "dc_bus": {
+                "voltage_v": dc_voltage,
+                "gen_kw": round(dc_bus_gen_kw, 1),
+                "load_kw": round(dc_bus_load_kw, 1),
+            },
+            "ac_bus": {
+                "voltage_v": ac_voltage,
+                "gen_kw": round(ac_bus_gen_kw, 1),
+                "load_kw": round(ac_bus_load_kw, 1),
+            },
+            "nodes": {
+                "dc_wind": {
+                    "count": dc_wind_cnt,
+                    "online": dc_wind_on,
+                    "p_kw": round(dc_wind_p, 1),
+                },
+                "dc_pv": {
+                    "count": dc_pv_cnt,
+                    "online": dc_pv_on,
+                    "p_kw": round(dc_pv_p, 1),
+                    "voltage_v": round(sum(dc_pv_u) / len(dc_pv_u), 1) if dc_pv_u else None,
+                },
+                "dc_storage": {
+                    "count": dc_es_cnt,
+                    "online": dc_es_on,
+                    "p_kw": round(dc_es_p, 1),
+                    "soc_pct": round(sum(dc_es_socs) / len(dc_es_socs), 1) if dc_es_socs else None,
+                    "state": _es_state(dc_es_p),
+                },
+                "dc_load": {
+                    "p_kw": round(dc_load_p, 1),
+                    "voltage_v": dc_voltage,
+                    "share_pct": round(dc_load_p / total_load_kw * 100.0, 1) if total_load_kw > 1e-6 else 0.0,
+                },
+                "ac_wind": {
+                    "count": ac_wind_cnt,
+                    "online": ac_wind_on,
+                    "p_kw": round(ac_wind_p, 1),
+                },
+                "ac_pv": {
+                    "count": ac_pv_cnt,
+                    "online": ac_pv_on,
+                    "p_kw": round(ac_pv_p, 1),
+                },
+                "ac_storage": {
+                    "count": ac_es_cnt,
+                    "online": ac_es_on,
+                    "p_kw": round(ac_es_p, 1),
+                    "soc_pct": round(sum(ac_es_socs) / len(ac_es_socs), 1) if ac_es_socs else None,
+                    "state": _es_state(ac_es_p),
+                },
+                "diesel": {
+                    "count": diesel_cnt,
+                    "online": diesel_on,
+                    "p_kw": round(diesel_p, 1),
+                    "rated_kw": round(diesel_rated, 1) if diesel_rated > 0 else None,
+                },
+                "ac_load": {
+                    "p_kw": round(total_ac_load_kw, 1),
+                    "regular_kw": round(ac_load_p, 1),
+                    "voltage_v": ac_voltage,
+                    "share_pct": round(total_ac_load_kw / total_load_kw * 100.0, 1) if total_load_kw > 1e-6 else 0.0,
+                },
+                "dcac": {
+                    "count": dcac_cnt,
+                    "online": dcac_on,
+                    "p_kw": round(abs(dcac_flow_kw), 1),
+                    "signed_dc_p_kw": round(dcac_flow_kw, 1),
+                    "direction": dcac_dir,
+                    "rated_kw": round(dcac_rated, 1) if dcac_rated > 0 else None,
+                },
+                "electrolyzer": {
+                    "p_kw": round(elec_p, 1),
+                    "flow_nm3h": round(elec_flow, 2) if elec_flow is not None else None,
+                    "pressure_mpa": round(elec_pressure, 2) if elec_pressure is not None else None,
+                },
+                "hydro_storage": {
+                    "soc_pct": round(sum(h2_socs) / len(h2_socs), 1) if h2_socs else None,
+                    "pressure_mpa": round(h2_pressure, 2) if h2_pressure is not None else None,
+                    "flow_nm3h": round(h2_flow, 2) if h2_flow is not None else None,
+                    "state": (
+                        "charging" if (h2_flow is not None and h2_flow < -0.05)
+                        else ("discharging" if (h2_flow is not None and h2_flow > 0.05) else "idle")
+                    ),
+                },
+                "fuel_cell": {
+                    "p_kw": round(fc_p, 1),
+                    "flow_nm3h": round(fc_flow, 2) if fc_flow is not None else None,
+                    "pressure_mpa": round(fc_pressure, 2) if fc_pressure is not None else None,
+                },
+            },
+            "environment": {
+                "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
+                "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
+                "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
+                "dc_voltage_v": dc_voltage,
+                "ac_voltage_v": ac_voltage,
+            },
+            "sources": {
+                "scene": f"{self.runtime_name}/{self.scene_name}",
+                "model_db": self.model_db.name if self.model_db.is_file() else "—",
+                "d_db": self.d_db.name if self.d_db.is_file() else "—",
+                "c_db": self.c_db.name if self.c_db.is_file() else "—",
+                "device_count": len(devices),
+                "channel_count": len(comm_channels),
+                "rtu_online": online_rtus,
+                "rtu_total": len(comm_rtus),
+                "points": point_counts,
+            },
+        }
+
     # -------------------- 2. SVG 潮流图底图与实时映射 --------------------
     def get_svg_bytes(self) -> bytes:
         if not self.svg_path.is_file():

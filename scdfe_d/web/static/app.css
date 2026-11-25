@@ -6,14 +6,24 @@ body{margin:0}button,input,select{font:inherit;color:inherit;border:1px solid #c
 #mapping-form .dialog-actions { flex-shrink:0; }
 .workbench .type-tabs button.active { background:#087f8c; border-color:#087f8c; color:white; }
 .workbench .source-results { flex:0 0 220px; min-height:120px; max-height:220px; }
-.workbench .filters #model-table { max-width:220px; }
-.workbench .filters #device { min-width:130px; }
-/* 量测面板：类型分段与右侧操作按钮合并为紧凑单行 */
-.measure-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.measure-bar .type-tabs { flex:0 0 auto; width:auto; gap:4px; }
-.measure-bar #table-hint { margin-left:4px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workbench .filters #category { max-width:116px; }
+.workbench .filters #model-table { max-width:168px; }
+.workbench .filters #device { min-width:110px; max-width:176px; }
+.workbench .filters #search { width:118px; }
+/* 量测面板与采集记录页：筛选、类型分段与操作按钮统一收拢为紧凑单行 */
+.measure-bar,
+.history-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.measure-bar select,
+.measure-bar input[type="search"],
+.measure-bar button,
+.history-bar button { padding:4px 8px !important; min-height:28px; font-size:12px; }
+.measure-bar .type-tabs,
+.history-bar .type-tabs { flex:0 0 auto; width:auto; gap:2px; padding:2px !important; }
+.measure-bar .type-tabs button,
+.history-bar .type-tabs button { min-height:24px; padding:2px 8px !important; }
 .measure-bar-actions { margin-left:auto; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .measure-bar-actions #definition-actions { margin-left:0; gap:6px; }
+.inline-group { display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .quantity-identity { white-space:normal; min-width:130px; }
 .quantity-identity small { display:block; margin-top:4px; color:#718397; }
 .measure-status { padding:3px 7px; background:#fff2e9; border-radius:4px; font-size:11px; font-weight:600; display:inline-block; }
@@ -56,12 +66,11 @@ td.parameter-cell .parameter-field.limit-invalid {
 tr.changed td { background:var(--warn-soft, #fcf8e8); }
 #parameter-selection {
   flex-shrink:0;
-  padding:5px 8px;
-  border:1px solid #dbe5ee;
-  border-radius:5px;
-  background:#f6f9fb;
+  padding:0;
+  border:0;
+  background:transparent;
 }
-#parameter-selection button { padding:5px 10px; }
+#parameter-selection button { padding:4px 8px !important; }
 #choose-all { width:16px; height:16px; vertical-align:middle; }
 #bulk-parameter-editor { width:min(510px, calc(100vw - 48px)); }
 #bulk-parameter-editor .two { margin-top:12px; }

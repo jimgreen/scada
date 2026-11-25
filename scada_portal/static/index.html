@@ -68,6 +68,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
             <span>系统首页</span>
           </button>
+          <button type="button" class="nav-item" data-view="energyflow">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5m6 0h5M4 12h16M4 18h5m6 0h5"/><circle cx="12" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/></svg>
+            <span>全景流向</span>
+          </button>
           <button type="button" class="nav-item" data-view="powerflow">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7.5 6h9M6.3 8.2 10.7 15.8M17.7 8.2 13.3 15.8"/></svg>
             <span>潮流图</span>
@@ -273,6 +277,256 @@
                 <div><strong id="kpi-hydro-total">--</strong><small>万kWh</small></div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- ==================== 1.5 全景流向（交直流微电网与氢能实时能流） ==================== -->
+        <section id="view-energyflow" class="portal-view ef-view" hidden>
+          <div class="ef-kpi-bar" aria-label="微电网实时运行核心指标">
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">总负荷</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-load">--</strong><small>kW</small></div>
+            </div>
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">新能源出力</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-renew">--</strong><small>kW</small></div>
+            </div>
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">绿电占比</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-green">--</strong><small>%</small></div>
+            </div>
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">储能总功率</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-storage">--</strong><small>kW</small></div>
+            </div>
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">柴发总功率</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-diesel">--</strong><small>kW</small></div>
+            </div>
+            <div class="ef-kpi">
+              <span class="ef-kpi-label">有效量测</span>
+              <div class="ef-kpi-val"><strong id="ef-kpi-valid">--</strong><small id="ef-kpi-valid-sub">/ --</small></div>
+            </div>
+          </div>
+
+          <div class="ef-grid">
+            <div class="ef-card ef-flow-card">
+              <div class="ef-card-head">
+                <h2>交直流微电网与氢能全景流向</h2>
+                <div class="ef-card-actions">
+                  <button type="button" class="btn secondary ef-jump-btn" data-ef-view="powerflow">潮流图</button>
+                  <button type="button" class="btn secondary ef-jump-btn" data-ef-view="devices">设备图</button>
+                </div>
+              </div>
+
+              <div class="ef-balance-bar">
+                <div class="ef-bal-side">
+                  <span class="ef-bus-tag dc" id="ef-dc-volt">直流侧 750V</span>
+                  <span class="ef-bal-stat" id="ef-dc-balance">发 -- / 荷 -- kW</span>
+                </div>
+                <div class="ef-bal-center">
+                  <span class="ef-green-dot"></span>
+                  <span id="ef-green-summary">绿电 -- kW · 占比 --%</span>
+                </div>
+                <div class="ef-bal-side right">
+                  <span class="ef-bus-tag ac" id="ef-ac-volt">交流侧 380V</span>
+                  <span class="ef-bal-stat" id="ef-ac-balance">发 -- / 荷 -- kW</span>
+                </div>
+              </div>
+
+              <div class="ef-stage">
+                <svg id="ef-svg" viewBox="0 0 920 468" preserveAspectRatio="xMidYMid meet" role="img" aria-label="交直流微电网与氢能实时流向图">
+                  <defs>
+                    <linearGradient id="ef-dc-bus-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#38bdf8" />
+                      <stop offset="100%" stop-color="#0284c7" />
+                    </linearGradient>
+                    <linearGradient id="ef-ac-bus-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#34d399" />
+                      <stop offset="100%" stop-color="#059669" />
+                    </linearGradient>
+                  </defs>
+
+                  <!-- 直流 / 交流垂直主母线 -->
+                  <text class="ef-bus-cap dc" x="305" y="34" text-anchor="middle" id="ef-svg-dc-cap">DC 750V</text>
+                  <line class="ef-bus-bar dc" x1="305" y1="44" x2="305" y2="424" stroke="url(#ef-dc-bus-grad)" stroke-width="5" stroke-linecap="round" />
+                  <text class="ef-bus-foot" x="305" y="446" text-anchor="middle">直流母线</text>
+
+                  <text class="ef-bus-cap ac" x="615" y="34" text-anchor="middle" id="ef-svg-ac-cap">AC 380V</text>
+                  <line class="ef-bus-bar ac" x1="615" y1="44" x2="615" y2="424" stroke="url(#ef-ac-bus-grad)" stroke-width="5" stroke-linecap="round" />
+                  <text class="ef-bus-foot" x="615" y="446" text-anchor="middle">交流母线</text>
+
+                  <!-- 左侧直流连线 -->
+                  <path id="ef-line-dc-wind" class="ef-line c-wind flow-idle" d="M 244 92 L 302 92" />
+                  <path id="ef-line-dc-pv" class="ef-line c-pv flow-idle" d="M 244 188 L 302 188" />
+                  <path id="ef-line-dc-storage" class="ef-line c-storage flow-idle" d="M 244 284 L 302 284" />
+                  <path id="ef-line-dc-load" class="ef-line c-load flow-idle" d="M 302 380 L 244 380" />
+
+                  <!-- 中间耦合连线：DC/AC、电制氢、储氢、燃料电池 -->
+                  <path id="ef-line-dcac-l" class="ef-line c-dcac flow-idle" d="M 308 134 L 432 134" />
+                  <path id="ef-line-dcac-r" class="ef-line c-dcac flow-idle" d="M 488 134 L 612 134" />
+                  <path id="ef-line-elec-ac" class="ef-line c-h2 flow-idle" d="M 612 238 L 560 238" />
+                  <path id="ef-line-elec-h2" class="ef-line c-h2 flow-idle" d="M 538 260 L 538 314 L 494 314" />
+                  <path id="ef-line-h2-fc" class="ef-line c-storage flow-idle" d="M 458 348 L 458 398 L 402 398" />
+                  <path id="ef-line-fc-dc" class="ef-line c-storage flow-idle" d="M 358 398 L 308 398" />
+
+                  <!-- 右侧交流连线 -->
+                  <path id="ef-line-ac-wind" class="ef-line c-wind flow-idle" d="M 676 80 L 618 80" />
+                  <path id="ef-line-ac-pv" class="ef-line c-pv flow-idle" d="M 676 158 L 618 158" />
+                  <path id="ef-line-ac-storage" class="ef-line c-storage flow-idle" d="M 676 236 L 618 236" />
+                  <path id="ef-line-diesel" class="ef-line c-diesel flow-idle" d="M 676 314 L 618 314" />
+                  <path id="ef-line-ac-load" class="ef-line c-load flow-idle" d="M 618 392 L 676 392" />
+
+                  <!-- 左侧 4 个直流节点 -->
+                  <g class="ef-node" data-jump-cat="wind" transform="translate(222, 92)">
+                    <circle class="ef-ring c-wind" r="21" />
+                    <g class="ef-ico c-wind" transform="translate(-11,-11) scale(0.92)">
+                      <circle cx="12" cy="10" r="1.5" /><path d="M12 11.5V21M9 21h6M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13" />
+                    </g>
+                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流风电 <tspan class="ef-n-dim" id="ef-dc-wind-cnt">· --台</tspan></text>
+                    <text class="ef-n-val" x="-32" y="9" text-anchor="end" id="ef-dc-wind-kw">-- kW</text>
+                    <text class="ef-n-sub" x="-32" y="25" text-anchor="end" id="ef-dc-wind-sub">在线 --</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="pv" transform="translate(222, 188)">
+                    <circle class="ef-ring c-pv" r="21" />
+                    <g class="ef-ico c-pv" transform="translate(-11,-11) scale(0.92)">
+                      <circle cx="12" cy="12" r="4" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
+                    </g>
+                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流光伏 <tspan class="ef-n-dim" id="ef-dc-pv-cnt">· --台</tspan></text>
+                    <text class="ef-n-val" x="-32" y="9" text-anchor="end" id="ef-dc-pv-kw">-- kW</text>
+                    <text class="ef-n-sub" x="-32" y="25" text-anchor="end" id="ef-dc-pv-sub">-- V</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="storage" transform="translate(222, 284)">
+                    <circle class="ef-ring c-storage" r="21" />
+                    <g class="ef-ico c-storage" transform="translate(-11,-11) scale(0.92)">
+                      <rect x="4" y="7" width="14" height="10" rx="2" /><path d="M18 10h2v4h-2M8 10v4M11 10v4" />
+                    </g>
+                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流储能 <tspan class="ef-n-dim" id="ef-dc-es-soc">· SOC --%</tspan></text>
+                    <text class="ef-n-val" x="-32" y="9" text-anchor="end" id="ef-dc-es-kw">-- kW</text>
+                    <text class="ef-n-sub" x="-32" y="25" text-anchor="end" id="ef-dc-es-sub">--</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="load" transform="translate(222, 380)">
+                    <circle class="ef-ring c-load" r="21" />
+                    <g class="ef-ico c-load" transform="translate(-11,-11) scale(0.92)">
+                      <path d="M13 3 6 13h5l-1 8 8-11h-5l0-7z" />
+                    </g>
+                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流负荷 <tspan class="ef-n-dim" id="ef-dc-load-v">· 750V</tspan></text>
+                    <text class="ef-n-val" x="-32" y="9" text-anchor="end" id="ef-dc-load-kw">-- kW</text>
+                    <text class="ef-n-sub" x="-32" y="25" text-anchor="end" id="ef-dc-load-sub">占总负荷 --%</text>
+                  </g>
+
+                  <!-- 中间枢纽：DC/AC、电制氢、储氢罐、燃料电池 -->
+                  <g class="ef-node" data-jump-cat="converter" transform="translate(460, 134)">
+                    <text class="ef-n-title" x="0" y="-36" text-anchor="middle">DC/AC 变流 <tspan class="ef-n-dim" id="ef-dcac-cap">· --</tspan></text>
+                    <circle class="ef-ring c-dcac" r="26" />
+                    <text class="ef-hub-tag" x="0" y="-2" text-anchor="middle">DC/AC</text>
+                    <text class="ef-hub-arrow" x="0" y="13" text-anchor="middle" id="ef-dcac-arrow">⇄</text>
+                    <text class="ef-n-val" x="0" y="48" text-anchor="middle" id="ef-dcac-kw">-- kW</text>
+                    <text class="ef-n-sub" x="0" y="64" text-anchor="middle" id="ef-dcac-dir">--</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="hydrogen" transform="translate(538, 238)">
+                    <circle class="ef-ring c-h2" r="20" />
+                    <text class="ef-hub-tag" x="0" y="4" text-anchor="middle">H₂↑</text>
+                    <text class="ef-n-title" x="-30" y="-10" text-anchor="end">电制氢</text>
+                    <text class="ef-n-val sm" x="-30" y="8" text-anchor="end" id="ef-elec-kw">-- kW</text>
+                    <text class="ef-n-sub" x="-30" y="23" text-anchor="end" id="ef-elec-flow">-- Nm³/h</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="hydrogen" transform="translate(458, 314)">
+                    <circle class="ef-gauge-bg" r="32" />
+                    <circle class="ef-gauge-arc" id="ef-h2-arc" r="32" transform="rotate(-90)" stroke-dasharray="0 201.06" />
+                    <text class="ef-gauge-pct" x="0" y="-1" text-anchor="middle" id="ef-h2-soc">--%</text>
+                    <text class="ef-gauge-sub" x="0" y="14" text-anchor="middle" id="ef-h2-pres">-- MPa</text>
+                    <text class="ef-n-title" x="-42" y="-2" text-anchor="end">储氢罐</text>
+                    <text class="ef-n-sub" x="-42" y="14" text-anchor="end" id="ef-h2-state">--</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="hydrogen" transform="translate(380, 398)">
+                    <circle class="ef-ring c-storage" r="19" />
+                    <text class="ef-hub-tag" x="0" y="4" text-anchor="middle">FC</text>
+                    <text class="ef-n-title" x="28" y="-10" text-anchor="start">燃料电池</text>
+                    <text class="ef-n-val sm" x="28" y="8" text-anchor="start" id="ef-fc-kw">-- kW</text>
+                    <text class="ef-n-sub" x="28" y="23" text-anchor="start" id="ef-fc-flow">-- Nm³/h</text>
+                  </g>
+
+                  <!-- 右侧 5 个交流节点 -->
+                  <g class="ef-node" data-jump-cat="wind" transform="translate(698, 80)">
+                    <circle class="ef-ring c-wind" r="20" />
+                    <g class="ef-ico c-wind" transform="translate(-11,-11) scale(0.92)">
+                      <circle cx="12" cy="10" r="1.5" /><path d="M12 11.5V21M9 21h6M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13" />
+                    </g>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流风电 <tspan class="ef-n-dim" id="ef-ac-wind-cnt">· --台</tspan></text>
+                    <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-ac-wind-kw">-- kW</text>
+                    <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-ac-wind-sub">在线 --</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="pv" transform="translate(698, 158)">
+                    <circle class="ef-ring c-pv" r="20" />
+                    <g class="ef-ico c-pv" transform="translate(-11,-11) scale(0.92)">
+                      <circle cx="12" cy="12" r="4" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
+                    </g>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流光伏 <tspan class="ef-n-dim" id="ef-ac-pv-cnt">· --台</tspan></text>
+                    <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-ac-pv-kw">-- kW</text>
+                    <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-ac-pv-sub">在线 --</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="storage" transform="translate(698, 236)">
+                    <circle class="ef-ring c-storage" r="20" />
+                    <g class="ef-ico c-storage" transform="translate(-11,-11) scale(0.92)">
+                      <rect x="4" y="7" width="14" height="10" rx="2" /><path d="M18 10h2v4h-2M8 10v4M11 10v4" />
+                    </g>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流储能 <tspan class="ef-n-dim" id="ef-ac-es-soc">· SOC --%</tspan></text>
+                    <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-ac-es-kw">-- kW</text>
+                    <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-ac-es-sub">--</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="diesel" transform="translate(698, 314)">
+                    <circle class="ef-ring c-diesel" r="20" />
+                    <text class="ef-hub-tag c-diesel-txt" x="0" y="4" text-anchor="middle">DG</text>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">柴发 <tspan class="ef-n-dim" id="ef-diesel-cnt">· --台</tspan></text>
+                    <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-diesel-kw">-- kW</text>
+                    <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-diesel-sub">运行 -- 台</text>
+                  </g>
+
+                  <g class="ef-node" data-jump-cat="load" transform="translate(698, 392)">
+                    <circle class="ef-ring c-load" r="20" />
+                    <g class="ef-ico c-load" transform="translate(-11,-11) scale(0.92)">
+                      <path d="M13 3 6 13h5l-1 8 8-11h-5l0-7z" />
+                    </g>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流负荷 <tspan class="ef-n-dim" id="ef-ac-load-v">· 380V</tspan></text>
+                    <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-ac-load-kw">-- kW</text>
+                    <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-ac-load-sub">占总负荷 --%</text>
+                  </g>
+                </svg>
+              </div>
+            </div>
+
+            <aside class="ef-card ef-side-card" aria-label="环境与数据源">
+              <div class="ef-card-head">
+                <h2>环境与数据源</h2>
+                <span class="ef-side-time" id="ef-sample-time">--:--:--</span>
+              </div>
+              <div class="ef-kv-list">
+                <div class="ef-kv"><span>风速</span><strong id="ef-env-wind">-- m/s</strong></div>
+                <div class="ef-kv"><span>辐照度</span><strong id="ef-env-irr">-- W/m²</strong></div>
+                <div class="ef-kv"><span>直流母线</span><strong id="ef-env-dcu">-- V</strong></div>
+                <div class="ef-kv"><span>交流母线</span><strong id="ef-env-acu">-- V</strong></div>
+                <div class="ef-kv-sep"></div>
+                <div class="ef-kv"><span>模型源</span><strong id="ef-src-model">--</strong></div>
+                <div class="ef-kv"><span>实时源</span><strong id="ef-src-d">--</strong></div>
+                <div class="ef-kv"><span>采集源</span><strong id="ef-src-c">--</strong></div>
+                <div class="ef-kv"><span>在线 RTU</span><strong id="ef-src-rtu">--</strong></div>
+                <div class="ef-kv"><span>四遥点表</span><strong id="ef-src-points">--</strong></div>
+                <div class="ef-kv-sep"></div>
+                <div class="ef-kv"><span>正常量测</span><strong class="ef-st-ok" id="ef-qual-ok">--</strong></div>
+                <div class="ef-kv"><span>越上 / 越下限</span><strong class="ef-st-warn" id="ef-qual-limit">--</strong></div>
+                <div class="ef-kv"><span>通信异常</span><strong class="ef-st-err" id="ef-qual-comm">--</strong></div>
+              </div>
+            </aside>
           </div>
         </section>
 

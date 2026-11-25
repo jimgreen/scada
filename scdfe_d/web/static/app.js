@@ -506,11 +506,14 @@
       });
     }
     const count = total ?? rows.length;
-    $('#table-hint').textContent = detail?.device
-      ? detail.device.name + ' · ' + detail.device.table + '[' + detail.device.idx + ']'
-      : queryMode
-        ? [$('#category').selectedOptions[0]?.textContent, $('#model-table').value || '全部设备表', '全部设备'].filter(Boolean).join(' · ')
-        : '';
+    const tableHint = $('#table-hint');
+    if (tableHint) {
+      tableHint.textContent = detail?.device
+        ? detail.device.name + ' · ' + detail.device.table + '[' + detail.device.idx + ']'
+        : queryMode
+          ? [$('#category').selectedOptions[0]?.textContent, $('#model-table').value || '全部设备表', '全部设备'].filter(Boolean).join(' · ')
+          : '';
+    }
     $('#page-summary').textContent = limit && count
       ? '共 ' + count + ' 项 · 当前 ' + ((page - 1) * limit + 1) + '–' + Math.min(page * limit, count)
       : '共 ' + count + ' 项量测';
@@ -606,8 +609,9 @@
     all.indeterminate = chosen.size > 0 && chosen.size < selectable;
     all.disabled = saving || !selectable;
     $('#bulk-parameters').disabled = saving || !chosen.size;
-    $('#parameter-selection-count').textContent = '已选 ' + chosen.size + ' 项 · 当前显示 '
-      + selectable + ' 项可配置量测';
+    const selectionCount = $('#parameter-selection-count');
+    selectionCount.textContent = '已选 ' + chosen.size + '/' + selectable;
+    selectionCount.title = '已选 ' + chosen.size + ' 项 · 当前显示 ' + selectable + ' 项可配置量测';
   }
 
   function setDraft(row, changes) {

@@ -18,28 +18,25 @@
 <div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>设备量测</th></tr></thead><tbody id="category-rows"></tbody></table></div>
 </section>
 <section id="measure-panel" class="panel flexible" hidden>
-<div class="toolbar filters">
-<label>设备类型<select id="category"><option value="">全部类型</option></select></label>
-<label>设备表<select id="model-table"><option value="">全部设备表</option></select></label>
-<label>设备<select id="device"><option value="">全部设备</option></select></label>
-<input id="search" type="search" placeholder="按属性名称过滤" aria-label="按属性名称过滤">
+<div class="toolbar filters measure-bar">
+<select id="category" aria-label="设备类型" title="设备类型"><option value="">全部类型</option></select>
+<select id="model-table" aria-label="设备表" title="设备表"><option value="">全部设备表</option></select>
+<select id="device" aria-label="设备" title="设备"><option value="">全部设备</option></select>
+<input id="search" type="search" placeholder="过滤属性" aria-label="按属性名称过滤" title="按属性名称过滤">
 <label class="check"><input id="only-invalid" type="checkbox">仅不可用</label>
-</div>
-<div class="toolbar measure-bar">
-<div class="type-tabs" role="group" aria-label="量测类型"><button id="tab-all" aria-pressed="true" class="active">全部</button><button id="tab-yc" aria-pressed="false">遥测 YC</button><button id="tab-yx" aria-pressed="false">遥信 YX</button></div>
-<span class="muted" id="table-hint"></span>
+<div class="type-tabs" role="group" aria-label="量测类型"><button id="tab-all" aria-pressed="true" class="active">全部</button><button id="tab-yc" aria-pressed="false" title="遥测 YC">YC</button><button id="tab-yx" aria-pressed="false" title="遥信 YX">YX</button></div>
 <div class="actions measure-bar-actions">
-<label class="check" id="live-refresh"><input id="auto-refresh" type="checkbox" checked>5 秒刷新</label>
-<div class="actions" id="definition-actions"><button id="import-model">导入设备模型</button><button id="new-device">新增设备</button><button id="new-measurement" class="primary">新增属性映射</button></div>
+<div class="inline-group" id="parameter-selection" hidden><span id="parameter-selection-count" class="muted" aria-live="polite"></span><button id="bulk-parameters" disabled>批量设置</button><label id="draft-filter" class="check" hidden><input id="only-draft" type="checkbox">仅看待保存</label></div>
+<label class="check" id="live-refresh"><input id="auto-refresh" type="checkbox" checked>5s 刷新</label>
+<div class="actions" id="definition-actions"><button id="import-model" title="导入设备模型">导入模型</button><button id="new-device">新增设备</button><button id="new-measurement" class="primary" title="新增属性映射">新增映射</button></div>
 <button id="refresh">刷新</button>
 </div>
 </div>
-<div class="toolbar" id="parameter-selection" hidden><span id="parameter-selection-count" class="muted" aria-live="polite"></span><button id="bulk-parameters" disabled>批量设置</button><label id="draft-filter" class="check" hidden><input id="only-draft" type="checkbox">仅看待保存</label></div>
 <div class="table-wrap"><table><thead id="measure-head"></thead><tbody id="measure-rows"></tbody></table></div>
 <div class="pager"><span id="page-summary"></span><div class="actions" id="page-actions"><button id="previous">上一页</button><span id="page-number"></span><button id="next">下一页</button></div>
 <div class="actions" id="parameter-actions" hidden><span id="parameter-status" aria-live="polite"></span><button id="discard-parameters" disabled>撤销修改</button><button id="save-parameters" class="primary" disabled>保存参数</button></div></div>
 <div id="point-trend" hidden></div></section>
-<section id="history-panel" class="panel flexible" hidden><div class="toolbar"><h2>采集与修改记录</h2><button id="history-refresh" class="actions">刷新</button></div><div class="type-tabs"><button id="show-refreshes" class="active">采集批次</button><button id="show-changes">定义修改</button></div><div class="table-wrap"><table><thead id="history-head"></thead><tbody id="history-rows"></tbody></table></div></section>
+<section id="history-panel" class="panel flexible" hidden><div class="toolbar history-bar"><h2>采集与修改记录</h2><div class="type-tabs"><button id="show-refreshes" class="active">采集批次</button><button id="show-changes">定义修改</button></div><button id="history-refresh" class="actions">刷新</button></div><div class="table-wrap"><table><thead id="history-head"></thead><tbody id="history-rows"></tbody></table></div></section>
 </main>
 <dialog id="bulk-parameter-editor" aria-labelledby="bulk-parameter-title">
   <form id="bulk-parameter-form">
