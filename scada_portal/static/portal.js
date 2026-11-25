@@ -29,6 +29,10 @@
     pfY: 0,
     pfData: null,
     pfSelectedDev: null,
+    pfShowArrows: true,
+    pfArrowPaths: [], // [{ key, kind, voltageType, pathEl, length, pKw, dir, speed, scale, arrows: [{el, offset}] }]
+    pfAnimRaf: null,
+    pfLastFrameTs: 0,
     // 设备图状态
     devCategories: [],
     devCategory: "",
@@ -120,6 +124,9 @@
     }
     if (view === "powerflow" && state.svgLoaded) {
       requestAnimationFrame(() => fitSvgView());
+      startPowerflowAnimation();
+    } else if (view !== "powerflow") {
+      stopPowerflowAnimation();
     }
     if (view === "devices") {
       requestAnimationFrame(() => drawTrendChart());
@@ -398,6 +405,7 @@
     svg.setAttribute("width", String(state.svgWidth));
     svg.setAttribute("height", String(state.svgHeight));
     state.svgLoaded = true;
+    initPowerflowArrowPaths(svg);
     applySvgThemeColors();
     fitSvgView();
 
@@ -407,6 +415,253 @@
       const devId = target.getAttribute("dev-id") || target.getAttribute("dev");
       if (devId) openPowerflowDrawer(devId);
     });
+  }
+
+  // -------------------- SVG 潮流动态流动箭头引擎 --------------------
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function transformSimplePathD(d, tx, ty, sx, sy, vx, vy) {
+    // 将 <symbol> 内 M/L 折线坐标映射到 SVG 主画布坐标，保证 getPointAtLength 与切线角绝对精确
+    const tokens = String(d || "").match(/[MLml]|-?\d*\.?\d+(?:e[-+]?\d+)?/g);
+    if (!tokens) return "";
+    const out = [];
+    let i = 0;
+    let cmd = "M";
+    while (i < tokens.length) {
+      if (/^[MLml]$/.test(tokens[i])) {
+        cmd = tokens[i].toUpperCase();
+        out.push(cmd);
+        i += 1;
+        continue;
+      }
+      const x = Number(tokens[i]);
+      const y = Number(tokens[i + 1]);
+      if (Number.isNaN(x) || Number.isNaN(y)) break;
+      const gx = tx + (x - vx) * sx;
+      const gy = ty + (y - vy) * sy;
+      out.push(`${gx.toFixed(2)} ${gy.toFixed(2)}`);
+      i += 2;
+    }
+    return out.join(" ");
+  }
+
+  function arrowColorFor(voltageType) {
+    const dark = isDarkTheme();
+    if (voltageType === "dc") return dark ? "#38bdf8" : "#2563eb";
+    if (voltageType === "hydro") return dark ? "#c084fc" : "#7c3aed";
+    return dark ? "#34f5a8" : "#0d9488";
+  }
+
+  function arrowStrokeFor() {
+    return isDarkTheme() ? "#04101f" : "#ffffff";
+  }
+
+  function initPowerflowArrowPaths(svg) {
+    const rootG = svg.querySelector("#root_g") || svg;
+    const oldArrows = rootG.querySelector("#PowerFlow_Arrows_Layer");
+    if (oldArrows) oldArrows.remove();
+    const oldGeom = rootG.querySelector("#PowerFlow_Geom_Hidden");
+    if (oldGeom) oldGeom.remove();
+
+    const geomLayer = document.createElementNS(SVG_NS, "g");
+    geomLayer.setAttribute("id", "PowerFlow_Geom_Hidden");
+    geomLayer.setAttribute("visibility", "hidden");
+    geomLayer.setAttribute("pointer-events", "none");
+    rootG.appendChild(geomLayer);
+
+    const arrowLayer = document.createElementNS(SVG_NS, "g");
+    arrowLayer.setAttribute("id", "PowerFlow_Arrows_Layer");
+    arrowLayer.setAttribute("pointer-events", "none");
+    const measLayer = rootG.querySelector("#Measurement_Layer") || rootG.querySelector("#Text_Layer");
+    if (measLayer) rootG.insertBefore(arrowLayer, measLayer);
+    else rootG.appendChild(arrowLayer);
+
+    const entries = [];
+
+    // 1. 解析 Segment_Layer 全部连接导线
+    svg.querySelectorAll("#Segment_Layer path[id][d]").forEach((pathEl) => {
+      const len = typeof pathEl.getTotalLength === "function" ? pathEl.getTotalLength() : 0;
+      if (len < 16) return;
+      entries.push({
+        key: pathEl.getAttribute("id"),
+        kind: "edge",
+        voltageType: (pathEl.getAttribute("class") || "").includes("dcv") ? "dc" : "ac",
+        pathEl,
+        length: len,
+        pKw: 0,
+        dir: 1,
+        speed: 0,
+        scale: 1,
+        arrows: [],
+      });
+    });
+
+    // 2. 解析 ACBranch / DCBranch / ACZeroBranch 支路几何路径
+    svg.querySelectorAll("#ACBranch_Layer use[dev-id], #DCBranch_Layer use[dev-id], #ACZeroBranch_Layer use[dev-id]").forEach((useEl) => {
+      const devId = useEl.getAttribute("dev-id");
+      const href = (useEl.getAttribute("href") || useEl.getAttribute("xlink:href") || "").replace(/^#/, "");
+      if (!devId || !href) return;
+      const sym = svg.querySelector(`#${CSS.escape(href)}`);
+      const symPath = sym?.querySelector("path[d]");
+      if (!sym || !symPath) return;
+      const vb = (sym.getAttribute("viewBox") || "-75 -18 150 36").split(/[\s,]+/).map(Number);
+      const x = Number(useEl.getAttribute("x") || 0);
+      const y = Number(useEl.getAttribute("y") || 0);
+      const w = Number(useEl.getAttribute("width") || vb[2] || 150);
+      const h = Number(useEl.getAttribute("height") || vb[3] || 36);
+      const dGlobal = transformSimplePathD(
+        symPath.getAttribute("d"),
+        x,
+        y,
+        vb[2] ? w / vb[2] : 1,
+        vb[3] ? h / vb[3] : 1,
+        vb[0] || 0,
+        vb[1] || 0
+      );
+      if (!dGlobal) return;
+      const pEl = document.createElementNS(SVG_NS, "path");
+      pEl.setAttribute("d", dGlobal);
+      geomLayer.appendChild(pEl);
+      const len = typeof pEl.getTotalLength === "function" ? pEl.getTotalLength() : 0;
+      if (len < 16) return;
+      entries.push({
+        key: devId,
+        kind: "branch",
+        voltageType: devId.startsWith("DC") ? "dc" : "ac",
+        pathEl: pEl,
+        length: len,
+        pKw: 0,
+        dir: 1,
+        speed: 0,
+        scale: 1,
+        arrows: [],
+      });
+    });
+
+    state.pfArrowPaths = entries;
+  }
+
+  function updatePowerflowArrowsData(flows) {
+    const svg = $("#pf-stage svg");
+    const arrowLayer = svg?.querySelector("#PowerFlow_Arrows_Layer");
+    if (!arrowLayer || !flows) return;
+
+    const edges = flows.edges || {};
+    const branches = flows.branches || {};
+    const strokeCol = arrowStrokeFor();
+    let activeCount = 0;
+
+    state.pfArrowPaths.forEach((item) => {
+      const rec = item.kind === "edge" ? edges[item.key] : branches[item.key];
+      const pKw = rec && typeof rec.p_kw === "number" ? rec.p_kw : 0;
+      const absP = Math.abs(pKw);
+      if (rec?.voltage_type) item.voltageType = rec.voltage_type;
+      item.pKw = pKw;
+
+      if (absP < 0.05) {
+        item.speed = 0;
+        item.arrows.forEach((a) => {
+          a.el.setAttribute("visibility", "hidden");
+        });
+        return;
+      }
+
+      activeCount += 1;
+      item.dir = pKw >= 0 ? 1 : -1;
+      // 功率大小对数映射箭头缩放（0.72x ~ 1.55x）与速度（28 ~ 146 px/s）
+      const norm = Math.min(1, Math.log10(1 + absP) / 2.38);
+      item.scale = 0.72 + 0.83 * norm;
+      item.speed = 28 + 118 * norm;
+
+      // 依导线长度与箭头尺寸自动确定循环箭头数量（1 ~ 6 枚）
+      const spacing = Math.max(58, 96 - norm * 24);
+      const desired = Math.max(1, Math.min(6, Math.round(item.length / spacing)));
+      const fillCol = arrowColorFor(item.voltageType);
+
+      while (item.arrows.length < desired) {
+        const poly = document.createElementNS(SVG_NS, "polygon");
+        poly.setAttribute("class", "pf-arrow-node");
+        poly.setAttribute("points", "9.5,0 -6.2,-5.4 -2.6,0 -6.2,5.4");
+        poly.setAttribute("stroke-width", "1.15");
+        poly.setAttribute("stroke-linejoin", "round");
+        arrowLayer.appendChild(poly);
+        item.arrows.push({ el: poly, offset: (item.arrows.length / desired) * item.length });
+      }
+      while (item.arrows.length > desired) {
+        const removed = item.arrows.pop();
+        removed.el.remove();
+      }
+      item.arrows.forEach((a, idx) => {
+        a.el.setAttribute("visibility", "visible");
+        a.el.setAttribute("fill", fillCol);
+        a.el.setAttribute("stroke", strokeCol);
+        if (a.offset >= item.length || a.offset < 0) {
+          a.offset = (idx / desired) * item.length;
+        }
+      });
+    });
+
+    if (activeCount > 0) startPowerflowAnimation();
+    else stopPowerflowAnimation();
+  }
+
+  function stepPowerflowAnimation(ts) {
+    if (state.view !== "powerflow" || !state.pfShowArrows || document.hidden) {
+      state.pfAnimRaf = null;
+      state.pfLastFrameTs = 0;
+      return;
+    }
+    const dt = state.pfLastFrameTs ? Math.min(0.08, (ts - state.pfLastFrameTs) / 1000) : 0.016;
+    state.pfLastFrameTs = ts;
+
+    let anyMoving = false;
+    for (const item of state.pfArrowPaths) {
+      if (item.speed <= 0 || !item.arrows.length) continue;
+      anyMoving = true;
+      const len = item.length;
+      const step = item.speed * dt * item.dir;
+      const eps = Math.min(2.0, len * 0.05);
+      for (const a of item.arrows) {
+        a.offset = (a.offset + step) % len;
+        if (a.offset < 0) a.offset += len;
+        const pos = a.offset;
+        const p0 = item.pathEl.getPointAtLength(Math.max(0, pos - eps));
+        const p1 = item.pathEl.getPointAtLength(Math.min(len, pos + eps));
+        const pt = item.pathEl.getPointAtLength(pos);
+        let dx = p1.x - p0.x;
+        let dy = p1.y - p0.y;
+        if (item.dir < 0) {
+          dx = -dx;
+          dy = -dy;
+        }
+        const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+        a.el.setAttribute(
+          "transform",
+          `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)}) rotate(${angle.toFixed(1)}) scale(${item.scale.toFixed(2)})`
+        );
+      }
+    }
+
+    if (anyMoving) {
+      state.pfAnimRaf = requestAnimationFrame(stepPowerflowAnimation);
+    } else {
+      state.pfAnimRaf = null;
+      state.pfLastFrameTs = 0;
+    }
+  }
+
+  function startPowerflowAnimation() {
+    if (state.pfAnimRaf || state.view !== "powerflow" || !state.pfShowArrows) return;
+    state.pfLastFrameTs = 0;
+    state.pfAnimRaf = requestAnimationFrame(stepPowerflowAnimation);
+  }
+
+  function stopPowerflowAnimation() {
+    if (state.pfAnimRaf) {
+      cancelAnimationFrame(state.pfAnimRaf);
+      state.pfAnimRaf = null;
+      state.pfLastFrameTs = 0;
+    }
   }
 
   function updateSvgLiveValues(pf) {
@@ -454,6 +709,10 @@
       }
       useEl.style.color = info.closed ? "" : "#ff4d6d";
     });
+
+    if (pf.flows) {
+      updatePowerflowArrowsData(pf.flows);
+    }
 
     const stat = $("#pf-stat");
     if (stat) {
@@ -579,6 +838,12 @@
     $("#pf-drawer-close")?.addEventListener("click", () => {
       $("#pf-drawer").hidden = true;
       state.pfSelectedDev = null;
+    });
+    $("#pf-show-arrows")?.addEventListener("change", (e) => {
+      state.pfShowArrows = Boolean(e.target.checked);
+      $("#pf-stage").classList.toggle("hide-arrows", !state.pfShowArrows);
+      if (state.pfShowArrows) startPowerflowAnimation();
+      else stopPowerflowAnimation();
     });
     $("#pf-show-meas")?.addEventListener("change", (e) => {
       $("#pf-stage").classList.toggle("hide-meas", !e.target.checked);
@@ -1228,9 +1493,15 @@
   // 监听主题切换与窗口缩放，实时同步 SVG 和日曲线配色与尺寸
   new MutationObserver(() => {
     applySvgThemeColors();
+    if (state.pfData?.flows) updatePowerflowArrowsData(state.pfData.flows);
     renderTrendChips();
     drawTrendChart();
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopPowerflowAnimation();
+    else if (state.view === "powerflow" && state.pfShowArrows) startPowerflowAnimation();
+  });
 
   window.addEventListener("resize", () => {
     if (state.view === "home") updateHeroFlowLines(lastRealtimeEnergy);

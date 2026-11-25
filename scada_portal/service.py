@@ -189,6 +189,7 @@ class PortalService:
         self._last_sample_ts: float | None = None
         # 运行期实时累计（用于微电网总览能量微增量）
         self._session_kwh: dict[str, float] = defaultdict(float)
+        self._svg_topo_cache: tuple[int, dict[str, Any]] | None = None
 
         self._init_history_db()
         if enable_sampler:
@@ -738,12 +739,213 @@ class PortalService:
                         "value": round(float(m_map["flow"]["value"]), 2), "unit": "Nm³/h", "valid": m_map["flow"]["valid"]
                     }
 
+        flows = self._compute_powerflow_vectors(devices, breakers)
+
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "svg_slots": svg_slots,
             "breakers": breakers,
+            "flows": flows,
             "devices": dev_summaries,
         }
+
+    def _load_svg_topology(self) -> dict[str, Any]:
+        """解析并缓存 SVG 中设备节点拓扑与 Segment_Layer 连接边关系。"""
+        if not self.svg_path.is_file():
+            return {"devices": {}, "edges": []}
+        mtime_ns = self.svg_path.stat().st_mtime_ns
+        if self._svg_topo_cache is not None and self._svg_topo_cache[0] == mtime_ns:
+            return self._svg_topo_cache[1]
+
+        dev_nodes: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, str]] = []
+        try:
+            root = ET.parse(self.svg_path).getroot()
+            root_g = next((c for c in root if c.attrib.get("id") == "root_g"), root)
+            for layer in root_g:
+                lid = layer.attrib.get("id", "")
+                if lid == "Segment_Layer":
+                    for elem in layer:
+                        eid = elem.attrib.get("id")
+                        src = elem.attrib.get("source-dev-id")
+                        dst = elem.attrib.get("target-dev-id")
+                        if eid and src and dst and elem.attrib.get("d"):
+                            edges.append({
+                                "id": eid,
+                                "source": src,
+                                "target": dst,
+                                "cls": elem.attrib.get("class", ""),
+                            })
+                    continue
+                for elem in layer:
+                    if not elem.tag.endswith("use"):
+                        continue
+                    dev_id = elem.attrib.get("dev-id")
+                    if not dev_id:
+                        continue
+                    vt = elem.attrib.get("voltage-type")
+                    vt1 = elem.attrib.get("voltage-type-1") or vt
+                    vt2 = elem.attrib.get("voltage-type-2") or vt
+                    dev_nodes[dev_id] = {
+                        "dev_id": dev_id,
+                        "table": dev_id.split("-", 1)[0],
+                        "vtype": vt or vt1 or "",
+                        "node": (vt, elem.attrib.get("node")) if elem.attrib.get("node") else None,
+                        "node1": (vt1, elem.attrib.get("node-1")) if elem.attrib.get("node-1") else None,
+                        "node2": (vt2, elem.attrib.get("node-2")) if elem.attrib.get("node-2") else None,
+                    }
+        except Exception:
+            return {"devices": {}, "edges": []}
+
+        topo = {"devices": dev_nodes, "edges": edges}
+        self._svg_topo_cache = (mtime_ns, topo)
+        return topo
+
+    def _compute_powerflow_vectors(
+        self,
+        devices: list[dict[str, Any]],
+        breakers: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """依据实时有功功率与节点拓扑计算每条支路与连接边的有功潮流幅值及方向。"""
+        topo = self._load_svg_topology()
+        svg_devs = topo["devices"]
+        by_dev_id = {d["dev_id"]: d for d in devices}
+
+        # 统计设备向各电气节点 (vtype, node_id) 注入的有功功率（正值 = 设备注入节点）
+        node_injections: dict[tuple[str, str], float] = defaultdict(float)
+        dev_out_power: dict[str, float] = {}
+        branch_flows: dict[str, dict[str, Any]] = {}
+
+        def mval(dev: dict[str, Any] | None, metric: str) -> float | None:
+            if not dev:
+                return None
+            for m in dev["metrics"]:
+                if m["metric"] == metric and m["value"] is not None:
+                    return _to_float(m["value"])
+            return None
+
+        # 氢能关联电功率（制氢负荷 / 燃料电池发电）
+        h2_prod_kw = 0.0
+        h2_gen_kw = 0.0
+        for d in devices:
+            if d["table_name"] == "ACLoad" and "制氢" in d["name"]:
+                pv = mval(d, "p")
+                if pv is not None:
+                    h2_prod_kw += pv
+            elif d["table_name"] == "DCGenerator" and ("燃料电池" in d["name"] or "氢" in d["name"]):
+                pv = mval(d, "p")
+                if pv is not None:
+                    h2_gen_kw += pv
+
+        for dev in devices:
+            dev_id = dev["dev_id"]
+            t = dev["table_name"]
+            info = svg_devs.get(dev_id)
+
+            if t in {"ACBranch", "DCBranch", "ACZeroBranch"}:
+                ip = mval(dev, "i_p")
+                jp = mval(dev, "j_p")
+                vtype = "dc" if t == "DCBranch" else "ac"
+                if ip is not None:
+                    branch_flows[dev_id] = {"p_kw": round(ip, 2), "voltage_type": vtype}
+                    if info and info["node1"]:
+                        node_injections[info["node1"]] += -ip
+                if jp is not None and info and info["node2"]:
+                    node_injections[info["node2"]] += -jp
+                continue
+
+            if t in {"ACGenerator", "DCGenerator"}:
+                p = mval(dev, "p")
+                if p is not None:
+                    dev_out_power[dev_id] = p
+                    if info and info["node"]:
+                        node_injections[info["node"]] += p
+            elif t in {"ACLoad", "DCLoad"}:
+                p = mval(dev, "p")
+                if p is not None:
+                    dev_out_power[dev_id] = -p
+                    if info and info["node"]:
+                        node_injections[info["node"]] += -p
+            elif t == "DCDCConverter":
+                ip = mval(dev, "i_p")
+                jp = mval(dev, "j_p")
+                if info and info["node1"] and ip is not None:
+                    node_injections[info["node1"]] += -ip
+                if info and info["node2"] and jp is not None:
+                    node_injections[info["node2"]] += -jp
+            elif t == "DCACConverter":
+                acp = mval(dev, "ac_p")
+                dcp = mval(dev, "dc_p")
+                if info:
+                    for term in (info["node1"], info["node2"]):
+                        if not term:
+                            continue
+                        if term[0] == "ac" and acp is not None:
+                            node_injections[term] += -acp
+                        elif term[0] == "dc" and dcp is not None:
+                            node_injections[term] += -dcp
+
+        # 计算 Segment_Layer 每一条连接边 source -> target 的精确功率与方向
+        edge_flows: dict[str, dict[str, Any]] = {}
+        bus_nodes = {
+            dev_id: info["node"]
+            for dev_id, info in svg_devs.items()
+            if info["table"] in {"ACRealBs", "DCRealBs"} and info["node"]
+        }
+
+        for edge in topo["edges"]:
+            eid = edge["id"]
+            src = edge["source"]
+            dst = edge["target"]
+            src_tbl = src.split("-", 1)[0]
+            dst_tbl = dst.split("-", 1)[0]
+            cls = edge.get("cls", "")
+            if "dcv" in cls or src_tbl.startswith("DC") or dst_tbl.startswith("DC"):
+                vtype = "dc"
+            elif "Hydro" in src_tbl or "Hydro" in dst_tbl:
+                vtype = "hydro"
+            else:
+                vtype = "ac"
+
+            # 若涉及断路器且已分闸，潮流归零
+            if src in breakers and not breakers[src]["closed"]:
+                edge_flows[eid] = {"p_kw": 0.0, "voltage_type": vtype}
+                continue
+            if dst in breakers and not breakers[dst]["closed"]:
+                edge_flows[eid] = {"p_kw": 0.0, "voltage_type": vtype}
+                continue
+
+            p_kw: float | None = None
+            # 1. 氢能连接边
+            if src.startswith("AcE2Hydro") and dst.startswith("HydroStorage"):
+                p_kw = h2_prod_kw
+                vtype = "hydro"
+            elif src.startswith("Hydro2DcE") and dst.startswith("HydroStorage"):
+                # 燃料电池发电时从储氢罐流向燃料电池（反向）
+                p_kw = -h2_gen_kw
+                vtype = "hydro"
+            # 2. 发电机直连边（src 为发电机）
+            elif src in dev_out_power and src_tbl in {"ACGenerator", "DCGenerator"}:
+                p_kw = dev_out_power[src]
+            # 3. 负荷直连边（dst 为负荷）
+            elif dst in dev_out_power and dst_tbl in {"ACLoad", "DCLoad"}:
+                p_kw = -dev_out_power[dst]
+            # 4. 断路器连母线（src 为断路器，dst 为母线）
+            elif src_tbl in {"ACBreak", "DCBreak"} and dst in bus_nodes:
+                b_info = svg_devs.get(src)
+                bus_term = bus_nodes[dst]
+                if b_info:
+                    non_bus = b_info["node1"] if b_info["node2"] == bus_term else b_info["node2"]
+                    if non_bus and non_bus in node_injections:
+                        p_kw = node_injections[non_bus]
+            # 5. 兜底：若目标为断路器，查其非母线侧注入
+            elif dst_tbl in {"ACBreak", "DCBreak"} and src in by_dev_id:
+                p_kw = dev_out_power.get(src)
+
+            if p_kw is not None:
+                edge_flows[eid] = {"p_kw": round(float(p_kw), 2), "voltage_type": vtype}
+
+        return {"branches": branch_flows, "edges": edge_flows}
 
     # -------------------- 3. 设备图与 24 小时日曲线 --------------------
     def get_devices(self, category: str | None = None, search: str | None = None) -> dict[str, Any]:

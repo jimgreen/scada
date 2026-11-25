@@ -146,6 +146,12 @@ class ScadaPortalTests(unittest.TestCase):
             self._create_device_table(conn, "ACStorageGen", [("soc", "yc")])
             self._create_device_table(conn, "ACLoad", [("p", "yc"), ("run", "yx")])
             self._create_device_table(conn, "ACBreak", [("ia", "yc"), ("position", "yx")])
+            self._create_device_table(conn, "ACBranch", [("i_p", "yc"), ("j_p", "yc"), ("run", "yx")])
+
+            conn.execute(
+                'INSERT INTO ACBranch (idx, name, i_p, i_p_qual, i_p_rtu, i_p_pnt, j_p, j_p_qual, j_p_rtu, j_p_pnt, run, run_qual, run_rtu, run_pnt) '
+                'VALUES (20, "交流线路-20", 45.2, 0, 3, 10, -45.0, 0, 3, 11, 1, 0, 3, 10)'
+            )
 
             conn.execute(
                 'INSERT INTO ACGenerator (idx, name, p, p_qual, p_rtu, p_pnt, uab, uab_qual, uab_rtu, uab_pnt, run, run_qual, run_rtu, run_pnt) '
@@ -187,7 +193,10 @@ class ScadaPortalTests(unittest.TestCase):
         self.svg_path.write_text(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0,0,1000,800">'
             '<g id="root_g"><g id="Background_Layer"><rect width="100%" height="100%" fill="#f1f5f9"/></g>'
-            '<g id="ACGenerator_Layer"><use id="ACGenerator-1" dev-id="ACGenerator-1" x="100" y="100" width="80" height="60"/></g>'
+            '<g id="Segment_Layer"><path id="edge-1" class="kv380" source-dev-id="ACGenerator-1" target-dev-id="ACBreak-1" d="M 100 100 L 240 100"/></g>'
+            '<g id="ACGenerator_Layer"><use id="ACGenerator-1" dev-id="ACGenerator-1" voltage-type="ac" node="1" x="100" y="100" width="80" height="60"/></g>'
+            '<g id="ACBreak_Layer"><use id="ACBreak-1" dev-id="ACBreak-1" voltage-type="ac" node-1="1" node-2="2" x="240" y="100" width="80" height="60"/></g>'
+            '<g id="ACBranch_Layer"><use id="ACBranch-20" dev-id="ACBranch-20" voltage-type="ac" node-1="1" node-2="11" x="180" y="100" width="120" height="36"/></g>'
             '<g id="Measurement_Layer"><g class="mg" dev="ACGenerator-1">'
             '<text><tspan>P</tspan><tspan class="mv" mt="activePower">--</tspan><tspan>MW</tspan></text>'
             '</g></g></g></svg>',
@@ -250,6 +259,10 @@ class ScadaPortalTests(unittest.TestCase):
         # 储能 SOC 应自动关联到对应 ACGenerator-23
         self.assertAlmostEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["value"], 75.0)
         self.assertTrue(pf["breakers"]["ACBreak-1"]["closed"])
+        # 潮流箭头矢量（支路与连接边）
+        self.assertAlmostEqual(pf["flows"]["branches"]["ACBranch-20"]["p_kw"], 45.2)
+        self.assertEqual(pf["flows"]["branches"]["ACBranch-20"]["voltage_type"], "ac")
+        self.assertAlmostEqual(pf["flows"]["edges"]["edge-1"]["p_kw"], 45.2)
 
     def test_devices_categories_and_daily_trend(self):
         status, _, body = http_get(self.httpd.server_port, "/api/devices")
