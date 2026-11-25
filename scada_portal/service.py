@@ -132,16 +132,20 @@ MODEL_PARAM_META: dict[str, tuple[str, str]] = {
     "i_max": ("电流上限", "A"),
     "ac_p_max": ("交流有功上限", "kW"),
     "ac_p_min": ("交流有功下限", "kW"),
+    "ac_i_max": ("交流电流上限", "A"),
     "dc_p_max": ("直流功率上限", "kW"),
     "dc_p_min": ("直流功率下限", "kW"),
+    "dc_i_max": ("直流电流上限", "A"),
     "ac_v_max": ("交流电压上限", "pu"),
     "ac_v_min": ("交流电压下限", "pu"),
     "dc_v_max": ("直流电压上限", "pu"),
     "dc_v_min": ("直流电压下限", "pu"),
     "i_p_max": ("I 侧功率上限", "kW"),
     "i_p_min": ("I 侧功率下限", "kW"),
+    "i_i_max": ("I 侧电流上限", "A"),
     "j_p_max": ("J 侧功率上限", "kW"),
     "j_p_min": ("J 侧功率下限", "kW"),
+    "j_i_max": ("J 侧电流上限", "A"),
     "i_v_max": ("I 侧电压上限", "pu"),
     "i_v_min": ("I 侧电压下限", "pu"),
     "j_v_max": ("J 侧电压上限", "pu"),
@@ -1350,17 +1354,33 @@ class PortalService:
             "total": len(items),
         }
 
-    def get_device_trend(self, table_name: str, idx: int, *, hours: float = 24.0) -> dict[str, Any]:
-        hours = max(0.5, min(24.0, float(hours)))
+    def get_device_trend(
+        self,
+        table_name: str,
+        idx: int,
+        *,
+        hours: float = 24.0,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> dict[str, Any]:
         now_ms = int(time.time() * 1000)
-        since_ms = now_ms - int(hours * 3600 * 1000)
+        if start_ms is not None and end_ms is not None:
+            since_ms = int(start_ms)
+            until_ms = int(end_ms)
+            if until_ms <= since_ms:
+                raise ValueError("曲线结束时间必须大于开始时间")
+            span_hours = round((until_ms - since_ms) / 3600000.0, 4)
+        else:
+            span_hours = max(1 / 60.0, min(24.0, float(hours)))
+            since_ms = now_ms - int(span_hours * 3600 * 1000)
+            until_ms = now_ms
         series_map: dict[str, list[list[float]]] = defaultdict(list)
 
         with self._history_lock, self._open_history() as conn:
             rows = conn.execute(
                 "SELECT metric, ts_ms, value FROM device_daily_samples "
-                "WHERE table_name=? AND idx=? AND ts_ms>=? ORDER BY ts_ms ASC",
-                (table_name, idx, since_ms),
+                "WHERE table_name=? AND idx=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
+                (table_name, idx, since_ms, until_ms),
             ).fetchall()
         for metric, ts_ms, val in rows:
             series_map[metric].append([int(ts_ms), round(float(val), 4)])
@@ -1384,8 +1404,9 @@ class PortalService:
         return {
             "table_name": table_name,
             "idx": idx,
-            "hours": hours,
+            "hours": span_hours,
             "since_ms": since_ms,
+            "end_ms": until_ms,
             "now_ms": now_ms,
             "series": series,
         }

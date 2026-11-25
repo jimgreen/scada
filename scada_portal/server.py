@@ -136,7 +136,14 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 table_name = parts[2]
                 idx = int(parts[3])
                 hours = float(query.get("hours", "24"))
-                return self._json(200, self.service.get_device_trend(table_name, idx, hours=hours))
+                start_ms = int(query["start_ms"]) if query.get("start_ms") else None
+                end_ms = int(query["end_ms"]) if query.get("end_ms") else None
+                return self._json(
+                    200,
+                    self.service.get_device_trend(
+                        table_name, idx, hours=hours, start_ms=start_ms, end_ms=end_ms
+                    ),
+                )
             if path == "/api/comm/rtus":
                 return self._json(200, self.service.get_comm_rtus())
             if path == "/api/comm/channels":

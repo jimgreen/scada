@@ -337,9 +337,18 @@
                 <div class="pf-mp-chart-box">
                   <div class="pf-mp-chart-head">
                     <div class="pf-mp-tabs" id="pf-mp-tabs" role="tablist" aria-label="曲线时间窗">
-                      <button type="button" class="pf-mp-tab active" role="tab" aria-selected="true" data-mp-hours="1">近 1 小时</button>
-                      <button type="button" class="pf-mp-tab" role="tab" aria-selected="false" data-mp-hours="24">近 1 天</button>
+                      <button type="button" class="pf-mp-tab" role="tab" aria-selected="false" data-mp-gran="minute">当分</button>
+                      <button type="button" class="pf-mp-tab active" role="tab" aria-selected="true" data-mp-gran="hour">当时</button>
+                      <button type="button" class="pf-mp-tab" role="tab" aria-selected="false" data-mp-gran="day">当日</button>
                     </div>
+                    <div class="pf-mp-nav" aria-label="时间步进">
+                      <button type="button" class="pf-mp-nav-btn" id="pf-mp-prev" title="向左走一个单位">◀</button>
+                      <button type="button" class="pf-mp-nav-btn" id="pf-mp-now" title="回到当前时段">当前</button>
+                      <button type="button" class="pf-mp-nav-btn" id="pf-mp-next" title="向右走一个单位" disabled>▶</button>
+                    </div>
+                  </div>
+                  <div class="pf-mp-chart-meta">
+                    <span id="pf-mp-window-label">--</span>
                     <small id="pf-mp-chart-stat"></small>
                   </div>
                   <div class="pf-mp-canvas-wrap" id="pf-mp-canvas-wrap">

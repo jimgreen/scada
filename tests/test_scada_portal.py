@@ -322,6 +322,18 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertIn("p", metrics)
         self.assertEqual(metrics["p"]["latest"], 45.2)
 
+        # 按精确 start_ms / end_ms 查询自然时间窗
+        now_ms = trend["now_ms"]
+        status, _, wbody = http_get(
+            self.httpd.server_port,
+            f"/api/devices/ACGenerator/1/trend?start_ms={now_ms - 60000}&end_ms={now_ms + 60000}",
+        )
+        self.assertEqual(status, 200)
+        wtrend = json.loads(wbody.decode("utf-8"))
+        self.assertEqual(wtrend["since_ms"], now_ms - 60000)
+        self.assertEqual(wtrend["end_ms"], now_ms + 60000)
+        self.assertIn("p", {s["metric"] for s in wtrend["series"]})
+
     def test_comm_endpoints_and_logs(self):
         status, _, r_body = http_get(self.httpd.server_port, "/api/comm/rtus")
         self.assertEqual(status, 200)

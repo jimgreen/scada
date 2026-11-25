@@ -31,9 +31,13 @@
     pfSelectedDev: null,
     pfHoverDev: null,
     pfHoverMeas: null, // { devId, mt, slot }
-    pfMpHours: 1,
+    pfMpGran: "hour", // "minute" | "hour" | "day"
+    pfMpOffset: 0, // 0=当前，-1=上一个单位
+    pfMpWindow: null, // { startMs, endMs, label, gran }
     pfMpReqSeq: 0,
     pfMpTrendCache: new Map(), // key -> { ts, points }
+    pfMpPoints: [],
+    pfMpHoverX: null,
     pfPopHideTimer: null,
     pfShowArrows: true,
     pfArrowPaths: [], // [{ key, kind, voltageType, pathEl, length, pKw, dir, speed, scale, arrows: [{el, offset}] }]
@@ -511,6 +515,8 @@
     }
     svg.setAttribute("width", String(state.svgWidth));
     svg.setAttribute("height", String(state.svgHeight));
+    // 移除 SVG 内原生 <title>，防止浏览器弹出白底系统提示框遮挡自定义悬浮框
+    svg.querySelectorAll("title").forEach((el) => el.remove());
     state.svgLoaded = true;
     initPowerflowArrowPaths(svg);
     applySvgThemeColors();
@@ -919,6 +925,24 @@
     popEl.style.top = `${Math.round(top)}px`;
   }
 
+  function buildKvTableHtml(pairs) {
+    if (!pairs || !pairs.length) return "";
+    const rows = [];
+    for (let i = 0; i < pairs.length; i += 2) {
+      const a = pairs[i];
+      const b = pairs[i + 1];
+      rows.push(
+        `<tr>` +
+        `<th title="${esc(a.label)}">${esc(a.label)}</th><td title="${esc(a.value)}">${esc(a.value)}</td>` +
+        (b
+          ? `<th title="${esc(b.label)}">${esc(b.label)}</th><td title="${esc(b.value)}">${esc(b.value)}</td>`
+          : `<th></th><td></td>`) +
+        `</tr>`
+      );
+    }
+    return `<table class="pf-kv-table"><tbody>${rows.join("")}</tbody></table>`;
+  }
+
   function renderDevicePopoverContent(devId, highlight = false) {
     const dev = state.pfData?.devices?.[devId];
     const svg = $("#pf-stage svg");
@@ -947,15 +971,8 @@
         switchView("devices");
       };
     }
-    const itemsHtml = params.map(
-      (p) =>
-        `<div class="pf-pop-param" title="${esc(p.label)}: ${esc(p.value)}">` +
-        `<span>${esc(p.label)}</span>` +
-        `<strong>${esc(p.value)}</strong>` +
-        `</div>`
-    );
-    $("#pf-dev-pop-metrics").innerHTML = itemsHtml.length
-      ? itemsHtml.join("")
+    $("#pf-dev-pop-metrics").innerHTML = params.length
+      ? buildKvTableHtml(params)
       : '<div class="empty-hint">暂无设备模型参数</div>';
   }
 
@@ -971,38 +988,105 @@
     positionPopover(devPop, clientX, clientY);
   }
 
-  function drawMeasPopoverChart(points, slot) {
+  function setupMeasPopoverCanvas() {
     const canvas = $("#pf-meas-canvas");
     const wrap = $("#pf-mp-canvas-wrap");
-    const statEl = $("#pf-mp-chart-stat");
-    if (!canvas || !wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const w = Math.max(120, Math.round(rect.width));
-    const h = Math.max(80, Math.round(rect.height));
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
+    if (!canvas || !wrap) return null;
+    const w = wrap.clientWidth || Math.round(wrap.getBoundingClientRect().width);
+    const h = wrap.clientHeight || Math.round(wrap.getBoundingClientRect().height);
+    if (w < 40 || h < 40) return null;
+    const dpr = Math.max(window.devicePixelRatio || 1, 2);
+    const targetW = Math.round(w * dpr);
+    const targetH = Math.round(h * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    return { ctx, w, h };
+  }
 
+  function clearMeasPopoverChart(message = "") {
+    state.pfMpPoints = [];
+    state.pfMpHoverX = null;
+    const env = setupMeasPopoverCanvas();
+    if (!env) return;
+    if (message) {
+      const pal = chartPalette();
+      env.ctx.fillStyle = pal.axis;
+      env.ctx.font = '12px "Microsoft YaHei", sans-serif';
+      env.ctx.textAlign = "center";
+      env.ctx.textBaseline = "middle";
+      env.ctx.fillText(message, env.w / 2, env.h / 2);
+    }
+  }
+
+  function fmtChartAxisVal(v) {
+    const abs = Math.abs(v);
+    if (abs >= 10000) return v.toFixed(0);
+    if (abs >= 100) return v.toFixed(1);
+    if (abs >= 1) return v.toFixed(2);
+    return v.toFixed(3);
+  }
+
+  function computeMeasWindow(gran, offset) {
+    const now = new Date();
+    const pad2 = (n) => String(n).padStart(2, "0");
+    let start;
+    let end;
+    let label;
+    if (gran === "minute") {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes() + offset, 0, 0);
+      end = new Date(start.getTime() + 60 * 1000);
+      label = `${pad2(start.getMonth() + 1)}/${pad2(start.getDate())} ${pad2(start.getHours())}:${pad2(start.getMinutes())}`;
+    } else if (gran === "day") {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, 0, 0, 0, 0);
+      end = new Date(start.getTime() + 24 * 3600 * 1000);
+      label = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
+    } else {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + offset, 0, 0, 0);
+      end = new Date(start.getTime() + 3600 * 1000);
+      label = `${pad2(start.getMonth() + 1)}/${pad2(start.getDate())} ${pad2(start.getHours())}:00–${pad2(end.getHours())}:00`;
+    }
+    return { startMs: start.getTime(), endMs: end.getTime(), label, gran };
+  }
+
+  function updateMeasNavUI(win) {
+    const lbl = $("#pf-mp-window-label");
+    if (lbl && win) lbl.textContent = win.label;
+    const nextBtn = $("#pf-mp-next");
+    if (nextBtn) nextBtn.disabled = state.pfMpOffset >= 0;
+    const nowBtn = $("#pf-mp-now");
+    if (nowBtn) nowBtn.disabled = state.pfMpOffset === 0;
+  }
+
+  function drawMeasPopoverChart(points, slot, win = state.pfMpWindow) {
+    state.pfMpPoints = points || [];
+    const statEl = $("#pf-mp-chart-stat");
+    const env = setupMeasPopoverCanvas();
+    if (!env) return;
+    const { ctx, w, h } = env;
     const pal = chartPalette();
+    const dark = isDarkTheme();
+
     if (!points || !points.length) {
       if (statEl) statEl.textContent = "暂无采样";
       ctx.fillStyle = pal.axis;
-      ctx.font = '11px "Microsoft YaHei", sans-serif';
+      ctx.font = '12px "Microsoft YaHei", sans-serif';
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("暂无历史曲线数据", w / 2, h / 2);
+      ctx.fillText("该时段暂无采样数据", w / 2, h / 2);
       return;
     }
 
-    const pad = { left: 42, right: 10, top: 10, bottom: 20 };
+    const pad = { left: 50, right: 14, top: 14, bottom: 24 };
     const plotW = Math.max(20, w - pad.left - pad.right);
     const plotH = Math.max(20, h - pad.top - pad.bottom);
 
-    let minT = points[0][0];
-    let maxT = points[points.length - 1][0];
+    let minT = win ? win.startMs : points[0][0];
+    let maxT = win ? win.endMs : points[points.length - 1][0];
     if (maxT <= minT) maxT = minT + 60000;
 
     let minV = Infinity;
@@ -1012,19 +1096,20 @@
       if (v > maxV) maxV = v;
     }
     if (statEl) {
-      statEl.textContent = `${points.length} 点 · ${fmtNum(minV, 2)}~${fmtNum(maxV, 2)}`;
+      statEl.textContent = `${points.length} 点 · ${fmtChartAxisVal(minV)} ~ ${fmtChartAxisVal(maxV)}`;
     }
+
     const hasLimits = slot && slot.max_value != null && slot.min_value != null && Number(slot.max_value) > Number(slot.min_value);
     const isSocPct = slot?.metric === "soc" && maxV > 1.5;
     const limMax = hasLimits ? (isSocPct && Number(slot.max_value) <= 1.5 ? Number(slot.max_value) * 100 : Number(slot.max_value)) : null;
     const limMin = hasLimits ? (isSocPct && Number(slot.min_value) <= 1.5 ? Number(slot.min_value) * 100 : Number(slot.min_value)) : null;
 
     if (Math.abs(maxV - minV) < 1e-6) {
-      const span = Math.max(1, Math.abs(maxV) * 0.1);
+      const span = Math.max(0.5, Math.abs(maxV) * 0.08);
       minV -= span;
       maxV += span;
     } else {
-      const m = (maxV - minV) * 0.12;
+      const m = (maxV - minV) * 0.14;
       minV -= m;
       maxV += m;
     }
@@ -1032,111 +1117,232 @@
     const xFor = (t) => pad.left + ((t - minT) / (maxT - minT)) * plotW;
     const yFor = (v) => pad.top + (1 - (v - minV) / (maxV - minV)) * plotH;
 
-    // 水平网格与 Y 轴
-    ctx.strokeStyle = pal.grid;
+    // 1. 精细 4 档水平网格与 Y 轴刻度（0.5px 像素对齐）
     ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.fillStyle = pal.axis;
-    ctx.font = '10px "JetBrains Mono", Consolas, monospace';
+    ctx.font = '10.5px "JetBrains Mono", Consolas, monospace';
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    for (let i = 0; i <= 2; i += 1) {
-      const ratio = i / 2;
-      const y = pad.top + ratio * plotH;
+    const ySteps = 3;
+    for (let i = 0; i <= ySteps; i += 1) {
+      const ratio = i / ySteps;
+      const y = Math.round(pad.top + ratio * plotH) + 0.5;
       const v = maxV - ratio * (maxV - minV);
+      ctx.strokeStyle = i === ySteps ? (dark ? "rgba(148,163,184,0.28)" : "rgba(100,116,139,0.32)") : pal.grid;
+      ctx.setLineDash(i === ySteps ? [] : [3, 3]);
       ctx.beginPath();
       ctx.moveTo(pad.left, y);
       ctx.lineTo(pad.left + plotW, y);
       ctx.stroke();
-      ctx.fillText(v.toFixed(Math.abs(v) >= 100 ? 1 : 2), pad.left - 5, y);
+      ctx.fillStyle = pal.axis;
+      ctx.fillText(fmtChartAxisVal(v), pad.left - 7, y);
     }
 
-    // 若有效上下限落在当前纵轴范围内，绘制参考虚线
-    if (limMax !== null && limMax >= minV && limMax <= maxV) {
-      const y = yFor(limMax);
-      ctx.strokeStyle = "rgba(249, 115, 22, 0.72)";
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(pad.left, y);
-      ctx.lineTo(pad.left + plotW, y);
-      ctx.stroke();
-    }
-    if (limMin !== null && limMin >= minV && limMin <= maxV) {
-      const y = yFor(limMin);
-      ctx.strokeStyle = "rgba(99, 102, 241, 0.72)";
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(pad.left, y);
-      ctx.lineTo(pad.left + plotW, y);
-      ctx.stroke();
-    }
-
-    // X 轴起止时间
+    // 2. 4 档 X 轴时间刻度与极淡垂直网格
     ctx.setLineDash([]);
     ctx.fillStyle = pal.axis;
     ctx.textBaseline = "top";
-    const fmtHM = (ms) => {
+    const gran = win?.gran || state.pfMpGran;
+    const fmtTick = (ms, isLast) => {
+      if (gran === "day" && isLast) return "24:00";
       const d = new Date(ms);
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return gran === "minute" ? `${mm}:${ss}` : `${hh}:${mm}`;
     };
-    ctx.textAlign = "left";
-    ctx.fillText(fmtHM(minT), pad.left, pad.top + plotH + 4);
-    ctx.textAlign = "right";
-    ctx.fillText(fmtHM(maxT), pad.left + plotW, pad.top + plotH + 4);
+    const xSteps = 3;
+    for (let i = 0; i <= xSteps; i += 1) {
+      const ratio = i / xSteps;
+      const t = minT + ratio * (maxT - minT);
+      const x = Math.round(pad.left + ratio * plotW) + 0.5;
+      if (i > 0 && i < xSteps) {
+        ctx.strokeStyle = dark ? "rgba(148,163,184,0.08)" : "rgba(100,116,139,0.10)";
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, pad.top + plotH);
+        ctx.stroke();
+      }
+      ctx.textAlign = i === 0 ? "left" : i === xSteps ? "right" : "center";
+      ctx.fillText(fmtTick(t, i === xSteps), x, pad.top + plotH + 6);
+    }
 
-    // 曲线与淡填充
-    const lineColor = pal.colors[0];
-    ctx.strokeStyle = lineColor;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    points.forEach(([t, v], i) => {
-      const x = xFor(t);
-      const y = yFor(v);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    // 3. 有效上下限参考虚线（落在当前视野内时绘出并标注）
+    const drawLimitLine = (val, color, tag) => {
+      if (val === null || val < minV || val > maxV) return;
+      const y = Math.round(yFor(val)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.font = '9.5px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(`${tag} ${fmtChartAxisVal(val)}`, pad.left + plotW - 2, y - 2);
+      ctx.restore();
+    };
+    drawLimitLine(limMax, dark ? "rgba(251,146,60,0.8)" : "rgba(194,65,12,0.8)", "H");
+    drawLimitLine(limMin, dark ? "rgba(165,180,252,0.8)" : "rgba(67,56,202,0.8)", "L");
+
+    // 4. 垂直渐变面积填充 + 抗锯齿发光曲线 + 末端高亮实时点
+    const lineColor = dark ? "#38BDF8" : "#2563EB";
+    const glowColor = dark ? "rgba(56, 189, 248, 0.45)" : "rgba(37, 99, 235, 0.22)";
+    const baseLineY = pad.top + plotH;
 
     if (points.length >= 2) {
-      ctx.lineTo(xFor(points[points.length - 1][0]), pad.top + plotH);
-      ctx.lineTo(xFor(points[0][0]), pad.top + plotH);
-      ctx.closePath();
-      ctx.fillStyle = isDarkTheme() ? "rgba(56, 189, 248, 0.14)" : "rgba(37, 99, 235, 0.12)";
-      ctx.fill();
-    } else {
-      ctx.fillStyle = lineColor;
+      const grad = ctx.createLinearGradient(0, pad.top, 0, baseLineY);
+      grad.addColorStop(0, dark ? "rgba(56, 189, 248, 0.28)" : "rgba(37, 99, 235, 0.22)");
+      grad.addColorStop(1, dark ? "rgba(56, 189, 248, 0.01)" : "rgba(37, 99, 235, 0.01)");
       ctx.beginPath();
-      ctx.arc(xFor(points[0][0]), yFor(points[0][1]), 3, 0, Math.PI * 2);
+      points.forEach(([t, v], i) => {
+        const x = xFor(t);
+        const y = yFor(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.lineTo(xFor(points[points.length - 1][0]), baseLineY);
+      ctx.lineTo(xFor(points[0][0]), baseLineY);
+      ctx.closePath();
+      ctx.fillStyle = grad;
       ctx.fill();
+
+      ctx.save();
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      points.forEach(([t, v], i) => {
+        const x = xFor(t);
+        const y = yFor(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 末端实时点（无悬停时高亮末端最新值）
+    const lastPt = points[points.length - 1];
+    const lastX = xFor(lastPt[0]);
+    const lastY = yFor(lastPt[1]);
+    ctx.save();
+    ctx.fillStyle = dark ? "rgba(56,189,248,0.28)" : "rgba(37,99,235,0.22)";
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = dark ? "#e6f7ff" : "#ffffff";
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 2.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // 5. 悬停十字准星与精确读数气泡
+    if (
+      state.pfMpHoverX !== null
+      && state.pfMpHoverX >= pad.left
+      && state.pfMpHoverX <= pad.left + plotW
+    ) {
+      const hoverT = minT + ((state.pfMpHoverX - pad.left) / plotW) * (maxT - minT);
+      let best = points[0];
+      let bestDist = Infinity;
+      for (const pt of points) {
+        const dist = Math.abs(pt[0] - hoverT);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = pt;
+        }
+      }
+      const px = Math.round(xFor(best[0])) + 0.5;
+      const py = yFor(best[1]);
+
+      ctx.save();
+      ctx.strokeStyle = pal.crosshair;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, pad.top);
+      ctx.lineTo(px, baseLineY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = lineColor;
+      ctx.strokeStyle = dark ? "#081121" : "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, 3.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      const d = new Date(best[0]);
+      const tStr = d.toLocaleTimeString("zh-CN", { hour12: false });
+      const vStr = `${fmtChartAxisVal(best[1])}${slot?.unit ? " " + slot.unit : ""}`;
+      const labelText = `${tStr}  ${vStr}`;
+      ctx.font = '10.5px "JetBrains Mono", Consolas, monospace';
+      const tw = ctx.measureText(labelText).width;
+      const boxW = tw + 14;
+      const boxH = 20;
+      let bx = px + 8;
+      if (bx + boxW > w - 6) bx = px - boxW - 8;
+      bx = Math.max(pad.left + 2, bx);
+      const by = Math.max(4, Math.min(baseLineY - boxH - 4, py - boxH / 2));
+
+      ctx.fillStyle = pal.tooltipBg;
+      ctx.strokeStyle = pal.tooltipBorder;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, boxW, boxH, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = pal.tooltipText;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(labelText, bx + 7, by + boxH / 2 + 0.5);
+      ctx.restore();
     }
   }
 
-  async function loadMeasPopoverTrend(slot, hours) {
+  async function loadMeasPopoverTrend(slot, gran = state.pfMpGran, offset = state.pfMpOffset) {
+    const win = computeMeasWindow(gran, offset);
+    state.pfMpWindow = win;
+    updateMeasNavUI(win);
     const statEl = $("#pf-mp-chart-stat");
     if (!slot || !slot.table_name || slot.idx == null || !slot.metric) {
-      drawMeasPopoverChart([], slot);
+      drawMeasPopoverChart([], slot, win);
       return;
     }
-    const cacheKey = `${slot.table_name}:${slot.idx}:${slot.metric}:${hours}`;
+    const cacheKey = `${slot.table_name}:${slot.idx}:${slot.metric}:${win.startMs}:${win.endMs}`;
     const cached = state.pfMpTrendCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && now - cached.ts < 5000) {
-      drawMeasPopoverChart(cached.points, slot);
+    const ttl = offset === 0 ? 4000 : 30000;
+    if (cached && Date.now() - cached.ts < ttl) {
+      drawMeasPopoverChart(cached.points, slot, win);
       return;
     }
     const seq = ++state.pfMpReqSeq;
+    clearMeasPopoverChart("加载曲线…");
     if (statEl) statEl.textContent = "加载曲线…";
     try {
       const data = await api(
-        `/api/devices/${encodeURIComponent(slot.table_name)}/${slot.idx}/trend?hours=${hours}`
+        `/api/devices/${encodeURIComponent(slot.table_name)}/${slot.idx}/trend?start_ms=${win.startMs}&end_ms=${win.endMs}`
       );
       if (seq !== state.pfMpReqSeq) return;
       const series = (data.series || []).find((s) => s.metric === slot.metric);
       const pts = series ? series.points || [] : [];
       state.pfMpTrendCache.set(cacheKey, { ts: Date.now(), points: pts });
-      drawMeasPopoverChart(pts, slot);
+      drawMeasPopoverChart(pts, slot, win);
     } catch (_) {
-      if (seq === state.pfMpReqSeq) drawMeasPopoverChart([], slot);
+      if (seq === state.pfMpReqSeq) drawMeasPopoverChart([], slot, win);
     }
   }
 
@@ -1167,17 +1373,18 @@
     const weightStr = slot?.weight != null ? fmtLimitCompact(slot.weight) : "—";
     const timeStr = slot?.source_time ? fmtTime(slot.source_time).slice(5) : "—";
 
-    $("#pf-mp-meta-grid").innerHTML =
-      `<div class="pf-mp-kv"><span>RTU / 点号</span><strong title="${esc(rtuPnt)}">${esc(rtuPnt)}</strong></div>` +
-      `<div class="pf-mp-kv"><span>量测状态</span><strong>${esc(statusText)}</strong></div>` +
-      `<div class="pf-mp-kv"><span>权重</span><strong>${esc(weightStr)}</strong></div>` +
-      `<div class="pf-mp-kv"><span>下限 (min)</span><strong>${esc(minStr)}</strong></div>` +
-      `<div class="pf-mp-kv"><span>上限 (max)</span><strong>${esc(maxStr)}</strong></div>` +
-      `<div class="pf-mp-kv"><span>更新时间</span><strong title="${esc(timeStr)}">${esc(timeStr)}</strong></div>`;
+    $("#pf-mp-meta-grid").innerHTML = buildKvTableHtml([
+      { label: "RTU / 点号", value: rtuPnt },
+      { label: "量测状态", value: statusText },
+      { label: "下限 (min)", value: minStr },
+      { label: "上限 (max)", value: maxStr },
+      { label: "权重", value: weightStr },
+      { label: "更新时间", value: timeStr },
+    ]);
 
     state.pfHoverMeas = { devId, mt, slot };
     if (reloadChart) {
-      loadMeasPopoverTrend(slot, state.pfMpHours);
+      loadMeasPopoverTrend(slot, state.pfMpGran, state.pfMpOffset);
     }
   }
 
@@ -1187,9 +1394,12 @@
     if (!measPop) return;
     if (devPop) devPop.hidden = true;
     state.pfHoverDev = null;
-    renderMeasPopoverContent(devId, mt, true);
+    state.pfMpOffset = 0;
+    // 先填充文本并取消 hidden 完成布局，再按真实高清像素尺寸绘曲线，彻底避免 0x0 回退拉伸模糊
+    renderMeasPopoverContent(devId, mt, false);
     measPop.hidden = false;
     positionPopover(measPop, clientX, clientY);
+    loadMeasPopoverTrend(state.pfHoverMeas?.slot, state.pfMpGran, 0);
   }
 
   function focusSvgDevice(devId) {
@@ -1261,7 +1471,7 @@
       applySvgTransform();
     }, { passive: false });
 
-    // 悬浮框自身鼠标进出与近1小时/近1天分页标签切换
+    // 悬浮框自身鼠标进出与 当分/当时/当日 分页标签及 ◀/当前/▶ 步进切换
     ["#pf-dev-popover", "#pf-meas-popover"].forEach((sel) => {
       const el = $(sel);
       el?.addEventListener("mouseenter", cancelHidePfPopovers);
@@ -1269,17 +1479,42 @@
     });
     $$("#pf-mp-tabs .pf-mp-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const hrs = Number(btn.dataset.mpHours || 1);
-        state.pfMpHours = hrs;
+        const gran = btn.dataset.mpGran || "hour";
+        state.pfMpGran = gran;
+        state.pfMpOffset = 0;
         $$("#pf-mp-tabs .pf-mp-tab").forEach((b) => {
           const active = b === btn;
           b.classList.toggle("active", active);
           b.setAttribute("aria-selected", active ? "true" : "false");
         });
         if (state.pfHoverMeas?.slot) {
-          loadMeasPopoverTrend(state.pfHoverMeas.slot, hrs);
+          loadMeasPopoverTrend(state.pfHoverMeas.slot, gran, 0);
         }
       });
+    });
+    const shiftMeasWindow = (delta) => {
+      const next = delta === 0 ? 0 : Math.min(0, state.pfMpOffset + delta);
+      if (next === state.pfMpOffset && delta !== 0) return;
+      state.pfMpOffset = next;
+      if (state.pfHoverMeas?.slot) {
+        loadMeasPopoverTrend(state.pfHoverMeas.slot, state.pfMpGran, state.pfMpOffset);
+      }
+    };
+    $("#pf-mp-prev")?.addEventListener("click", () => shiftMeasWindow(-1));
+    $("#pf-mp-now")?.addEventListener("click", () => shiftMeasWindow(0));
+    $("#pf-mp-next")?.addEventListener("click", () => shiftMeasWindow(1));
+    $("#pf-meas-canvas")?.addEventListener("mousemove", (e) => {
+      if (!state.pfMpPoints.length || !state.pfHoverMeas?.slot) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      state.pfMpHoverX = e.clientX - rect.left;
+      drawMeasPopoverChart(state.pfMpPoints, state.pfHoverMeas.slot);
+    });
+    $("#pf-meas-canvas")?.addEventListener("mouseleave", () => {
+      if (state.pfMpHoverX === null) return;
+      state.pfMpHoverX = null;
+      if (state.pfMpPoints.length && state.pfHoverMeas?.slot) {
+        drawMeasPopoverChart(state.pfMpPoints, state.pfHoverMeas.slot);
+      }
     });
 
     $("#pf-zoom-in")?.addEventListener("click", () => {
