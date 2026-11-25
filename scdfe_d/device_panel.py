@@ -81,14 +81,11 @@ def _read_device(store, con, table, idx, *, live=False):
     }
     source_db = store.default_source_database()
     items = []
-    fields = wide.keys()[2:]
-    step = len(SUFFIXES)
-    for offset in range(0, len(fields), step):
-        metric = fields[offset]
-        fields_in_group = fields[offset : offset + step]
-        if fields_in_group != [metric + suffix for suffix in SUFFIXES]:
+    available = set(wide.keys())
+    for metric, kind in metrics:
+        fields_in_group = [metric + suffix for suffix in SUFFIXES]
+        if any(field not in available for field in fields_in_group):
             raise ApiError(409, "设备量测字段分组不完整")
-        kind = next((k for m, k in metrics if m == metric), "yc")
         (
             value,
             quality,

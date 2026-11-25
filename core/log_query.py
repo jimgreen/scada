@@ -29,6 +29,7 @@ LOG_PATTERNS = {
     # another RTU/channel over its lifetime.
     "s": re.compile(r"(?P<process>scdfe_s-channel-[1-9]\d*|scdfe_s-(?:operations-\d+|iec104|modbus-(?:tcp|rtu)(?:-server)?|can(?:-server)?|opc-server|bacnet-server))-(?P<hour>\d{8}-\d{2})\.log$"),
     "t": re.compile(r"(?P<process>scdfe_t-(?:channel-[1-9]\d*|operations-\d+))-(?P<hour>\d{8}-\d{2})\.log$"),
+    "d": re.compile(r"(?P<process>scdfe_d-(?:web|collector|control|operations-\d+))-(?P<hour>\d{8}-\d{2})\.log$"),
 }
 
 

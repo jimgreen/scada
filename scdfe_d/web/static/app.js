@@ -9,6 +9,10 @@
   const mappingMode = mode === '/mappings';
   const queryMode = mode === '/measurements' || mode === '/devices';
   const parameterMode = mode === '/parameters';
+  const controlDispatchMode = mode === '/controls';
+  const controlMappingMode = mode === '/control-mappings';
+  const controlMode = controlDispatchMode || controlMappingMode;
+  const logsMode = mode === '/logs';
   const deviceMode = mappingMode || queryMode || parameterMode;
   const pointTrendHost = $('#point-trend');
   const pointTrend = queryMode && pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
@@ -161,6 +165,7 @@
     $('#property-count').textContent = counts.device_measurement;
     $('#mapping-count').textContent = counts.scada_point_mapping;
     $('#valid-count').textContent = counts.valid;
+    if ($('#control-count')) $('#control-count').textContent = counts.control ?? 0;
     renderCollectorControls();
     const last = overview.last_refresh;
     $('#last-refresh').textContent = last
@@ -764,11 +769,26 @@
 
   async function loadHistory() {
     const data = await api('/api/history');
+    if (historyMode === 'controls') {
+      const headers = ['时间', '来源', '设备', '属性', '类型', 'RTU / 点号', '设定值', '状态', '详情'];
+      $('#history-head').innerHTML = '<tr>' + headers.map(heading => '<th scope="col">' + heading + '</th>').join('') + '</tr>';
+      const items = data.controls || [];
+      $('#history-rows').innerHTML = items.map(row => '<tr><td>' + html(time(row.at))
+        + '</td><td>' + html(row.source === 'db_watch' ? '库监视' : 'Web')
+        + '</td><td class="name">' + html(row.device_name || row.model_table)
+        + '</td><td><code>' + html(row.control) + '</code></td><td><span class="ctrl-kind-tag ' + html(row.kind) + '">' + html((row.kind || '').toUpperCase())
+        + '</span></td><td>' + html(row.rtu_id == null ? '—' : row.rtu_id + ' / ' + row.pnt_no)
+        + '</td><td class="quantity-value">' + html(number(row.value))
+        + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
+        + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
+        || emptyRow(headers, '暂无控调流水记录');
+      return;
+    }
     const changes = historyMode === 'changes';
     const headers = changes ? ['时间', '对象', '编号', '修改内容']
       : ['批次', '开始时间', '完成时间', '属性数', '可用数', '异常'];
     $('#history-head').innerHTML = '<tr>' + headers.map(heading => '<th scope="col">' + heading + '</th>').join('') + '</tr>';
-    $('#history-rows').innerHTML = data[historyMode].map(row => changes
+    $('#history-rows').innerHTML = (data[historyMode] || []).map(row => changes
       ? '<tr><td>' + html(time(row.changed_at)) + '</td><td>' + html(row.entity) + '</td><td>' + html(number(row.entity_id))
         + '</td><td class="wrap">' + html(row.after_json) + '</td></tr>'
       : '<tr><td>' + html(row.refresh_id) + '</td><td>' + html(time(row.started_at)) + '</td><td>'
@@ -779,6 +799,8 @@
 
   async function refresh() {
     if (deviceMode) await loadRows();
+    else if (controlMode) await loadControls();
+    else if (logsMode) await loadLogs({ append: false });
     else if (mode === '/history') await loadHistory();
     else await summary();
   }
@@ -896,6 +918,11 @@
             await api('/api/model/import', 'POST', { path: row.path });
             await loadDevices();
             await refresh();
+          } else if (browserMode === 'ctrl-source') {
+            $('#ctrl-edit-source').value = row.path;
+            $('#source-browser').close();
+            ctrlSourcePage = 1;
+            findControlSource();
           } else {
             $('#edit-source').value = row.path;
             $('#source-browser').close();
@@ -921,15 +948,298 @@
     await loadRows();
   }
 
+  // ==================== 控调下发、控调定义与运行日志视图 ====================
+  let ctrlRows = [];
+  let ctrlPage = 1;
+  let ctrlKind = '';
+  let ctrlSeq = 0;
+  let ctrlEditing = null;
+  let ctrlSourcePage = 1;
+  let ctrlSourceSeq = 0;
+  const ctrlDraftValues = new Map();
+
+  let logSeq = 0;
+  let logCursor = null;
+  let logItems = [];
+
+  async function loadControlCatalog() {
+    catalog = await api('/api/device-catalog');
+    devices = catalog.devices || [];
+    tables = catalog.tables || [];
+    const cats = catalog.category_labels || {};
+    $('#ctrl-category').innerHTML = option('', '全部类型')
+      + Object.entries(cats).map(([k, v]) => option(k, v)).join('');
+    $('#ctrl-table').innerHTML = option('', '全部设备表')
+      + tables.map(t => option(t.table_name, t.table_name + ' (' + t.count + ')')).join('');
+    $('#ctrl-edit-device').innerHTML = devices.map(d => option(d.device_id, d.name + ' · ' + (d.tables?.[0]?.table || ''))).join('');
+  }
+
+  function renderControlRows(items, total, summaryData) {
+    ctrlRows = items;
+    if (summaryData) {
+      $('#ctrl-summary').textContent = '共 ' + summaryData.total + ' · YK ' + summaryData.yk
+        + ' · YT ' + summaryData.yt + (summaryData.pending ? ' · 待回执 ' + summaryData.pending : '');
+    }
+    if (controlDispatchMode) {
+      const headers = ['设备', '控调属性', '类型', '当前设定值', '限值', '状态', '指令 / 回执时间', '操作'];
+      $('#control-head').innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
+      $('#control-rows').innerHTML = items.map((row, index) => {
+        const disabled = Boolean(row.notuse);
+        const unitSuffix = row.unit ? ' ' + html(row.unit) : '';
+        const draftVal = ctrlDraftValues.has(row.control_id)
+          ? ctrlDraftValues.get(row.control_id)
+          : (row.value == null ? '' : String(row.value));
+        const valCell = row.kind === 'yt'
+          ? '<td class="ctrl-input-cell"><input class="ctrl-field" type="number" step="any" data-ctrl-input="' + index
+            + '" value="' + html(draftVal) + '" placeholder="' + html(row.unit ? '设定 (' + row.unit + ')' : '输入设定值')
+            + '"' + (disabled ? ' disabled' : '') + '></td>'
+          : '<td class="quantity-value">' + (row.value == null ? '—' : (Number(row.value) === 1 ? '1 · 合/启' : '0 · 分/停')) + '</td>';
+        const opCell = row.kind === 'yk'
+          ? '<span class="ctrl-ops"><button type="button" class="btn-on" data-yk="' + index + '" data-val="1"' + (disabled ? ' disabled' : '')
+            + '>合/启 (1)</button><button type="button" class="btn-off" data-yk="' + index + '" data-val="0"' + (disabled ? ' disabled' : '')
+            + '>分/停 (0)</button></span>'
+          : '<span class="ctrl-ops"><button type="button" class="primary" data-yt-send="' + index + '"' + (disabled ? ' disabled' : '')
+            + '>下发</button></span>';
+        const timeCell = html(time(row.cmd_time_ms))
+          + (row.cmd_ack_time_ms ? '<span class="muted">回执 ' + html(time(row.cmd_ack_time_ms)) + '</span>' : '');
+        return '<tr><td class="name">' + html(row.device_name) + '<span class="muted">' + html(row.model_table) + ' #' + html(row.model_idx) + '</span></td>'
+          + '<td class="quantity-identity"><strong>' + html(row.label || row.control) + '</strong><small><code>' + html(row.control) + '</code>' + unitSuffix + ' · RTU ' + html(row.rtu_id) + '/' + html(row.pnt_no) + '</small></td>'
+          + '<td><span class="ctrl-kind-tag ' + html(row.kind) + '">' + html(row.kind.toUpperCase()) + '</span></td>'
+          + valCell
+          + '<td class="limit-range">' + html(formatLimitRange(row)) + '</td>'
+          + '<td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label) + '</span></td>'
+          + '<td>' + timeCell + '</td>'
+          + '<td>' + opCell + '</td></tr>';
+      }).join('') || emptyRow(headers, '暂无已绑定控调点位');
+    } else {
+      const headers = ['设备', '控调属性', '类型', '源库 / RTU / 点号', '限值范围', '控制状态', '操作'];
+      $('#control-head').innerHTML = '<tr>' + headers.map(h => '<th scope="col">' + h + '</th>').join('') + '</tr>';
+      $('#control-rows').innerHTML = items.map((row, index) => '<tr><td class="name">' + html(row.device_name)
+        + '<span class="muted">' + html(row.model_table) + ' #' + html(row.model_idx) + '</span></td>'
+        + '<td class="quantity-identity"><strong>' + html(row.label || row.control) + '</strong><small><code>' + html(row.control) + '</code></small></td>'
+        + '<td><span class="ctrl-kind-tag ' + html(row.kind) + '">' + html(row.kind.toUpperCase()) + '</span></td>'
+        + '<td class="path" title="' + html(row.source_database) + '">' + html(row.rtu_id) + ' / ' + html(row.pnt_no)
+        + '<span class="muted">' + html(row.source_database || '—') + '</span></td>'
+        + '<td class="limit-range">' + html(formatLimitRange(row)) + '</td>'
+        + '<td><span class="ctrl-status s-' + (row.notuse ? '5' : '2') + '">' + (row.notuse ? '控制禁用' : '允许控制') + '</span></td>'
+        + '<td><span class="ctrl-ops"><button type="button" data-ctrl-edit="' + index + '">编辑</button>'
+        + '<button type="button" data-ctrl-delete="' + index + '">删除</button></span></td></tr>').join('')
+        || emptyRow(headers, '暂无控调映射，可点击右上角新增');
+    }
+    const pages = Math.max(1, Math.ceil(total / 100));
+    $('#ctrl-page-summary').textContent = '共 ' + total + ' 条控调记录';
+    $('#ctrl-page-number').textContent = ctrlPage + ' / ' + pages;
+    $('#ctrl-prev').disabled = ctrlPage <= 1;
+    $('#ctrl-next').disabled = ctrlPage >= pages;
+  }
+
+  async function loadControlHistory() {
+    if (!controlDispatchMode) return;
+    const data = await api('/api/control-history');
+    const items = data.items || [];
+    $('#ctrl-history-count').textContent = items.length ? '（最近 ' + items.length + ' 条）' : '（暂无记录）';
+    $('#ctrl-history-rows').innerHTML = items.map(row => '<tr><td>' + html(time(row.at))
+      + '</td><td>' + html(row.source === 'db_watch' ? '库监视' : 'Web')
+      + '</td><td class="name">' + html(row.device_name || row.model_table)
+      + '</td><td><code>' + html(row.control) + '</code></td><td><span class="ctrl-kind-tag ' + html(row.kind) + '">' + html((row.kind || '').toUpperCase())
+      + '</span></td><td>' + html(row.rtu_id == null ? '—' : row.rtu_id + ' / ' + row.pnt_no)
+      + '</td><td class="quantity-value">' + html(number(row.value))
+      + '</td><td><span class="ctrl-status s-' + html(row.cmd_status) + '">' + html(row.status_label)
+      + '</span></td><td class="wrap">' + html(row.detail || '—') + '</td></tr>').join('')
+      || '<tr><td colspan="9" class="empty">暂无控调流水</td></tr>';
+  }
+
+  async function loadControls() {
+    const req = ++ctrlSeq;
+    const params = new URLSearchParams({ page: ctrlPage, limit: 100 });
+    if ($('#ctrl-category').value) params.set('category', $('#ctrl-category').value);
+    if ($('#ctrl-table').value) params.set('table', $('#ctrl-table').value);
+    if (ctrlKind) params.set('kind', ctrlKind);
+    if (controlDispatchMode && $('#ctrl-status').value !== '') params.set('status', $('#ctrl-status').value);
+    if ($('#ctrl-search').value.trim()) params.set('q', $('#ctrl-search').value.trim());
+    const data = await api('/api/controls?' + params);
+    if (req !== ctrlSeq) return;
+    renderControlRows(data.items || [], data.total || 0, data.summary);
+    if (controlDispatchMode) await loadControlHistory();
+  }
+
+  async function triggerDispatch(row, targetValue) {
+    if (!row) return;
+    const isYk = row.kind === 'yk';
+    let parsedValue;
+    if (isYk) {
+      parsedValue = Number(targetValue);
+    } else {
+      const raw = String(targetValue ?? '').trim();
+      if (!raw) throw new Error('请输入有效的遥调设定值');
+      parsedValue = Number(raw);
+      if (!Number.isFinite(parsedValue)) throw new Error('遥调设定值必须为有限数值');
+      if (row.max_value != null && row.min_value != null && Number(row.max_value) > Number(row.min_value)) {
+        if (parsedValue > Number(row.max_value) || parsedValue < Number(row.min_value)) {
+          throw new Error('设定值 ' + parsedValue + ' 超出限值范围 [' + row.min_value + ', ' + row.max_value + ']');
+        }
+      }
+    }
+    const actionDesc = isYk
+      ? (parsedValue === 1 ? '合 / 启 (1)' : '分 / 停 (0)')
+      : (parsedValue + (row.unit ? ' ' + row.unit : ''));
+    const ok = await confirmDanger(
+      isYk ? '确认下发遥控指令' : '确认下发遥调指令',
+      '目标设备：' + row.device_name + '（' + row.model_table + ' #' + row.model_idx + '）\n'
+        + '控调属性：' + (row.label || row.control) + ' [' + row.control + '] · RTU ' + row.rtu_id + ' / 点号 ' + row.pnt_no + '\n'
+        + '下发目标值：' + actionDesc + '\n'
+        + '确认立即写入 scdfe_c 并下发？',
+      '确认下发',
+    );
+    if (!ok) return;
+    await api('/api/controls/' + row.control_id + '/dispatch', 'POST', { value: parsedValue });
+    ctrlDraftValues.delete(row.control_id);
+    await loadControls();
+  }
+
+  function openControlEditor(row) {
+    ctrlEditing = row || null;
+    error('#ctrl-editor-error', '');
+    $('#control-form').reset();
+    $('#ctrl-editor-title').textContent = ctrlEditing ? '编辑控调映射' : '新增控调映射';
+    $('#ctrl-edit-device').value = row?.device_id || devices[0]?.device_id || '';
+    $('#ctrl-edit-attr').value = row?.control || '';
+    $('#ctrl-edit-kind').value = row?.kind || ctrlKind || 'yk';
+    $('#ctrl-edit-min').value = row?.min_value ?? '';
+    $('#ctrl-edit-max').value = row?.max_value ?? '';
+    $('#ctrl-edit-notuse').checked = Boolean(row?.notuse);
+    $('#ctrl-edit-source').value = row?.source_database || catalog?.sources?.[0] || '';
+    $('#ctrl-edit-rtu').value = row?.rtu_id ?? '';
+    $('#ctrl-edit-point').value = row?.pnt_no ?? '';
+    $('#ctrl-source-rows').replaceChildren();
+    $('#ctrl-source-page').textContent = '';
+    $('#ctrl-source-message').textContent = '';
+    $('#ctrl-source-prev').disabled = true;
+    $('#ctrl-source-next').disabled = true;
+    ctrlSourcePage = 1;
+    ctrlSourceSeq += 1;
+    $('#control-editor').showModal();
+  }
+
+  async function findControlSource() {
+    const req = ++ctrlSourceSeq;
+    error('#ctrl-editor-error', '');
+    const kindVal = $('#ctrl-edit-kind').value;
+    const query = new URLSearchParams({
+      source_database: $('#ctrl-edit-source').value.trim(),
+      kind: kindVal,
+      q: $('#ctrl-source-search').value.trim(),
+      page: ctrlSourcePage,
+    });
+    try {
+      const data = await api('/api/source-points?' + query);
+      if (req !== ctrlSourceSeq) return;
+      $('#ctrl-source-rows').innerHTML = (data.items || []).map((row, index) => '<tr><td>' + html(row.rtu_id)
+        + ' / ' + html(row.pnt_no) + '</td><td class="name">' + html(row.name)
+        + '</td><td><button type="button" data-ctrl-src="' + index + '">选择</button></td></tr>').join('');
+      for (const btn of $('#ctrl-source-rows').querySelectorAll('[data-ctrl-src]')) {
+        btn.addEventListener('click', () => {
+          const item = data.items[Number(btn.dataset.ctrlSrc)];
+          $('#ctrl-edit-rtu').value = item.rtu_id;
+          $('#ctrl-edit-point').value = item.pnt_no;
+          if (!$('#ctrl-edit-attr').value && item.name && item.name.includes('.')) {
+            const guess = item.name.split('.').pop();
+            if (/^[a-z][a-z0-9_]{0,47}$/.test(guess)) $('#ctrl-edit-attr').value = guess;
+          }
+          if (kindVal === 'yt') {
+            if ($('#ctrl-edit-min').value === '' && item.eng_min != null) $('#ctrl-edit-min').value = item.eng_min;
+            if ($('#ctrl-edit-max').value === '' && item.eng_max != null) $('#ctrl-edit-max').value = item.eng_max;
+          }
+          $('#ctrl-source-message').textContent = '已选：' + item.name + ' · RTU ' + item.rtu_id + ' / 点号 ' + item.pnt_no;
+        });
+      }
+      $('#ctrl-source-message').textContent = '找到 ' + data.total + ' 个 ' + kindVal.toUpperCase() + ' 控调点';
+      $('#ctrl-source-page').textContent = ctrlSourcePage + ' / ' + Math.max(1, Math.ceil(data.total / 50));
+      $('#ctrl-source-prev').disabled = ctrlSourcePage <= 1;
+      $('#ctrl-source-next').disabled = ctrlSourcePage * 50 >= data.total;
+    } catch (exception) {
+      if (req === ctrlSourceSeq) error('#ctrl-editor-error', exception.message);
+    }
+  }
+
+  async function loadLogFiles() {
+    const data = await api('/api/logs/files');
+    const files = data.items || [];
+    const current = $('#log-file').value;
+    $('#log-file').innerHTML = option('', '全部小时文件 (' + files.length + ')')
+      + files.map(f => option(f.name, f.process + ' · ' + f.hour + ' (' + Math.max(1, Math.round(f.size / 1024)) + ' KB)')).join('');
+    if (files.some(f => f.name === current)) $('#log-file').value = current;
+  }
+
+  function renderLogRows() {
+    $('#log-rows').innerHTML = logItems.map(item => {
+      const proc = (item.filename || '').split('/').pop().replace(/-\d{8}-\d{2}\.log$/, '');
+      const lvl = item.level || 'INFO';
+      return '<tr><td>' + html(time(item.time))
+        + '</td><td><span class="log-lvl ' + html(lvl) + '">' + html(lvl) + '</span></td>'
+        + '<td>' + html(proc) + '</td>'
+        + '<td class="log-text">' + html(item.text) + '</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">暂无匹配的运行日志</td></tr>';
+  }
+
+  async function loadLogs({ append = false } = {}) {
+    const req = ++logSeq;
+    const params = new URLSearchParams({ limit: 300 });
+    if ($('#log-process').value) params.set('process', $('#log-process').value);
+    if ($('#log-level').value) params.set('level', $('#log-level').value);
+    if ($('#log-file').value) params.set('filename', $('#log-file').value);
+    if ($('#log-search').value.trim()) params.set('q', $('#log-search').value.trim());
+    if (append && logCursor) params.set('cursor', logCursor);
+    const data = await api('/api/logs/read?' + params);
+    if (req !== logSeq) return;
+    if (append) logItems = logItems.concat(data.items || []);
+    else logItems = data.items || [];
+    logCursor = data.next_cursor || null;
+    renderLogRows();
+    $('#log-meta').textContent = '已扫描 ' + (data.scanned_files || 0) + ' 个文件';
+    $('#log-summary').textContent = '当前展示 ' + logItems.length + ' 条日志';
+    $('#log-more').hidden = !data.has_more;
+  }
+
+  function exportLogs() {
+    if (!logItems.length) return;
+    const content = logItems.map(i => '[' + (i.filename || '') + '] ' + (i.text || '')).join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'scdfe_d-logs-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function init() {
     $('#overview').hidden = mode !== '/';
     $('#overview-stats').hidden = mode !== '/';
     $('#measure-panel').hidden = !deviceMode;
     $('#history-panel').hidden = mode !== '/history';
+    $('#control-panel').hidden = !controlMode;
+    $('#logs-panel').hidden = !logsMode;
     $('#definition-actions').hidden = !mappingMode;
     $('#parameter-actions').hidden = !parameterMode;
     $('#parameter-selection').hidden = !parameterMode;
     $('#live-refresh').hidden = !queryMode;
+    if (controlMode) {
+      $('#ctrl-status').hidden = !controlDispatchMode;
+      $('#ctrl-live-wrap').hidden = !controlDispatchMode;
+      $('#new-control').hidden = !controlMappingMode;
+      $('#control-history-drawer').hidden = !controlDispatchMode;
+      await loadControlCatalog();
+      await loadControls();
+      ready = true;
+      return;
+    }
+    if (logsMode) {
+      await loadLogFiles();
+      await loadLogs({ append: false });
+      ready = true;
+      return;
+    }
     if (!deviceMode) {
       await refresh();
       ready = true;
@@ -981,10 +1291,15 @@
     await refresh();
   }));
   $('#history-refresh').addEventListener('click', run(loadHistory));
-  for (const type of ['refreshes', 'changes']) {
-    $('#show-' + type).addEventListener('click', run(async () => {
+  for (const type of ['refreshes', 'changes', 'controls']) {
+    const btn = $('#show-' + type);
+    if (!btn) continue;
+    btn.addEventListener('click', run(async () => {
       historyMode = type;
-      for (const value of ['refreshes', 'changes']) $('#show-' + value).classList.toggle('active', value === type);
+      for (const value of ['refreshes', 'changes', 'controls']) {
+        const el = $('#show-' + value);
+        if (el) el.classList.toggle('active', value === type);
+      }
       await loadHistory();
     }));
   }
@@ -1193,11 +1508,197 @@
     }
   });
 
+  // 控调下发与控调定义事件绑定
+  const resetCtrlAndLoad = run(async () => { ctrlPage = 1; await loadControls(); });
+  $('#ctrl-category').addEventListener('change', resetCtrlAndLoad);
+  $('#ctrl-table').addEventListener('change', resetCtrlAndLoad);
+  $('#ctrl-status').addEventListener('change', resetCtrlAndLoad);
+  let ctrlTimer;
+  $('#ctrl-search').addEventListener('input', () => {
+    clearTimeout(ctrlTimer);
+    ctrlTimer = setTimeout(resetCtrlAndLoad, 250);
+  });
+  for (const type of ['', 'yk', 'yt']) {
+    $('#ctrl-tab-' + (type || 'all')).addEventListener('click', run(async () => {
+      ctrlKind = type;
+      for (const v of ['', 'yk', 'yt']) {
+        const b = $('#ctrl-tab-' + (v || 'all'));
+        b.classList.toggle('active', v === ctrlKind);
+        b.setAttribute('aria-pressed', String(v === ctrlKind));
+      }
+      ctrlPage = 1;
+      await loadControls();
+    }));
+  }
+  $('#ctrl-refresh').addEventListener('click', run(loadControls));
+  $('#ctrl-prev').addEventListener('click', run(async () => {
+    if (ctrlPage <= 1) return;
+    ctrlPage -= 1;
+    await loadControls();
+  }));
+  $('#ctrl-next').addEventListener('click', run(async () => {
+    ctrlPage += 1;
+    await loadControls();
+  }));
+  $('#new-control').addEventListener('click', () => {
+    if (!devices.length) error('#alert', '请先新增设备或导入模型');
+    else openControlEditor();
+  });
+  $('#control-rows').addEventListener('input', event => {
+    const input = event.target.closest('[data-ctrl-input]');
+    if (!input) return;
+    const row = ctrlRows[Number(input.dataset.ctrlInput)];
+    if (!row) return;
+    ctrlDraftValues.set(row.control_id, input.value);
+    const val = parseLimitInput(input.value);
+    const bad = Number.isNaN(val) || (
+      val !== null && row.max_value != null && row.min_value != null
+      && Number(row.max_value) > Number(row.min_value)
+      && (val > Number(row.max_value) || val < Number(row.min_value))
+    );
+    input.classList.toggle('limit-invalid', bad);
+  });
+  $('#control-rows').addEventListener('keydown', run(async event => {
+    if (event.key !== 'Enter') return;
+    const input = event.target.closest('[data-ctrl-input]');
+    if (!input) return;
+    event.preventDefault();
+    const row = ctrlRows[Number(input.dataset.ctrlInput)];
+    await triggerDispatch(row, input.value);
+  }));
+  $('#control-rows').addEventListener('click', run(async event => {
+    const ykBtn = event.target.closest('[data-yk]');
+    if (ykBtn) {
+      const row = ctrlRows[Number(ykBtn.dataset.yk)];
+      await triggerDispatch(row, Number(ykBtn.dataset.val));
+      return;
+    }
+    const ytBtn = event.target.closest('[data-yt-send]');
+    if (ytBtn) {
+      const idx = Number(ytBtn.dataset.ytSend);
+      const row = ctrlRows[idx];
+      const input = $('#control-rows').querySelector('[data-ctrl-input="' + idx + '"]');
+      await triggerDispatch(row, input ? input.value : row?.value);
+      return;
+    }
+    const editBtn = event.target.closest('[data-ctrl-edit]');
+    if (editBtn) {
+      openControlEditor(ctrlRows[Number(editBtn.dataset.ctrlEdit)]);
+      return;
+    }
+    const delBtn = event.target.closest('[data-ctrl-delete]');
+    if (delBtn) {
+      const row = ctrlRows[Number(delBtn.dataset.ctrlDelete)];
+      if (row && await confirmDanger(
+        '确认删除控调映射',
+        '删除 ' + row.device_name + ' 的 ' + row.control + '（' + row.kind.toUpperCase() + '）控调映射后不可恢复，确认删除？',
+        '确认删除',
+      )) {
+        await api('/api/controls/' + row.control_id, 'DELETE', { version: row.version });
+        await loadControls();
+      }
+    }
+  }));
+  for (const id of ['ctrl-editor-cancel', 'ctrl-editor-close']) {
+    $('#' + id).addEventListener('click', () => $('#control-editor').close());
+  }
+  $('#control-editor').addEventListener('close', () => { ctrlSourceSeq += 1; });
+  $('#ctrl-find-source').addEventListener('click', () => { ctrlSourcePage = 1; findControlSource(); });
+  $('#ctrl-edit-kind').addEventListener('change', () => {
+    ctrlSourcePage = 1;
+    ctrlSourceSeq += 1;
+    $('#ctrl-source-rows').replaceChildren();
+    $('#ctrl-source-page').textContent = '';
+    $('#ctrl-edit-rtu').value = '';
+    $('#ctrl-edit-point').value = '';
+  });
+  $('#ctrl-source-search').addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      ctrlSourcePage = 1;
+      findControlSource();
+    }
+  });
+  $('#ctrl-source-prev').addEventListener('click', () => {
+    if (ctrlSourcePage <= 1) return;
+    ctrlSourcePage -= 1;
+    findControlSource();
+  });
+  $('#ctrl-source-next').addEventListener('click', () => {
+    ctrlSourcePage += 1;
+    findControlSource();
+  });
+  $('#ctrl-browse-source').addEventListener('click', () => {
+    browserMode = 'ctrl-source';
+    if ($('#source-browser-title')) $('#source-browser-title').textContent = '选择目标 scdfe_c 数据库';
+    $('#source-browser').showModal();
+    const path = $('#ctrl-edit-source').value;
+    const slash = path.lastIndexOf('/');
+    browse(slash >= 0 ? path.slice(0, slash) : '.');
+  });
+  $('#control-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    error('#ctrl-editor-error', '');
+    $('#ctrl-editor-save').disabled = true;
+    try {
+      const minVal = parseLimitInput($('#ctrl-edit-min').value);
+      const maxVal = parseLimitInput($('#ctrl-edit-max').value);
+      const rangeErr = limitRangeError(maxVal, minVal);
+      if (rangeErr) {
+        error('#ctrl-editor-error', rangeErr);
+        return;
+      }
+      const data = {
+        device_id: Number($('#ctrl-edit-device').value),
+        control: $('#ctrl-edit-attr').value.trim(),
+        kind: $('#ctrl-edit-kind').value,
+        source_database: $('#ctrl-edit-source').value.trim(),
+        rtu_id: Number($('#ctrl-edit-rtu').value),
+        pnt_no: Number($('#ctrl-edit-point').value),
+        max_value: maxVal,
+        min_value: minVal,
+        notuse: Number($('#ctrl-edit-notuse').checked),
+      };
+      if (ctrlEditing) data.version = ctrlEditing.version;
+      await api('/api/controls' + (ctrlEditing ? '/' + ctrlEditing.control_id : ''), ctrlEditing ? 'PUT' : 'POST', data);
+      $('#control-editor').close();
+      await loadControls();
+    } catch (exception) {
+      error($('#control-editor').open ? '#ctrl-editor-error' : '#alert', exception.message);
+    } finally {
+      $('#ctrl-editor-save').disabled = false;
+    }
+  });
+
+  // 运行日志事件绑定
+  const reloadLogs = run(async () => { await loadLogs({ append: false }); });
+  $('#log-process').addEventListener('change', reloadLogs);
+  $('#log-level').addEventListener('change', reloadLogs);
+  $('#log-file').addEventListener('change', reloadLogs);
+  let logTimer;
+  $('#log-search').addEventListener('input', () => {
+    clearTimeout(logTimer);
+    logTimer = setTimeout(reloadLogs, 250);
+  });
+  $('#log-refresh').addEventListener('click', run(async () => {
+    await loadLogFiles();
+    await loadLogs({ append: false });
+  }));
+  $('#log-more').addEventListener('click', run(async () => {
+    await loadLogs({ append: true });
+  }));
+  $('#log-export').addEventListener('click', exportLogs);
+
   run(init)();
   const update = run(refresh);
   setInterval(async () => {
     if (!ready || polling || collectorActionPending || document.hidden || document.querySelector('dialog[open]')) return;
-    if (mode !== '/' && !(queryMode && $('#auto-refresh').checked)) return;
+    if (controlDispatchMode && document.activeElement?.matches('.ctrl-field')) return;
+    const autoOn = mode === '/'
+      || (queryMode && $('#auto-refresh').checked)
+      || (controlDispatchMode && $('#ctrl-auto-refresh').checked)
+      || (logsMode && $('#log-auto-refresh').checked);
+    if (!autoOn) return;
     polling = true;
     try {
       await update();

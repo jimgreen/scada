@@ -102,6 +102,43 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
                     raise ApiError(400, "删除量测需要正整数 version 字段")
                 store.delete_measurement(int(parts[2]), body["version"])
                 return self._json(200, dict(deleted=True))
+        if parts == ["api", "controls"]:
+            if method == "GET":
+                return self._json(200, store.controls(query))
+            if method == "POST":
+                return self._json(201, dict(item=store.save_control(self._body())))
+        if len(parts) == 3 and parts[:2] == ["api", "controls"]:
+            if method == "PUT":
+                return self._json(
+                    200, dict(item=store.save_control(self._body(), int(parts[2])))
+                )
+            if method == "DELETE":
+                body = self._body()
+                if "version" not in body or type(body["version"]) is not int or body["version"] < 1:
+                    raise ApiError(400, "删除控调映射需要正整数 version 字段")
+                store.delete_control(int(parts[2]), body["version"])
+                return self._json(200, dict(deleted=True))
+        if (
+            len(parts) == 4
+            and parts[:2] == ["api", "controls"]
+            and parts[3] == "dispatch"
+            and method == "POST"
+        ):
+            body = self._body()
+            if "value" not in body:
+                raise ApiError(400, "下发指令需要 value 字段")
+            result = store.dispatch_control(int(parts[2]), body["value"], source="web")
+            if collector.running:
+                collector._wake.set()
+            return self._json(200, result)
+        if parts == ["api", "control-history"] and method == "GET":
+            return self._json(200, store.control_history())
+        if parts == ["api", "logs", "files"] and method == "GET":
+            return self._json(
+                200, dict(items=store.list_log_files(record=query.get("record", "runtime")))
+            )
+        if parts == ["api", "logs", "read"] and method == "GET":
+            return self._json(200, store.read_logs(query))
         if parts == ["api", "history"] and method == "GET":
             return self._json(200, store.history())
         if parts == ["api", "collector", "interval"] and method == "PUT":
@@ -159,7 +196,10 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
                 "/measurements": "measurements.html",
                 "/parameters": "parameters.html",
                 "/mappings": "mappings.html",
+                "/controls": "controls.html",
+                "/control-mappings": "control-mappings.html",
                 "/history": "history.html",
+                "/logs": "logs.html",
             }
             if url.path in pages:
                 page_name = pages[url.path]

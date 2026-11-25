@@ -58,8 +58,22 @@ def _same_value(a, b):
 
 from core.rtdb_schema import RTDB_METADATA_TABLES, sync_embedded_schema
 from core.scdfe_control import InstanceLock
+from core.scdfe_logger import ScdfeLogger
+from core.log_paths import log_entries
+from core.log_query import LOG_PATTERNS, search_logs
 from core.common import ApiError
 from scdfe_d.measurement_layout import (
+    CONTROL_META,
+    CTRL_STATUS_DISABLED,
+    CTRL_STATUS_DISP_MENU,
+    CTRL_STATUS_DISP_TYPE,
+    CTRL_STATUS_FAILED,
+    CTRL_STATUS_IDLE,
+    CTRL_STATUS_LABELS,
+    CTRL_STATUS_PENDING,
+    CTRL_STATUS_SUCCESS,
+    CTRL_STATUS_UNCONFIGURED,
+    CTRL_SUFFIXES,
     EXTENSION_METRICS,
     LEGACY_SUFFIXES,
     QUAL_COMM_ERROR,
@@ -72,6 +86,8 @@ from scdfe_d.measurement_layout import (
     RESERVED_METRIC_SUFFIXES,
     SUFFIXES,
     UNBOUND_PROFILES,
+    control_columns,
+    control_order,
     measurement_columns,
     metric_order,
 )
@@ -232,31 +248,17 @@ def _quote_col(name):
     return '"' + name.replace('"', '""') + '"'
 
 
-def _match_suffix_layout(rest, suffixes):
-    """尝试按指定后缀元组解析设备宽表剩余列，成功返回 [(metric, kind), ...]，否则返回 None。"""
-    step = len(suffixes)
-    if len(rest) % step != 0:
-        return None
-    metrics = []
-    for offset in range(0, len(rest), step):
-        group = rest[offset : offset + step]
-        metric = group[0][1]
-        if (
-            not _METRIC_NAME_RE.fullmatch(metric)
-            or metric in {"idx", "name"}
-            or metric.endswith(RESERVED_METRIC_SUFFIXES)
-        ):
-            return None
-        if [row[1] for row in group] != [metric + suffix for suffix in suffixes]:
-            return None
-        col_type = str(group[0][2] or "").upper()
-        kind = "yx" if col_type == "INTEGER" else "yc"
-        metrics.append((metric, kind))
-    return metrics
+def _parse_device_table_layout(columns_info):
+    """按列组顺序解析设备宽表（支持 10 列量测、旧版 8 列量测与 9 列控调混合共存）。
 
-
-def parse_device_table_columns(columns_info):
-    """校验并解析设备宽表列定义（兼容现行 10 列与旧版 8 列），返回 [(metric, kind), ...]。"""
+    成功返回字典：
+        metrics: [(metric, 'yc'|'yx'), ...]
+        controls: [(control, 'yk'|'yt'), ...]
+        metric_offsets: {metric: col_index}
+        control_offsets: {control: col_index}
+        has_legacy: bool（是否包含旧版 8 列量测分组）
+    结构非法时返回 None。
+    """
     if len(columns_info) < 2:
         return None
     if columns_info[0][1] != "idx" or columns_info[1][1] != "name":
@@ -264,32 +266,113 @@ def parse_device_table_columns(columns_info):
     if not columns_info[0][5]:
         return None
     rest = columns_info[2:]
-    if not rest:
-        return []
-    matched = _match_suffix_layout(rest, SUFFIXES)
-    if matched is not None:
-        return matched
-    return _match_suffix_layout(rest, LEGACY_SUFFIXES)
+    metrics = []
+    controls = []
+    metric_offsets = {}
+    control_offsets = {}
+    seen_names = set()
+    has_legacy = False
+    pos = 0
+    total = len(rest)
+    step_cur = len(SUFFIXES)
+    step_legacy = len(LEGACY_SUFFIXES)
+    step_ctrl = len(CTRL_SUFFIXES)
+
+    while pos < total:
+        base_col = rest[pos]
+        attr = base_col[1]
+        if (
+            not _METRIC_NAME_RE.fullmatch(attr)
+            or attr in {"idx", "name"}
+            or attr in seen_names
+            or attr.endswith(RESERVED_METRIC_SUFFIXES)
+        ):
+            return None
+        if pos + 1 >= total:
+            return None
+        second_name = rest[pos + 1][1]
+        col_type = str(base_col[2] or "").upper()
+        if second_name == attr + "_qual":
+            if pos + step_cur <= total and [
+                r[1] for r in rest[pos : pos + step_cur]
+            ] == [attr + s for s in SUFFIXES]:
+                kind = "yx" if col_type == "INTEGER" else "yc"
+                metrics.append((attr, kind))
+                metric_offsets[attr] = 2 + pos
+                seen_names.add(attr)
+                pos += step_cur
+            elif pos + step_legacy <= total and [
+                r[1] for r in rest[pos : pos + step_legacy]
+            ] == [attr + s for s in LEGACY_SUFFIXES]:
+                kind = "yx" if col_type == "INTEGER" else "yc"
+                metrics.append((attr, kind))
+                metric_offsets[attr] = 2 + pos
+                seen_names.add(attr)
+                has_legacy = True
+                pos += step_legacy
+            else:
+                return None
+        elif second_name == attr + "_cmd_time":
+            if pos + step_ctrl <= total and [
+                r[1] for r in rest[pos : pos + step_ctrl]
+            ] == [attr + s for s in CTRL_SUFFIXES]:
+                kind = "yk" if col_type == "INTEGER" else "yt"
+                controls.append((attr, kind))
+                control_offsets[attr] = 2 + pos
+                seen_names.add(attr)
+                pos += step_ctrl
+            else:
+                return None
+        else:
+            return None
+
+    return dict(
+        metrics=metrics,
+        controls=controls,
+        metric_offsets=metric_offsets,
+        control_offsets=control_offsets,
+        has_legacy=has_legacy,
+    )
+
+
+def parse_device_table_schema(columns_info):
+    """解析设备宽表，返回 (metrics, controls)，结构非法时返回 None。"""
+    layout = _parse_device_table_layout(columns_info)
+    if layout is None:
+        return None
+    return layout["metrics"], layout["controls"]
+
+
+def parse_device_table_columns(columns_info):
+    """校验并解析设备宽表量测列定义（兼容现行 10 列、旧版 8 列及含 9 列控调混合表），返回 [(metric, kind), ...]。"""
+    layout = _parse_device_table_layout(columns_info)
+    if layout is None:
+        return None
+    return layout["metrics"]
 
 
 def table_has_limit_columns(columns_info):
-    """检查设备宽表是否已采用含 _max/_min 的 10 列标准结构。"""
-    if len(columns_info) <= 2:
-        return True
-    return _match_suffix_layout(columns_info[2:], SUFFIXES) is not None
+    """检查设备宽表是否已采用含 _max/_min 的 10 列标准量测结构（兼容混合控调列）。"""
+    layout = _parse_device_table_layout(columns_info)
+    return layout is not None and not layout["has_legacy"]
 
 
 class _DeviceSchemaCatalog:
-    """为 RTDB 嵌入元数据提供设备宽表量测状态列（*_qual）的菜单选项（N选1）显示提示。"""
+    """为 RTDB 嵌入元数据提供量测状态列（*_qual）和控调状态列（*_cmd_status）的菜单选项显示提示。"""
 
-    def __init__(self, table_schemas):
-        self._schemas = dict(table_schemas)
+    def __init__(self, table_layouts):
+        self._layouts = {}
+        for item in table_layouts:
+            if len(item) == 2:
+                self._layouts[item[0]] = (item[1], ())
+            else:
+                self._layouts[item[0]] = (item[1], item[2])
 
     def names(self):
-        return list(self._schemas.keys())
+        return list(self._layouts.keys())
 
     def get(self, table_name):
-        metrics = self._schemas.get(table_name, ())
+        metrics, controls = self._layouts.get(table_name, ((), ()))
         columns = [
             {
                 "eng_name": f"{metric}_qual",
@@ -299,13 +382,22 @@ class _DeviceSchemaCatalog:
             }
             for metric, _ in metrics
         ]
+        columns.extend(
+            {
+                "eng_name": f"{ctrl}_cmd_status",
+                "data_type": "int",
+                "disp_type": CTRL_STATUS_DISP_TYPE,
+                "disp_menu": CTRL_STATUS_DISP_MENU,
+            }
+            for ctrl, _ in controls
+        )
         return {"head": {}, "columns": columns}
 
 
 def _sync_device_rtdb_schema(con):
-    """同步全部设备宽表的 RTDB 嵌入元数据，确保所有量测状态列配置为菜单类型（N选1）。"""
-    discovered = discover_device_tables(con)
-    dev_tables = [t for t, _ in discovered]
+    """同步全部设备宽表的 RTDB 嵌入元数据，确保所有量测与控调状态列配置为菜单类型（N选1）。"""
+    discovered = discover_device_table_layouts(con)
+    dev_tables = [t for t, *_ in discovered]
     catalog = _DeviceSchemaCatalog(discovered)
     sync_embedded_schema(con, catalog=catalog, include_tables=dev_tables)
     return dev_tables
@@ -323,8 +415,11 @@ def _is_rtdb_companion_table(name):
     )
 
 
-def discover_device_tables(con):
-    """发现库内全部合法设备宽表，返回有序列表 [(table_name, [(metric, kind), ...]), ...]。"""
+def discover_device_table_layouts(con):
+    """发现库内全部合法设备宽表及其完整列组布局。
+
+    返回有序列表：[(table, metrics, controls, metric_offsets, control_offsets), ...]。
+    """
     all_tables = [
         row[0]
         for row in con.execute(
@@ -340,10 +435,23 @@ def discover_device_tables(con):
         ):
             continue
         info = con.execute(f'PRAGMA table_info("{table}")').fetchall()
-        metrics = parse_device_table_columns(info)
-        if metrics is not None:
-            result.append((table, metrics))
+        layout = _parse_device_table_layout(info)
+        if layout is not None:
+            result.append(
+                (
+                    table,
+                    layout["metrics"],
+                    layout["controls"],
+                    layout["metric_offsets"],
+                    layout["control_offsets"],
+                )
+            )
     return result
+
+
+def discover_device_tables(con):
+    """发现库内全部合法设备宽表，返回有序列表 [(table_name, [(metric, kind), ...]), ...]。"""
+    return [(table, metrics) for table, metrics, _, _, _ in discover_device_table_layouts(con)]
 
 
 def validate_database(path):
@@ -504,12 +612,27 @@ class DeviceStore:
         self._id_to_meas = {}
         self._next_meas_id = 1
         self._versions = {}
+        self._ctrl_ids = {}
+        self._id_to_ctrl = {}
+        self._next_ctrl_id = 1
+        self._ctrl_versions = {}
         self._runtime_meta = {}  # (table, idx, metric) -> {valid, reason, collected_at}
         self._last_bound_points = {}  # (table, idx, metric) -> (rtu_id, pnt_no)
         self._refresh_seq = 0
         self._refresh_history = deque(maxlen=MAX_HISTORY_ITEMS)
         self._change_history = deque(maxlen=MAX_HISTORY_ITEMS)
-        self._schema_cache = None  # (schema_version, [(table, [(metric, kind), ...])])
+        self._control_seq = 0
+        self._control_history = deque(maxlen=MAX_HISTORY_ITEMS)
+        self._control_baseline = {}  # (table, idx, control) -> (value, cmd_time)
+        self._control_baseline_ready = False
+        self._pending_controls = {}  # (table, idx, control) -> dict(...)
+        self._control_ack_timeout = 15.0
+        self._control_poll_interval = 0.25
+        self._log_lock = threading.Lock()
+        self._control_logger = None
+        self._collector_logger = None
+        self.log_dir = self.db_path.parent / "logs"
+        self._schema_cache = None  # (schema_version, layouts)
         self._overview_cache = None  # (cache_key, overview_dict)
 
         existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
@@ -534,20 +657,26 @@ class DeviceStore:
 
     @staticmethod
     def _upgrade_legacy_device_tables(con):
-        """将旧版 8 列设备宽表无损升级为含 _max/_min 的 10 列标准分组结构。"""
+        """将旧版 8 列设备宽表无损升级为含 _max/_min 的 10 列标准分组结构，同时原样保留控调列组。"""
         upgraded = []
-        for table, metrics in discover_device_tables(con):
+        for table, metrics, controls, _, _ in discover_device_table_layouts(con):
             quoted = _quote_table(table)
             info = con.execute(f"PRAGMA table_info({quoted})").fetchall()
             if table_has_limit_columns(info):
                 continue
+            existing_col_names = {r[1] for r in info}
             keep_cols = ["idx", "name"]
             defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
             for metric, kind in metrics:
                 for col, col_type, default in measurement_columns(metric, kind):
                     defs.append(f'"{col}" {col_type}{default}')
-                for suf in LEGACY_SUFFIXES:
-                    keep_cols.append(metric + suf)
+                    if col in existing_col_names:
+                        keep_cols.append(col)
+            for ctrl, kind in controls:
+                for col, col_type, default in control_columns(ctrl, kind):
+                    defs.append(f'"{col}" {col_type}{default}')
+                    if col in existing_col_names:
+                        keep_cols.append(col)
             tmp_name = f"__upgrade_limits_{table}"
             tmp_quoted = f'"{tmp_name}"'
             cols_sql = ", ".join(_quote_col(c) for c in keep_cols)
@@ -583,6 +712,14 @@ class DeviceStore:
             (QUAL_DISP_TYPE, QUAL_DISP_MENU),
         ).fetchone()
         if bad_qual_meta is not None:
+            return False
+        bad_ctrl_meta = con.execute(
+            "SELECT 1 FROM rtdb_schema_columns "
+            "WHERE eng_name LIKE '%\\_cmd\\_status' ESCAPE '\\' "
+            "AND (disp_type != ? OR disp_menu != ?) LIMIT 1",
+            (CTRL_STATUS_DISP_TYPE, CTRL_STATUS_DISP_MENU),
+        ).fetchone()
+        if bad_ctrl_meta is not None:
             return False
         return True
 
@@ -721,21 +858,31 @@ class DeviceStore:
     def _audit(self, _con, entity, key, before, after):
         self._record_change(entity, key, before, after)
 
-    def _get_table_schemas(self, con):
-        """按 schema_version 缓存所有设备宽表结构 [(table, [(metric, kind), ...]), ...]。"""
+    def _get_table_layouts(self, con):
+        """按 schema_version 缓存所有设备宽表完整布局 [(table, metrics, controls, metric_offsets, control_offsets), ...]。"""
         schema_ver = con.execute("PRAGMA schema_version").fetchone()[0]
         with self._mutex:
             if self._schema_cache is not None and self._schema_cache[0] == schema_ver:
                 return self._schema_cache[1]
-        schemas = discover_device_tables(con)
+        layouts = discover_device_table_layouts(con)
         with self._mutex:
-            self._schema_cache = (schema_ver, schemas)
-        return schemas
+            self._schema_cache = (schema_ver, layouts)
+        return layouts
+
+    def _get_table_schemas(self, con):
+        """兼容旧调用：返回 [(table, [(metric, kind), ...]), ...]。"""
+        return [(tbl, metrics) for tbl, metrics, _, _, _ in self._get_table_layouts(con)]
 
     def table_metrics(self, con, table):
-        for tbl, metrics in self._get_table_schemas(con):
+        for tbl, metrics, _, _, _ in self._get_table_layouts(con):
             if tbl == table:
                 return metrics
+        return None
+
+    def table_controls(self, con, table):
+        for tbl, _, controls, _, _ in self._get_table_layouts(con):
+            if tbl == table:
+                return controls
         return None
 
     def table_column_types(self, con, table):
@@ -1097,20 +1244,19 @@ class DeviceStore:
 
     def _scan_bindings(self, con):
         """扫描全部设备宽表的全部量测槽位（含无配置槽位），提取配置、当前值与上下限。"""
-        schemas = self._get_table_schemas(con)
+        layouts = self._get_table_layouts(con)
         cur = con.cursor()
         cur.row_factory = None
         bindings = []
         requested_sets = defaultdict(set)
-        step = len(SUFFIXES)
-        for table, metrics in schemas:
+        for table, metrics, _, metric_offsets, _ in layouts:
             if not metrics:
                 continue
             quoted = _quote_table(table)
             for row in cur.execute(f"SELECT * FROM {quoted}"):
                 idx = row[0]
-                base = 2
                 for metric, kind in metrics:
+                    base = metric_offsets[metric]
                     rtu_raw = row[base + 6]
                     pnt_raw = row[base + 7]
                     max_val = row[base + 8]
@@ -1138,7 +1284,6 @@ class DeviceStore:
                     )
                     if rtu_i is not None and pnt_i is not None:
                         requested_sets[kind].add((rtu_i, pnt_i))
-                    base += step
         requested = {k: frozenset(pts) for k, pts in requested_sets.items() if pts}
         return bindings, requested
 
@@ -1507,8 +1652,8 @@ class DeviceStore:
 
     def source_points(self, query):
         kind = query.get("kind", "yc")
-        if kind not in ("yc", "yx"):
-            raise ApiError(400, "仅支持遥测 YC、遥信 YX")
+        if kind not in ("yc", "yx", "yk", "yt"):
+            raise ApiError(400, "仅支持遥测 YC、遥信 YX、遥控 YK、遥调 YT")
         where, args = [], []
         if query.get("rtu_id"):
             where.append("rtu_id=?")
@@ -1519,33 +1664,62 @@ class DeviceStore:
         clause = " WHERE " + " AND ".join(where) if where else ""
         page = max(1, int(query.get("page", 1)))
         with self.source(query.get("source_database") or None) as con:
+            table = f"fes_{kind}_define"
+            cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+            if kind in ("yk", "yt"):
+                if not {"rtu_id", "pnt_no", "name", "value", "status", "cmd_time", "cmd_handle_time"} <= cols:
+                    raise ApiError(400, f"源库缺少 {table} 表或必要控调字段")
+                select_fields = ["rtu_id", "pnt_no", "name", "value", "status", "cmd_time", "cmd_handle_time"]
+                if "man_disable" in cols:
+                    select_fields.append("man_disable")
+                if "auto_disable" in cols:
+                    select_fields.append("auto_disable")
+                if "eng_max" in cols:
+                    select_fields.append("eng_max")
+                if "eng_min" in cols:
+                    select_fields.append("eng_min")
+                select_sql = ",".join(select_fields)
+            else:
+                select_sql = "rtu_id,pnt_no,name,value,status,refresh_time"
             total = con.execute(
-                f"SELECT count(*) FROM fes_{kind}_define" + clause, args
+                f"SELECT count(*) FROM {table}" + clause, args
             ).fetchone()[0]
             rows = con.execute(
-                f"SELECT rtu_id,pnt_no,name,value,status,refresh_time FROM fes_{kind}_define"
+                f"SELECT {select_sql} FROM {table}"
                 + clause
                 + " ORDER BY rtu_id,pnt_no LIMIT 50 OFFSET ?",
                 args + [(page - 1) * 50],
             ).fetchall()
         return dict(items=[dict(r) for r in rows], total=total, page=page, limit=50)
 
-    def _ensure_device_table(self, con, table, initial_metrics=(), *, sync_schema=True):
-        """确保设备宽表存在并包含指定量测列组。"""
+    def _ensure_device_table(
+        self, con, table, initial_metrics=(), *, initial_controls=(), sync_schema=True
+    ):
+        """确保设备宽表存在并包含指定的量测列组（10 列）及控调列组（9 列）。"""
         quoted = _quote_table(table)
         existing = con.execute(f"PRAGMA table_info({quoted})").fetchall()
         schema_changed = False
         if not existing:
             metrics = sorted(initial_metrics, key=metric_order)
+            controls = sorted(initial_controls, key=control_order)
+            m_names = {m for m, _ in metrics}
+            c_names = {c for c, _ in controls}
+            if m_names & c_names:
+                raise ApiError(400, f"同一设备表的量测与控调属性名不能冲突：{table}")
             defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
             for metric, kind in metrics:
                 for col, col_type, default in measurement_columns(metric, kind):
                     defs.append(f'"{col}" {col_type}{default}')
+            for ctrl, kind in controls:
+                for col, col_type, default in control_columns(ctrl, kind):
+                    defs.append(f'"{col}" {col_type}{default}')
             con.execute(f"CREATE TABLE {quoted} ({', '.join(defs)})")
             schema_changed = True
-        elif initial_metrics:
+        else:
             existing_cols = {r[1]: str(r[2] or "").upper() for r in existing}
             for metric, kind in sorted(initial_metrics, key=metric_order):
+                if metric + "_cmd_time" in existing_cols:
+                    raise ApiError(400, f"属性名已被控调字段占用：{table}.{metric}")
                 if metric in existing_cols:
                     expected_type = "INTEGER" if kind == "yx" else "REAL"
                     if existing_cols[metric] != expected_type:
@@ -1553,6 +1727,19 @@ class DeviceStore:
                     continue
                 for col, col_type, default in measurement_columns(metric, kind):
                     con.execute(f'ALTER TABLE {quoted} ADD COLUMN "{col}" {col_type}{default}')
+                    existing_cols[col] = col_type
+                schema_changed = True
+            for ctrl, kind in sorted(initial_controls, key=control_order):
+                if ctrl + "_qual" in existing_cols:
+                    raise ApiError(400, f"属性名已被量测字段占用：{table}.{ctrl}")
+                if ctrl in existing_cols:
+                    expected_type = "INTEGER" if kind == "yk" else "REAL"
+                    if existing_cols[ctrl] != expected_type:
+                        raise ApiError(400, f"同一设备表的控调类型必须一致：{table}.{ctrl}")
+                    continue
+                for col, col_type, default in control_columns(ctrl, kind):
+                    con.execute(f'ALTER TABLE {quoted} ADD COLUMN "{col}" {col_type}{default}')
+                    existing_cols[col] = col_type
                 schema_changed = True
         if schema_changed and sync_schema:
             _sync_device_rtdb_schema(con)
@@ -1727,8 +1914,7 @@ class DeviceStore:
             con.execute("BEGIN")
             cur = con.cursor()
             cur.row_factory = None
-            step = len(SUFFIXES)
-            for table, metrics in self._get_table_schemas(con):
+            for table, metrics, _, metric_offsets, _ in self._get_table_layouts(con):
                 cat = category_for(table)
                 if cat_filter and cat != cat_filter:
                     continue
@@ -1740,8 +1926,8 @@ class DeviceStore:
                     did = self.device_id_for(table, idx)
                     bound_cnt = 0
                     valid_cnt = 0
-                    base = 2
                     for metric, _ in metrics:
+                        base = metric_offsets[metric]
                         rtu, pnt = row[base + 6], row[base + 7]
                         if _is_valid_point_config(rtu, pnt):
                             bound_cnt += 1
@@ -1756,7 +1942,6 @@ class DeviceStore:
                                 meta,
                             )
                             valid_cnt += valid
-                        base += step
                     items.append(
                         dict(
                             device_id=did,
@@ -1801,8 +1986,7 @@ class DeviceStore:
                 return dict(items=[], total=0, page=page, limit=limit)
             cur = con.cursor()
             cur.row_factory = None
-            step = len(SUFFIXES)
-            for table, metrics in self._get_table_schemas(con):
+            for table, metrics, _, metric_offsets, _ in self._get_table_layouts(con):
                 if filter_table and table != filter_table:
                     continue
                 if target_dev is not None and table != target_dev[0]:
@@ -1823,15 +2007,13 @@ class DeviceStore:
                     idx, dev_name = row[0], row[1]
                     dev_name_lower = str(dev_name).lower() if kw else ""
                     did = None
-                    base = 2
                     for metric, kind in metrics:
+                        base = metric_offsets[metric]
                         rtu, pnt = row[base + 6], row[base + 7]
                         if _is_valid_point_config(rtu, pnt):
                             if filter_kind and kind != filter_kind:
-                                base += step
                                 continue
                             if kw and kw not in metric.lower() and kw not in dev_name_lower:
-                                base += step
                                 continue
                             val = row[base]
                             qual = row[base + 1]
@@ -1842,7 +2024,6 @@ class DeviceStore:
                                 val, qual, stamp, notuse, rtu, pnt, meta
                             )
                             if only_invalid and valid:
-                                base += step
                                 continue
                             # 仅对落入当前分页窗口的条目构造完整字典，避免全量物化数万条记录。
                             if start <= total < end:
@@ -1890,7 +2071,6 @@ class DeviceStore:
                                     )
                                 )
                             total += 1
-                        base += step
         return dict(
             items=page_items,
             total=total,
@@ -2127,23 +2307,17 @@ class DeviceStore:
             (QUAL_UNCONFIGURED, idx),
         )
 
-    def _prune_unused_metric_column(self, con, table, metric) -> bool:
-        """若该表所有设备均未绑定该指标且不在预设未绑定清单中，移除该 8 列并同步 RTDB 元数据。"""
-        profile = UNBOUND_PROFILES.get(table)
-        if profile and (metric in profile[0] or metric in profile[1]):
-            return False
+    def _rebuild_device_table(self, con, table, keep_metrics, keep_controls):
+        """按保留的量测列组与控调列组无损重建设备宽表，并同步 RTDB 元数据。"""
         quoted = _quote_table(table)
-        still_used = con.execute(
-            f"SELECT 1 FROM {quoted} WHERE {_quote_col(metric + '_rtu')} IS NOT NULL OR {_quote_col(metric + '_pnt')} IS NOT NULL LIMIT 1"
-        ).fetchone()
-        if still_used:
-            return False
-        metrics = self.table_metrics(con, table) or []
-        remaining = [(m, k) for m, k in metrics if m != metric]
         keep_cols = ["idx", "name"]
         defs = ["idx INTEGER PRIMARY KEY", "name TEXT NOT NULL"]
-        for m, k in remaining:
+        for m, k in keep_metrics:
             for col, col_type, default in measurement_columns(m, k):
+                keep_cols.append(col)
+                defs.append(f'"{col}" {col_type}{default}')
+        for c, k in keep_controls:
+            for col, col_type, default in control_columns(c, k):
                 keep_cols.append(col)
                 defs.append(f'"{col}" {col_type}{default}')
         tmp_name = f"__rebuild_{table}"
@@ -2154,6 +2328,22 @@ class DeviceStore:
         con.execute(f"DROP TABLE {quoted}")
         con.execute(f"ALTER TABLE {tmp_quoted} RENAME TO {quoted}")
         _sync_device_rtdb_schema(con)
+
+    def _prune_unused_metric_column(self, con, table, metric) -> bool:
+        """若该表所有设备均未绑定该指标且不在预设未绑定清单中，移除该 10 列并原样保留所有控调列组。"""
+        profile = UNBOUND_PROFILES.get(table)
+        if profile and (metric in profile[0] or metric in profile[1]):
+            return False
+        quoted = _quote_table(table)
+        still_used = con.execute(
+            f"SELECT 1 FROM {quoted} WHERE {_quote_col(metric + '_rtu')} IS NOT NULL OR {_quote_col(metric + '_pnt')} IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if still_used:
+            return False
+        metrics = self.table_metrics(con, table) or []
+        controls = self.table_controls(con, table) or []
+        remaining = [(m, k) for m, k in metrics if m != metric]
+        self._rebuild_device_table(con, table, remaining, controls)
         return True
 
     def delete_measurement(self, measurement_id, version=None):
@@ -2206,13 +2396,14 @@ class DeviceStore:
             device_count = 0
             bound_count = 0
             valid_count = 0
+            control_count = 0
+            control_pending = 0
             cur = con.cursor()
             cur.row_factory = None
-            step = len(SUFFIXES)
-            for table, metrics in self._get_table_schemas(con):
+            for table, metrics, controls, metric_offsets, control_offsets in self._get_table_layouts(con):
                 quoted = _quote_table(table)
                 cat = category_for(table)
-                if not metrics:
+                if not metrics and not controls:
                     cnt = cur.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]
                     device_count += cnt
                     categories_map[cat] += cnt
@@ -2221,8 +2412,8 @@ class DeviceStore:
                     idx = row[0]
                     device_count += 1
                     categories_map[cat] += 1
-                    base = 2
                     for metric, _ in metrics:
+                        base = metric_offsets[metric]
                         rtu, pnt = row[base + 6], row[base + 7]
                         if _is_valid_point_config(rtu, pnt):
                             bound_count += 1
@@ -2237,7 +2428,13 @@ class DeviceStore:
                                 meta,
                             )
                             valid_count += valid
-                        base += step
+                    for ctrl, _ in controls:
+                        cbase = control_offsets[ctrl]
+                        crtu, cpnt = row[cbase + 5], row[cbase + 6]
+                        if _is_valid_point_config(crtu, cpnt):
+                            control_count += 1
+                            if row[cbase + 2] == CTRL_STATUS_PENDING:
+                                control_pending += 1
         with self._mutex:
             last = dict(self._refresh_history[0]) if self._refresh_history else None
             interval = self._interval_seconds
@@ -2247,6 +2444,8 @@ class DeviceStore:
                     device_measurement=bound_count,
                     scada_point_mapping=bound_count,
                     valid=valid_count,
+                    control=control_count,
+                    control_pending=control_pending,
                 ),
                 last_refresh=last,
                 categories=[
@@ -2265,7 +2464,1266 @@ class DeviceStore:
             return dict(
                 refreshes=[dict(r) for r in self._refresh_history],
                 changes=[dict(r) for r in self._change_history],
+                controls=[dict(r) for r in self._control_history],
             )
+
+    # ------------------------------------------------------------------
+    # 运行日志写入与查询（scdfe_d-control / scdfe_d-collector）
+    # ------------------------------------------------------------------
+
+    def _get_logger(self, role):
+        with self._log_lock:
+            if role == "control":
+                if self._control_logger is None:
+                    self._control_logger = ScdfeLogger(
+                        self.log_dir, process_name="scdfe_d-control"
+                    )
+                return self._control_logger
+            if self._collector_logger is None:
+                self._collector_logger = ScdfeLogger(
+                    self.log_dir, process_name="scdfe_d-collector"
+                )
+            return self._collector_logger
+
+    def _emit_file_log(self, role, level, message):
+        """安全写入按小时轮转运行日志，任何磁盘异常不阻断实时业务。"""
+        try:
+            logger = self._get_logger(role)
+            if level == "WARNING":
+                logger.alarm(message)
+            elif level == "ERROR":
+                logger.error(message)
+            elif level == "PROCESS":
+                logger.process(message)
+            else:
+                logger.normal(message)
+        except Exception:
+            LOG.debug("failed to emit scdfe_d file log (%s): %s", role, message, exc_info=True)
+
+    def list_log_files(self, *, record="runtime"):
+        """枚举当前设备库同级 logs 目录下的全部 scdfe_d 日志文件。"""
+        if record not in ("runtime", "packet"):
+            raise ApiError(400, "记录类型无效")
+        root = Path(self.log_dir).resolve()
+        if not root.is_dir():
+            return []
+        pattern = LOG_PATTERNS["d"]
+        items = []
+        for entry, relative_name in log_entries(root, "scdfe_d-"):
+            match = pattern.fullmatch(entry.name)
+            if match is None:
+                continue
+            try:
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            items.append(
+                dict(
+                    name=relative_name,
+                    process=match.group("process"),
+                    hour=match.group("hour"),
+                    size=stat.st_size,
+                    modified_at=int(stat.st_mtime * 1000),
+                )
+            )
+        items.sort(key=lambda item: (item["modified_at"], item["name"]), reverse=True)
+        return items
+
+    def read_logs(self, query):
+        """按条件检索 scdfe_d 运行日志（委托 core.log_query.search_logs）。"""
+        root = Path(self.log_dir).resolve()
+        if not root.is_dir():
+            return dict(
+                items=[],
+                next_cursor=None,
+                has_more=False,
+                scanned_files=0,
+                scanned_bytes=0,
+                skipped_lines=0,
+                keyword=query.get("q", "").strip(),
+                order="hour_file_desc_line_desc",
+            )
+        try:
+            return search_logs(root, dict(query), family="d")
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from exc
+
+    # ------------------------------------------------------------------
+    # 设备遥控（YK）/ 遥调（YT）定义、实时监视与下发至 scdfe_c 闭环
+    # ------------------------------------------------------------------
+
+    def control_id_for(self, table, idx, control, *, con=None):
+        key = (table, int(idx), str(control))
+        with self._mutex:
+            cid = self._ctrl_ids.get(key)
+            if cid is not None:
+                return cid
+            empty = not self._ctrl_ids
+        if empty and con is not None:
+            self._prime_control_ids(con)
+        with self._mutex:
+            cid = self._ctrl_ids.get(key)
+            if cid is None:
+                cid = self._next_ctrl_id
+                self._next_ctrl_id += 1
+                self._ctrl_ids[key] = cid
+                self._id_to_ctrl[cid] = key
+            return cid
+
+    def resolve_control_id(self, con, control_id):
+        cid = int(control_id)
+        with self._mutex:
+            target = self._id_to_ctrl.get(cid)
+        if target is not None:
+            return target
+        self._prime_control_ids(con)
+        with self._mutex:
+            return self._id_to_ctrl.get(cid)
+
+    def _prime_control_ids(self, con):
+        cur = con.cursor()
+        cur.row_factory = None
+        for table, _, controls, _, _ in self._get_table_layouts(con):
+            if not controls:
+                continue
+            for (idx,) in cur.execute(
+                f"SELECT idx FROM {_quote_table(table)} ORDER BY idx"
+            ):
+                for ctrl, _ in controls:
+                    self.control_id_for(table, idx, ctrl)
+
+    def control_version_for(self, table, idx, control):
+        key = (table, int(idx), str(control))
+        with self._mutex:
+            return self._ctrl_versions.get(key, 1)
+
+    def bump_control_version(self, table, idx, control):
+        key = (table, int(idx), str(control))
+        with self._mutex:
+            nxt = self._ctrl_versions.get(key, 1) + 1
+            self._ctrl_versions[key] = nxt
+            return nxt
+
+    def _record_control_event(
+        self,
+        *,
+        source,
+        table,
+        idx,
+        device_name,
+        control,
+        kind,
+        rtu_id,
+        pnt_no,
+        value,
+        cmd_time,
+        status,
+        ack_time=None,
+        detail="",
+    ):
+        with self._mutex:
+            self._control_seq += 1
+            entry = dict(
+                event_id=self._control_seq,
+                at=utc_now(),
+                source=source,
+                model_table=table,
+                model_idx=idx,
+                device_name=device_name,
+                control=control,
+                kind=kind,
+                rtu_id=rtu_id,
+                pnt_no=pnt_no,
+                value=value,
+                cmd_time_ms=cmd_time,
+                cmd_status=status,
+                status_label=CTRL_STATUS_LABELS.get(status, str(status)),
+                cmd_ack_time_ms=ack_time,
+                detail=detail,
+            )
+            self._control_history.appendleft(entry)
+            return entry
+
+    def control_history(self):
+        with self._mutex:
+            return dict(items=[dict(r) for r in self._control_history])
+
+    @staticmethod
+    def _normalize_control_value(kind, raw_value, max_val=None, min_val=None):
+        """校验并规范化遥控/遥调目标值；非法或越限时抛出 ApiError(400)。"""
+        if raw_value is None or isinstance(raw_value, bool):
+            raise ApiError(400, "控调指令值不能为空或布尔类型")
+        if kind == "yk":
+            try:
+                num = float(raw_value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ApiError(400, "遥控值只能为 0 或 1") from exc
+            if not math.isfinite(num) or num not in (0.0, 1.0):
+                raise ApiError(400, "遥控值只能为 0（分/停）或 1（合/启）")
+            return int(num)
+        try:
+            num = float(raw_value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ApiError(400, "遥调设定值必须为有限数值") from exc
+        if not math.isfinite(num):
+            raise ApiError(400, "遥调设定值必须为有限数值")
+        upper = _parse_limit_number(max_val)
+        lower = _parse_limit_number(min_val)
+        if upper is not None and lower is not None and upper > lower:
+            if num > upper:
+                raise ApiError(400, f"遥调值 {num} 超过上限 {upper}")
+            if num < lower:
+                raise ApiError(400, f"遥调值 {num} 低于下限 {lower}")
+        return num
+
+    def controls(self, query):
+        """分页查询已绑定的设备遥控/遥调清单。"""
+        filter_device = int(query["device_id"]) if query.get("device_id") else None
+        filter_kind = query.get("kind") or ""
+        if filter_kind and filter_kind not in ("yk", "yt"):
+            raise ApiError(400, "控调类型仅支持 yk 或 yt")
+        filter_cat = query.get("category") or ""
+        filter_table = query.get("table") or ""
+        filter_status = (
+            int(query["status"])
+            if query.get("status") not in (None, "")
+            else None
+        )
+        kw = (query.get("q") or "").strip().lower()
+        page = max(1, int(query.get("page", 1)))
+        limit = min(500, max(1, int(query.get("limit", 100))))
+        source_db = self.default_source_database()
+
+        start = (page - 1) * limit
+        end = start + limit
+        page_items = []
+        total = 0
+        yk_total = 0
+        yt_total = 0
+        pending_total = 0
+        disabled_total = 0
+
+        with self._mutex:
+            ver_snap = dict(self._ctrl_versions)
+
+        with self.connection() as con:
+            con.execute("BEGIN")
+            target_dev = (
+                self.resolve_device_id(con, filter_device)
+                if filter_device is not None
+                else None
+            )
+            if filter_device is not None and target_dev is None:
+                return dict(
+                    items=[],
+                    total=0,
+                    page=page,
+                    limit=limit,
+                    summary=dict(total=0, yk=0, yt=0, pending=0, disabled=0),
+                )
+            cur = con.cursor()
+            cur.row_factory = None
+            for table, _, controls, _, control_offsets in self._get_table_layouts(con):
+                if filter_table and table != filter_table:
+                    continue
+                if target_dev is not None and table != target_dev[0]:
+                    continue
+                cat = category_for(table)
+                if filter_cat and cat != filter_cat:
+                    continue
+                if not controls:
+                    continue
+                quoted = _quote_table(table)
+                if target_dev is not None:
+                    rows_iter = cur.execute(
+                        f"SELECT * FROM {quoted} WHERE idx=?", (target_dev[1],)
+                    )
+                else:
+                    rows_iter = cur.execute(f"SELECT * FROM {quoted} ORDER BY idx")
+                for row in rows_iter:
+                    idx, dev_name = row[0], row[1]
+                    dev_name_lower = str(dev_name or "").lower() if kw else ""
+                    did = None
+                    for ctrl, kind in controls:
+                        base = control_offsets[ctrl]
+                        rtu, pnt = row[base + 5], row[base + 6]
+                        if not _is_valid_point_config(rtu, pnt):
+                            continue
+                        status_val = int(row[base + 2]) if row[base + 2] is not None else CTRL_STATUS_IDLE
+                        notuse = 1 if row[base + 4] else 0
+                        if notuse:
+                            disabled_total += 1
+                        if status_val == CTRL_STATUS_PENDING:
+                            pending_total += 1
+                        if kind == "yk":
+                            yk_total += 1
+                        else:
+                            yt_total += 1
+                        if filter_kind and kind != filter_kind:
+                            continue
+                        if filter_status is not None and status_val != filter_status:
+                            continue
+                        label, unit = CONTROL_META.get(ctrl, (ctrl, ""))
+                        if (
+                            kw
+                            and kw not in ctrl.lower()
+                            and kw not in label.lower()
+                            and kw not in dev_name_lower
+                            and kw not in table.lower()
+                        ):
+                            continue
+                        if start <= total < end:
+                            if did is None:
+                                did = self.device_id_for(table, idx)
+                            cid = self.control_id_for(table, idx, ctrl)
+                            page_items.append(
+                                dict(
+                                    control_id=cid,
+                                    device_id=did,
+                                    model_table=table,
+                                    model_idx=idx,
+                                    device_name=dev_name,
+                                    category=cat,
+                                    control=ctrl,
+                                    label=label,
+                                    unit=unit,
+                                    kind=kind,
+                                    value=row[base],
+                                    cmd_time_ms=row[base + 1],
+                                    cmd_status=status_val,
+                                    status_label=CTRL_STATUS_LABELS.get(status_val, str(status_val)),
+                                    cmd_ack_time_ms=row[base + 3],
+                                    notuse=notuse,
+                                    source_database=source_db,
+                                    rtu_id=int(rtu),
+                                    pnt_no=int(pnt),
+                                    max_value=row[base + 7],
+                                    min_value=row[base + 8],
+                                    version=ver_snap.get((table, int(idx), str(ctrl)), 1),
+                                )
+                            )
+                        total += 1
+        return dict(
+            items=page_items,
+            total=total,
+            page=page,
+            limit=limit,
+            summary=dict(
+                total=yk_total + yt_total,
+                yk=yk_total,
+                yt=yt_total,
+                pending=pending_total,
+                disabled=disabled_total,
+            ),
+        )
+
+    def save_control(self, data, control_id=None):
+        """在设备宽表中新增或更新一条遥控（YK）/ 遥调（YT）控调点位映射。"""
+        ctrl = data.get("control", "")
+        kind = data.get("kind", "yk")
+        if (
+            not isinstance(ctrl, str)
+            or not _METRIC_NAME_RE.fullmatch(ctrl)
+            or kind not in ("yk", "yt")
+        ):
+            raise ApiError(400, "控调属性名须为小写英文字母/数字/下划线，类型须为 YK/YT")
+        if ctrl in ("idx", "name") or ctrl.endswith(RESERVED_METRIC_SUFFIXES):
+            raise ApiError(400, "控调属性名不能使用保留元数据后缀")
+
+        source = data.get("source_database") or self.default_source_database()
+        rtu = _parse_positive_int(data.get("rtu_id"))
+        point = _parse_positive_int(data.get("pnt_no"))
+        if rtu is None or point is None:
+            raise ApiError(400, "RTU 编号和点号必须为正整数")
+
+        raw_notuse = data.get("notuse", 0)
+        if isinstance(raw_notuse, bool):
+            raise ApiError(400, "禁用标记只能为 0 或 1")
+        notuse = int(raw_notuse)
+        if notuse not in (0, 1):
+            raise ApiError(400, "禁用标记只能为 0 或 1")
+
+        has_max = "max_value" in data
+        has_min = "min_value" in data
+        raw_max = data.get("max_value")
+        raw_min = data.get("min_value")
+        max_val = _parse_limit_number(raw_max) if has_max else None
+        min_val = _parse_limit_number(raw_min) if has_min else None
+        if has_max and raw_max is not None and str(raw_max).strip() != "" and max_val is None:
+            raise ApiError(400, "控调上限必须为有限数值或留空")
+        if has_min and raw_min is not None and str(raw_min).strip() != "" and min_val is None:
+            raise ApiError(400, "控调下限必须为有限数值或留空")
+        if max_val is not None and min_val is not None and max_val <= min_val:
+            raise ApiError(400, "控调上限必须大于下限")
+
+        # 校验源库 fes_{yk|yt}_define 中确实存在目标点
+        with self.source(source) as src_con:
+            src_table = f"fes_{kind}_define"
+            cols = {r[1] for r in src_con.execute(f"PRAGMA table_info({src_table})")}
+            if not {"rtu_id", "pnt_no", "value", "status", "cmd_time", "cmd_handle_time"} <= cols:
+                raise ApiError(400, f"源库缺少 {src_table} 表或必要控调字段")
+            found = src_con.execute(
+                f"SELECT name FROM {src_table} WHERE rtu_id=? AND pnt_no=?",
+                (rtu, point),
+            ).fetchall()
+            if len(found) != 1:
+                raise ApiError(400, f"指定的源控调点在 {src_table} 中不存在或主键不唯一")
+
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            old_target = None
+            if control_id is not None:
+                old_target = self.resolve_control_id(con, control_id)
+                if old_target is None:
+                    raise ApiError(404, "控调映射不存在")
+                cur_ver = self.control_version_for(*old_target)
+                if "version" in data:
+                    req_ver = data["version"]
+                    if type(req_ver) is not int or req_ver < 1:
+                        raise ApiError(400, "版本号必须为正整数")
+                    if req_ver != cur_ver:
+                        raise ApiError(409, "控调定义已被修改，请刷新后重试")
+
+            if data.get("table") and data.get("idx") is not None:
+                table, idx = str(data["table"]), _strict_int64(data["idx"])
+                self._table_name(table)
+                if self.table_metrics(con, table) is None:
+                    raise ApiError(404, "目标设备表不存在")
+            elif data.get("device_id") is not None:
+                resolved = self.resolve_device_id(con, data["device_id"])
+                if resolved is None:
+                    raise ApiError(400, "目标设备不存在")
+                table, idx = resolved
+            elif old_target is not None:
+                table, idx, _ = old_target
+            else:
+                raise ApiError(400, "目标设备不存在")
+
+            quoted = _quote_table(table)
+            dev_row = con.execute(
+                f"SELECT name FROM {quoted} WHERE idx=?", (idx,)
+            ).fetchone()
+            if dev_row is None:
+                raise ApiError(400, "目标设备不存在")
+            dev_name = dev_row[0]
+
+            if old_target is not None and old_target != (table, idx, ctrl):
+                self._clear_control_cell(con, *old_target)
+
+            self._ensure_device_table(con, table, initial_controls=[(ctrl, kind)])
+            cur_vals = con.execute(
+                f"SELECT {_quote_col(ctrl)}, {_quote_col(ctrl + '_cmd_time')}, "
+                f"{_quote_col(ctrl + '_cmd_rtu')}, {_quote_col(ctrl + '_cmd_pnt')}, "
+                f"{_quote_col(ctrl + '_cmd_max')}, {_quote_col(ctrl + '_cmd_min')} "
+                f"FROM {quoted} WHERE idx=?",
+                (idx,),
+            ).fetchone()
+            existing_bound = _is_valid_point_config(cur_vals[2], cur_vals[3])
+            final_max = max_val if has_max else _parse_limit_number(cur_vals[4])
+            final_min = min_val if has_min else _parse_limit_number(cur_vals[5])
+            if (
+                (has_max or has_min)
+                and final_max is not None
+                and final_min is not None
+                and float(final_max) <= float(final_min)
+            ):
+                raise ApiError(400, "控调上限必须大于下限")
+            point_changed = cur_vals[2] != rtu or cur_vals[3] != point
+            next_status = CTRL_STATUS_DISABLED if notuse else CTRL_STATUS_IDLE
+            if point_changed:
+                con.execute(
+                    f"""UPDATE {quoted} SET
+                        {_quote_col(ctrl)}=NULL,
+                        {_quote_col(ctrl + '_cmd_time')}=NULL,
+                        {_quote_col(ctrl + '_cmd_status')}=?,
+                        {_quote_col(ctrl + '_cmd_ack_time')}=NULL,
+                        {_quote_col(ctrl + '_cmd_notuse')}=?,
+                        {_quote_col(ctrl + '_cmd_rtu')}=?,
+                        {_quote_col(ctrl + '_cmd_pnt')}=?,
+                        {_quote_col(ctrl + '_cmd_max')}=?,
+                        {_quote_col(ctrl + '_cmd_min')}=?
+                    WHERE idx=?""",
+                    (next_status, notuse, rtu, point, final_max, final_min, idx),
+                )
+                baseline_pair = (None, None)
+            else:
+                con.execute(
+                    f"""UPDATE {quoted} SET
+                        {_quote_col(ctrl + '_cmd_status')}=CASE
+                            WHEN ?=1 THEN ?
+                            WHEN {_quote_col(ctrl + '_cmd_status')} IN (?, ?) THEN ?
+                            ELSE {_quote_col(ctrl + '_cmd_status')}
+                        END,
+                        {_quote_col(ctrl + '_cmd_notuse')}=?,
+                        {_quote_col(ctrl + '_cmd_max')}=?,
+                        {_quote_col(ctrl + '_cmd_min')}=?
+                    WHERE idx=?""",
+                    (
+                        notuse,
+                        CTRL_STATUS_DISABLED,
+                        CTRL_STATUS_DISABLED,
+                        CTRL_STATUS_UNCONFIGURED,
+                        CTRL_STATUS_IDLE,
+                        notuse,
+                        final_max,
+                        final_min,
+                        idx,
+                    ),
+                )
+                baseline_pair = (cur_vals[0], cur_vals[1])
+            cid = self.control_id_for(table, idx, ctrl)
+            did = self.device_id_for(table, idx, con=con)
+
+        if data.get("source_database"):
+            self.set_source_database(source)
+        with self._mutex:
+            if old_target is not None and old_target != (table, idx, ctrl):
+                self._control_baseline.pop(old_target, None)
+                self._pending_controls.pop(old_target, None)
+            if self._control_baseline_ready:
+                self._control_baseline[(table, idx, ctrl)] = baseline_pair
+            if point_changed:
+                self._pending_controls.pop((table, idx, ctrl), None)
+        ver = (
+            self.control_version_for(table, idx, ctrl)
+            if (control_id is None and not existing_bound)
+            else self.bump_control_version(table, idx, ctrl)
+        )
+        label, unit = CONTROL_META.get(ctrl, (ctrl, ""))
+        after = dict(
+            control_id=cid,
+            device_id=did,
+            model_table=table,
+            model_idx=idx,
+            device_name=dev_name,
+            category=category_for(table),
+            control=ctrl,
+            label=label,
+            unit=unit,
+            kind=kind,
+            notuse=notuse,
+            source_database=source,
+            rtu_id=rtu,
+            pnt_no=point,
+            max_value=final_max,
+            min_value=final_min,
+            cmd_status=next_status,
+            status_label=CTRL_STATUS_LABELS.get(next_status, str(next_status)),
+            version=ver,
+        )
+        self._record_change("control_mapping", cid, {}, after)
+        self._emit_file_log(
+            "control",
+            "INFO",
+            f"保存控调映射 设备={table}.{dev_name}(idx={idx}) 属性={ctrl}({kind.upper()}) "
+            f"RTU={rtu} 点号={point} 禁用={notuse} 上限={final_max} 下限={final_min}",
+        )
+        self.bump_config_epoch()
+        return after
+
+    def _clear_control_cell(self, con, table, idx, control):
+        quoted = _quote_table(table)
+        con.execute(
+            f"""UPDATE {quoted} SET
+                {_quote_col(control)}=NULL,
+                {_quote_col(control + '_cmd_time')}=NULL,
+                {_quote_col(control + '_cmd_status')}=?,
+                {_quote_col(control + '_cmd_ack_time')}=NULL,
+                {_quote_col(control + '_cmd_notuse')}=0,
+                {_quote_col(control + '_cmd_rtu')}=NULL,
+                {_quote_col(control + '_cmd_pnt')}=NULL,
+                {_quote_col(control + '_cmd_max')}=NULL,
+                {_quote_col(control + '_cmd_min')}=NULL
+            WHERE idx=?""",
+            (CTRL_STATUS_UNCONFIGURED, idx),
+        )
+
+    def _prune_unused_control_column(self, con, table, control) -> bool:
+        """若该表所有设备均未绑定该控调属性，移除该 9 列并原样保留所有量测列组。"""
+        quoted = _quote_table(table)
+        still_used = con.execute(
+            f"SELECT 1 FROM {quoted} WHERE {_quote_col(control + '_cmd_rtu')} IS NOT NULL "
+            f"OR {_quote_col(control + '_cmd_pnt')} IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if still_used:
+            return False
+        metrics = self.table_metrics(con, table) or []
+        controls = self.table_controls(con, table) or []
+        remaining = [(c, k) for c, k in controls if c != control]
+        self._rebuild_device_table(con, table, metrics, remaining)
+        return True
+
+    def delete_control(self, control_id, version=None):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            target = self.resolve_control_id(con, control_id)
+            if target is None:
+                raise ApiError(409, "控调映射不存在或已被修改")
+            table, idx, ctrl = target
+            if version is not None:
+                if type(version) is not int or version < 1:
+                    raise ApiError(400, "版本号必须为正整数")
+                if version != self.control_version_for(table, idx, ctrl):
+                    raise ApiError(409, "控调映射不存在或已被修改")
+            self._clear_control_cell(con, table, idx, ctrl)
+            pruned = self._prune_unused_control_column(con, table, ctrl)
+        with self._mutex:
+            self._control_baseline.pop(target, None)
+            self._pending_controls.pop(target, None)
+            if pruned:
+                stale = [k for k in self._ctrl_ids if k[0] == table and k[2] == ctrl]
+                for key in stale:
+                    cid = self._ctrl_ids.pop(key, None)
+                    if cid is not None:
+                        self._id_to_ctrl.pop(cid, None)
+                    self._ctrl_versions.pop(key, None)
+                    self._control_baseline.pop(key, None)
+                    self._pending_controls.pop(key, None)
+            else:
+                self.bump_control_version(table, idx, ctrl)
+        self._record_change(
+            "control_mapping_delete",
+            int(control_id),
+            dict(table=table, idx=idx, control=ctrl),
+            {},
+        )
+        self._emit_file_log(
+            "control",
+            "INFO",
+            f"删除控调映射 表={table} idx={idx} 属性={ctrl} 剪枝列={pruned}",
+        )
+        self.bump_config_epoch()
+
+    def _dispatch_to_scdfe_c(self, source_name, kind, rtu_id, pnt_no, value):
+        """按 scdfe_c 标准下发协议原子写入 fes_{yk|yt}_define（触发 command_version 与 trace）。"""
+        if kind not in ("yk", "yt"):
+            raise ApiError(400, "控调类型必须为 yk 或 yt")
+        source_db = source_name or self.default_source_database()
+        path = self.source_path(source_db)
+        if not path.is_file():
+            raise ApiError(503, f"目标源库不存在：{source_db}")
+        table = f"fes_{kind}_define"
+        try:
+            with closing(sqlite3.connect(path, timeout=10)) as con:
+                con.row_factory = sqlite3.Row
+                con.execute("PRAGMA busy_timeout=10000")
+                con.execute("PRAGMA synchronous=FULL")
+                with con:
+                    con.execute("BEGIN IMMEDIATE")
+                    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+                    required = {"rtu_id", "pnt_no", "value", "status", "cmd_time", "cmd_handle_time"}
+                    if not required <= cols:
+                        raise ApiError(400, f"源库 {source_db} 缺少 {table} 表或必要控调列")
+                    sel_cols = ["name", "value", "status", "cmd_time", "cmd_handle_time"]
+                    for opt in ("man_disable", "auto_disable", "eng_max", "eng_min", "_version"):
+                        if opt in cols:
+                            sel_cols.append(opt)
+                    row = con.execute(
+                        f"SELECT {','.join(sel_cols)} FROM {table} WHERE rtu_id=? AND pnt_no=?",
+                        (int(rtu_id), int(pnt_no)),
+                    ).fetchone()
+                    if row is None:
+                        raise ApiError(400, f"源库 {table} 中不存在 RTU={rtu_id} 点号={pnt_no}")
+                    row_dict = dict(row)
+                    if row_dict.get("man_disable") or row_dict.get("auto_disable"):
+                        raise ApiError(409, f"源库测点 RTU={rtu_id} 点号={pnt_no} 已被闭锁禁用")
+                    if kind == "yt":
+                        eng_max = _parse_limit_number(row_dict.get("eng_max"))
+                        eng_min = _parse_limit_number(row_dict.get("eng_min"))
+                        if eng_max is not None and eng_min is not None and eng_max > eng_min:
+                            if float(value) > eng_max:
+                                raise ApiError(400, f"设定值 {value} 超过源库工程上限 {eng_max}")
+                            if float(value) < eng_min:
+                                raise ApiError(400, f"设定值 {value} 低于源库工程下限 {eng_min}")
+                    cur_cmd = int(row_dict.get("cmd_time") or 0)
+                    cur_ack = int(row_dict.get("cmd_handle_time") or 0)
+                    if cur_cmd > cur_ack:
+                        raise ApiError(409, f"源测点 RTU={rtu_id} 点号={pnt_no} 存在未完成指令，请等待回执")
+                    dispatch_ms = max(int(time.time() * 1000), cur_cmd + 1, cur_ack + 1)
+                    if "_version" in cols:
+                        con.execute(
+                            f"UPDATE {table} SET value=?, cmd_time=?, status=0, "
+                            "_version=COALESCE(_version, 0)+1 WHERE rtu_id=? AND pnt_no=?",
+                            (value, dispatch_ms, int(rtu_id), int(pnt_no)),
+                        )
+                    else:
+                        con.execute(
+                            f"UPDATE {table} SET value=?, cmd_time=?, status=0 "
+                            "WHERE rtu_id=? AND pnt_no=?",
+                            (value, dispatch_ms, int(rtu_id), int(pnt_no)),
+                        )
+                    return dict(
+                        dispatch_ms=dispatch_ms,
+                        source_database=source_db,
+                        point_name=row_dict.get("name") or "",
+                    )
+        except ApiError:
+            raise
+        except sqlite3.Error as exc:
+            raise ApiError(503, f"写入源库 {source_db} 失败：{exc}") from exc
+
+    def dispatch_control(self, control_id, raw_value, *, source="web"):
+        """从 Web 端或接口手动下发遥控/遥调指令：校验 -> 写 scdfe_c -> 回写设备宽表 -> 登记回执跟踪。"""
+        source_db = self.default_source_database()
+        with self.connection() as con:
+            con.execute("BEGIN")
+            target = self.resolve_control_id(con, control_id)
+            if target is None:
+                raise ApiError(404, "控调点位不存在")
+            table, idx, ctrl = target
+            controls = self.table_controls(con, table)
+            if not controls:
+                raise ApiError(404, "控调点位不存在")
+            kind = next((k for c, k in controls if c == ctrl), None)
+            if kind is None:
+                raise ApiError(404, "控调点位不存在")
+            quoted = _quote_table(table)
+            row = con.execute(
+                f"SELECT name, {_quote_col(ctrl + '_cmd_notuse')}, {_quote_col(ctrl + '_cmd_rtu')}, "
+                f"{_quote_col(ctrl + '_cmd_pnt')}, {_quote_col(ctrl + '_cmd_max')}, {_quote_col(ctrl + '_cmd_min')} "
+                f"FROM {quoted} WHERE idx=?",
+                (idx,),
+            ).fetchone()
+            if row is None:
+                raise ApiError(404, "目标设备不存在")
+            dev_name, notuse, rtu_raw, pnt_raw, max_val, min_val = (
+                row[0],
+                1 if row[1] else 0,
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            )
+
+        rtu_id = _parse_positive_int(rtu_raw)
+        pnt_no = _parse_positive_int(pnt_raw)
+        if rtu_id is None or pnt_no is None:
+            raise ApiError(400, "控调点位尚未配置有效的 RTU 和点号")
+        if notuse:
+            self._emit_file_log(
+                "control",
+                "WARNING",
+                f"拦截下发(已禁用) 来源={source} 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) 目标值={raw_value}",
+            )
+            raise ApiError(409, "该控调点位已被禁用，禁止下发")
+
+        norm_val = self._normalize_control_value(kind, raw_value, max_val, min_val)
+        try:
+            res = self._dispatch_to_scdfe_c(source_db, kind, rtu_id, pnt_no, norm_val)
+        except ApiError as exc:
+            now_ms = int(time.time() * 1000)
+            self._record_control_event(
+                source=source,
+                table=table,
+                idx=idx,
+                device_name=dev_name,
+                control=ctrl,
+                kind=kind,
+                rtu_id=rtu_id,
+                pnt_no=pnt_no,
+                value=norm_val,
+                cmd_time=now_ms,
+                status=CTRL_STATUS_FAILED,
+                detail=exc.message,
+            )
+            self._emit_file_log(
+                "control",
+                "ERROR",
+                f"下发失败 来源={source} 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) "
+                f"RTU={rtu_id} 点号={pnt_no} 值={norm_val} 原因={exc.message}",
+            )
+            raise
+
+        dispatch_ms = res["dispatch_ms"]
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                f"""UPDATE {_quote_table(table)} SET
+                    {_quote_col(ctrl)}=?,
+                    {_quote_col(ctrl + '_cmd_time')}=?,
+                    {_quote_col(ctrl + '_cmd_status')}=?,
+                    {_quote_col(ctrl + '_cmd_ack_time')}=NULL
+                WHERE idx=?""",
+                (norm_val, dispatch_ms, CTRL_STATUS_PENDING, idx),
+            )
+
+        with self._mutex:
+            self._control_baseline[(table, idx, ctrl)] = (norm_val, dispatch_ms)
+            self._control_baseline_ready = True
+            self._pending_controls[(table, idx, ctrl)] = dict(
+                source_database=source_db,
+                source=source,
+                kind=kind,
+                rtu_id=rtu_id,
+                pnt_no=pnt_no,
+                value=norm_val,
+                dispatch_ms=dispatch_ms,
+                cmd_time=dispatch_ms,
+                started_mono=time.monotonic(),
+                device_name=dev_name,
+            )
+            self._overview_cache = None
+
+        event = self._record_control_event(
+            source=source,
+            table=table,
+            idx=idx,
+            device_name=dev_name,
+            control=ctrl,
+            kind=kind,
+            rtu_id=rtu_id,
+            pnt_no=pnt_no,
+            value=norm_val,
+            cmd_time=dispatch_ms,
+            status=CTRL_STATUS_PENDING,
+            detail=f"已下发至 {source_db} ({res['point_name']})",
+        )
+        self._emit_file_log(
+            "control",
+            "INFO",
+            f"下发指令 来源={source} 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) "
+            f"RTU={rtu_id} 点号={pnt_no} 值={norm_val} 时标={dispatch_ms} 源点={res['point_name']}",
+        )
+        return dict(
+            control_id=int(control_id),
+            model_table=table,
+            model_idx=idx,
+            device_name=dev_name,
+            control=ctrl,
+            kind=kind,
+            rtu_id=rtu_id,
+            pnt_no=pnt_no,
+            value=norm_val,
+            cmd_time_ms=dispatch_ms,
+            cmd_status=CTRL_STATUS_PENDING,
+            status_label=CTRL_STATUS_LABELS[CTRL_STATUS_PENDING],
+            source_database=source_db,
+            event=event,
+        )
+
+    def _scan_control_slots(self, con):
+        """扫描全部设备宽表的控调列组，返回完整槽位快照列表。"""
+        layouts = self._get_table_layouts(con)
+        cur = con.cursor()
+        cur.row_factory = None
+        slots = []
+        for table, _, controls, _, control_offsets in layouts:
+            if not controls:
+                continue
+            quoted = _quote_table(table)
+            for row in cur.execute(f"SELECT * FROM {quoted}"):
+                idx, dev_name = row[0], row[1]
+                for ctrl, kind in controls:
+                    base = control_offsets[ctrl]
+                    slots.append(
+                        (
+                            table,
+                            idx,
+                            dev_name,
+                            ctrl,
+                            kind,
+                            row[base],          # value
+                            row[base + 1],      # cmd_time
+                            row[base + 2],      # cmd_status
+                            row[base + 3],      # cmd_ack_time
+                            1 if row[base + 4] else 0,  # notuse
+                            row[base + 5],      # rtu_raw
+                            row[base + 6],      # pnt_raw
+                            row[base + 7],      # max_val
+                            row[base + 8],      # min_val
+                        )
+                    )
+        return slots
+
+    def poll_controls_once(self, *, _writer=None, _control_state=None):
+        """实时监视设备宽表控调值/时标变化并下发至 scdfe_c，同时同步在途指令回执。"""
+        source_db = self.default_source_database()
+        dispatched = 0
+        rejected = 0
+        acked = 0
+        timed_out = 0
+
+        # 1. 检测宽表是否有变化（冷启动或 data_version/config_epoch 变化时才扫表，零空闲开销）
+        need_scan = False
+        cur_ver = None
+        epoch = self._config_epoch
+        with self._mutex:
+            baseline_ready = self._control_baseline_ready
+        if not baseline_ready or _control_state is None:
+            need_scan = True
+        elif _writer is not None:
+            cur_ver = _writer.execute("PRAGMA data_version").fetchone()[0]
+            if _control_state.get("scan_key") != (cur_ver, epoch):
+                need_scan = True
+        else:
+            need_scan = True
+
+        slots = None
+        if need_scan:
+            with self.connection(_writer=_writer) as read_con:
+                read_con.execute("BEGIN")
+                try:
+                    cur_ver = read_con.execute("PRAGMA data_version").fetchone()[0]
+                    epoch = self._config_epoch
+                    slots = self._scan_control_slots(read_con)
+                finally:
+                    read_con.rollback()
+
+        if slots is not None:
+            with self._mutex:
+                if not self._control_baseline_ready:
+                    # 冷启动建立基线，防止把库内历史指令当成新命令误下发
+                    bound_cnt = 0
+                    for s in slots:
+                        key = (s[0], s[1], s[3])
+                        self._control_baseline[key] = (s[5], s[6])
+                        if _is_valid_point_config(s[10], s[11]):
+                            bound_cnt += 1
+                    self._control_baseline_ready = True
+                    if bound_cnt:
+                        self._emit_file_log(
+                            "control",
+                            "PROCESS",
+                            f"控调实时监视基线已建立，共纳管 {bound_cnt} 个已绑定遥控/遥调点位",
+                        )
+                    if _control_state is not None:
+                        _control_state["scan_key"] = (cur_ver, epoch)
+                    slots = []
+                else:
+                    baseline_copy = dict(self._control_baseline)
+
+            if slots:
+                changes_by_row = defaultdict(dict)
+                baseline_updates = {}
+                pending_additions = {}
+                active_keys = set()
+
+                for s in slots:
+                    (
+                        table,
+                        idx,
+                        dev_name,
+                        ctrl,
+                        kind,
+                        val,
+                        cmd_time,
+                        cmd_status,
+                        cmd_ack_time,
+                        notuse,
+                        rtu_raw,
+                        pnt_raw,
+                        max_val,
+                        min_val,
+                    ) = s
+                    key = (table, idx, ctrl)
+                    active_keys.add(key)
+                    prev = baseline_copy.get(key)
+                    if prev is None:
+                        # 运行期新增列：若未写值则仅记录基线；若已写入非空值则视为新指令
+                        if val is None:
+                            baseline_updates[key] = (val, cmd_time)
+                            continue
+                        prev_val, prev_time = None, None
+                    else:
+                        prev_val, prev_time = prev
+
+                    val_changed = not _same_value(val, prev_val)
+                    time_changed = cmd_time != prev_time
+                    if not val_changed and not time_changed:
+                        continue
+
+                    # 外部清空为 NULL 不触发下发
+                    if val is None:
+                        baseline_updates[key] = (val, cmd_time)
+                        continue
+
+                    rtu_id = _parse_positive_int(rtu_raw)
+                    pnt_no = _parse_positive_int(pnt_raw)
+                    now_ms = int(time.time() * 1000)
+
+                    # 校验配置与禁用闭锁
+                    if rtu_id is None or pnt_no is None:
+                        rejected += 1
+                        row_u = changes_by_row[(table, idx)]
+                        row_u[ctrl + "_cmd_status"] = CTRL_STATUS_UNCONFIGURED
+                        baseline_updates[key] = (val, cmd_time)
+                        self._record_control_event(
+                            source="db_watch",
+                            table=table,
+                            idx=idx,
+                            device_name=dev_name,
+                            control=ctrl,
+                            kind=kind,
+                            rtu_id=None,
+                            pnt_no=None,
+                            value=val,
+                            cmd_time=cmd_time or now_ms,
+                            status=CTRL_STATUS_UNCONFIGURED,
+                            detail="外部写入控调变化但未配置有效 RTU/点号",
+                        )
+                        self._emit_file_log(
+                            "control",
+                            "WARNING",
+                            f"监视拦截(无配置) 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) 值={val} 时标={cmd_time}",
+                        )
+                        continue
+
+                    if notuse:
+                        rejected += 1
+                        row_u = changes_by_row[(table, idx)]
+                        row_u[ctrl + "_cmd_status"] = CTRL_STATUS_DISABLED
+                        baseline_updates[key] = (val, cmd_time)
+                        self._record_control_event(
+                            source="db_watch",
+                            table=table,
+                            idx=idx,
+                            device_name=dev_name,
+                            control=ctrl,
+                            kind=kind,
+                            rtu_id=rtu_id,
+                            pnt_no=pnt_no,
+                            value=val,
+                            cmd_time=cmd_time or now_ms,
+                            status=CTRL_STATUS_DISABLED,
+                            detail="外部写入控调变化但该点已禁用闭锁",
+                        )
+                        self._emit_file_log(
+                            "control",
+                            "WARNING",
+                            f"监视拦截(控制禁用) 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) "
+                            f"RTU={rtu_id} 点号={pnt_no} 值={val}",
+                        )
+                        continue
+
+                    # 值类型与上下限校验 + 下发至 scdfe_c
+                    try:
+                        norm_val = self._normalize_control_value(kind, val, max_val, min_val)
+                        res = self._dispatch_to_scdfe_c(
+                            source_db, kind, rtu_id, pnt_no, norm_val
+                        )
+                    except ApiError as exc:
+                        rejected += 1
+                        row_u = changes_by_row[(table, idx)]
+                        row_u[ctrl + "_cmd_status"] = CTRL_STATUS_FAILED
+                        baseline_updates[key] = (val, cmd_time)
+                        self._record_control_event(
+                            source="db_watch",
+                            table=table,
+                            idx=idx,
+                            device_name=dev_name,
+                            control=ctrl,
+                            kind=kind,
+                            rtu_id=rtu_id,
+                            pnt_no=pnt_no,
+                            value=val,
+                            cmd_time=cmd_time or now_ms,
+                            status=CTRL_STATUS_FAILED,
+                            detail=exc.message,
+                        )
+                        self._emit_file_log(
+                            "control",
+                            "ERROR",
+                            f"监视下发失败 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) "
+                            f"RTU={rtu_id} 点号={pnt_no} 值={val} 原因={exc.message}",
+                        )
+                        continue
+
+                    dispatch_ms = res["dispatch_ms"]
+                    final_cmd_time = cmd_time if (time_changed and cmd_time is not None) else dispatch_ms
+                    row_u = changes_by_row[(table, idx)]
+                    if not _same_value(norm_val, val):
+                        row_u[ctrl] = norm_val
+                    if final_cmd_time != cmd_time:
+                        row_u[ctrl + "_cmd_time"] = final_cmd_time
+                    row_u[ctrl + "_cmd_status"] = CTRL_STATUS_PENDING
+                    row_u[ctrl + "_cmd_ack_time"] = None
+                    baseline_updates[key] = (norm_val, final_cmd_time)
+                    pending_additions[key] = dict(
+                        source_database=source_db,
+                        source="db_watch",
+                        kind=kind,
+                        rtu_id=rtu_id,
+                        pnt_no=pnt_no,
+                        value=norm_val,
+                        dispatch_ms=dispatch_ms,
+                        cmd_time=final_cmd_time,
+                        started_mono=time.monotonic(),
+                        device_name=dev_name,
+                    )
+                    dispatched += 1
+                    self._record_control_event(
+                        source="db_watch",
+                        table=table,
+                        idx=idx,
+                        device_name=dev_name,
+                        control=ctrl,
+                        kind=kind,
+                        rtu_id=rtu_id,
+                        pnt_no=pnt_no,
+                        value=norm_val,
+                        cmd_time=final_cmd_time,
+                        status=CTRL_STATUS_PENDING,
+                        detail=f"监视到库内变化，已自动转发至 {source_db} ({res['point_name']})",
+                    )
+                    self._emit_file_log(
+                        "control",
+                        "INFO",
+                        f"监视转发指令 设备={table}.{dev_name} 属性={ctrl}({kind.upper()}) "
+                        f"RTU={rtu_id} 点号={pnt_no} 旧值={prev_val} 新值={norm_val} "
+                        f"时标={final_cmd_time} 源时标={dispatch_ms}",
+                    )
+
+                if changes_by_row:
+                    with self.connection(_writer=_writer) as con:
+                        con.execute("BEGIN IMMEDIATE")
+                        self._write_device_updates(con, changes_by_row)
+                        cur_ver = con.execute("PRAGMA data_version").fetchone()[0]
+                with self._mutex:
+                    # 清理已删除表/列的过期基线
+                    for stale in list(self._control_baseline):
+                        if stale not in active_keys:
+                            self._control_baseline.pop(stale, None)
+                    self._control_baseline.update(baseline_updates)
+                    self._pending_controls.update(pending_additions)
+                    if changes_by_row:
+                        self._overview_cache = None
+                if _control_state is not None:
+                    _control_state["scan_key"] = (cur_ver, epoch)
+
+        # 2. 轮询在途待回执指令的 scdfe_c 执行结果（cmd_handle_time >= dispatch_ms 或超时）
+        with self._mutex:
+            pending_snapshot = dict(self._pending_controls)
+
+        if pending_snapshot:
+            by_source = defaultdict(lambda: defaultdict(list))
+            for key, info in pending_snapshot.items():
+                by_source[info["source_database"]][info["kind"]].append((key, info))
+
+            ack_updates = defaultdict(dict)
+            resolved_keys = []
+            now_mono = time.monotonic()
+
+            for src_name, kinds_map in by_source.items():
+                src_rows = {}
+                try:
+                    with self.source(src_name) as src_con:
+                        for kind, entries in kinds_map.items():
+                            src_table = f"fes_{kind}_define"
+                            pts = sorted({(info["rtu_id"], info["pnt_no"]) for _, info in entries})
+                            wanted = ",".join("(?,?)" for _ in pts)
+                            params = tuple(v for pair in pts for v in pair)
+                            sql = (
+                                f"WITH wanted(rtu_id,pnt_no) AS (VALUES {wanted}) "
+                                f"SELECT p.rtu_id, p.pnt_no, p.status, p.cmd_handle_time "
+                                f"FROM wanted JOIN {src_table} p "
+                                "ON p.rtu_id=wanted.rtu_id AND p.pnt_no=wanted.pnt_no"
+                            )
+                            for r in src_con.execute(sql, params):
+                                src_rows[(kind, int(r[0]), int(r[1]))] = (r[2], r[3])
+                except (ApiError, sqlite3.Error, OSError) as exc:
+                    self._emit_file_log(
+                        "control",
+                        "WARNING",
+                        f"查询源库 {src_name} 控调回执失败：{exc}",
+                    )
+                    continue
+
+                for kind, entries in kinds_map.items():
+                    for key, info in entries:
+                        table, idx, ctrl = key
+                        row_state = src_rows.get((kind, info["rtu_id"], info["pnt_no"]))
+                        if row_state is not None:
+                            src_status, src_ack_time = row_state
+                            ack_ms = int(src_ack_time or 0)
+                            if ack_ms >= info["dispatch_ms"]:
+                                final_status = (
+                                    CTRL_STATUS_SUCCESS
+                                    if int(src_status or 0) == 1
+                                    else CTRL_STATUS_FAILED
+                                )
+                                row_u = ack_updates[(table, idx)]
+                                row_u[ctrl + "_cmd_status"] = final_status
+                                row_u[ctrl + "_cmd_ack_time"] = ack_ms
+                                resolved_keys.append(key)
+                                acked += 1
+                                detail = (
+                                    f"scdfe_c 回执成功 (status={src_status})"
+                                    if final_status == CTRL_STATUS_SUCCESS
+                                    else f"scdfe_c 回执失败 (status={src_status})"
+                                )
+                                self._record_control_event(
+                                    source=info["source"],
+                                    table=table,
+                                    idx=idx,
+                                    device_name=info["device_name"],
+                                    control=ctrl,
+                                    kind=kind,
+                                    rtu_id=info["rtu_id"],
+                                    pnt_no=info["pnt_no"],
+                                    value=info["value"],
+                                    cmd_time=info["cmd_time"],
+                                    status=final_status,
+                                    ack_time=ack_ms,
+                                    detail=detail,
+                                )
+                                self._emit_file_log(
+                                    "control",
+                                    "INFO" if final_status == CTRL_STATUS_SUCCESS else "WARNING",
+                                    f"收到控调回执 设备={table}.{info['device_name']} 属性={ctrl}({kind.upper()}) "
+                                    f"RTU={info['rtu_id']} 点号={info['pnt_no']} 值={info['value']} "
+                                    f"结果={CTRL_STATUS_LABELS[final_status]} 回执时标={ack_ms}",
+                                )
+                                continue
+                        if now_mono - info["started_mono"] >= self._control_ack_timeout:
+                            timeout_ms = int(time.time() * 1000)
+                            row_u = ack_updates[(table, idx)]
+                            row_u[ctrl + "_cmd_status"] = CTRL_STATUS_FAILED
+                            row_u[ctrl + "_cmd_ack_time"] = timeout_ms
+                            resolved_keys.append(key)
+                            timed_out += 1
+                            self._record_control_event(
+                                source=info["source"],
+                                table=table,
+                                idx=idx,
+                                device_name=info["device_name"],
+                                control=ctrl,
+                                kind=kind,
+                                rtu_id=info["rtu_id"],
+                                pnt_no=info["pnt_no"],
+                                value=info["value"],
+                                cmd_time=info["cmd_time"],
+                                status=CTRL_STATUS_FAILED,
+                                ack_time=timeout_ms,
+                                detail=f"等待 scdfe_c 回执超时（>{int(self._control_ack_timeout)}s）",
+                            )
+                            self._emit_file_log(
+                                "control",
+                                "WARNING",
+                                f"控调回执超时 设备={table}.{info['device_name']} 属性={ctrl}({kind.upper()}) "
+                                f"RTU={info['rtu_id']} 点号={info['pnt_no']} 值={info['value']}",
+                            )
+
+            if ack_updates:
+                with self.connection(_writer=_writer) as con:
+                    con.execute("BEGIN IMMEDIATE")
+                    self._write_device_updates(con, ack_updates)
+                    ack_ver = con.execute("PRAGMA data_version").fetchone()[0]
+                if _control_state is not None:
+                    _control_state["scan_key"] = (ack_ver, self._config_epoch)
+                with self._mutex:
+                    for key in resolved_keys:
+                        cur_p = self._pending_controls.get(key)
+                        if cur_p is not None and cur_p["dispatch_ms"] == pending_snapshot[key]["dispatch_ms"]:
+                            self._pending_controls.pop(key, None)
+                    self._overview_cache = None
+
+        return dict(
+            dispatched=dispatched,
+            rejected=rejected,
+            acked=acked,
+            timed_out=timed_out,
+            pending=len(self._pending_controls),
+        )
 
 
 class Collector:
@@ -2324,55 +3782,116 @@ class Collector:
                     writer = None
                     source_cache = {}
                     plan_cache = {}
+                    control_state = {}
+                    ctrl_interval = max(0.05, float(self.store._control_poll_interval))
+                    self.store._emit_file_log(
+                        "collector",
+                        "PROCESS",
+                        f"设备采集与控调监视线程已启动，采集周期={self.store.get_interval()}s，控调监视周期={ctrl_interval}s",
+                    )
                     try:
-                        next_scan = time.monotonic()
+                        now = time.monotonic()
+                        next_scan = now
+                        next_ctrl = now
                         last_scan = None
                         period = None
+                        last_err_logged = ""
                         while not self._stop.is_set():
                             self._wake.clear()
                             sample_due = False
                             try:
                                 if writer is None:
                                     writer = self.store._open_connection()
+                                now = time.monotonic()
+                                # 1. 亚秒级控调变化监视与回执闭环（不阻塞量测采集）
+                                if now >= next_ctrl:
+                                    try:
+                                        self.store.poll_controls_once(
+                                            _writer=writer,
+                                            _control_state=control_state,
+                                        )
+                                    except Exception as ctrl_exc:
+                                        LOG.exception("device control monitor cycle failed")
+                                        self.store._emit_file_log(
+                                            "control",
+                                            "ERROR",
+                                            f"控调监视周期异常：{ctrl_exc}",
+                                        )
+                                        control_state.clear()
+                                    next_ctrl = time.monotonic() + ctrl_interval
+
+                                # 2. 按设定周期执行量测采集
                                 new_period = self.store.get_interval()
                                 now = time.monotonic()
                                 if new_period != period and last_scan is not None:
                                     next_scan = max(now, last_scan + new_period)
                                 period = new_period
-                                if now < next_scan:
-                                    self._wake.wait(min(next_scan - now, 1))
-                                    continue
-                                if self._stop.is_set():
-                                    break
-                                last_scan = next_scan
-                                sample_due = True
-                                result = self.store.collect_once(
-                                    _writer=writer,
-                                    _source_cache=source_cache,
-                                    _plan_cache=plan_cache,
-                                )
-                                self.last_error = "; ".join(result["errors"].values())
+                                if now >= next_scan:
+                                    if self._stop.is_set():
+                                        break
+                                    last_scan = next_scan
+                                    sample_due = True
+                                    result = self.store.collect_once(
+                                        _writer=writer,
+                                        _source_cache=source_cache,
+                                        _plan_cache=plan_cache,
+                                    )
+                                    err_text = "; ".join(result["errors"].values())
+                                    self.last_error = err_text
+                                    if err_text and err_text != last_err_logged:
+                                        self.store._emit_file_log(
+                                            "collector",
+                                            "WARNING",
+                                            f"量测采集异常：{err_text}",
+                                        )
+                                        last_err_logged = err_text
+                                    elif not err_text and last_err_logged:
+                                        self.store._emit_file_log(
+                                            "collector",
+                                            "INFO",
+                                            f"量测采集已恢复正常，有效量测={result['valid_count']}/{result['total_count']}",
+                                        )
+                                        last_err_logged = ""
+                                    next_scan += period
+                                    now = time.monotonic()
+                                    if next_scan <= now:
+                                        next_scan += period * (
+                                            1 + math.floor((now - next_scan) / period)
+                                        )
                             except Exception as exc:
                                 LOG.exception("device collector cycle failed")
                                 self.last_error = str(exc)
+                                self.store._emit_file_log(
+                                    "collector",
+                                    "ERROR",
+                                    f"设备采集周期发生异常：{exc}",
+                                )
                                 plan_cache.clear()
+                                control_state.clear()
                                 if writer is not None:
                                     try:
                                         writer.close()
                                     except Exception:
                                         pass
                                     writer = None
-                                if not sample_due:
-                                    self._wake.wait(1)
-                                    continue
-                            next_scan += period
+                                if sample_due:
+                                    next_scan = time.monotonic() + (period or DEFAULT_INTERVAL_SECONDS)
+                                self._wake.wait(min(1.0, ctrl_interval))
+                                continue
+
                             now = time.monotonic()
-                            if next_scan <= now:
-                                next_scan += period * (
-                                    1 + math.floor((now - next_scan) / period)
-                                )
-                            self._wake.wait(min(next_scan - now, 1))
+                            wait_s = min(
+                                max(0.02, next_ctrl - now),
+                                max(0.02, next_scan - now),
+                                0.5,
+                            )
+                            self._wake.wait(wait_s)
                     finally:
+                        self.store._emit_file_log(
+                            "collector",
+                            "PROCESS",
+                            "设备采集与控调监视线程已停止",
+                        )
                         try:
                             for entry in source_cache.values():
                                 try:

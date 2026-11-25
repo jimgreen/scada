@@ -606,7 +606,11 @@ class PortalService:
                     col_types = {c[1]: (c[2] or "").upper() for c in cols}
                     if "idx" not in col_names or "name" not in col_names:
                         continue
-                    metrics = [cn[:-4] for cn in col_names if cn.endswith("_rtu")]
+                    metrics = [
+                        cn[:-4]
+                        for cn in col_names
+                        if cn.endswith("_rtu") and not cn.endswith("_cmd_rtu")
+                    ]
                     if not metrics:
                         continue
                     select_cols = ["idx", "name"]
