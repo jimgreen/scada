@@ -395,12 +395,6 @@
               <select id="comm-rtu-filter" aria-label="按 RTU 筛选">
                 <option value="">全部 RTU</option>
               </select>
-              <select id="comm-kind-filter" aria-label="四遥类型">
-                <option value="yc">遥测 YC</option>
-                <option value="yx">遥信 YX</option>
-                <option value="yt">遥调 YT</option>
-                <option value="yk">遥控 YK</option>
-              </select>
               <input id="comm-point-search" type="search" placeholder="搜索测点名称或点号…" aria-label="搜索测点" />
             </div>
           </div>
@@ -450,6 +444,12 @@
           </div>
 
           <div class="table-panel" id="comm-points-panel" hidden>
+            <div class="sub-tab-bar" id="comm-kind-tabs" role="tablist" aria-label="四遥类型">
+              <button type="button" class="sub-tab-btn active" role="tab" aria-selected="true" data-kind="yc">遥测 YC</button>
+              <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-kind="yx">遥信 YX</button>
+              <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-kind="yt">遥调 YT</button>
+              <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-kind="yk">遥控 YK</button>
+            </div>
             <div class="table-wrap">
               <table>
                 <thead>

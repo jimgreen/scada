@@ -1334,6 +1334,40 @@ input[type="search"], select {
   display: none !important;
 }
 
+.sub-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: var(--border, 1px solid rgba(0, 229, 255, 0.18));
+  background: var(--bg-subtle, rgba(13, 27, 51, 0.55));
+  flex-shrink: 0;
+}
+
+html[data-theme] .sub-tab-bar button.sub-tab-btn {
+  padding: 5px 14px !important;
+  border-radius: var(--radius-btn, 6px) !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--text-secondary, #7da2c4) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+html[data-theme] .sub-tab-bar button.sub-tab-btn:hover {
+  background: var(--table-hover, rgba(0, 229, 255, 0.08)) !important;
+  color: var(--text-primary, #e6f7ff) !important;
+}
+
+html[data-theme] .sub-tab-bar button.sub-tab-btn.active {
+  background: var(--bg-selected, rgba(0, 229, 255, 0.16)) !important;
+  border-color: var(--accent, #00e5ff) !important;
+  color: var(--accent, #00e5ff) !important;
+  font-weight: 600 !important;
+}
+
 .table-wrap {
   flex: 1;
   overflow: auto;

@@ -43,6 +43,7 @@
     trendHoverX: null,
     // 通信图状态
     commTab: "rtus",
+    commPointKind: "yc",
     commPointOffset: 0,
     commPointLimit: 50,
     commPointTotal: 0,
@@ -1316,7 +1317,7 @@
         : '<tr><td colspan="9" class="empty-hint">暂无通信通道</td></tr>';
     } else {
       const qs = new URLSearchParams({
-        kind: $("#comm-kind-filter").value || "yc",
+        kind: state.commPointKind || "yc",
         limit: String(state.commPointLimit),
         offset: String(state.commPointOffset),
       });
@@ -1368,7 +1369,20 @@
     });
   });
   $("#comm-rtu-filter")?.addEventListener("change", () => { state.commPointOffset = 0; loadComm(); });
-  $("#comm-kind-filter")?.addEventListener("change", () => { state.commPointOffset = 0; loadComm(); });
+  $$("#comm-kind-tabs .sub-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.kind;
+      if (!kind || kind === state.commPointKind) return;
+      state.commPointKind = kind;
+      state.commPointOffset = 0;
+      $$("#comm-kind-tabs .sub-tab-btn").forEach((b) => {
+        const active = b === btn;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", String(active));
+      });
+      loadComm();
+    });
+  });
   $("#comm-point-search")?.addEventListener("input", () => { state.commPointOffset = 0; loadComm(); });
   $("#comm-prev")?.addEventListener("click", () => {
     state.commPointOffset = Math.max(0, state.commPointOffset - state.commPointLimit);
