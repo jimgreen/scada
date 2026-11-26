@@ -74,6 +74,13 @@
     logRecord: "runtime",
     logFilename: "",
     logLines: [],
+    // 极地管控大屏状态
+    cockpitHours: 6,
+    cockpitData: null,
+    cockpitHiddenPower: new Set(),
+    cockpitHiddenSched: new Set(),
+    cockpitPowerHoverX: null,
+    cockpitSchedHoverX: null,
   };
 
   function esc(val) {
@@ -356,7 +363,7 @@
 
   // ==================== 视图切换与路由 ====================
   function switchView(view, updateHash = true) {
-    const valid = ["home", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
+    const valid = ["home", "cockpit", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
     if (!valid.includes(view)) view = "home";
     state.view = view;
     document.body.classList.toggle("view-home", view === "home");
@@ -373,6 +380,9 @@
     refreshCurrentView();
     if (view === "home") {
       requestAnimationFrame(() => updateHeroFlowLines(lastRealtimeEnergy));
+    }
+    if (view === "cockpit") {
+      requestAnimationFrame(() => drawCockpitCharts());
     }
     if (view === "powerflow" && state.svgLoaded) {
       requestAnimationFrame(() => fitSvgView());
@@ -3143,6 +3153,525 @@
     btn.addEventListener("click", () => switchView(btn.dataset.efView));
   });
 
+  // ==================== 1.2 极地管控（三栏智慧微电网大屏） ====================
+  function cockpitPalette() {
+    const dark = isDarkTheme();
+    const cs = getComputedStyle(document.documentElement);
+    return {
+      series: dark ? SERIES_COLORS_DARK : SERIES_COLORS_LIGHT,
+      grid: dark ? "rgba(148, 163, 184, 0.14)" : "rgba(15, 23, 42, 0.08)",
+      zero: dark ? "rgba(148, 163, 184, 0.42)" : "rgba(15, 23, 42, 0.32)",
+      axis: cs.getPropertyValue("--text-secondary").trim() || (dark ? "#94A3B8" : "#64748B"),
+      text: cs.getPropertyValue("--text-primary").trim() || (dark ? "#F8FAFC" : "#0F172A"),
+      accent: cs.getPropertyValue("--accent").trim() || (dark ? "#38BDF8" : "#2563EB"),
+      tipBg: dark ? "rgba(9, 17, 32, 0.94)" : "rgba(255, 255, 255, 0.96)",
+      tipBorder: cs.getPropertyValue("--border-strong").trim() || (dark ? "rgba(56, 189, 248, 0.35)" : "#CBD5E1"),
+    };
+  }
+
+  function setCkPulse(id, powerKw, { reverse = false, warn = false } = {}) {
+    const el = $("#" + id);
+    const beadId = id.replace("ck-pulse-", "ck-bead-");
+    const bead = $("#" + beadId);
+    const p = Math.abs(Number(powerKw || 0));
+    const idle = p < 0.2;
+    if (el) {
+      el.classList.toggle("idle", idle);
+      el.classList.toggle("reverse", Boolean(reverse));
+      el.classList.toggle("warn", Boolean(warn));
+      if (!idle) {
+        const dur = Math.max(0.7, Math.min(2.6, 2.4 - Math.log10(p + 1) * 0.7));
+        el.style.animationDuration = `${dur.toFixed(2)}s`;
+      }
+    }
+    if (bead) {
+      bead.classList.toggle("idle", idle);
+      const motion = bead.querySelector("animateMotion");
+      if (motion && !idle) {
+        motion.setAttribute("keyPoints", reverse ? "1;0" : "0;1");
+        motion.setAttribute("keyTimes", "0;1");
+      }
+    }
+  }
+
+  function renderCkMix(sourceMix, greenPct) {
+    const legEl = $("#ck-mix-legend");
+    const barsEl = $("#ck-mix-bars");
+    const arcsEl = $("#ck-donut-arcs");
+    if (!legEl || !barsEl || !arcsEl) return;
+    const pal = cockpitPalette().series;
+    const items = Array.isArray(sourceMix) ? sourceMix : [];
+    const totalPct = items.reduce((acc, s) => acc + Math.max(0, Number(s.pct || 0)), 0) || 1;
+    const maxVal = Math.max(...items.map((s) => Number(s.value_wkwh || 0)), 0.01);
+
+    $("#ck-donut-green").textContent = `${fmtNum(greenPct, 1)}%`;
+
+    legEl.innerHTML = items.map((s, i) => {
+      const color = pal[i % pal.length];
+      return `<span class="ck-mix-leg-item"><i class="ck-mix-dot" style="background:${color}"></i>${esc(s.label)} <strong>${fmtNum(s.pct, 1)}%</strong></span>`;
+    }).join("");
+
+    barsEl.innerHTML = items.map((s, i) => {
+      const color = pal[i % pal.length];
+      const w = Math.max(6, Math.min(100, (Number(s.value_wkwh || 0) / maxVal) * 100));
+      return (
+        `<div class="ck-bar-row">` +
+        `<div class="ck-bar-top"><span>${esc(s.label)}</span><strong>${fmtNum(s.value_wkwh, 2)} 万kWh</strong></div>` +
+        `<div class="ck-bar-track"><div class="ck-bar-fill" style="width:${w.toFixed(1)}%;background:linear-gradient(90deg, ${color}55 0%, ${color} 100%)"></div></div>` +
+        `</div>`
+      );
+    }).join("");
+
+    const circ = 2 * Math.PI * 41;
+    let offset = 0;
+    arcsEl.innerHTML = items.map((s, i) => {
+      const frac = Math.max(0, Number(s.pct || 0)) / totalPct;
+      const segLen = Math.max(0, frac * circ - 1.8);
+      const color = pal[i % pal.length];
+      const svg = `<circle class="ck-donut-arc" cx="60" cy="60" r="41" stroke="${color}" stroke-dasharray="${segLen.toFixed(2)} ${(circ - segLen).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" />`;
+      offset += frac * circ;
+      return svg;
+    }).join("");
+  }
+
+  function renderCkLegend(containerId, seriesList, hiddenSet, onToggle) {
+    const el = $("#" + containerId);
+    if (!el) return;
+    const pal = cockpitPalette().series;
+    el.innerHTML = (seriesList || []).map((s, i) => {
+      const color = pal[i % pal.length];
+      const off = hiddenSet.has(s.key) ? " off" : "";
+      return `<button type="button" class="ck-leg-chip${off}" data-ck-key="${esc(s.key)}" title="${esc(s.label)}"><i class="ck-leg-dot" style="background:${color}"></i>${esc(s.label)}</button>`;
+    }).join("");
+    el.querySelectorAll("[data-ck-key]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const k = btn.dataset.ckKey;
+        if (hiddenSet.has(k)) hiddenSet.delete(k);
+        else hiddenSet.add(k);
+        onToggle();
+      });
+    });
+  }
+
+  function drawCockpitCurve(canvasId, seriesList, hiddenSet, hoverX, { showZero = false, areaFill = true } = {}) {
+    const canvas = $("#" + canvasId);
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.round(rect.width);
+    const H = Math.round(rect.height);
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const pal = cockpitPalette();
+    const visible = (seriesList || []).map((s, i) => ({
+      ...s,
+      color: pal.series[i % pal.series.length],
+    })).filter((s) => !hiddenSet.has(s.key) && Array.isArray(s.points) && s.points.length > 0);
+
+    const padL = 44;
+    const padR = 12;
+    const padT = 14;
+    const padB = 22;
+    const plotW = Math.max(10, W - padL - padR);
+    const plotH = Math.max(10, H - padT - padB);
+
+    if (!visible.length) {
+      ctx.fillStyle = pal.axis;
+      ctx.font = "12px Inter, 'Microsoft YaHei', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("暂无采样曲线", W / 2, H / 2);
+      return;
+    }
+
+    let minT = Infinity;
+    let maxT = -Infinity;
+    let minV = showZero ? 0 : Infinity;
+    let maxV = showZero ? 0 : -Infinity;
+    for (const s of visible) {
+      for (const pt of s.points) {
+        const t = Number(pt[0]);
+        const v = Number(pt[1]);
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+    if (!Number.isFinite(minT) || !Number.isFinite(minV)) return;
+    if (maxT <= minT) {
+      minT -= 60000;
+      maxT += 60000;
+    }
+    if (Math.abs(maxV - minV) < 1e-3) {
+      maxV += 5;
+      minV = showZero ? Math.min(0, minV - 5) : Math.max(0, minV - 5);
+    } else {
+      const span = maxV - minV;
+      maxV += span * 0.12;
+      minV -= span * (showZero ? 0.12 : 0.08);
+      if (!showZero && minV < 0 && visible.every((s) => s.points.every((p) => p[1] >= 0))) {
+        minV = 0;
+      }
+    }
+
+    const xOf = (t) => padL + ((t - minT) / (maxT - minT)) * plotW;
+    const yOf = (v) => padT + ((maxV - v) / (maxV - minV)) * plotH;
+
+    // 水平网格与 Y 轴刻度（单位 kW）
+    const ticks = 4;
+    ctx.font = "10.5px 'JetBrains Mono', Consolas, monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i <= ticks; i += 1) {
+      const frac = i / ticks;
+      const val = maxV - frac * (maxV - minV);
+      const y = padT + frac * plotH;
+      ctx.strokeStyle = pal.grid;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(W - padR, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = pal.axis;
+      ctx.fillText(Math.abs(val) >= 100 ? val.toFixed(0) : val.toFixed(1), padL - 5, y);
+    }
+
+    // 单位标识
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = pal.axis;
+    ctx.fillText("kW", 6, 2);
+
+    // 零轴强调线（双向储能/氢能曲线）
+    if (showZero && minV < 0 && maxV > 0) {
+      const y0 = yOf(0);
+      ctx.strokeStyle = pal.zero;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(padL, y0);
+      ctx.lineTo(W - padR, y0);
+      ctx.stroke();
+    }
+
+    // X 轴时间刻度
+    const xTicks = 4;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = pal.axis;
+    for (let i = 0; i <= xTicks; i += 1) {
+      const t = minT + (i / xTicks) * (maxT - minT);
+      const x = xOf(t);
+      const d = new Date(t);
+      const label = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      ctx.fillText(label, Math.max(padL + 14, Math.min(W - padR - 14, x)), H - padB + 5);
+    }
+
+    // 绘制各曲线（平滑曲线 + 霓虹垂直渐变面积 + 轻柔发光丝带 + 末端实时光点）
+    const dark = isDarkTheme();
+    const baseLineY = showZero && minV < 0 && maxV > 0 ? yOf(0) : padT + plotH;
+    const traceSmooth = (coords) => {
+      ctx.moveTo(coords[0][0], coords[0][1]);
+      if (coords.length === 2) {
+        ctx.lineTo(coords[1][0], coords[1][1]);
+        return;
+      }
+      for (let i = 0; i < coords.length - 1; i += 1) {
+        const cur = coords[i];
+        const nxt = coords[i + 1];
+        const mx = (cur[0] + nxt[0]) * 0.5;
+        const my = (cur[1] + nxt[1]) * 0.5;
+        if (i === 0) ctx.lineTo(mx, my);
+        else ctx.quadraticCurveTo(cur[0], cur[1], mx, my);
+      }
+      const last = coords[coords.length - 1];
+      ctx.lineTo(last[0], last[1]);
+    };
+
+    for (const s of visible) {
+      const pts = s.points;
+      const coords = pts.map((p) => [xOf(p[0]), yOf(p[1])]);
+
+      if (coords.length >= 2 && areaFill) {
+        ctx.save();
+        ctx.beginPath();
+        traceSmooth(coords);
+        ctx.lineTo(coords[coords.length - 1][0], baseLineY);
+        ctx.lineTo(coords[0][0], baseLineY);
+        ctx.closePath();
+        const grad = showZero && minV < 0 && maxV > 0
+          ? ctx.createLinearGradient(0, padT, 0, padT + plotH)
+          : ctx.createLinearGradient(0, padT, 0, baseLineY);
+        if (showZero && minV < 0 && maxV > 0) {
+          const zFrac = Math.max(0.05, Math.min(0.95, (baseLineY - padT) / plotH));
+          grad.addColorStop(0, s.color + (dark ? "54" : "30"));
+          grad.addColorStop(zFrac, s.color + "06");
+          grad.addColorStop(1, s.color + (dark ? "54" : "30"));
+        } else {
+          grad.addColorStop(0, s.color + (dark ? "58" : "2e"));
+          grad.addColorStop(1, s.color + "04");
+        }
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      if (coords.length === 1) {
+        ctx.arc(coords[0][0], coords[0][1], 3, 0, Math.PI * 2);
+        ctx.fillStyle = s.color;
+        ctx.fill();
+      } else {
+        traceSmooth(coords);
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 2;
+        if (dark) {
+          ctx.shadowColor = s.color;
+          ctx.shadowBlur = 8;
+        }
+        ctx.stroke();
+        // 末端发光实时光点
+        const last = coords[coords.length - 1];
+        ctx.beginPath();
+        ctx.arc(last[0], last[1], 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = dark ? "#ffffff" : s.color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(last[0], last[1], 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = s.color + "40";
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // 十字准星与半透明圆角 Tooltip
+    if (hoverX !== null && hoverX >= padL && hoverX <= W - padR) {
+      const targetT = minT + ((hoverX - padL) / plotW) * (maxT - minT);
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(hoverX, padT);
+      ctx.lineTo(hoverX, padT + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const rows = [];
+      let snapTs = targetT;
+      for (const s of visible) {
+        let best = s.points[0];
+        let bestDist = Math.abs(best[0] - targetT);
+        for (let i = 1; i < s.points.length; i += 1) {
+          const d = Math.abs(s.points[i][0] - targetT);
+          if (d < bestDist) {
+            bestDist = d;
+            best = s.points[i];
+          }
+        }
+        snapTs = best[0];
+        const bx = xOf(best[0]);
+        const by = yOf(best[1]);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(bx, by, 3, 0, Math.PI * 2);
+        ctx.fill();
+        rows.push({ label: s.label, val: `${Number(best[1]).toFixed(1)} kW`, color: s.color });
+      }
+      const d = new Date(snapTs);
+      const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+      const lineH = 15;
+      const boxW = 152;
+      const boxH = 22 + rows.length * lineH;
+      const bx = hoverX + 10 + boxW > W - 4 ? Math.max(padL + 2, hoverX - boxW - 10) : hoverX + 10;
+      const by = padT + 2;
+
+      ctx.fillStyle = pal.tipBg;
+      ctx.strokeStyle = pal.tipBorder;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(bx, by, boxW, boxH, 6);
+      else ctx.rect(bx, by, boxW, boxH);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = "10.5px 'JetBrains Mono', Consolas, monospace";
+      ctx.fillStyle = pal.axis;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(timeStr, bx + 8, by + 5);
+
+      rows.forEach((r, i) => {
+        const ry = by + 20 + i * lineH;
+        ctx.fillStyle = r.color;
+        ctx.beginPath();
+        ctx.arc(bx + 11, ry + 6, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = pal.text;
+        ctx.textAlign = "left";
+        ctx.fillText(r.label.slice(0, 10), bx + 18, ry);
+        ctx.textAlign = "right";
+        ctx.fillText(r.val, bx + boxW - 8, ry);
+      });
+    }
+  }
+
+  function drawCockpitCharts() {
+    const data = state.cockpitData;
+    if (!data) return;
+    renderCkMix(data.source_mix, data.polar_stats?.green_ratio_pct);
+    renderCkLegend("ck-power-legend", data.power_curves, state.cockpitHiddenPower, drawCockpitCharts);
+    renderCkLegend("ck-sched-legend", data.storage_schedule, state.cockpitHiddenSched, drawCockpitCharts);
+    drawCockpitCurve("ck-power-canvas", data.power_curves, state.cockpitHiddenPower, state.cockpitPowerHoverX, {
+      showZero: false,
+      areaFill: true,
+    });
+    drawCockpitCurve("ck-storage-canvas", data.storage_schedule, state.cockpitHiddenSched, state.cockpitSchedHoverX, {
+      showZero: true,
+      areaFill: true,
+    });
+  }
+
+  function renderPolarCockpit(data) {
+    state.cockpitData = data;
+    const cum = data.cumulative || {};
+    const res = data.resilience || {};
+    const hub = data.hub || {};
+    const n = hub.nodes || {};
+    const st = data.polar_stats || {};
+    const rn = data.renewables || {};
+
+    // 左上 L1
+    $("#ck-run-days").textContent = `${data.running_days ?? "--"} 天`;
+    $("#ck-total-supply").textContent = fmtNum(cum.total_supply_wkwh, 2);
+    $("#ck-total-load").textContent = fmtNum(cum.total_load_wkwh, 2);
+    $("#ck-diesel-saved").textContent = fmtNum(cum.diesel_saved_tons, 1);
+    $("#ck-co2-reduced").textContent = fmtNum(cum.co2_reduced_tons, 1);
+
+    // 左中 L2
+    $("#ck-replace-pct").textContent = `替代率 ${fmtNum(res.diesel_replace_pct, 1)}%`;
+    $("#ck-autonomy-h").textContent = fmtNum(res.autonomy_hours, 1);
+    $("#ck-wind-saved").textContent = fmtNum(res.wind_saved_tons, 1);
+    $("#ck-pv-saved").textContent = fmtNum(res.pv_saved_tons, 1);
+    const pText = res.hydro_pressure_mpa != null ? ` · ${fmtNum(res.hydro_pressure_mpa, 2)} MPa` : "";
+    $("#ck-h2-reserve").textContent = `${fmtNum(res.hydro_soc_pct, 1)}%${pText}`;
+
+    // 中上 C1：能量枢纽 6 节点 + 光轨方向
+    $("#ck-hub-green").textContent = `${fmtNum(hub.green_ratio_pct, 1)}%`;
+    $("#ck-hub-gen").textContent = fmtNum(hub.total_gen_kw, 1);
+    $("#ck-hub-load").textContent = fmtNum(hub.total_load_kw, 1);
+
+    $("#ck-n-pv-p").textContent = `${fmtNum(n.pv?.p_kw, 1)} kW`;
+    $("#ck-n-pv-sub").textContent = n.pv?.irradiance_wm2 != null
+      ? `辐照 ${fmtNum(n.pv.irradiance_wm2, 0)} W/m²`
+      : `在线 ${n.pv?.online ?? 0}/${n.pv?.count ?? 0}`;
+
+    $("#ck-n-wind-p").textContent = `${fmtNum(n.wind?.p_kw, 1)} kW`;
+    $("#ck-n-wind-sub").textContent = n.wind?.wind_speed_ms != null
+      ? `风速 ${fmtNum(n.wind.wind_speed_ms, 1)} m/s`
+      : `在线 ${n.wind?.online ?? 0}/${n.wind?.count ?? 0}`;
+
+    const esStateText = n.storage?.state === "charge" ? "充电" : (n.storage?.state === "discharge" ? "放电" : "待机");
+    $("#ck-n-es-p").textContent = `${esStateText} ${fmtNum(Math.abs(n.storage?.p_kw ?? 0), 1)} kW`;
+    $("#ck-n-es-sub").textContent = `SOC ${fmtNum(n.storage?.soc_pct, 1)}%`;
+
+    $("#ck-n-load-p").textContent = `${fmtNum(n.load?.p_kw, 1)} kW`;
+    $("#ck-n-load-sub").textContent = `DC ${fmtNum(n.load?.dc_kw, 0)} / AC ${fmtNum(n.load?.ac_kw, 0)}`;
+
+    const h2Net = Number(n.hydrogen?.gen_kw || 0) - Number(n.hydrogen?.prod_kw || 0);
+    const h2Label = h2Net > 0.2 ? `氢电 ${fmtNum(n.hydrogen?.gen_kw, 1)} kW`
+      : (Number(n.hydrogen?.prod_kw || 0) > 0.2 ? `制氢 ${fmtNum(n.hydrogen?.prod_kw, 1)} kW` : "待机 0.0 kW");
+    $("#ck-n-h2-p").textContent = h2Label;
+    $("#ck-n-h2-sub").textContent = `储氢 ${fmtNum(n.hydrogen?.soc_pct, 1)}%`;
+
+    $("#ck-n-diesel-p").textContent = `${fmtNum(n.diesel?.p_kw, 1)} kW`;
+    $("#ck-n-diesel-sub").textContent = `在线 ${n.diesel?.online ?? 0}/${n.diesel?.count ?? 0}`;
+
+    setCkPulse("ck-pulse-pv", n.pv?.p_kw);
+    setCkPulse("ck-pulse-wind", n.wind?.p_kw);
+    setCkPulse("ck-pulse-storage", n.storage?.p_kw, { reverse: n.storage?.state === "charge" });
+    setCkPulse("ck-pulse-load", n.load?.p_kw);
+    setCkPulse("ck-pulse-hydrogen", Math.max(Number(n.hydrogen?.prod_kw || 0), Number(n.hydrogen?.gen_kw || 0)), {
+      reverse: h2Net > 0.2,
+    });
+    setCkPulse("ck-pulse-diesel", n.diesel?.p_kw, { warn: true });
+
+    // 右上 R1
+    $("#ck-st-green").textContent = `${fmtNum(st.green_ratio_pct, 1)}%`;
+    $("#ck-st-temp").textContent = st.temperature_c != null ? `${fmtNum(st.temperature_c, 1)} °C` : "—";
+    $("#ck-st-wind").textContent = st.wind_speed_ms != null ? `${fmtNum(st.wind_speed_ms, 1)} m/s` : "—";
+    $("#ck-st-irr").textContent = st.irradiance_wm2 != null ? `${fmtNum(st.irradiance_wm2, 0)} W/m²` : "—";
+    $("#ck-st-bus").textContent = `${fmtNum(st.dc_voltage_v, 0)} / ${fmtNum(st.ac_voltage_v, 0)} V`;
+    const healthEl = $("#ck-st-health");
+    healthEl.textContent = `${st.alarm_unacked ?? 0} / ${st.rtu_online ?? 0}/${st.rtu_total ?? 0}`;
+    healthEl.style.color = Number(st.alarm_unacked || 0) > 0 ? "var(--warn)" : "var(--ok)";
+
+    // 右中 R2
+    $("#ck-pyr-wind-total").textContent = fmtNum(rn.wind?.total_wkwh, 2);
+    $("#ck-pyr-wind-live").textContent = `${fmtNum(rn.wind?.live_kw, 1)} kW`;
+    $("#ck-pyr-wind-today").textContent = `${fmtNum(rn.wind?.today_kwh, 1)} kWh`;
+    $("#ck-pyr-pv-total").textContent = fmtNum(rn.pv?.total_wkwh, 2);
+    $("#ck-pyr-pv-live").textContent = `${fmtNum(rn.pv?.live_kw, 1)} kW`;
+    $("#ck-pyr-pv-today").textContent = `${fmtNum(rn.pv?.today_kwh, 1)} kWh`;
+
+    // 侧栏健康与告警徽标同步
+    if (data.health) {
+      $("#health-rtus").textContent = `${data.health.rtu_online} / ${data.health.rtu_total}`;
+      $("#health-points").textContent = `${data.health.valid_measurements} / ${data.health.bound_measurements}`;
+      $("#health-gen").textContent = `${fmtNum(hub.total_gen_kw, 1)} kW`;
+      $("#health-load").textContent = `${fmtNum(hub.total_load_kw, 1)} kW`;
+      updateAlarmBadge(data.health.alarm_unacked);
+      updateCollectorBadge(data.health.collector_running);
+    }
+
+    drawCockpitCharts();
+  }
+
+  async function loadPolarCockpit() {
+    const data = await api(`/api/polar-cockpit?hours=${encodeURIComponent(state.cockpitHours)}`);
+    renderPolarCockpit(data);
+  }
+
+  // 极地管控交互绑定（节点跳转、时间窗切换、Canvas 十字准星）
+  $$("#view-cockpit [data-ck-cat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.devCategory = btn.dataset.ckCat || "";
+      switchView("devices");
+    });
+  });
+  $("#ck-st-alarm-btn")?.addEventListener("click", () => switchView("alarms"));
+  $$("#ck-hours-seg [data-ck-hours]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.cockpitHours = Number(btn.dataset.ckHours || 6);
+      $$("#ck-hours-seg [data-ck-hours]").forEach((b) => b.classList.toggle("active", b === btn));
+      loadPolarCockpit().catch((err) => setConnection(false, err.message));
+    });
+  });
+  function bindCkCanvasHover(canvasId, key) {
+    const el = $("#" + canvasId);
+    if (!el) return;
+    el.addEventListener("mousemove", (e) => {
+      const r = el.getBoundingClientRect();
+      state[key] = e.clientX - r.left;
+      drawCockpitCharts();
+    });
+    el.addEventListener("mouseleave", () => {
+      state[key] = null;
+      drawCockpitCharts();
+    });
+  }
+  bindCkCanvasHover("ck-power-canvas", "cockpitPowerHoverX");
+  bindCkCanvasHover("ck-storage-canvas", "cockpitSchedHoverX");
+
   // ==================== 轮询调度、快捷键盘与主题同步 ====================
   let pendingRefresh = false;
   let overviewTick = 0;
@@ -3158,6 +3687,8 @@
       const tasks = [];
       if (viewAtStart === "home") {
         tasks.push(loadOverview());
+      } else if (viewAtStart === "cockpit") {
+        tasks.push(loadPolarCockpit());
       } else if (viewAtStart === "energyflow") {
         tasks.push(loadEnergyFlow());
       } else {
@@ -3210,7 +3741,7 @@
       }
       return;
     }
-    const keyViewMap = { "1": "home", "2": "energyflow", "3": "powerflow", "4": "devices", "5": "alarms", "6": "comm", "7": "logs" };
+    const keyViewMap = { "1": "home", "2": "cockpit", "3": "energyflow", "4": "powerflow", "5": "devices", "6": "alarms", "7": "comm", "8": "logs" };
     if (keyViewMap[e.key]) {
       switchView(keyViewMap[e.key]);
     }
@@ -3238,6 +3769,7 @@
     if (state.pfData?.flows) updatePowerflowArrowsData(state.pfData.flows);
     renderTrendChips();
     drawTrendChart();
+    if (state.view === "cockpit") drawCockpitCharts();
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   document.addEventListener("visibilitychange", () => {
@@ -3247,6 +3779,7 @@
 
   window.addEventListener("resize", () => {
     if (state.view === "home") updateHeroFlowLines(lastRealtimeEnergy);
+    if (state.view === "cockpit") drawCockpitCharts();
     if (state.view === "devices") drawTrendChart();
   });
 
@@ -3256,9 +3789,10 @@
     }).observe($("#hero-stage"));
   }
 
-  // 启动入口（同时支持 #hash 与 /energy-flow、/alarms 等路径直达）
+  // 启动入口（同时支持 #hash 与 /cockpit、/energy-flow、/alarms 等路径直达）
   const initialHash = location.hash.replace(/^#/, "");
   const pathViewMap = {
+    "/cockpit": "cockpit",
     "/energy-flow": "energyflow",
     "/powerflow": "powerflow",
     "/devices": "devices",
@@ -3266,7 +3800,7 @@
     "/comm": "comm",
     "/logs": "logs",
   };
-  const validViews = ["home", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
+  const validViews = ["home", "cockpit", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
   const initialView = validViews.includes(initialHash)
     ? initialHash
     : (pathViewMap[location.pathname] || "home");

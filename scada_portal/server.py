@@ -212,7 +212,7 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
 
         try:
             # 静态页面与前端资源
-            if path in {"/", "/index.html", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs"}:
+            if path in {"/", "/index.html", "/cockpit", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs"}:
                 return self._serve_file(STATIC_DIR / "index.html")
             if path.startswith("/static/"):
                 rel = path.removeprefix("/static/")
@@ -237,6 +237,9 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 })
             if path == "/api/overview":
                 return self._json(200, self.service.get_overview())
+            if path == "/api/polar-cockpit":
+                hours = _parse_float(query.get("hours"), "hours", default=6.0)
+                return self._json(200, self.service.get_polar_cockpit(hours=hours))
             if path == "/api/energy-flow":
                 return self._json(200, self.service.get_energy_flow())
             if path == "/api/svg":

@@ -252,6 +252,7 @@ class ScadaPortalTests(unittest.TestCase):
             "/static/portal.css", "/static/portal.js",
             "/static/ui-theme.css", "/static/ui-i18n.js",
             "/static/assets/qinling-hero.jpg",
+            "/static/assets/qinling-station-holo.png",
         ):
             status, _, body = http_get(self.httpd.server_port, path)
             self.assertEqual(status, 200, path)
@@ -414,6 +415,22 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertIn("nodes", ef)
         self.assertIn("sources", ef)
         self.assertGreaterEqual(ef["summary"]["total_load_kw"], 0.0)
+
+        # 1.2 极地管控三栏大屏 SPA 路由与聚合接口
+        status, _, ck_page = http_get(self.httpd.server_port, "/cockpit")
+        self.assertEqual(status, 200)
+        self.assertIn("view-cockpit", ck_page.decode("utf-8"))
+
+        status, _, ck_raw = http_get(self.httpd.server_port, "/api/polar-cockpit?hours=6")
+        self.assertEqual(status, 200)
+        ck = json.loads(ck_raw.decode("utf-8"))
+        self.assertEqual(set(ck["hub"]["nodes"].keys()), {"wind", "pv", "storage", "load", "hydrogen", "diesel"})
+        self.assertGreater(ck["cumulative"]["total_supply_wkwh"], 0.0)
+        self.assertGreater(ck["cumulative"]["co2_reduced_tons"], 0.0)
+        self.assertGreaterEqual(ck["resilience"]["autonomy_hours"], 0.0)
+        self.assertEqual(len(ck["source_mix"]), 4)
+        self.assertEqual(len(ck["power_curves"]), 5)
+        self.assertGreaterEqual(len(ck["storage_schedule"]), 1)
 
         # 2. 单指标趋势查询与单边时间窗/超大整数防御
         status, _, tr_raw = http_get(self.httpd.server_port, "/api/devices/ACGenerator/1/trend?hours=1&metric=p")

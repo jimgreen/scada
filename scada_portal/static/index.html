@@ -69,6 +69,10 @@
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
             <span>系统首页</span>
           </button>
+          <button type="button" class="nav-item" data-view="cockpit">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><path d="M12 22V12M21 7l-9 5-9-5"/></svg>
+            <span>极地管控</span>
+          </button>
           <button type="button" class="nav-item" data-view="energyflow">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5m6 0h5M4 12h16M4 18h5m6 0h5"/><circle cx="12" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/></svg>
             <span>全景流向</span>
@@ -282,6 +286,469 @@
                 <span>氢能总发电</span>
                 <div><strong id="kpi-hydro-total">--</strong><small>万kWh</small></div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 1.2 极地管控（极地微电网三栏智慧大屏） ==================== -->
+        <section id="view-cockpit" class="portal-view ck-view" hidden>
+          <!-- 极地极光与星尘氛围层 -->
+          <div class="ck-aurora-bg" aria-hidden="true"></div>
+          <div class="ck-grid">
+            <!-- 左栏：极地运行总览 / 节油保供与自持 / 电源结构分析 -->
+            <div class="ck-col ck-col-left">
+              <article class="ck-panel ck-panel-cum">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>极地运行总览</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <span class="ck-head-meta" id="ck-run-days">-- 天</span>
+                </header>
+                <div class="ck-cum-grid">
+                  <div class="ck-cum-item">
+                    <span class="ck-orb" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H12L11 22l8.5-11.5H12z"/></svg>
+                    </span>
+                    <div class="ck-cum-val"><strong id="ck-total-supply">--</strong><small>万kWh</small></div>
+                    <span class="ck-cum-label">累计供电</span>
+                  </div>
+                  <div class="ck-cum-item">
+                    <span class="ck-orb" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M8 4v5M16 4v5M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>
+                    </span>
+                    <div class="ck-cum-val"><strong id="ck-total-load">--</strong><small>万kWh</small></div>
+                    <span class="ck-cum-label">科考负荷</span>
+                  </div>
+                  <div class="ck-cum-item">
+                    <span class="ck-orb ok" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M12 3s6 6.8 6 11a6 6 0 1 1-12 0c0-4.2 6-11 6-11Z"/><path d="M9.5 15a2.5 2.5 0 0 0 2.5 2.5"/></svg>
+                    </span>
+                    <div class="ck-cum-val"><strong id="ck-diesel-saved">--</strong><small>吨</small></div>
+                    <span class="ck-cum-label">累计节油</span>
+                  </div>
+                  <div class="ck-cum-item">
+                    <span class="ck-orb ok" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M19 5c-6 0-11 3.5-13 9 2.5 1 5.5 1.5 8 0 3.5-2 5-5.5 5-9Z"/><path d="M6 19c1.5-2.5 4-4.5 7-6"/></svg>
+                    </span>
+                    <div class="ck-cum-val"><strong id="ck-co2-reduced">--</strong><small>吨 CO₂</small></div>
+                    <span class="ck-cum-label">累计减碳</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="ck-panel ck-panel-resilience">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>节油保供与自持</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <span class="ck-head-meta" id="ck-replace-pct">替代率 --%</span>
+                </header>
+                <div class="ck-res-body">
+                  <div class="ck-res-hero">
+                    <span class="ck-orb lg ok" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M12 3 4 7v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V7l-8-4Z"/><path d="M9 12l2 2 4-4"/></svg>
+                    </span>
+                    <span class="ck-res-hero-label">电氢孤网自持</span>
+                    <div class="ck-res-hero-val"><strong id="ck-autonomy-h">--</strong><small>h</small></div>
+                  </div>
+                  <div class="ck-res-rows">
+                    <div class="ck-res-row">
+                      <span>风机节油</span>
+                      <strong><em id="ck-wind-saved">--</em> <small>吨</small></strong>
+                    </div>
+                    <div class="ck-res-row">
+                      <span>光伏节油</span>
+                      <strong><em id="ck-pv-saved">--</em> <small>吨</small></strong>
+                    </div>
+                    <div class="ck-res-row">
+                      <span>储氢余量</span>
+                      <strong><em id="ck-h2-reserve">--</em></strong>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="ck-panel ck-panel-mix">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>电源结构占比</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                </header>
+                <div class="ck-mix-legend" id="ck-mix-legend"></div>
+                <div class="ck-mix-body">
+                  <div class="ck-donut-wrap">
+                    <svg class="ck-donut-svg" viewBox="0 0 120 120" aria-hidden="true">
+                      <circle class="ck-donut-halo" cx="60" cy="60" r="53" />
+                      <circle class="ck-donut-track" cx="60" cy="60" r="41" />
+                      <g id="ck-donut-arcs"></g>
+                    </svg>
+                    <div class="ck-donut-center">
+                      <strong id="ck-donut-green">--%</strong>
+                      <span>绿电</span>
+                    </div>
+                  </div>
+                  <div class="ck-mix-bars" id="ck-mix-bars"></div>
+                </div>
+              </article>
+            </div>
+
+            <!-- 中栏：极地孤网智慧能量枢纽 / 源荷功率曲线 -->
+            <div class="ck-col ck-col-center">
+              <article class="ck-panel ck-panel-hub">
+                <div class="ck-hub-stage" id="ck-hub-stage">
+                  <!-- 中央全息能量光轨、粒子光球与 3D 浮空水晶枢纽 SVG -->
+                  <svg class="ck-hub-svg" viewBox="0 0 680 360" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                    <defs>
+                      <radialGradient id="ck-core-glow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#38e8ff" stop-opacity="0.62" />
+                        <stop offset="45%" stop-color="#0ea5e9" stop-opacity="0.24" />
+                        <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+                      </radialGradient>
+                      <radialGradient id="ck-floor-halo" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.52" />
+                        <stop offset="55%" stop-color="#0284c7" stop-opacity="0.18" />
+                        <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+                      </radialGradient>
+                      <linearGradient id="ck-beam-up" x1="0%" y1="100%" x2="0%" y2="0%">
+                        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.32" />
+                        <stop offset="65%" stop-color="#67e8f9" stop-opacity="0.08" />
+                        <stop offset="100%" stop-color="#67e8f9" stop-opacity="0" />
+                      </linearGradient>
+                      <linearGradient id="ck-cube-top" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#e0faff" stop-opacity="0.96" />
+                        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.88" />
+                      </linearGradient>
+                      <linearGradient id="ck-cube-left" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.82" />
+                        <stop offset="100%" stop-color="#0369a1" stop-opacity="0.92" />
+                      </linearGradient>
+                      <linearGradient id="ck-cube-right" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.84" />
+                        <stop offset="100%" stop-color="#0b2244" stop-opacity="0.94" />
+                      </linearGradient>
+                      <linearGradient id="ck-wing-glass" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stop-color="#a5f3fc" stop-opacity="0.78" />
+                        <stop offset="100%" stop-color="#2563eb" stop-opacity="0.28" />
+                      </linearGradient>
+                      <filter id="ck-glow-filter" x="-40%" y="-40%" width="180%" height="180%">
+                        <feGaussianBlur stdDeviation="3.4" result="b" />
+                        <feMerge>
+                          <feMergeNode in="b" />
+                          <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                      </filter>
+                    </defs>
+
+                    <!-- 背景透视星盘与呼吸脉冲底座 -->
+                    <ellipse cx="340" cy="204" rx="254" ry="108" class="ck-hub-ring outer" />
+                    <ellipse cx="340" cy="204" rx="168" ry="70" class="ck-hub-ring mid" />
+                    <ellipse cx="340" cy="204" rx="124" ry="52" fill="url(#ck-floor-halo)" />
+                    <ellipse cx="340" cy="204" rx="92" ry="38" class="ck-hub-ring core" />
+                    <ellipse cx="340" cy="204" rx="80" ry="32" class="ck-hub-ripple" />
+
+                    <!-- 旋转全息底座刻度光盘（透视压扁） -->
+                    <g transform="translate(340, 204) scale(1, 0.42)">
+                      <g class="ck-spin-cw">
+                        <circle r="112" class="ck-dial-ring" />
+                        <circle r="134" class="ck-dial-ticks" />
+                      </g>
+                      <g class="ck-spin-ccw">
+                        <circle r="90" class="ck-dial-inner" />
+                      </g>
+                    </g>
+
+                    <!-- 中央向上扩散全息极光光幕 -->
+                    <polygon points="246,204 434,204 410,66 270,66" fill="url(#ck-beam-up)" opacity="0.68" />
+
+                    <!-- 6 条动态能量流光轨（左 3 源汇入中心，右 3 端与中心双向交互） -->
+                    <g class="ck-hub-tracks">
+                      <path id="ck-path-pv" class="ck-flow-track" d="M 116 84 Q 214 96 292 170" />
+                      <path id="ck-path-wind" class="ck-flow-track" d="M 96 192 Q 196 196 266 196" />
+                      <path id="ck-path-storage" class="ck-flow-track" d="M 134 294 Q 232 282 298 222" />
+                      <path id="ck-path-load" class="ck-flow-track" d="M 388 170 Q 466 96 564 84" />
+                      <path id="ck-path-hydrogen" class="ck-flow-track" d="M 414 196 Q 484 196 584 192" />
+                      <path id="ck-path-diesel" class="ck-flow-track" d="M 546 294 Q 448 282 382 222" />
+                    </g>
+                    <g class="ck-hub-pulses" filter="url(#ck-glow-filter)">
+                      <path id="ck-pulse-pv" class="ck-flow-pulse" d="M 116 84 Q 214 96 292 170" />
+                      <path id="ck-pulse-wind" class="ck-flow-pulse" d="M 96 192 Q 196 196 266 196" />
+                      <path id="ck-pulse-storage" class="ck-flow-pulse" d="M 134 294 Q 232 282 298 222" />
+                      <path id="ck-pulse-load" class="ck-flow-pulse" d="M 388 170 Q 466 96 564 84" />
+                      <path id="ck-pulse-hydrogen" class="ck-flow-pulse" d="M 414 196 Q 484 196 584 192" />
+                      <path id="ck-pulse-diesel" class="ck-flow-pulse" d="M 546 294 Q 448 282 382 222" />
+                    </g>
+
+                    <!-- 沿路径飞驰的仙气能量光珠 -->
+                    <g class="ck-orb-particles" filter="url(#ck-glow-filter)">
+                      <circle r="3.4" class="ck-orb-bead" id="ck-bead-pv">
+                        <animateMotion dur="2.6s" repeatCount="indefinite" path="M 116 84 Q 214 96 292 170" />
+                      </circle>
+                      <circle r="3.6" class="ck-orb-bead" id="ck-bead-wind">
+                        <animateMotion dur="2.1s" repeatCount="indefinite" path="M 96 192 Q 196 196 266 196" />
+                      </circle>
+                      <circle r="3.6" class="ck-orb-bead ok" id="ck-bead-storage">
+                        <animateMotion dur="2.4s" repeatCount="indefinite" path="M 134 294 Q 232 282 298 222" />
+                      </circle>
+                      <circle r="3.8" class="ck-orb-bead" id="ck-bead-load">
+                        <animateMotion dur="1.9s" repeatCount="indefinite" path="M 388 170 Q 466 96 564 84" />
+                      </circle>
+                      <circle r="3.4" class="ck-orb-bead ok" id="ck-bead-hydrogen">
+                        <animateMotion dur="2.5s" repeatCount="indefinite" path="M 414 196 Q 484 196 584 192" />
+                      </circle>
+                      <circle r="3.4" class="ck-orb-bead warn" id="ck-bead-diesel">
+                        <animateMotion dur="2.3s" repeatCount="indefinite" path="M 546 294 Q 448 282 382 222" />
+                      </circle>
+                    </g>
+
+                    <!-- 中央南极秦岭站「南十字星」主楼 3D 浮空全息模型（保留全部底座/光幕/星尘特效） -->
+                    <g class="ck-iso-core-wrap" transform="translate(340, 176)">
+                      <!-- 柔和全息投影底光 -->
+                      <ellipse cx="0" cy="30" rx="88" ry="34" fill="url(#ck-core-glow)" opacity="0.88" />
+                      <!-- 浮空呼吸的南十字星全息主楼 -->
+                      <g class="ck-iso-float">
+                        <image
+                          class="ck-station-holo"
+                          href="/static/assets/qinling-station-holo.png"
+                          x="-114"
+                          y="-94"
+                          width="228"
+                          height="174"
+                          preserveAspectRatio="xMidYMid meet"
+                        />
+                      </g>
+                      <!-- 向上飘散的全息微光粒子（仙气细节） -->
+                      <g class="ck-spark-group">
+                        <circle class="ck-spark s1" cx="-46" cy="12" r="1.8" />
+                        <circle class="ck-spark s2" cx="42" cy="8" r="2.1" />
+                        <circle class="ck-spark s3" cx="-14" cy="-22" r="1.5" />
+                        <circle class="ck-spark s4" cx="56" cy="-6" r="1.6" />
+                        <circle class="ck-spark s5" cx="6" cy="18" r="1.9" />
+                      </g>
+                    </g>
+                  </svg>
+
+                  <!-- 枢纽顶部与中心实时摘要徽标 -->
+                  <div class="ck-hub-badge">极地孤网智慧能量枢纽</div>
+                  <div class="ck-hub-center-stat">
+                    <span>绿电 <strong id="ck-hub-green">--%</strong></span>
+                    <i></i>
+                    <span>发 <strong id="ck-hub-gen">--</strong> / 荷 <strong id="ck-hub-load">--</strong> kW</span>
+                  </div>
+
+                  <!-- 6 大极地实景全息台座节点（去硬框，光环底座 + 顶置胶囊） -->
+                  <button type="button" class="ck-node ck-node-pv" data-ck-cat="pv">
+                    <span class="ck-node-title">光伏发电</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="10" rx="1.5"/><path d="M3 11h18M9 6v10M15 6v10M8 20h8M12 16v4"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-pv-p">-- kW</strong>
+                      <small id="ck-n-pv-sub">辐照 -- W/m²</small>
+                    </div>
+                  </button>
+
+                  <button type="button" class="ck-node ck-node-wind" data-ck-cat="wind">
+                    <span class="ck-node-title">风力发电</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M9 21h6M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-wind-p">-- kW</strong>
+                      <small id="ck-n-wind-sub">风速 -- m/s</small>
+                    </div>
+                  </button>
+
+                  <button type="button" class="ck-node ck-node-storage" data-ck-cat="storage">
+                    <span class="ck-node-title">电化学储能</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 9h6M9 13h6M9 17h6"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-es-p">-- kW</strong>
+                      <small id="ck-n-es-sub">SOC --%</small>
+                    </div>
+                  </button>
+
+                  <button type="button" class="ck-node ck-node-load" data-ck-cat="load">
+                    <span class="ck-node-title">科考负荷</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><path d="M4 20h16M6 20V8l6-4 6 4v12M10 12h4M10 16h4"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-load-p">-- kW</strong>
+                      <small id="ck-n-load-sub">DC -- / AC --</small>
+                    </div>
+                  </button>
+
+                  <button type="button" class="ck-node ck-node-hydrogen" data-ck-cat="hydrogen">
+                    <span class="ck-node-title">氢能制储</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 9v6M12.5 9v6M8.5 12h4M15.2 15h2.2"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-h2-p">-- kW</strong>
+                      <small id="ck-n-h2-sub">储氢 --%</small>
+                    </div>
+                  </button>
+
+                  <button type="button" class="ck-node ck-node-diesel" data-ck-cat="diesel">
+                    <span class="ck-node-title">柴发保供</span>
+                    <span class="ck-node-disc" aria-hidden="true">
+                      <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h4M7 14h3M15 10v4M18 10v4M7 6V4M17 6V4"/></svg>
+                    </span>
+                    <div class="ck-node-readout">
+                      <strong id="ck-n-diesel-p">-- kW</strong>
+                      <small id="ck-n-diesel-sub">在线 -- / --</small>
+                    </div>
+                  </button>
+                </div>
+              </article>
+
+              <article class="ck-panel ck-panel-curve">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>源荷功率曲线</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <div class="ck-curve-legend" id="ck-power-legend"></div>
+                  <div class="ck-hours-seg" id="ck-hours-seg" role="group" aria-label="曲线时间窗口">
+                    <button type="button" data-ck-hours="1">1h</button>
+                    <button type="button" class="active" data-ck-hours="6">6h</button>
+                    <button type="button" data-ck-hours="24">24h</button>
+                  </div>
+                </header>
+                <div class="ck-canvas-wrap">
+                  <canvas id="ck-power-canvas"></canvas>
+                </div>
+              </article>
+            </div>
+
+            <!-- 右栏：极地能效与环境 / 风光发电实绩 / 储能与氢能调度曲线 -->
+            <div class="ck-col ck-col-right">
+              <article class="ck-panel ck-panel-stats">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>极地能效与环境</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                </header>
+                <div class="ck-stat-grid">
+                  <div class="ck-stat-box">
+                    <span>绿电占比</span>
+                    <strong id="ck-st-green">--%</strong>
+                  </div>
+                  <div class="ck-stat-box">
+                    <span>极地气温</span>
+                    <strong id="ck-st-temp">-- °C</strong>
+                  </div>
+                  <div class="ck-stat-box">
+                    <span>瞬时风速</span>
+                    <strong id="ck-st-wind">-- m/s</strong>
+                  </div>
+                  <div class="ck-stat-box">
+                    <span>光照辐照</span>
+                    <strong id="ck-st-irr">-- W/m²</strong>
+                  </div>
+                  <div class="ck-stat-box">
+                    <span>双母线电压</span>
+                    <strong id="ck-st-bus">-- / -- V</strong>
+                  </div>
+                  <button type="button" class="ck-stat-box ck-stat-btn" id="ck-st-alarm-btn">
+                    <span>告警 / RTU</span>
+                    <strong id="ck-st-health">-- / --</strong>
+                  </button>
+                </div>
+              </article>
+
+              <article class="ck-panel ck-panel-renew">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>风光发电实绩</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                </header>
+                <div class="ck-pyramid-grid">
+                  <div class="ck-pyramid-card">
+                    <span class="ck-pyr-title">风电累计发电</span>
+                    <div class="ck-pyr-val"><strong id="ck-pyr-wind-total">--</strong><small>万kWh</small></div>
+                    <svg class="ck-pyr-svg" viewBox="0 0 120 72" aria-hidden="true">
+                      <defs>
+                        <radialGradient id="ck-pyr-glow1" cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stop-color="#38e8ff" stop-opacity="0.72" />
+                          <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+                        </radialGradient>
+                        <linearGradient id="ck-pyr-a" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.92" />
+                          <stop offset="100%" stop-color="#0369a1" stop-opacity="0.32" />
+                        </linearGradient>
+                        <linearGradient id="ck-pyr-b" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#bae6fd" stop-opacity="0.86" />
+                          <stop offset="100%" stop-color="#0c4a6e" stop-opacity="0.22" />
+                        </linearGradient>
+                      </defs>
+                      <ellipse cx="60" cy="60" rx="44" ry="9" fill="url(#ck-pyr-glow1)" />
+                      <ellipse cx="60" cy="60" rx="34" ry="6.5" class="ck-pyr-base" />
+                      <ellipse cx="60" cy="60" rx="20" ry="3.8" class="ck-pyr-base inner" />
+                      <g class="ck-pyr-float">
+                        <polygon points="60,57 25,18 60,28" fill="url(#ck-pyr-a)" />
+                        <polygon points="60,57 95,18 60,28" fill="url(#ck-pyr-b)" />
+                        <polygon points="60,8 95,18 60,28 25,18" fill="#e0faff" opacity="0.58" />
+                        <path d="M60,8 L60,57 M25,18 L60,28 L95,18 M42,38 L60,43 L78,38" fill="none" stroke="#e0faff" stroke-width="0.9" opacity="0.88" />
+                      </g>
+                      <circle class="ck-spark s1" cx="38" cy="46" r="1.4" />
+                      <circle class="ck-spark s3" cx="82" cy="40" r="1.5" />
+                    </svg>
+                    <div class="ck-pyr-meta">
+                      <span>实时 <strong id="ck-pyr-wind-live">-- kW</strong></span>
+                      <span>今日 <strong id="ck-pyr-wind-today">-- kWh</strong></span>
+                    </div>
+                  </div>
+                  <div class="ck-pyramid-card">
+                    <span class="ck-pyr-title">光伏累计发电</span>
+                    <div class="ck-pyr-val"><strong id="ck-pyr-pv-total">--</strong><small>万kWh</small></div>
+                    <svg class="ck-pyr-svg" viewBox="0 0 120 72" aria-hidden="true">
+                      <defs>
+                        <radialGradient id="ck-pyr-glow2" cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.68" />
+                          <stop offset="100%" stop-color="#0f766e" stop-opacity="0" />
+                        </radialGradient>
+                        <linearGradient id="ck-pyr-c" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%" stop-color="#5eead4" stop-opacity="0.92" />
+                          <stop offset="100%" stop-color="#0f766e" stop-opacity="0.32" />
+                        </linearGradient>
+                        <linearGradient id="ck-pyr-d" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stop-color="#99f6e4" stop-opacity="0.86" />
+                          <stop offset="100%" stop-color="#134e4a" stop-opacity="0.22" />
+                        </linearGradient>
+                      </defs>
+                      <ellipse cx="60" cy="60" rx="44" ry="9" fill="url(#ck-pyr-glow2)" />
+                      <ellipse cx="60" cy="60" rx="34" ry="6.5" class="ck-pyr-base ok" />
+                      <ellipse cx="60" cy="60" rx="20" ry="3.8" class="ck-pyr-base inner ok" />
+                      <g class="ck-pyr-float delay">
+                        <polygon points="60,57 25,18 60,28" fill="url(#ck-pyr-c)" />
+                        <polygon points="60,57 95,18 60,28" fill="url(#ck-pyr-d)" />
+                        <polygon points="60,8 95,18 60,28 25,18" fill="#ccfbf1" opacity="0.58" />
+                        <path d="M60,8 L60,57 M25,18 L60,28 L95,18 M42,38 L60,43 L78,38" fill="none" stroke="#f0fdfa" stroke-width="0.9" opacity="0.88" />
+                      </g>
+                      <circle class="ck-spark s2" cx="40" cy="44" r="1.4" />
+                      <circle class="ck-spark s4" cx="80" cy="42" r="1.5" />
+                    </svg>
+                    <div class="ck-pyr-meta">
+                      <span>实时 <strong id="ck-pyr-pv-live">-- kW</strong></span>
+                      <span>今日 <strong id="ck-pyr-pv-today">-- kWh</strong></span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="ck-panel ck-panel-sched">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>储氢充放调度曲线</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <div class="ck-curve-legend" id="ck-sched-legend"></div>
+                </header>
+                <div class="ck-canvas-wrap">
+                  <canvas id="ck-storage-canvas"></canvas>
+                </div>
+              </article>
             </div>
           </div>
         </section>
