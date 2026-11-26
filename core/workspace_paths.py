@@ -1,7 +1,7 @@
 """统一的工作区三参数数据库路径解析与目录发现模块。
 
 数据库路径遵循统一结构：
-    <workspace_root>/<runtime_name>/<scene_name>/sqldb/scada/<role_db>.sqlite3
+    <workspace_root>/<runtime_name>/<scene_name>/sqldb/scada/<role_db>.db
 
 其中：
 - ``workspace_root``：工作区根目录（默认 ``D:\\codex\\workspace``，环境变量 ``SCDFE_WORKSPACE_ROOT``）
@@ -29,10 +29,10 @@ ENV_RUNTIME_NAME = "SCDFE_RUNTIME_NAME"
 ENV_SCENE_NAME = "SCDFE_SCENE_NAME"
 
 ROLE_DB_FILENAMES = {
-    "c": "scdfe_c.sqlite3",
-    "t": "scdfe_c.sqlite3",
-    "s": "scdfe_s.sqlite3",
-    "d": "scdfe_d.sqlite3",
+    "c": "scdfe_c.db",
+    "t": "scdfe_c.db",
+    "s": "scdfe_s.db",
+    "d": "scdfe_d.db",
 }
 
 _INVALID_SEGMENT_CHARS = set('/\\\x00<>:"|?*')

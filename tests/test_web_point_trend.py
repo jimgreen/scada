@@ -20,7 +20,7 @@ def running_server(factory, root=None):
     workspace = tempfile.TemporaryDirectory() if root is None else nullcontext(root)
     with workspace as directory:
         root = Path(directory)
-        server = factory("127.0.0.1", 0, db_path=root / "trend.sqlite3", workspace_root=root)
+        server = factory("127.0.0.1", 0, db_path=root / "trend.db", workspace_root=root)
         worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         worker.start()
         try:
@@ -46,7 +46,7 @@ def request(server, body=None, *, method="POST", path="/api/point-trend", header
 class DevicePointTrendTests(unittest.TestCase):
     def test_d_samples_scaled_value_and_reports_missing_measurement(self):
         with running_server(make_d) as (server, root):
-            source = root / "source.sqlite3"
+            source = root / "source.db"
             stamp = time.time_ns() // 1_000_000
             with closing(sqlite3.connect(source)) as connection, connection:
                 for kind in ("yc", "yx"):

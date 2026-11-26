@@ -143,7 +143,7 @@ class CollectorWriteTests(unittest.TestCase):
                 kind="yc",
                 name="无功功率",
                 unit="kVar",
-                source_database="c.sqlite3",
+                source_database="c.db",
                 rtu_id=1,
                 pnt_no=2,
             )
@@ -172,7 +172,7 @@ class CollectorWriteTests(unittest.TestCase):
                 kind="yc",
                 name="负荷有功",
                 unit="kW",
-                source_database="c.sqlite3",
+                source_database="c.db",
                 rtu_id=1,
                 pnt_no=1,
             )

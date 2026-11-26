@@ -18,7 +18,7 @@ class DeviceParameterHTTPTests(unittest.TestCase):
         (device,) = catalog["devices"]
         self.assertEqual(device["tables"], [{"table": "Manual_generator", "idx": 1}])
         self.assertNotIn("model_json", device)
-        self.assertEqual(catalog["sources"], ["c.sqlite3"])
+        self.assertEqual(catalog["sources"], ["c.db"])
         self.assertEqual(
             catalog["tables"], [{"table_name": "Manual_generator", "count": 1}]
         )

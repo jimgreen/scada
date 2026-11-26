@@ -30,12 +30,12 @@ class ScadaPortalTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.c_db = self.root / "scdfe_c.sqlite3"
-        self.d_db = self.root / "scdfe_d.sqlite3"
-        self.model_db = self.root / "devices.sqlite3"
+        self.c_db = self.root / "scdfe_c.db"
+        self.d_db = self.root / "scdfe_d.db"
+        self.model_db = self.root / "devices.db"
         self.svg_path = self.root / "qinling.svg"
         self.log_dir = self.root / "logs"
-        self.hist_db = self.root / "history.sqlite3"
+        self.hist_db = self.root / "history.db"
 
         self._seed_c_db()
         self._seed_d_db()

@@ -294,7 +294,7 @@ def main(argv=None):
     parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数或Web选择定位")
     add_workspace_arguments(parser)
     parser.add_argument(
-        "--source", type=str, default=None, help="源 FES 数据库相对路径，省略时默认优先同级 ../fes/scdfe_c.sqlite3，其次同目录 scdfe_c.sqlite3"
+        "--source", type=str, default=None, help="源 FES 数据库相对路径，省略时默认优先同级 ../fes/scdfe_c.db，其次同目录 scdfe_c.db"
     )
     parser.add_argument(
         "--collect", action="store_true", help="启动 Web 时同时启动采集"

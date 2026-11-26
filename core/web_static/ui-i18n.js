@@ -1,6 +1,7 @@
 /* SCADA 全站多语言（zh-CN / en-US / ru-RU）与多风格主题引擎。
- * 支持全部 8 套 Design Tokens 预设：
- * minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix / bento-grid / glassmorphism / editorial。
+ * 支持全部 14 套 Design Tokens 预设：
+ * 浅色：minimalist-light / arctic-frost / warm-paper / slate-daylight / bento-grid / editorial
+ * 暗色：precision-dark / ocean-slate / nord-dark / industrial-amber / glassmorphism / sci-fi-cyan / sci-fi-purple / sci-fi-matrix
  * 三层多语言能力：全站三语精确词典 + 参数化动态模板规则 + TextNode/placeholder/title/aria-label/document.title 增量同步。
  * 无外部依赖、完全兼容严格 CSP（无内联脚本），支持 localStorage 持久化。
  */
@@ -11,13 +12,19 @@
   const LANG_KEY = "scada_ui_lang";
   const THEMES = [
     "minimalist-light",
+    "arctic-frost",
+    "warm-paper",
+    "slate-daylight",
+    "bento-grid",
+    "editorial",
     "precision-dark",
+    "ocean-slate",
+    "nord-dark",
+    "industrial-amber",
+    "glassmorphism",
     "sci-fi-cyan",
     "sci-fi-purple",
     "sci-fi-matrix",
-    "bento-grid",
-    "glassmorphism",
-    "editorial",
   ];
   const LEGACY_THEME_MAP = {
     "sci-fi": "sci-fi-cyan",
@@ -25,10 +32,13 @@
   };
   const DARK_THEMES = new Set([
     "precision-dark",
+    "ocean-slate",
+    "nord-dark",
+    "industrial-amber",
+    "glassmorphism",
     "sci-fi-cyan",
     "sci-fi-purple",
     "sci-fi-matrix",
-    "glassmorphism",
   ]);
   const LANGS = ["zh-CN", "en-US", "ru-RU"];
   const TRANSLATED_ATTRS = ["placeholder", "title", "aria-label"];
@@ -38,37 +48,55 @@
     "zh-CN": {
       "ui.theme.label": "界面风格",
       "ui.theme.minimalist-light": "极简明亮",
+      "ui.theme.arctic-frost": "极地冰蓝",
+      "ui.theme.warm-paper": "护眼暖纸",
+      "ui.theme.slate-daylight": "冷灰工程",
+      "ui.theme.bento-grid": "便当盒网格",
+      "ui.theme.editorial": "编辑杂志",
       "ui.theme.precision-dark": "精密暗黑",
+      "ui.theme.ocean-slate": "深海工业蓝",
+      "ui.theme.nord-dark": "北欧极夜",
+      "ui.theme.industrial-amber": "碳黑琥珀",
+      "ui.theme.glassmorphism": "毛玻璃拟态",
       "ui.theme.sci-fi-cyan": "科幻 · 电光青",
       "ui.theme.sci-fi-purple": "科幻 · 赛博紫",
       "ui.theme.sci-fi-matrix": "科幻 · 矩阵绿",
-      "ui.theme.bento-grid": "便当盒网格",
-      "ui.theme.glassmorphism": "毛玻璃拟态",
-      "ui.theme.editorial": "编辑杂志",
       "ui.lang.label": "界面语言",
     },
     "en-US": {
       "ui.theme.label": "UI Theme",
       "ui.theme.minimalist-light": "Minimalist Light",
+      "ui.theme.arctic-frost": "Arctic Frost",
+      "ui.theme.warm-paper": "Warm Paper",
+      "ui.theme.slate-daylight": "Slate Daylight",
+      "ui.theme.bento-grid": "Bento Grid",
+      "ui.theme.editorial": "Editorial",
       "ui.theme.precision-dark": "Precision Dark",
+      "ui.theme.ocean-slate": "Ocean Slate",
+      "ui.theme.nord-dark": "Nord Dark",
+      "ui.theme.industrial-amber": "Industrial Amber",
+      "ui.theme.glassmorphism": "Glassmorphism",
       "ui.theme.sci-fi-cyan": "Sci-Fi · Cyan",
       "ui.theme.sci-fi-purple": "Sci-Fi · Cyber Purple",
       "ui.theme.sci-fi-matrix": "Sci-Fi · Matrix Green",
-      "ui.theme.bento-grid": "Bento Grid",
-      "ui.theme.glassmorphism": "Glassmorphism",
-      "ui.theme.editorial": "Editorial",
       "ui.lang.label": "Language",
     },
     "ru-RU": {
       "ui.theme.label": "Стиль интерфейса",
       "ui.theme.minimalist-light": "Светлый минимализм",
+      "ui.theme.arctic-frost": "Арктический лёд",
+      "ui.theme.warm-paper": "Тёплая бумага",
+      "ui.theme.slate-daylight": "Инженерный серый",
+      "ui.theme.bento-grid": "Сетка Бенто",
+      "ui.theme.editorial": "Журнальный",
       "ui.theme.precision-dark": "Тёмный приборный",
+      "ui.theme.ocean-slate": "Глубокий океан",
+      "ui.theme.nord-dark": "Полярная ночь",
+      "ui.theme.industrial-amber": "Янтарь и карбон",
+      "ui.theme.glassmorphism": "Стекломорфизм",
       "ui.theme.sci-fi-cyan": "Sci-Fi · Циан",
       "ui.theme.sci-fi-purple": "Sci-Fi · Кибер-пурпур",
       "ui.theme.sci-fi-matrix": "Sci-Fi · Матрица",
-      "ui.theme.bento-grid": "Сетка Бенто",
-      "ui.theme.glassmorphism": "Стекломорфизм",
-      "ui.theme.editorial": "Журнальный",
       "ui.lang.label": "Язык интерфейса",
     },
   };

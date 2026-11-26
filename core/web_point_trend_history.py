@@ -136,7 +136,7 @@ class PointTrendHistory:
         if not source.is_relative_to(self.root):
             raise ValueError('测点数据库超出工作区根目录')
         key = sha256(os.path.normcase(str(source)).encode('utf8')).hexdigest()[:32]
-        self.path = source.parent / '.scada-trends' / f'{role}-{key}.sqlite3'
+        self.path = source.parent / '.scada-trends' / f'{role}-{key}.db'
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread_lock = threading.Lock()

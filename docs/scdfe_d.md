@@ -1,7 +1,7 @@
 # scdfe_d 设备量测
 
 `scdfe_d` 读取 `scdfe_c` 采集业务库的遥测、遥信点，将数据关联到设备属性。
-源业务库只读；设备定义、映射及量测结果写入独立的 `scdfe_d.sqlite3`。
+源业务库只读；设备定义、映射及量测结果写入独立的 `scdfe_d.db`。
 
 ## 设备表
 
@@ -43,7 +43,7 @@
 在 `D:\codex\scada` 运行：
 
 ```powershell
-.venv\Scripts\python.exe -B -m scdfe_d.web.server --port 8980 --workspace-root D:\codex\workspace --db realtime/qinling/sqldb/scada/scdfe_d.sqlite3 --collect
+.venv\Scripts\python.exe -B -m scdfe_d.web.server --port 8980 --workspace-root D:\codex\workspace --db realtime/qinling/sqldb/scada/scdfe_d.db --collect
 ```
 
 访问 `http://127.0.0.1:8980/`。省略 `--collect` 时只启动 Web，在页面启动采集。
@@ -51,7 +51,7 @@
 默认采集周期为 5 秒。可在「设备采集」页输入 1–60 的整数并保存。周期写入当前设备库，运行中调整会重新安排下一批，重启后继续沿用。独立后台也会读取已保存的周期。
 
 ```powershell
-.venv\Scripts\python.exe -B -m scdfe_d --workspace-root D:\codex\workspace --db realtime/qinling/sqldb/scada/scdfe_d.sqlite3
+.venv\Scripts\python.exe -B -m scdfe_d --workspace-root D:\codex\workspace --db realtime/qinling/sqldb/scada/scdfe_d.db
 ```
 
 追加 `--interval 5` 可在启动时指定并保存周期。追加 `--once` 仅采集一次。同一设备库只允许一个采集实例。
@@ -66,7 +66,7 @@ Web 的「量测定义」页可按设备和名称查找量测，浏览源库并�
 首次导入模型可追加：
 
 ```text
---model realtime/qinling/sqldb/model/devices.sqlite3
+--model realtime/qinling/sqldb/model/devices.db
 ```
 
 导入保留模型设备标识和已有映射，不将模型设定值当作实时量测。新设备需在映射页

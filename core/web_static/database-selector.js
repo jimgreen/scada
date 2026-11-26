@@ -61,7 +61,7 @@
     const error = form.querySelector(':scope > .database-error'), folderError = $('.database-folder-error');
     const popup = $('.database-popup'), tree = $('#database-tree'), status = $('.database-validation');
     const createPanel = $('.database-create'), createError = $('.database-create-error');
-    const defaultRoleFile = current.role_db_filename || ('scdfe_' + (current.role === 't' ? 'c' : current.role) + '.sqlite3');
+    const defaultRoleFile = current.role_db_filename || ('scdfe_' + (current.role === 't' ? 'c' : current.role) + '.db');
     let validatedPath = '', validationSequence = 0, treeSequence = 0, contextSequence = 0, timer;
     const databaseFolder = current.directory || '.';
     const remembersFolders = typeof current.browse_directory === 'string';

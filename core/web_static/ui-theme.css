@@ -1,7 +1,8 @@
 /* SCADA Multi-Theme Design System
  * 严格遵循 web-ui-design / scientific-dashboard / web-ui-i18n 规范：
- * 支持全部 8 套 Design Tokens 预设：
- * minimalist-light / precision-dark / sci-fi-cyan / sci-fi-purple / sci-fi-matrix / bento-grid / glassmorphism / editorial。
+ * 支持全部 14 套 Design Tokens 预设：
+ * 浅色：minimalist-light / arctic-frost / warm-paper / slate-daylight / bento-grid / editorial
+ * 暗色：precision-dark / ocean-slate / nord-dark / industrial-amber / glassmorphism / sci-fi-cyan / sci-fi-purple / sci-fi-matrix
  */
 
 :root,
@@ -531,6 +532,422 @@
   --teal-dark: var(--accent-hover);
   --red: var(--danger);
   --shadow: var(--shadow-card);
+}
+
+/* ==================== 9. 极地冰蓝 (arctic-frost) ==================== */
+[data-theme="arctic-frost"] {
+  color-scheme: light;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #F0F6FB;
+  --bg-surface: #FFFFFF;
+  --bg-subtle: #E6F0F8;
+  --bg-hover: #EDF6FC;
+  --table-stripe: #F5FAFD;
+  --table-hover: #E0F2FE;
+  --bg-selected: #DCEFFA;
+
+  --sidebar-bg: #0B253A;
+  --sidebar-border: rgba(186, 230, 253, 0.10);
+  --sidebar-title: #7BA1BD;
+  --sidebar-text: #CBE2F2;
+  --sidebar-hover: rgba(186, 230, 253, 0.08);
+  --sidebar-active-bg: rgba(2, 132, 199, 0.34);
+  --sidebar-active-text: #FFFFFF;
+  --sidebar-active-bar: #38BDF8;
+
+  --text-primary: #0C2233;
+  --text-secondary: #4B6A82;
+  --text-tertiary: #7B98AE;
+  --border-color: #D4E4F1;
+  --border-strong: #B6D0E4;
+  --border: 1px solid var(--border-color);
+
+  --accent: #0284C7;
+  --accent-hover: #0369A1;
+  --accent-contrast: #FFFFFF;
+  --accent-soft: rgba(2, 132, 199, 0.11);
+  --accent-ring: rgba(2, 132, 199, 0.24);
+
+  --ok: #0D9488;
+  --ok-soft: rgba(13, 148, 136, 0.12);
+  --warn: #D97706;
+  --warn-soft: rgba(217, 119, 6, 0.13);
+  --danger: #DC2626;
+  --danger-soft: rgba(220, 38, 38, 0.10);
+
+  --radius-card: 10px;
+  --radius-btn: 7px;
+  --radius-input: 7px;
+  --radius-dialog: 14px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 2px 8px rgba(12, 34, 51, 0.05);
+  --shadow-dialog: 0 20px 46px rgba(12, 34, 51, 0.20);
+  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* ==================== 10. 护眼暖纸 (warm-paper) ==================== */
+[data-theme="warm-paper"] {
+  color-scheme: light;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #F6F2E9;
+  --bg-surface: #FFFDF8;
+  --bg-subtle: #EFE9DC;
+  --bg-hover: #F5F0E4;
+  --table-stripe: #F9F6EE;
+  --table-hover: #EDF6EF;
+  --bg-selected: #E5F1E8;
+
+  --sidebar-bg: #26221C;
+  --sidebar-border: rgba(246, 242, 233, 0.08);
+  --sidebar-title: #9B907E;
+  --sidebar-text: #DDD5C7;
+  --sidebar-hover: rgba(255, 253, 248, 0.07);
+  --sidebar-active-bg: rgba(21, 128, 61, 0.30);
+  --sidebar-active-text: #FFFDF8;
+  --sidebar-active-bar: #22C55E;
+
+  --text-primary: #231F1A;
+  --text-secondary: #6B6255;
+  --text-tertiary: #948978;
+  --border-color: #E2DACB;
+  --border-strong: #CCC2AF;
+  --border: 1px solid var(--border-color);
+
+  --accent: #15803D;
+  --accent-hover: #166534;
+  --accent-contrast: #FFFFFF;
+  --accent-soft: rgba(21, 128, 61, 0.11);
+  --accent-ring: rgba(21, 128, 61, 0.24);
+
+  --ok: #15803D;
+  --ok-soft: rgba(21, 128, 61, 0.12);
+  --warn: #B45309;
+  --warn-soft: rgba(180, 83, 9, 0.13);
+  --danger: #B91C1C;
+  --danger-soft: rgba(185, 28, 28, 0.11);
+
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --radius-input: 6px;
+  --radius-dialog: 12px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 1px 3px rgba(35, 31, 26, 0.05);
+  --shadow-dialog: 0 18px 42px rgba(35, 31, 26, 0.20);
+  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* ==================== 11. 冷灰工程 (slate-daylight) ==================== */
+[data-theme="slate-daylight"] {
+  color-scheme: light;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #EDF1F5;
+  --bg-surface: #FAFBFD;
+  --bg-subtle: #E2E8F0;
+  --bg-hover: #EDF2F8;
+  --table-stripe: #F2F5F9;
+  --table-hover: #E6EFFC;
+  --bg-selected: #DCE8FA;
+
+  --sidebar-bg: #1E293B;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-title: #94A3B8;
+  --sidebar-text: #CBD5E1;
+  --sidebar-hover: rgba(255, 255, 255, 0.07);
+  --sidebar-active-bg: rgba(29, 78, 216, 0.34);
+  --sidebar-active-text: #FFFFFF;
+  --sidebar-active-bar: #60A5FA;
+
+  --text-primary: #111827;
+  --text-secondary: #475569;
+  --text-tertiary: #64748B;
+  --border-color: #CBD5E1;
+  --border-strong: #94A3B8;
+  --border: 1px solid var(--border-color);
+
+  --accent: #1D4ED8;
+  --accent-hover: #1E40AF;
+  --accent-contrast: #FFFFFF;
+  --accent-soft: rgba(29, 78, 216, 0.11);
+  --accent-ring: rgba(29, 78, 216, 0.24);
+
+  --ok: #047857;
+  --ok-soft: rgba(4, 120, 87, 0.12);
+  --warn: #B45309;
+  --warn-soft: rgba(180, 83, 9, 0.13);
+  --danger: #DC2626;
+  --danger-soft: rgba(220, 38, 38, 0.11);
+
+  --radius-card: 6px;
+  --radius-btn: 4px;
+  --radius-input: 4px;
+  --radius-dialog: 10px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-dialog: 0 18px 40px rgba(15, 23, 42, 0.22);
+  --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* ==================== 12. 深海工业蓝 (ocean-slate) ==================== */
+[data-theme="ocean-slate"] {
+  color-scheme: dark;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #071422;
+  --bg-surface: #0D2036;
+  --bg-subtle: #142C48;
+  --bg-hover: rgba(56, 189, 248, 0.08);
+  --table-stripe: #10263F;
+  --table-hover: #183657;
+  --bg-selected: #163B61;
+
+  --sidebar-bg: #050F1A;
+  --sidebar-border: rgba(56, 189, 248, 0.14);
+  --sidebar-title: #5E87A8;
+  --sidebar-text: #9DC1DC;
+  --sidebar-hover: rgba(56, 189, 248, 0.08);
+  --sidebar-active-bg: rgba(56, 189, 248, 0.20);
+  --sidebar-active-text: #EAF4FC;
+  --sidebar-active-bar: #38BDF8;
+
+  --text-primary: #EAF4FC;
+  --text-secondary: #8EB2CE;
+  --text-tertiary: #5C819E;
+  --border-color: rgba(56, 189, 248, 0.16);
+  --border-strong: rgba(56, 189, 248, 0.34);
+  --border: 1px solid var(--border-color);
+
+  --accent: #38BDF8;
+  --accent-hover: #0EA5E9;
+  --accent-contrast: #071422;
+  --accent-soft: rgba(56, 189, 248, 0.16);
+  --accent-ring: rgba(56, 189, 248, 0.30);
+
+  --ok: #34D399;
+  --ok-soft: rgba(52, 211, 153, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.16);
+
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --radius-input: 6px;
+  --radius-dialog: 12px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 4px 18px rgba(2, 10, 20, 0.36);
+  --shadow-dialog: 0 22px 54px rgba(0, 6, 14, 0.65);
+  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* ==================== 13. 北欧极夜 (nord-dark) ==================== */
+[data-theme="nord-dark"] {
+  color-scheme: dark;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #242933;
+  --bg-surface: #2E3440;
+  --bg-subtle: #3B4252;
+  --bg-hover: rgba(136, 192, 208, 0.08);
+  --table-stripe: #333A47;
+  --table-hover: #434C5E;
+  --bg-selected: #384B5B;
+
+  --sidebar-bg: #1E222A;
+  --sidebar-border: rgba(216, 222, 233, 0.10);
+  --sidebar-title: #7B88A1;
+  --sidebar-text: #D8DEE9;
+  --sidebar-hover: rgba(136, 192, 208, 0.09);
+  --sidebar-active-bg: rgba(136, 192, 208, 0.20);
+  --sidebar-active-text: #ECEFF4;
+  --sidebar-active-bar: #88C0D0;
+
+  --text-primary: #ECEFF4;
+  --text-secondary: #A5B1C6;
+  --text-tertiary: #7B88A1;
+  --border-color: rgba(216, 222, 233, 0.12);
+  --border-strong: rgba(216, 222, 233, 0.24);
+  --border: 1px solid var(--border-color);
+
+  --accent: #88C0D0;
+  --accent-hover: #8FBCBB;
+  --accent-contrast: #1E222A;
+  --accent-soft: rgba(136, 192, 208, 0.17);
+  --accent-ring: rgba(136, 192, 208, 0.30);
+
+  --ok: #A3BE8C;
+  --ok-soft: rgba(163, 190, 140, 0.16);
+  --warn: #EBCB8B;
+  --warn-soft: rgba(235, 203, 139, 0.16);
+  --danger: #BF616A;
+  --danger-soft: rgba(191, 97, 106, 0.20);
+
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --radius-input: 6px;
+  --radius-dialog: 12px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 4px 16px rgba(15, 19, 26, 0.28);
+  --shadow-dialog: 0 22px 50px rgba(10, 13, 18, 0.56);
+  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* ==================== 14. 碳黑琥珀 (industrial-amber) ==================== */
+[data-theme="industrial-amber"] {
+  color-scheme: dark;
+  --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+
+  --bg-canvas: #121110;
+  --bg-surface: #1C1A18;
+  --bg-subtle: #272420;
+  --bg-hover: rgba(245, 158, 11, 0.08);
+  --table-stripe: #211E1B;
+  --table-hover: #2E2922;
+  --bg-selected: #382C18;
+
+  --sidebar-bg: #0E0D0C;
+  --sidebar-border: rgba(245, 158, 11, 0.14);
+  --sidebar-title: #8E8271;
+  --sidebar-text: #D6CBB9;
+  --sidebar-hover: rgba(245, 158, 11, 0.08);
+  --sidebar-active-bg: rgba(245, 158, 11, 0.22);
+  --sidebar-active-text: #FAF5ED;
+  --sidebar-active-bar: #F59E0B;
+
+  --text-primary: #FAF5ED;
+  --text-secondary: #B5AA9A;
+  --text-tertiary: #84796B;
+  --border-color: rgba(245, 158, 11, 0.18);
+  --border-strong: rgba(245, 158, 11, 0.36);
+  --border: 1px solid var(--border-color);
+
+  --accent: #F59E0B;
+  --accent-hover: #FBBF24;
+  --accent-contrast: #121110;
+  --accent-soft: rgba(245, 158, 11, 0.17);
+  --accent-ring: rgba(245, 158, 11, 0.32);
+
+  --ok: #34D399;
+  --ok-soft: rgba(52, 211, 153, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.18);
+  --danger: #F87171;
+  --danger-soft: rgba(248, 113, 113, 0.18);
+
+  --radius-card: 6px;
+  --radius-btn: 4px;
+  --radius-input: 4px;
+  --radius-dialog: 10px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 4px 18px rgba(0, 0, 0, 0.38);
+  --shadow-dialog: 0 22px 54px rgba(0, 0, 0, 0.68);
+  --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-color);
+  --paper: var(--bg-canvas);
+  --white: var(--bg-surface);
+  --teal: var(--accent);
+  --teal-dark: var(--accent-hover);
+  --red: var(--danger);
+  --shadow: var(--shadow-card);
+}
+
+/* 全局暗色/浅色原生控件与滚动条防亮白穿帮 */
+html[data-theme] {
+  accent-color: var(--accent);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--bg-canvas);
+}
+html[data-color-scheme="dark"] {
+  color-scheme: dark;
+}
+html[data-color-scheme="light"] {
+  color-scheme: light;
+}
+html[data-theme] *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html[data-theme] *::-webkit-scrollbar-track {
+  background: var(--bg-canvas);
+}
+html[data-theme] *::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid var(--bg-canvas);
+}
+html[data-theme] *::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+html[data-theme] select option {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
 }
 
 /* ==================== 基础排版与画布 ==================== */
@@ -2128,6 +2545,42 @@ body[data-points] .point-editor .dialog-head h2,
 [data-theme="editorial"] .log-content {
   background: #FAF9F6 !important;
   color: #18181B !important;
+}
+
+/* 4. 护眼暖纸（warm-paper）：羊皮纸阅读区低蓝光优化 */
+[data-theme="warm-paper"] .log-browser .lb-content,
+[data-theme="warm-paper"] .log-content {
+  background: #F6F2E9 !important;
+  color: #231F1A !important;
+}
+
+/* 5. 碳黑琥珀（industrial-amber）：暖暗日志终端与琥珀顶栏微线 */
+[data-theme="industrial-amber"] .workbench-topbar,
+[data-theme="industrial-amber"] .topbar {
+  box-shadow: 0 1px 0 rgba(245, 158, 11, 0.24) !important;
+}
+[data-theme="industrial-amber"] .log-browser .lb-content,
+[data-theme="industrial-amber"] .log-content,
+[data-theme="industrial-amber"] .conn-events,
+[data-theme="industrial-amber"] .log-list {
+  background: #141210 !important;
+  color: #F3EAD8 !important;
+}
+
+/* 6. 深海工业蓝（ocean-slate）与北欧极夜（nord-dark）：日志终端底色协调 */
+[data-theme="ocean-slate"] .log-browser .lb-content,
+[data-theme="ocean-slate"] .log-content,
+[data-theme="ocean-slate"] .conn-events,
+[data-theme="ocean-slate"] .log-list {
+  background: #06111D !important;
+  color: #DDF0FC !important;
+}
+[data-theme="nord-dark"] .log-browser .lb-content,
+[data-theme="nord-dark"] .log-content,
+[data-theme="nord-dark"] .conn-events,
+[data-theme="nord-dark"] .log-list {
+  background: #20252E !important;
+  color: #E5E9F0 !important;
 }
 
 /* ==================== 多语言（英文 / 俄文）防溢出布局 ==================== */

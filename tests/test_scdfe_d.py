@@ -18,7 +18,7 @@ class DeviceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.source = self.root / "c.sqlite3"
+        self.source = self.root / "c.db"
         with closing(sqlite3.connect(self.source)) as c, c:
             for kind in ("yc", "yx"):
                 c.execute(
@@ -32,7 +32,7 @@ class DeviceTests(unittest.TestCase):
                 "INSERT INTO fes_yx_define VALUES(1,1,?,1,0,?)",
                 ("开关位置", int(time.time() * 1000)),
             )
-        self.store = DeviceStore(self.root / "d.sqlite3", workspace_root=self.root)
+        self.store = DeviceStore(self.root / "d.db", workspace_root=self.root)
         self.device = self.store.create_device(
             dict(name="发电机 1", category="generator")
         )
@@ -43,7 +43,7 @@ class DeviceTests(unittest.TestCase):
                 kind="yc",
                 name="有功功率",
                 unit="kW",
-                source_database="c.sqlite3",
+                source_database="c.db",
                 rtu_id=1,
                 pnt_no=1,
             )
@@ -119,7 +119,7 @@ class DeviceTests(unittest.TestCase):
         self.assertIsNone(self.row()["previous_value"])
         with self.assertRaises(ApiError):
             self.store.save_measurement(dict(saved, version=1), saved["measurement_id"])
-        for path in ("../outside.sqlite3", str(self.source), "c.sqlite3/../../outside"):
+        for path in ("../outside.db", str(self.source), "c.db/../../outside"):
             with self.assertRaises(ApiError):
                 self.store.source_path(path)
 
@@ -149,7 +149,7 @@ class DeviceTests(unittest.TestCase):
                 self.assertNotIn(legacy, tables)
 
     def test_invalid_database_is_not_modified(self):
-        path = self.root / "wrong.sqlite3"
+        path = self.root / "wrong.db"
         with closing(sqlite3.connect(path)) as c, c:
             c.execute("CREATE TABLE unrelated(x)")
         before = path.read_bytes()
@@ -175,9 +175,9 @@ class DeviceTests(unittest.TestCase):
 
     def test_unavailable_source_keeps_last_value_but_invalidates_quality(self):
         self.store.collect_once()
-        self.source.rename(self.root / "offline.sqlite3")
+        self.source.rename(self.root / "offline.db")
         result = self.store.collect_once()
-        self.assertIn("c.sqlite3", result["errors"])
+        self.assertIn("c.db", result["errors"])
         self.assertEqual(self.row()["value"], 10)
         self.assertEqual(self.row()["valid"], 0)
         self.assertEqual(self.row()["quality"], 2)
@@ -198,7 +198,7 @@ class DeviceTests(unittest.TestCase):
         self.assertIsNone(self.row()["previous_value"])
 
     def test_model_class_tables_preserve_indices_and_extension_identity(self):
-        path = self.root / "model.sqlite3"
+        path = self.root / "model.db"
         with closing(sqlite3.connect(path)) as c, c:
             c.execute(
                 "CREATE TABLE rtdb_schema_tables(table_name TEXT,ordinal INTEGER)"
@@ -230,7 +230,7 @@ class DeviceTests(unittest.TestCase):
             c.execute("CREATE TABLE rtdb_data_HydroNode(c0,c1,c2)")
             c.execute("INSERT INTO rtdb_data_HydroNode VALUES(3,'氢气母管',42)")
         before = path.read_bytes()
-        self.assertEqual(self.store.import_model("model.sqlite3")["tables"], 3)
+        self.assertEqual(self.store.import_model("model.db")["tables"], 3)
         self.assertEqual(before, path.read_bytes())
         gen_device = next(
             d for d in self.store.devices({}) if d["model_table"] == "ACGenerator"
@@ -373,7 +373,7 @@ class DeviceTests(unittest.TestCase):
                 device_id=self.device["device_id"],
                 metric="battery_temp_max",
                 kind="yc",
-                source_database="c.sqlite3",
+                source_database="c.db",
                 rtu_id=1,
                 pnt_no=1,
                 max_value=60.0,
@@ -412,7 +412,7 @@ class DeviceTests(unittest.TestCase):
                         device_id=self.device["device_id"],
                         metric="battery_temp_max",
                         kind="yc",
-                        source_database="c.sqlite3",
+                        source_database="c.db",
                         rtu_id=1,
                         pnt_no=1,
                         max_value=bad_max,
@@ -486,7 +486,7 @@ class DeviceHTTPTests(unittest.TestCase):
         self.assertEqual(data["item"]["p"], 10)
         status, data = self.call(
             base,
-            "/api/source-points?source_database=c.sqlite3&kind=yx&q="
+            "/api/source-points?source_database=c.db&kind=yx&q="
             + __import__("urllib.parse", fromlist=["quote"]).quote("位置"),
         )
         self.assertEqual(data["total"], 1)
@@ -500,7 +500,7 @@ class DeviceHTTPTests(unittest.TestCase):
 
     def test_database_selection_creation_boundary_and_busy(self):
         server, base = self.server()
-        status, data = self.call(base, "/api/database/validate?path=c.sqlite3")
+        status, data = self.call(base, "/api/database/validate?path=c.db")
         self.assertFalse(data["valid"])
         status, data = self.call(base, "/api/database/tree?directory=..")
         self.assertEqual(status, 400)
@@ -508,7 +508,7 @@ class DeviceHTTPTests(unittest.TestCase):
             base,
             "/api/database/create",
             "POST",
-            dict(directory=".", name="new.sqlite3"),
+            dict(directory=".", name="new.db"),
         )
         self.assertEqual(status, 201)
         self.assertTrue(data["validation"]["valid"])
@@ -520,7 +520,7 @@ class DeviceHTTPTests(unittest.TestCase):
             base,
             "/api/database",
             "POST",
-            dict(database="new.sqlite3", expected_database="d.sqlite3"),
+            dict(database="new.db", expected_database="d.db"),
         )
         self.assertEqual(status, 409)
         self.call(base, "/api/collector/stop", "POST", {})
@@ -529,10 +529,10 @@ class DeviceHTTPTests(unittest.TestCase):
             base,
             "/api/database",
             "POST",
-            dict(database="new.sqlite3", expected_database="d.sqlite3"),
+            dict(database="new.db", expected_database="d.db"),
         )
         self.assertEqual(status, 200)
-        self.assertEqual(data["database"], "new.sqlite3")
+        self.assertEqual(data["database"], "new.db")
         status, data = self.call(
             base,
             "/api/collector/once",

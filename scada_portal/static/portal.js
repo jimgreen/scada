@@ -103,9 +103,20 @@
     return d.toLocaleString("zh-CN", { hour12: false });
   }
 
+  const LIGHT_THEMES = new Set([
+    "minimalist-light",
+    "arctic-frost",
+    "warm-paper",
+    "slate-daylight",
+    "bento-grid",
+    "editorial",
+  ]);
   function isDarkTheme() {
+    const scheme = document.documentElement.dataset.colorScheme;
+    if (scheme === "dark") return true;
+    if (scheme === "light") return false;
     const t = document.documentElement.dataset.theme || "sci-fi-cyan";
-    return t !== "minimalist-light" && t !== "bento-grid" && t !== "editorial";
+    return !LIGHT_THEMES.has(t);
   }
 
   function debounce(fn, delayMs = 250) {

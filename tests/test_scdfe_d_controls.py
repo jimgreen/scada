@@ -32,7 +32,7 @@ from scdfe_d.web.server import make_server
 
 
 def _create_source_scdfe_c(path: Path) -> None:
-    """构造带完整四遥（YC/YX/YK/YT）的模拟 scdfe_c.sqlite3。"""
+    """构造带完整四遥（YC/YX/YK/YT）的模拟 scdfe_c.db。"""
     with closing(sqlite3.connect(path)) as con:
         con.executescript(
             """
@@ -93,13 +93,13 @@ class TestScdfeDControls(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
-        self.src_db = self.root / "scdfe_c.sqlite3"
-        self.dev_db = self.root / "scdfe_d.sqlite3"
+        self.src_db = self.root / "scdfe_c.db"
+        self.dev_db = self.root / "scdfe_d.db"
         _create_source_scdfe_c(self.src_db)
         self.store = DeviceStore(
             self.dev_db,
             workspace_root=self.root,
-            source_database="scdfe_c.sqlite3",
+            source_database="scdfe_c.db",
         )
         self.dev = self.store.create_device({"name": "柴发-1", "category": "generator"})
         self.dev_id = self.dev["device_id"]
@@ -228,7 +228,7 @@ class TestScdfeDControls(unittest.TestCase):
         self.assertEqual(r1["dispatched"], 2)
         self.assertEqual(r1["pending"], 2)
 
-        # 检查 scdfe_c.sqlite3 已收到严格单调递增指令并递增 _version
+        # 检查 scdfe_c.db 已收到严格单调递增指令并递增 _version
         with closing(sqlite3.connect(self.src_db)) as ccon:
             yk_row = ccon.execute(
                 "SELECT value, cmd_time, status, _version FROM fes_yk_define WHERE rtu_id=3 AND pnt_no=1"
@@ -349,7 +349,7 @@ class TestScdfeDControls(unittest.TestCase):
             db_path=self.dev_db,
             workspace_root=self.root,
         )
-        server.store.set_source_database("scdfe_c.sqlite3")
+        server.store.set_source_database("scdfe_c.db")
         port = server.server_address[1]
         base = f"http://127.0.0.1:{port}"
         thread = threading.Thread(target=server.serve_forever, daemon=True)

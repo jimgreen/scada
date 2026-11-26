@@ -2,7 +2,7 @@
 
 scdfe_d 数据库中不再创建 measurement_value、measurement_refresh、scada_point_mapping、
 device_measurement、device 等冗余量测中间表；仅保留以设备类型为名的设备宽表与
-RTDB 元数据表（rtdb_schema_*）。源 SCADA 数据库（默认同目录 scdfe_c.sqlite3）始终只读。
+RTDB 元数据表（rtdb_schema_*）。源 SCADA 数据库（默认同级 ../fes/scdfe_c.db 或同目录 scdfe_c.db）始终只读。
 """
 
 from collections import defaultdict, deque
@@ -810,12 +810,15 @@ class DeviceStore:
         return interval
 
     def default_source_database(self):
-        """解析默认源 FES 采集库（优先显式配置，其次同级 ../fes/scdfe_c.sqlite3，再其次同目录 scdfe_c.sqlite3）。"""
+        """解析默认源 FES 采集库（优先显式配置，其次同级 ../fes/scdfe_c.db，再其次同目录 scdfe_c.db）。"""
         with self._mutex:
             explicit = self._source_database
         if explicit:
             return explicit
         candidates = (
+            self.db_path.parent.parent / "fes" / "scdfe_c.db",
+            self.db_path.parent / "scdfe_c.db",
+            self.db_path.parent / "c.db",
             self.db_path.parent.parent / "fes" / "scdfe_c.sqlite3",
             self.db_path.parent / "scdfe_c.sqlite3",
             self.db_path.parent / "c.sqlite3",
@@ -825,12 +828,12 @@ class DeviceStore:
             if path.is_file() and path.is_relative_to(self.root):
                 return path.relative_to(self.root).as_posix()
         if self.db_path.parent.name.lower() == "scada":
-            fallback = (self.db_path.parent.parent / "fes" / "scdfe_c.sqlite3").resolve()
+            fallback = (self.db_path.parent.parent / "fes" / "scdfe_c.db").resolve()
         else:
-            fallback = (self.db_path.parent / "scdfe_c.sqlite3").resolve()
+            fallback = (self.db_path.parent / "scdfe_c.db").resolve()
         if fallback.is_relative_to(self.root):
             return fallback.relative_to(self.root).as_posix()
-        return "scdfe_c.sqlite3"
+        return "scdfe_c.db"
 
     def set_source_database(self, relative_path):
         if relative_path:
@@ -1324,7 +1327,7 @@ class DeviceStore:
             for stale in [key for key in _source_cache if key not in active_sources]:
                 _source_cache.pop(stale)[0].close()
 
-        # 第二阶段：无本地写锁状态下读取外部源库（scdfe_c.sqlite3）快照。
+        # 第二阶段：无本地写锁状态下读取外部源库（scdfe_c.db）快照。
         source_points = {}
         errors = {}
         if requested_kinds:

@@ -14,7 +14,7 @@ class RebuildDeviceDatabaseTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.model = self.root / "models.sqlite3"
+        self.model = self.root / "models.db"
         with closing(sqlite3.connect(self.model)) as connection, connection:
             connection.execute(
                 "CREATE TABLE rtdb_schema_tables (table_name TEXT, ordinal INTEGER)"
@@ -36,7 +36,7 @@ class RebuildDeviceDatabaseTests(unittest.TestCase):
                 ("旧名称", "旧未量测设备"),
             )
 
-        self.points = self.root / "points.sqlite3"
+        self.points = self.root / "points.db"
         with closing(sqlite3.connect(self.points)) as connection, connection:
             for kind in ("yc", "yx"):
                 connection.execute(f"""CREATE TABLE fes_{kind}_define (
@@ -46,7 +46,7 @@ class RebuildDeviceDatabaseTests(unittest.TestCase):
                 ("有功功率", int(time.time() * 1000)),
             )
 
-        self.old = self.root / "old.sqlite3"
+        self.old = self.root / "old.db"
         store = DeviceStore(self.old, workspace_root=self.root)
         store.import_model(self.model.name)
         device = store.devices({"table": "ACGenerator"})[0]
@@ -91,7 +91,7 @@ class RebuildDeviceDatabaseTests(unittest.TestCase):
             connection.execute(
                 "INSERT INTO rtdb_data_ACGenerator VALUES (9,?)", ("新设备",)
             )
-        destination = self.root / "new.sqlite3"
+        destination = self.root / "new.db"
         result = rebuild(
             self.old, self.model.name, destination, workspace_root=self.root
         )
@@ -146,14 +146,14 @@ class RebuildDeviceDatabaseTests(unittest.TestCase):
             )
 
     def test_does_not_overwrite_or_publish_when_binding_cannot_be_migrated(self):
-        destination = self.root / "target.sqlite3"
+        destination = self.root / "target.db"
         destination.write_bytes(b"already exists")
         with self.assertRaises(FileExistsError):
             rebuild(self.old, self.model.name, destination, workspace_root=self.root)
         self.assertEqual(destination.read_bytes(), b"already exists")
         with closing(sqlite3.connect(self.model)) as connection, connection:
             connection.execute("DELETE FROM rtdb_data_ACGenerator WHERE c0=7")
-        failed = self.root / "missing.sqlite3"
+        failed = self.root / "missing.db"
         with self.assertRaisesRegex(ValueError, r"ACGenerator\[7\]"):
             rebuild(self.old, self.model.name, failed, workspace_root=self.root)
         self.assertFalse(failed.exists())

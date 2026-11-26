@@ -18,7 +18,7 @@ def main(argv=None):
     parser.add_argument("--db", type=Path, default=None, help="数据库路径（相对于工作区根目录）；省略时按三参数定位")
     add_workspace_arguments(parser)
     parser.add_argument(
-        "--source", type=str, default=None, help="源 SCADA 数据库相对路径，省略时默认同目录 scdfe_c.sqlite3"
+        "--source", type=str, default=None, help="源 SCADA 数据库相对路径，省略时默认同级 ../fes/scdfe_c.db 或同目录 scdfe_c.db"
     )
     parser.add_argument(
         "--interval", type=int, help="采集周期 1–60 秒，省略时沿用默认配置"

@@ -110,7 +110,7 @@ DEVICE_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("switch", "断路器开关"),
 )
 
-# 模型库（model/devices.sqlite3）扩展表 -> (主表名, 关联外键列名)
+# 模型库（model/devices.db）扩展表 -> (主表名, 关联外键列名)
 _MODEL_EXTENSIONS: dict[str, tuple[str, str]] = {
     "ACWindGen": ("ACGenerator", "idx_acgenerator"),
     "ACPVGen": ("ACGenerator", "idx_acgenerator"),
@@ -282,7 +282,7 @@ def _classify_device(table: str, name: str) -> str:
 
 
 class _PortalHistorySchemaCatalog:
-    """为 scada_portal_history.sqlite3 提供 RTDB 嵌入结构中文表名与字段说明。"""
+    """为 scada_portal_history.db 提供 RTDB 嵌入结构中文表名与字段说明。"""
 
     def names(self) -> list[str]:
         return ["device_daily_samples", "alarm_events"]
@@ -360,18 +360,27 @@ class PortalService:
         if c_db:
             self.c_db = Path(c_db).resolve()
         else:
-            fes_c_db = fes_sqldb_dir / "scdfe_c.sqlite3"
-            legacy_c_db = sqldb_dir / "scdfe_c.sqlite3"
-            self.c_db = fes_c_db if (fes_c_db.is_file() or not legacy_c_db.is_file()) else legacy_c_db
-        self.d_db = Path(d_db).resolve() if d_db else (sqldb_dir / "scdfe_d.sqlite3")
-        self.model_db = Path(model_db).resolve() if model_db else (model_sqldb_dir / "devices.sqlite3")
+            c_candidates = (
+                fes_sqldb_dir / "scdfe_c.db",
+                sqldb_dir / "scdfe_c.db",
+                fes_sqldb_dir / "scdfe_c.sqlite3",
+                sqldb_dir / "scdfe_c.sqlite3",
+            )
+            self.c_db = next((p for p in c_candidates if p.is_file()), c_candidates[0])
+        self.d_db = Path(d_db).resolve() if d_db else (sqldb_dir / "scdfe_d.db")
+        if model_db:
+            self.model_db = Path(model_db).resolve()
+        else:
+            m_db = model_sqldb_dir / "devices.db"
+            m_legacy = model_sqldb_dir / "devices.sqlite3"
+            self.model_db = m_db if (m_db.is_file() or not m_legacy.is_file()) else m_legacy
         self.svg_path = self._resolve_svg(svg_path, scene_dir / "model", scene_name)
         self.log_dir = Path(log_dir).resolve() if log_dir else (self.c_db.parent / "logs")
         self.d_log_dir = self.d_db.parent / "logs"
         self.history_db = (
             Path(history_db).resolve()
             if history_db
-            else (sqldb_dir / "scada_portal_history.sqlite3")
+            else (sqldb_dir / "scada_portal_history.db")
         )
         self.sample_interval_sec = max(1.0, float(sample_interval_sec))
         self._stop_event = threading.Event()
@@ -645,7 +654,7 @@ class PortalService:
                 continue
 
     def sample_once(self, *, prune: bool = False) -> int:
-        """从 scdfe_d.sqlite3 采集一帧全量有效数值量测并写入 24h 日曲线库。"""
+        """从 scdfe_d.db 采集一帧全量有效数值量测并写入 24h 日曲线库。"""
         if not self.d_db.is_file():
             return 0
         now_ms = int(time.time() * 1000)
@@ -1451,7 +1460,7 @@ class PortalService:
         return self.svg_path.read_bytes()
 
     def _read_model_params(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-        """读取 model/devices.sqlite3 全部设备静态参数（主表 + 扩展表），按 mtime 缓存。"""
+        """读取 model/devices.db 全部设备静态参数（主表 + 扩展表），按 mtime 缓存。"""
         if not self.model_db.is_file():
             return {}, {}
         mtime = self.model_db.stat().st_mtime_ns
@@ -2707,7 +2716,7 @@ class PortalService:
         search: str | None = None,
         limit: int = 300,
     ) -> dict[str, Any]:
-        """从 scada_portal_history.sqlite3 检索持久化告警历史（含已恢复与已确认记录）。"""
+        """从 scada_portal_history.db 检索持久化告警历史（含已恢复与已确认记录）。"""
         # 查询前刷新一次最新活动告警快照，确保刚触发或恢复的状态同步入库
         self._collect_raw_alarms(self._read_all_devices())
         limit = max(10, min(1000, int(limit)))

@@ -50,15 +50,15 @@ class ScadaWorkspacePathsTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     default_database_path("d"),
-                    (root / "simulation" / "huashan" / "sqldb" / "scada" / "scdfe_d.sqlite3").resolve(),
+                    (root / "simulation" / "huashan" / "sqldb" / "scada" / "scdfe_d.db").resolve(),
                 )
                 self.assertEqual(
                     default_database_path("c"),
-                    (root / "simulation" / "huashan" / "sqldb" / "fes" / "scdfe_c.sqlite3").resolve(),
+                    (root / "simulation" / "huashan" / "sqldb" / "fes" / "scdfe_c.db").resolve(),
                 )
                 self.assertEqual(
                     default_database_path("s"),
-                    (root / "simulation" / "huashan" / "sqldb" / "fes" / "scdfe_s.sqlite3").resolve(),
+                    (root / "simulation" / "huashan" / "sqldb" / "fes" / "scdfe_s.db").resolve(),
                 )
 
     def test_scdfe_d_discovers_sibling_fes_source_database(self):
@@ -68,13 +68,13 @@ class ScadaWorkspacePathsTests(unittest.TestCase):
             fes_dir = root / "realtime" / "qinling" / "sqldb" / "fes"
             scada_dir.mkdir(parents=True)
             fes_dir.mkdir(parents=True)
-            c_db = fes_dir / "scdfe_c.sqlite3"
+            c_db = fes_dir / "scdfe_c.db"
             sqlite3.connect(c_db).close()
-            store = DeviceStore(scada_dir / "scdfe_d.sqlite3", workspace_root=root)
+            store = DeviceStore(scada_dir / "scdfe_d.db", workspace_root=root)
             try:
                 self.assertEqual(
                     store.default_source_database(),
-                    "realtime/qinling/sqldb/fes/scdfe_c.sqlite3",
+                    "realtime/qinling/sqldb/fes/scdfe_c.db",
                 )
             finally:
                 store.close()
@@ -89,7 +89,7 @@ class ScadaWorkspacePathsTests(unittest.TestCase):
             self.assertEqual(list_runtimes(root), ["realtime"])
             self.assertEqual(list_scenes(root, "realtime"), ["qinling"])
             ctx = infer_workspace_context(
-                root / "realtime" / "qinling" / "sqldb" / "scada" / "scdfe_d.sqlite3",
+                root / "realtime" / "qinling" / "sqldb" / "scada" / "scdfe_d.db",
                 root,
             )
             self.assertEqual(ctx["sqldb_directory"], "realtime/qinling/sqldb/scada")
@@ -102,7 +102,7 @@ class ScadaWorkspacePathsTests(unittest.TestCase):
             ws_root, pref, db_path = resolve_web_database_args("d", args)
             self.assertEqual(ws_root, root.resolve())
             self.assertTrue(pref.is_relative_to(root.resolve()))
-            self.assertEqual(db_path, (root / "realtime" / "qinling" / "sqldb" / "scada" / "scdfe_d.sqlite3").resolve())
+            self.assertEqual(db_path, (root / "realtime" / "qinling" / "sqldb" / "scada" / "scdfe_d.db").resolve())
 
 
 if __name__ == "__main__":

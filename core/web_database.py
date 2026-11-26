@@ -213,7 +213,7 @@ class DatabaseSelectionMixin:
         return dict(
             database=relative,
             role=self.database_role,
-            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.sqlite3'),
+            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.db'),
             token=self._database_token,
             relative_database=relative,
             workspace_root=str(self._database_base_directory),
@@ -237,7 +237,7 @@ class DatabaseSelectionMixin:
             runtime_name=selected_runtime,
             runtimes=runtimes,
             scenes=scenes,
-            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.sqlite3'),
+            role_db_filename=ROLE_DB_FILENAMES.get(self.database_role, f'scdfe_{self.database_role}.db'),
         )
 
     def _browse_directory(self, fallback):
@@ -281,7 +281,7 @@ class DatabaseSelectionMixin:
             for path in folder.iterdir():
                 if path.name.startswith('.') or path.name in {'node_modules', '__pycache__'}:
                     continue
-                if path.is_dir() or (path.is_file() and path.suffix.lower() in {'.sqlite3', '.sqlite', '.db'}):
+                if path.is_dir() or (path.is_file() and path.suffix.lower() in {'.db', '.sqlite3', '.sqlite'}):
                     relative = self.relative_database_path(path)
                     if relative is not None:
                         entries.append(dict(name=path.name, path=relative, directory=path.is_dir()))
@@ -358,8 +358,8 @@ class DatabaseSelectionMixin:
         if not parent.is_dir():
             raise ApiError(400, '父目录不存在')
         target = self.resolve_database_path((parent / name).relative_to(self._database_base_directory).as_posix())
-        if not directory and target.suffix.lower() not in {'.sqlite3', '.sqlite', '.db'}:
-            raise ApiError(400, '数据库扩展名必须为 .sqlite3、.sqlite 或 .db')
+        if not directory and target.suffix.lower() not in {'.db', '.sqlite3', '.sqlite'}:
+            raise ApiError(400, '数据库扩展名必须为 .db、.sqlite3 或 .sqlite')
         created = False
         try:
             if directory:

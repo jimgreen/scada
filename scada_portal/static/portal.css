@@ -1470,17 +1470,13 @@ html[data-theme] .pf-mp-tabs button.pf-mp-tab.active {
   border: 1px solid rgba(148, 163, 184, 0.34);
 }
 
-html[data-theme="minimalist-light"] .badge.over,
-html[data-theme="bento-grid"] .badge.over,
-html[data-theme="editorial"] .badge.over {
+html[data-color-scheme="light"] .badge.over {
   background: #fff0e5;
   color: #c2410c;
   border-color: #fdba74;
 }
 
-html[data-theme="minimalist-light"] .badge.under,
-html[data-theme="bento-grid"] .badge.under,
-html[data-theme="editorial"] .badge.under {
+html[data-color-scheme="light"] .badge.under {
   background: #eef2ff;
   color: #4338ca;
   border-color: #a5b4fc;
@@ -2061,10 +2057,81 @@ html[data-theme="sci-fi-matrix"] {
   --hud-title-shadow: 0 0 14px rgba(0, 230, 118, 0.5);
 }
 
-/* 明亮主题统一体系（极简明亮 / 便当盒 / 编辑杂志）：极地白昼高空透明观景台 + 冰晶磨砂玻璃 + 高对比深色文字 */
-html[data-theme="minimalist-light"],
-html[data-theme="bento-grid"],
-html[data-theme="editorial"] {
+/* 深海工业蓝（沉稳电力调度中心大屏） */
+html[data-theme="ocean-slate"] {
+  --hud-glass: rgba(13, 32, 54, 0.84);
+  --hud-glass-strong: rgba(13, 32, 54, 0.94);
+  --hud-glass-hover: rgba(20, 44, 72, 0.96);
+  --hud-glass-active: linear-gradient(90deg, rgba(56, 189, 248, 0.28), rgba(56, 189, 248, 0.12));
+  --hud-topbar-bg: linear-gradient(180deg, rgba(7, 20, 34, 0.94) 0%, rgba(7, 20, 34, 0.68) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(20, 44, 72, 0.90) 0%, rgba(13, 32, 54, 0.94) 100%);
+  --hud-border: rgba(56, 189, 248, 0.24);
+  --hud-border-strong: rgba(56, 189, 248, 0.56);
+  --hud-text: #eaf4fc;
+  --hud-muted: #8eb2ce;
+  --hud-value: #34d399;
+  --hud-kpi-value: #38bdf8;
+  --hud-icon-bg: rgba(56, 189, 248, 0.14);
+  --hud-icon-fg: #38bdf8;
+  --hud-title-shadow: 0 0 10px rgba(56, 189, 248, 0.32);
+}
+
+/* 北欧极夜（低眩光极地夜间值班） */
+html[data-theme="nord-dark"] {
+  --hud-glass: rgba(46, 52, 64, 0.86);
+  --hud-glass-strong: rgba(46, 52, 64, 0.94);
+  --hud-glass-hover: rgba(59, 66, 82, 0.96);
+  --hud-glass-active: linear-gradient(90deg, rgba(136, 192, 208, 0.28), rgba(136, 192, 208, 0.12));
+  --hud-topbar-bg: linear-gradient(180deg, rgba(36, 41, 51, 0.94) 0%, rgba(36, 41, 51, 0.72) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(59, 66, 82, 0.90) 0%, rgba(46, 52, 64, 0.94) 100%);
+  --hud-border: rgba(216, 222, 233, 0.16);
+  --hud-border-strong: rgba(136, 192, 208, 0.54);
+  --hud-text: #eceff4;
+  --hud-muted: #a5b1c6;
+  --hud-value: #a3be8c;
+  --hud-kpi-value: #88c0d0;
+  --hud-icon-bg: rgba(136, 192, 208, 0.16);
+  --hud-icon-fg: #88c0d0;
+  --hud-center-border: linear-gradient(135deg, rgba(136, 192, 208, 0.80), rgba(163, 190, 140, 0.72));
+  --hud-center-bg: radial-gradient(circle at 30% 30%, rgba(59, 66, 82, 0.92), rgba(36, 41, 51, 0.95));
+  --hud-pct-grad: linear-gradient(180deg, #eceff4 0%, #88c0d0 100%);
+  --hud-pct-unit: #a3be8c;
+  --hud-pie-start: #a3be8c;
+  --hud-pie-end: #88c0d0;
+  --hud-pie-stroke: #88c0d0;
+  --hud-radar-stroke: rgba(136, 192, 208, 0.42);
+  --hud-title-shadow: none;
+}
+
+/* 碳黑琥珀（防蓝光硬核工业控制室） */
+html[data-theme="industrial-amber"] {
+  --hud-glass: rgba(28, 26, 24, 0.86);
+  --hud-glass-strong: rgba(28, 26, 24, 0.95);
+  --hud-glass-hover: rgba(42, 38, 34, 0.96);
+  --hud-glass-active: linear-gradient(90deg, rgba(245, 158, 11, 0.30), rgba(245, 158, 11, 0.12));
+  --hud-topbar-bg: linear-gradient(180deg, rgba(18, 17, 16, 0.95) 0%, rgba(18, 17, 16, 0.70) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(46, 38, 26, 0.88) 0%, rgba(28, 26, 24, 0.94) 100%);
+  --hud-border: rgba(245, 158, 11, 0.26);
+  --hud-border-strong: rgba(251, 191, 36, 0.64);
+  --hud-text: #faf5ed;
+  --hud-muted: #b5aa9a;
+  --hud-value: #34d399;
+  --hud-kpi-value: #fbbf24;
+  --hud-icon-bg: rgba(245, 158, 11, 0.16);
+  --hud-icon-fg: #f59e0b;
+  --hud-center-border: linear-gradient(135deg, rgba(245, 158, 11, 0.88), rgba(52, 211, 153, 0.68), rgba(251, 191, 36, 0.88));
+  --hud-center-bg: radial-gradient(circle at 30% 30%, rgba(44, 38, 30, 0.94), rgba(18, 17, 16, 0.96));
+  --hud-pct-grad: linear-gradient(180deg, #fef3c7 0%, #f59e0b 100%);
+  --hud-pct-unit: #fbbf24;
+  --hud-pie-start: #fbbf24;
+  --hud-pie-end: #d97706;
+  --hud-pie-stroke: #f59e0b;
+  --hud-radar-stroke: rgba(245, 158, 11, 0.44);
+  --hud-title-shadow: 0 0 12px rgba(245, 158, 11, 0.40);
+}
+
+/* 明亮主题统一体系（6 套浅色风格：极简明亮 / 极地冰蓝 / 护眼暖纸 / 冷灰工程 / 便当盒 / 编辑杂志） */
+html[data-color-scheme="light"] {
   --hud-glass: rgba(248, 251, 255, 0.86);
   --hud-glass-strong: rgba(255, 255, 255, 0.92);
   --hud-glass-hover: rgba(255, 255, 255, 0.98);
@@ -2101,6 +2168,50 @@ html[data-theme="editorial"] {
   --hud-bg-filter: brightness(1.24) contrast(0.90) saturate(0.84);
   --hud-bg-filter-sub: brightness(1.38) blur(10px) saturate(0.45) opacity(0.32);
   --hud-title-shadow: none;
+}
+
+/* 极地冰蓝专属霜青点缀 */
+html[data-theme="arctic-frost"] {
+  --hud-glass: rgba(240, 246, 251, 0.88);
+  --hud-border: rgba(2, 132, 199, 0.24);
+  --hud-border-strong: rgba(2, 132, 199, 0.58);
+  --hud-kpi-value: #0284c7;
+  --hud-icon-bg: rgba(2, 132, 199, 0.11);
+  --hud-icon-fg: #0284c7;
+  --hud-pie-end: #0284c7;
+  --hud-pie-stroke: #0284c7;
+}
+
+/* 护眼暖纸专属羊皮纸与森绿点缀 */
+html[data-theme="warm-paper"] {
+  --hud-glass: rgba(246, 242, 233, 0.90);
+  --hud-glass-strong: rgba(255, 253, 248, 0.95);
+  --hud-topbar-bg: linear-gradient(180deg, rgba(246, 242, 233, 0.95) 0%, rgba(239, 233, 220, 0.86) 100%);
+  --hud-crest-bg: linear-gradient(180deg, rgba(255, 253, 248, 0.96) 0%, rgba(246, 242, 233, 0.96) 100%);
+  --hud-border: rgba(21, 128, 61, 0.22);
+  --hud-border-strong: rgba(21, 128, 61, 0.54);
+  --hud-text: #231f1a;
+  --hud-muted: #6b6255;
+  --hud-value: #15803d;
+  --hud-kpi-value: #15803d;
+  --hud-icon-bg: rgba(21, 128, 61, 0.11);
+  --hud-icon-fg: #15803d;
+  --hud-center-border: linear-gradient(135deg, rgba(21, 128, 61, 0.70), rgba(180, 83, 9, 0.55));
+  --hud-pct-grad: linear-gradient(180deg, #166534 0%, #15803d 100%);
+  --hud-pie-start: #15803d;
+  --hud-pie-end: #b45309;
+  --hud-pie-stroke: #15803d;
+}
+
+/* 冷灰工程专属工业钴蓝点缀 */
+html[data-theme="slate-daylight"] {
+  --hud-glass: rgba(237, 241, 245, 0.90);
+  --hud-glass-strong: rgba(250, 251, 253, 0.96);
+  --hud-border: rgba(29, 78, 216, 0.22);
+  --hud-border-strong: rgba(29, 78, 216, 0.56);
+  --hud-kpi-value: #1d4ed8;
+  --hud-icon-bg: rgba(29, 78, 216, 0.11);
+  --hud-icon-fg: #1d4ed8;
 }
 
 /* 编辑杂志风强调色保持酒红典雅 */
@@ -2287,41 +2398,21 @@ html[data-theme] .flow-path.reverse { stroke: var(--hud-flow-reverse); }
 html[data-theme] .flow-path.idle { stroke: var(--hud-flow-idle); }
 
 /* 明亮主题下去掉深色辉光滤镜，线条更锐利清晰 */
-html[data-theme="minimalist-light"] .flow-path,
-html[data-theme="bento-grid"] .flow-path,
-html[data-theme="editorial"] .flow-path {
+html[data-color-scheme="light"] .flow-path {
   filter: none;
 }
 
-/* 明亮主题下其他 4 个工程页主面板恢复纯净浅色表面 */
-html[data-theme="minimalist-light"] .pf-canvas-wrap,
-html[data-theme="minimalist-light"] .pf-drawer,
-html[data-theme="minimalist-light"] .dev-list-panel,
-html[data-theme="minimalist-light"] .dev-detail-panel,
-html[data-theme="minimalist-light"] .table-panel,
-html[data-theme="minimalist-light"] .log-files-panel,
-html[data-theme="minimalist-light"] .log-reader-panel,
-html[data-theme="bento-grid"] .pf-canvas-wrap,
-html[data-theme="bento-grid"] .pf-drawer,
-html[data-theme="bento-grid"] .dev-list-panel,
-html[data-theme="bento-grid"] .dev-detail-panel,
-html[data-theme="bento-grid"] .table-panel,
-html[data-theme="bento-grid"] .log-files-panel,
-html[data-theme="bento-grid"] .log-reader-panel,
-html[data-theme="editorial"] .pf-canvas-wrap,
-html[data-theme="editorial"] .pf-drawer,
-html[data-theme="editorial"] .dev-list-panel,
-html[data-theme="editorial"] .dev-detail-panel,
-html[data-theme="editorial"] .table-panel,
-html[data-theme="editorial"] .log-files-panel,
-html[data-theme="editorial"] .log-reader-panel,
-html[data-theme="minimalist-light"] .ef-kpi-bar,
-html[data-theme="minimalist-light"] .ef-card,
-html[data-theme="bento-grid"] .ef-kpi-bar,
-html[data-theme="bento-grid"] .ef-card,
-html[data-theme="editorial"] .ef-kpi-bar,
-html[data-theme="editorial"] .ef-card {
-  background: rgba(255, 255, 255, 0.94) !important;
+/* 明亮主题下其他工程页主面板恢复纯净浅色表面 */
+html[data-color-scheme="light"] .pf-canvas-wrap,
+html[data-color-scheme="light"] .pf-drawer,
+html[data-color-scheme="light"] .dev-list-panel,
+html[data-color-scheme="light"] .dev-detail-panel,
+html[data-color-scheme="light"] .table-panel,
+html[data-color-scheme="light"] .log-files-panel,
+html[data-color-scheme="light"] .log-reader-panel,
+html[data-color-scheme="light"] .ef-kpi-bar,
+html[data-color-scheme="light"] .ef-card {
+  background: color-mix(in srgb, var(--bg-surface) 95%, transparent) !important;
   backdrop-filter: blur(12px);
 }
 
@@ -2534,9 +2625,7 @@ html[data-theme="editorial"] .ef-card {
 .ef-bus-bar.ac {
   filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.45));
 }
-html[data-theme="minimalist-light"] .ef-bus-bar,
-html[data-theme="bento-grid"] .ef-bus-bar,
-html[data-theme="editorial"] .ef-bus-bar {
+html[data-color-scheme="light"] .ef-bus-bar {
   filter: none;
 }
 
@@ -2747,72 +2836,34 @@ html[data-theme="editorial"] .ef-bus-bar {
   background: var(--border-strong, rgba(255, 255, 255, 0.12));
 }
 
-/* 浅色主题下调深全景流向 SVG 线条与图标色阶，保证白底清晰可读 */
-html[data-theme="minimalist-light"] .ef-line.c-wind,
-html[data-theme="bento-grid"] .ef-line.c-wind,
-html[data-theme="editorial"] .ef-line.c-wind,
-html[data-theme="minimalist-light"] .ef-ring.c-wind,
-html[data-theme="bento-grid"] .ef-ring.c-wind,
-html[data-theme="editorial"] .ef-ring.c-wind,
-html[data-theme="minimalist-light"] .ef-ico.c-wind,
-html[data-theme="bento-grid"] .ef-ico.c-wind,
-html[data-theme="editorial"] .ef-ico.c-wind,
-html[data-theme="minimalist-light"] .ef-line.c-dcac,
-html[data-theme="bento-grid"] .ef-line.c-dcac,
-html[data-theme="editorial"] .ef-line.c-dcac,
-html[data-theme="minimalist-light"] .ef-ring.c-dcac,
-html[data-theme="bento-grid"] .ef-ring.c-dcac,
-html[data-theme="editorial"] .ef-ring.c-dcac,
-html[data-theme="minimalist-light"] .ef-line.c-h2,
-html[data-theme="bento-grid"] .ef-line.c-h2,
-html[data-theme="editorial"] .ef-line.c-h2,
-html[data-theme="minimalist-light"] .ef-ring.c-h2,
-html[data-theme="bento-grid"] .ef-ring.c-h2,
-html[data-theme="editorial"] .ef-ring.c-h2,
-html[data-theme="minimalist-light"] .ef-gauge-arc,
-html[data-theme="bento-grid"] .ef-gauge-arc,
-html[data-theme="editorial"] .ef-gauge-arc {
+/* 浅色主题下调深全景流向 SVG 线条与图标色阶，保证浅底清晰可读 */
+html[data-color-scheme="light"] .ef-line.c-wind,
+html[data-color-scheme="light"] .ef-ring.c-wind,
+html[data-color-scheme="light"] .ef-ico.c-wind,
+html[data-color-scheme="light"] .ef-line.c-dcac,
+html[data-color-scheme="light"] .ef-ring.c-dcac,
+html[data-color-scheme="light"] .ef-line.c-h2,
+html[data-color-scheme="light"] .ef-ring.c-h2,
+html[data-color-scheme="light"] .ef-gauge-arc {
   stroke: #0284c7;
 }
-html[data-theme="minimalist-light"] .ef-line.c-storage,
-html[data-theme="bento-grid"] .ef-line.c-storage,
-html[data-theme="editorial"] .ef-line.c-storage,
-html[data-theme="minimalist-light"] .ef-ring.c-storage,
-html[data-theme="bento-grid"] .ef-ring.c-storage,
-html[data-theme="editorial"] .ef-ring.c-storage,
-html[data-theme="minimalist-light"] .ef-ico.c-storage,
-html[data-theme="bento-grid"] .ef-ico.c-storage,
-html[data-theme="editorial"] .ef-ico.c-storage {
+html[data-color-scheme="light"] .ef-line.c-storage,
+html[data-color-scheme="light"] .ef-ring.c-storage,
+html[data-color-scheme="light"] .ef-ico.c-storage {
   stroke: #0d9488;
 }
-html[data-theme="minimalist-light"] .ef-line.c-pv,
-html[data-theme="bento-grid"] .ef-line.c-pv,
-html[data-theme="editorial"] .ef-line.c-pv,
-html[data-theme="minimalist-light"] .ef-ring.c-pv,
-html[data-theme="bento-grid"] .ef-ring.c-pv,
-html[data-theme="editorial"] .ef-ring.c-pv,
-html[data-theme="minimalist-light"] .ef-ico.c-pv,
-html[data-theme="bento-grid"] .ef-ico.c-pv,
-html[data-theme="editorial"] .ef-ico.c-pv {
+html[data-color-scheme="light"] .ef-line.c-pv,
+html[data-color-scheme="light"] .ef-ring.c-pv,
+html[data-color-scheme="light"] .ef-ico.c-pv {
   stroke: #d97706;
 }
-html[data-theme="minimalist-light"] .ef-line.c-diesel,
-html[data-theme="bento-grid"] .ef-line.c-diesel,
-html[data-theme="editorial"] .ef-line.c-diesel,
-html[data-theme="minimalist-light"] .ef-ring.c-diesel,
-html[data-theme="bento-grid"] .ef-ring.c-diesel,
-html[data-theme="editorial"] .ef-ring.c-diesel {
+html[data-color-scheme="light"] .ef-line.c-diesel,
+html[data-color-scheme="light"] .ef-ring.c-diesel {
   stroke: #dc2626;
 }
-html[data-theme="minimalist-light"] .ef-line.c-load,
-html[data-theme="bento-grid"] .ef-line.c-load,
-html[data-theme="editorial"] .ef-line.c-load,
-html[data-theme="minimalist-light"] .ef-ring.c-load,
-html[data-theme="bento-grid"] .ef-ring.c-load,
-html[data-theme="editorial"] .ef-ring.c-load,
-html[data-theme="minimalist-light"] .ef-ico.c-load,
-html[data-theme="bento-grid"] .ef-ico.c-load,
-html[data-theme="editorial"] .ef-ico.c-load {
+html[data-color-scheme="light"] .ef-line.c-load,
+html[data-color-scheme="light"] .ef-ring.c-load,
+html[data-color-scheme="light"] .ef-ico.c-load {
   stroke: #7c3aed;
 }
 
@@ -3216,9 +3267,7 @@ html[data-theme] .ctrl-inline-input.limit-invalid {
     radial-gradient(circle at 78% 26%, rgba(165, 243, 252, 0.2) 0 1px, transparent 1.5px),
     radial-gradient(circle at 56% 12%, rgba(56, 189, 248, 0.24) 0 1.2px, transparent 1.8px);
 }
-html[data-theme="minimalist-light"] .ck-aurora-bg,
-html[data-theme="bento-grid"] .ck-aurora-bg,
-html[data-theme="editorial"] .ck-aurora-bg {
+html[data-color-scheme="light"] .ck-aurora-bg {
   opacity: 0.25;
 }
 .ck-grid {
@@ -3763,9 +3812,7 @@ html[data-theme="editorial"] .ck-aurora-bg {
   filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 72%, #38e8ff))
           drop-shadow(0 8px 18px rgba(0, 12, 32, 0.55));
 }
-html[data-theme="minimalist-light"] .ck-station-holo,
-html[data-theme="bento-grid"] .ck-station-holo,
-html[data-theme="editorial"] .ck-station-holo {
+html[data-color-scheme="light"] .ck-station-holo {
   filter: contrast(1.08) saturate(1.12) drop-shadow(0 6px 14px rgba(15, 23, 42, 0.22));
 }
 @keyframes ckFloatY {
@@ -4268,41 +4315,27 @@ html[data-theme="editorial"] .ck-station-holo {
   height: 100%;
 }
 
-/* 浅色主题收敛文字辉光与图标前景色，确保零白字浅底穿帮 */
-html[data-theme="minimalist-light"] .ck-orb,
-html[data-theme="bento-grid"] .ck-orb,
-html[data-theme="editorial"] .ck-orb,
-html[data-theme="minimalist-light"] .ck-node-disc,
-html[data-theme="bento-grid"] .ck-node-disc,
-html[data-theme="editorial"] .ck-node-disc {
+/* 全部 6 套浅色主题收敛文字辉光与图标前景色，确保零白字浅底穿帮 */
+html[data-color-scheme="light"] .ck-orb,
+html[data-color-scheme="light"] .ck-node-disc {
   color: var(--accent);
 }
-html[data-theme="minimalist-light"] .ck-orb.ok,
-html[data-theme="bento-grid"] .ck-orb.ok,
-html[data-theme="editorial"] .ck-orb.ok,
-html[data-theme="minimalist-light"] .ck-node-storage .ck-node-disc,
-html[data-theme="bento-grid"] .ck-node-storage .ck-node-disc,
-html[data-theme="editorial"] .ck-node-storage .ck-node-disc,
-html[data-theme="minimalist-light"] .ck-node-hydrogen .ck-node-disc,
-html[data-theme="bento-grid"] .ck-node-hydrogen .ck-node-disc,
-html[data-theme="editorial"] .ck-node-hydrogen .ck-node-disc {
+html[data-color-scheme="light"] .ck-orb.ok,
+html[data-color-scheme="light"] .ck-node-storage .ck-node-disc,
+html[data-color-scheme="light"] .ck-node-hydrogen .ck-node-disc {
   color: var(--ok);
 }
-html[data-theme="minimalist-light"] .ck-node-diesel .ck-node-disc,
-html[data-theme="bento-grid"] .ck-node-diesel .ck-node-disc,
-html[data-theme="editorial"] .ck-node-diesel .ck-node-disc {
+html[data-color-scheme="light"] .ck-node-diesel .ck-node-disc {
   color: var(--warn);
 }
-html[data-theme="minimalist-light"] .ck-panel,
-html[data-theme="bento-grid"] .ck-panel,
-html[data-theme="editorial"] .ck-panel {
+html[data-color-scheme="light"] .ck-panel {
   box-shadow: var(--shadow-card);
   background: var(--bg-surface);
 }
-html[data-theme="minimalist-light"] .ck-cum-val strong,
-html[data-theme="minimalist-light"] .ck-stat-box strong,
-html[data-theme="minimalist-light"] .ck-pyr-val strong,
-html[data-theme="minimalist-light"] .ck-head h2 {
+html[data-color-scheme="light"] .ck-cum-val strong,
+html[data-color-scheme="light"] .ck-stat-box strong,
+html[data-color-scheme="light"] .ck-pyr-val strong,
+html[data-color-scheme="light"] .ck-head h2 {
   text-shadow: none;
 }
 

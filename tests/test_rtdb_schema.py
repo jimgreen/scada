@@ -37,15 +37,15 @@ class EmbeddedSchemaTests(unittest.TestCase):
     def test_device_added_attribute_registers_whole_measurement_group(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with closing(sqlite3.connect(root / 'source.sqlite3')) as source, source:
+            with closing(sqlite3.connect(root / 'source.db')) as source, source:
                 for kind in ('yc', 'yx'):
                     source.execute(f"""CREATE TABLE fes_{kind}_define (rtu_id INTEGER, pnt_no INTEGER,
                         name TEXT, value REAL, status INTEGER, refresh_time INTEGER)""")
                     source.execute(f"INSERT INTO fes_{kind}_define VALUES(1, 6, 'Power', 3, 0, 1)")
-            store = DeviceStore(root / 'target.sqlite3', workspace_root=root)
+            store = DeviceStore(root / 'target.db', workspace_root=root)
             device = store.create_device(dict(category='generator', name='G1'))
             store.save_measurement(dict(device_id=device['device_id'], metric='p', kind='yc',
-                                        source_database='source.sqlite3', rtu_id=1, pnt_no=6))
+                                        source_database='source.db', rtu_id=1, pnt_no=6))
             with store.connection() as connection:
                 self.assertEqual(fields(connection, device['model_table']), [
                     'idx', 'name', 'p', 'p_qual', 'p_pre', 'p_time', 'p_notuse', 'p_weight', 'p_rtu', 'p_pnt', 'p_max', 'p_min',

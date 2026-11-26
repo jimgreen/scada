@@ -19,13 +19,28 @@
   const FULL_TIME = new Intl.DateTimeFormat(undefined, {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const TIME = new Intl.DateTimeFormat(undefined, {hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
   const AXIS_NAMES = {left:'左轴', right:'右轴'};
-  const DARK_THEMES = new Set(['precision-dark', 'sci-fi-cyan', 'sci-fi-purple', 'sci-fi-matrix', 'glassmorphism']);
+  const DARK_THEMES = new Set([
+    'precision-dark',
+    'ocean-slate',
+    'nord-dark',
+    'industrial-amber',
+    'sci-fi-cyan',
+    'sci-fi-purple',
+    'sci-fi-matrix',
+    'glassmorphism',
+  ]);
   const isDarkTheme = () => document.documentElement.dataset.colorScheme === 'dark' || DARK_THEMES.has(document.documentElement.dataset.theme || '');
   const themeAxisColors = () => {
     const theme = document.documentElement.dataset.theme;
     if (theme === 'sci-fi-cyan') return {left:'#00E5FF', right:'#FFB020'};
     if (theme === 'sci-fi-purple') return {left:'#C084FC', right:'#38BDF8'};
     if (theme === 'sci-fi-matrix') return {left:'#00E676', right:'#FBBF24'};
+    if (theme === 'ocean-slate') return {left:'#38BDF8', right:'#34D399'};
+    if (theme === 'nord-dark') return {left:'#88C0D0', right:'#EBCB8B'};
+    if (theme === 'industrial-amber') return {left:'#F59E0B', right:'#34D399'};
+    if (theme === 'arctic-frost') return {left:'#0284C7', right:'#0D9488'};
+    if (theme === 'warm-paper') return {left:'#15803D', right:'#B45309'};
+    if (theme === 'slate-daylight') return {left:'#1D4ED8', right:'#B45309'};
     if (theme === 'editorial') return {left:'#9F1239', right:'#B45309'};
     return isDarkTheme() ? {left:'#38BDF8', right:'#FBBF24'} : {left:'#2563EB', right:'#D97706'};
   };
