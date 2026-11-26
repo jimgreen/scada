@@ -30,6 +30,7 @@
     pfData: null,
     pfSelectedDev: null,
     pfHoverDev: null,
+    pfPopTab: "",
     pfHoverMeas: null, // { devId, mt, slot }
     pfMpGran: "hour", // "minute" | "hour" | "day"
     pfMpOffset: 0, // 0=当前，-1=上一个单位
@@ -89,6 +90,13 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function tr(text) {
+    if (window.scadaI18n && typeof window.scadaI18n.translateText === "function") {
+      return window.scadaI18n.translateText(String(text ?? ""));
+    }
+    return String(text ?? "");
   }
 
   function fmtNum(val, digits = 2) {
@@ -638,21 +646,70 @@
     applySvgTransform();
   }
 
+  function parseColorLuminance(raw) {
+    const str = String(raw || "").trim().toLowerCase();
+    if (!str || str === "none" || str === "transparent") return null;
+    let r = 0, g = 0, b = 0;
+    const hex = str.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+    if (hex) {
+      const h = hex[1].length === 3
+        ? hex[1].split("").map((c) => c + c).join("")
+        : hex[1];
+      r = parseInt(h.slice(0, 2), 16);
+      g = parseInt(h.slice(2, 4), 16);
+      b = parseInt(h.slice(4, 6), 16);
+    } else {
+      const rgb = str.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
+      if (!rgb) return null;
+      r = Number(rgb[1]);
+      g = Number(rgb[2]);
+      b = Number(rgb[3]);
+    }
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  }
+
+  function isSvgBgDark(svgEl) {
+    const svg = svgEl || $("#pf-stage svg");
+    const bgRect = svg?.querySelector("#Background_Layer rect");
+    const nativeFill = bgRect?.dataset?.nativeFill || bgRect?.getAttribute("fill") || "";
+    const lum = parseColorLuminance(nativeFill);
+    if (lum !== null) return lum < 0.5;
+    return isDarkTheme();
+  }
+
   function applySvgThemeColors() {
     const svg = $("#pf-stage svg");
     if (!svg) return;
-    const dark = isDarkTheme();
     const bgRect = svg.querySelector("#Background_Layer rect");
+    const wrap = $("#pf-canvas-wrap");
+    let nativeFill = "";
     if (bgRect) {
-      bgRect.setAttribute("fill", dark ? "#071122" : "#f1f5f9");
+      if (!bgRect.dataset.nativeFill) {
+        const rawFill = (bgRect.getAttribute("fill") || "").trim();
+        if (rawFill && rawFill.toLowerCase() !== "none" && rawFill.toLowerCase() !== "transparent") {
+          bgRect.dataset.nativeFill = rawFill;
+        }
+      }
+      nativeFill = bgRect.dataset.nativeFill || "";
+      // 若 SVG 自带背景色则原样保留，仅在无原生背景色时按门户主题兜底
+      if (nativeFill) {
+        bgRect.setAttribute("fill", nativeFill);
+      } else {
+        bgRect.setAttribute("fill", isDarkTheme() ? "#071122" : "#f1f5f9");
+      }
     }
+    if (wrap) {
+      if (nativeFill) wrap.style.setProperty("background", nativeFill, "important");
+      else wrap.style.removeProperty("background");
+    }
+    const dark = isSvgBgDark(svg);
     svg.querySelectorAll("#Text_Layer text").forEach((t) => {
-      t.setAttribute("fill", dark ? "#cfe6ff" : "#334155");
-      t.setAttribute("stroke", dark ? "rgba(6, 16, 34, 0.9)" : "rgba(255, 255, 255, 0.85)");
+      t.setAttribute("fill", dark ? "#cfe6ff" : "#1e293b");
+      t.setAttribute("stroke", dark ? "rgba(6, 16, 34, 0.9)" : "rgba(255, 255, 255, 0.92)");
     });
     svg.querySelectorAll("#Measurement_Layer g.mg rect").forEach((r) => {
-      r.setAttribute("fill", dark ? "rgba(8, 22, 44, 0.72)" : "rgba(255, 255, 255, 0.78)");
-      r.setAttribute("stroke", dark ? "rgba(0, 229, 255, 0.25)" : "rgba(100, 116, 139, 0.25)");
+      r.setAttribute("fill", dark ? "rgba(8, 22, 44, 0.72)" : "rgba(255, 255, 255, 0.88)");
+      r.setAttribute("stroke", dark ? "rgba(0, 229, 255, 0.25)" : "rgba(100, 116, 139, 0.35)");
       r.setAttribute("stroke-width", "1");
     });
     svg.querySelectorAll("#Measurement_Layer text").forEach((t) => {
@@ -779,14 +836,14 @@
   }
 
   function arrowColorFor(voltageType) {
-    const dark = isDarkTheme();
+    const dark = isSvgBgDark();
     if (voltageType === "dc") return dark ? "#38bdf8" : "#2563eb";
     if (voltageType === "hydro") return dark ? "#c084fc" : "#7c3aed";
     return dark ? "#34f5a8" : "#0d9488";
   }
 
   function arrowStrokeFor() {
-    return isDarkTheme() ? "#04101f" : "#ffffff";
+    return isSvgBgDark() ? "#04101f" : "#ffffff";
   }
 
   function initPowerflowArrowPaths(svg) {
@@ -1023,7 +1080,8 @@
           tspans[tspans.length - 1].textContent = entry.unit;
         }
         if (mt === "status") {
-          mv.setAttribute("fill", entry.raw ? "#00e6a8" : "#ff4d6d");
+          const dark = isSvgBgDark(svg);
+          mv.setAttribute("fill", entry.raw ? (dark ? "#00e6a8" : "#059669") : (dark ? "#ff4d6d" : "#dc2626"));
         }
       });
     });
@@ -1121,7 +1179,7 @@
     return `<table class="pf-kv-table"><tbody>${rows.join("")}</tbody></table>`;
   }
 
-  function renderDevicePopoverContent(devId, highlight = false) {
+  function renderDevicePopoverContent(devId, highlight = false, { resetTab = false } = {}) {
     const dev = state.pfData?.devices?.[devId];
     const svg = $("#pf-stage svg");
     if (highlight && svg) {
@@ -1130,16 +1188,29 @@
       if (node) node.classList.add("pf-highlight");
     }
     const jumpBtn = $("#pf-jump-device");
+    const tabsEl = $("#pf-dev-pop-tabs");
+    const metricsEl = $("#pf-dev-pop-metrics");
+    const ctrlHost = $("#pf-dev-pop-controls");
     if (!dev) {
       $("#pf-dev-pop-name").textContent = devId;
       $("#pf-dev-pop-meta").textContent = "暂无模型参数";
-      $("#pf-dev-pop-metrics").innerHTML = '<div class="empty-hint">模型库无此设备参数</div>';
+      if (tabsEl) { tabsEl.hidden = true; tabsEl.innerHTML = ""; }
+      if (metricsEl) { metricsEl.hidden = false; metricsEl.innerHTML = '<div class="empty-hint">模型库无此设备参数</div>'; }
+      if (ctrlHost) { ctrlHost.hidden = true; ctrlHost.innerHTML = ""; }
       if (jumpBtn) jumpBtn.disabled = true;
       return;
     }
+
     const params = dev.model_params || [];
+    const rawParamTabs = Array.isArray(dev.model_param_tabs) && dev.model_param_tabs.length
+      ? dev.model_param_tabs
+      : (params.length ? [{ key: "params", label: "设备参数", params }] : []);
+    const ctrls = dev.controls || [];
+    const totalParamCount = rawParamTabs.reduce((acc, t) => acc + (t.params?.length || 0), 0);
+
     $("#pf-dev-pop-name").textContent = dev.name;
-    $("#pf-dev-pop-meta").textContent = `${dev.table_name} #${dev.idx} · 参数 ${params.length} 项`;
+    $("#pf-dev-pop-meta").textContent = `${dev.table_name} #${dev.idx}`;
+
     if (jumpBtn) {
       jumpBtn.disabled = !dev.bound_count;
       jumpBtn.onclick = () => {
@@ -1149,47 +1220,107 @@
         switchView("devices");
       };
     }
-    $("#pf-dev-pop-metrics").innerHTML = params.length
-      ? buildKvTableHtml(params)
-      : '<div class="empty-hint">暂无设备模型参数</div>';
 
-    // 潮流图设备弹窗就地控调区（存在 YK/YT 时展示）
-    const ctrlHost = $("#pf-dev-pop-controls");
-    if (ctrlHost) {
-      const ctrls = dev.controls || [];
+    // 组装分页清单（耦合/扩展参数各自独立成页 + 存在指令时增加「就地指令」分页）
+    const tabs = rawParamTabs.map((t) => ({
+      key: t.key,
+      label: t.label,
+      count: (t.params || []).length,
+      kind: "params",
+      params: t.params || [],
+    }));
+    if (ctrls.length) {
+      tabs.push({ key: "__controls__", label: "就地指令", count: ctrls.length, kind: "controls" });
+    }
+    if (!tabs.length) {
+      tabs.push({ key: "params", label: "设备参数", count: 0, kind: "params", params: [] });
+    }
+
+    if (resetTab || !tabs.some((t) => t.key === state.pfPopTab)) {
+      state.pfPopTab = tabs[0].key;
+    }
+
+    const applyActiveTab = (tabKey) => {
+      state.pfPopTab = tabKey;
+      const active = tabs.find((t) => t.key === tabKey) || tabs[0];
+      if (tabsEl) {
+        tabsEl.querySelectorAll(".pf-pop-tab").forEach((btn) => {
+          const isCur = btn.dataset.pfPopTab === active.key;
+          btn.classList.toggle("active", isCur);
+          btn.setAttribute("aria-selected", isCur ? "true" : "false");
+        });
+      }
+      if (active.kind === "controls") {
+        if (metricsEl) metricsEl.hidden = true;
+        if (ctrlHost) ctrlHost.hidden = false;
+      } else {
+        if (ctrlHost) ctrlHost.hidden = true;
+        if (metricsEl) {
+          metricsEl.hidden = false;
+          metricsEl.innerHTML = active.params.length
+            ? buildKvTableHtml(active.params)
+            : '<div class="empty-hint">暂无设备模型参数</div>';
+        }
+      }
+    };
+
+    if (tabsEl) {
+      if (tabs.length > 1) {
+        tabsEl.hidden = false;
+        tabsEl.innerHTML = tabs.map((t) => {
+          const act = t.key === state.pfPopTab ? " active" : "";
+          return `<button type="button" class="pf-pop-tab${act}" role="tab" aria-selected="${act ? "true" : "false"}" data-pf-pop-tab="${esc(t.key)}">${esc(t.label)}<small>${t.count}</small></button>`;
+        }).join("");
+        tabsEl.querySelectorAll("[data-pf-pop-tab]").forEach((btn) => {
+          btn.addEventListener("click", () => applyActiveTab(btn.dataset.pfPopTab));
+        });
+      } else {
+        tabsEl.hidden = true;
+        tabsEl.innerHTML = "";
+      }
+    }
+
+    // 仅当用户未在指令输入框中编辑时才刷新指令区 DOM，避免定时刷新打断输入
+    const editingCtrl = ctrlHost && document.activeElement && ctrlHost.contains(document.activeElement);
+    if (ctrlHost && !editingCtrl) {
       if (!ctrls.length) {
-        ctrlHost.hidden = true;
         ctrlHost.innerHTML = "";
       } else {
-        ctrlHost.hidden = false;
-        ctrlHost.innerHTML =
-          '<div class="pf-pop-controls-title">就地指令（YK / YT）</div>' +
-          ctrls.map((c, ci) => {
-            const disabled = Boolean(c.disabled);
-            const key = `${dev.table_name}:${dev.idx}:${c.control}`;
-            const draft = state.ctrlDrafts.has(key) ? state.ctrlDrafts.get(key) : (c.value == null ? "" : String(c.value));
-            const ops = c.kind === "yk"
-              ? `<span class="ctrl-btn-group"><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="1"${disabled ? " disabled" : ""}>合/启</button><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="0"${disabled ? " disabled" : ""}>分/停</button></span>`
-              : `<span class="ctrl-btn-group"><input class="ctrl-inline-input pf-pop-ctrl-yt" type="number" step="any" data-pf-yt-input="${ci}" value="${esc(draft)}" placeholder="${esc(c.unit || "设定值")}"${disabled ? " disabled" : ""}><button type="button" class="btn primary" data-pf-yt-send="${ci}"${disabled ? " disabled" : ""}>下发</button></span>`;
-            return `<div class="pf-pop-ctrl-row"><span class="pf-pop-ctrl-name" title="${esc(c.control)}">${esc(c.label || c.control)}</span>${ctrlStatusBadge(c)}${ops}</div>`;
-          }).join("");
+        const targetDevFor = (c) => (
+          c.owner_table && c.owner_idx != null
+            ? { table_name: c.owner_table, idx: c.owner_idx, name: c.owner_name || dev.name }
+            : dev
+        );
+        ctrlHost.innerHTML = ctrls.map((c, ci) => {
+          const disabled = Boolean(c.disabled);
+          const tDev = targetDevFor(c);
+          const key = `${tDev.table_name}:${tDev.idx}:${c.control}`;
+          const draft = state.ctrlDrafts.has(key) ? state.ctrlDrafts.get(key) : (c.value == null ? "" : String(c.value));
+          const sideHtml = c.side_label ? `<span class="pf-pop-side-tag">${esc(c.side_label)}</span>` : "";
+          const ops = c.kind === "yk"
+            ? `<span class="ctrl-btn-group"><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="1"${disabled ? " disabled" : ""}>合/启</button><button type="button" class="btn secondary" data-pf-yk="${ci}" data-val="0"${disabled ? " disabled" : ""}>分/停</button></span>`
+            : `<span class="ctrl-btn-group"><input class="ctrl-inline-input pf-pop-ctrl-yt" type="number" step="any" data-pf-yt-input="${ci}" value="${esc(draft)}" placeholder="${esc(c.unit || "设定值")}"${disabled ? " disabled" : ""}><button type="button" class="btn primary" data-pf-yt-send="${ci}"${disabled ? " disabled" : ""}>下发</button></span>`;
+          return `<div class="pf-pop-ctrl-row"><span class="pf-pop-ctrl-name" title="${esc(c.control)}">${sideHtml}${esc(c.label || c.control)}</span>${ctrlStatusBadge(c)}${ops}</div>`;
+        }).join("");
         ctrlHost.querySelectorAll("[data-pf-yt-input]").forEach((inp) => {
           inp.addEventListener("input", () => {
             const c = ctrls[Number(inp.dataset.pfYtInput)];
-            if (c) state.ctrlDrafts.set(`${dev.table_name}:${dev.idx}:${c.control}`, inp.value);
+            if (!c) return;
+            const tDev = targetDevFor(c);
+            state.ctrlDrafts.set(`${tDev.table_name}:${tDev.idx}:${c.control}`, inp.value);
           });
           inp.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
               e.preventDefault();
               const c = ctrls[Number(inp.dataset.pfYtInput)];
-              dispatchPortalControl(dev, c, inp.value).catch((err) => setConnection(false, err.message));
+              if (c) dispatchPortalControl(targetDevFor(c), c, inp.value).catch((err) => setConnection(false, err.message));
             }
           });
         });
         ctrlHost.querySelectorAll("[data-pf-yk]").forEach((btn) => {
           btn.addEventListener("click", () => {
             const c = ctrls[Number(btn.dataset.pfYk)];
-            dispatchPortalControl(dev, c, Number(btn.dataset.val)).catch((err) => setConnection(false, err.message));
+            if (c) dispatchPortalControl(targetDevFor(c), c, Number(btn.dataset.val)).catch((err) => setConnection(false, err.message));
           });
         });
         ctrlHost.querySelectorAll("[data-pf-yt-send]").forEach((btn) => {
@@ -1197,11 +1328,13 @@
             const ci = Number(btn.dataset.pfYtSend);
             const c = ctrls[ci];
             const inp = ctrlHost.querySelector(`[data-pf-yt-input="${ci}"]`);
-            dispatchPortalControl(dev, c, inp ? inp.value : c?.value).catch((err) => setConnection(false, err.message));
+            if (c) dispatchPortalControl(targetDevFor(c), c, inp ? inp.value : c?.value).catch((err) => setConnection(false, err.message));
           });
         });
       }
     }
+
+    applyActiveTab(state.pfPopTab);
   }
 
   function showDevicePopover(devId, clientX, clientY, highlight = false) {
@@ -1210,8 +1343,9 @@
     if (!devPop) return;
     if (measPop) measPop.hidden = true;
     state.pfHoverMeas = null;
+    const switchedDev = state.pfHoverDev !== devId;
     state.pfHoverDev = devId;
-    renderDevicePopoverContent(devId, highlight);
+    renderDevicePopoverContent(devId, highlight, { resetTab: switchedDev });
     devPop.hidden = false;
     positionPopover(devPop, clientX, clientY);
   }
@@ -3298,7 +3432,7 @@
       ctx.font = "12px Inter, 'Microsoft YaHei', sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("暂无采样曲线", W / 2, H / 2);
+      ctx.fillText(tr("暂无采样曲线"), W / 2, H / 2);
       return;
     }
 
@@ -3496,7 +3630,7 @@
         ctx.beginPath();
         ctx.arc(bx, by, 3, 0, Math.PI * 2);
         ctx.fill();
-        rows.push({ label: s.label, val: `${Number(best[1]).toFixed(1)} kW`, color: s.color });
+        rows.push({ label: tr(s.label), val: `${Number(best[1]).toFixed(1)} kW`, color: s.color });
       }
       const d = new Date(snapTs);
       const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
@@ -3773,6 +3907,12 @@
     resetTimer();
   });
   $("#manual-refresh")?.addEventListener("click", refreshCurrentView);
+
+  // 监听语言切换，实时重绘 Canvas 图表与极地管控面板
+  document.addEventListener("scada:lang-change", () => {
+    drawTrendChart();
+    if (state.view === "cockpit") drawCockpitCharts();
+  });
 
   // 监听主题切换与窗口缩放，实时同步 SVG 和日曲线配色与尺寸
   new MutationObserver(() => {

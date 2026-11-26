@@ -298,12 +298,14 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertAlmostEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["value"], 75.0)
         self.assertEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["table_name"], "ACStorageGen")
         self.assertEqual(pf["svg_slots"]["ACGenerator-23"]["soc"]["metric"], "soc")
-        # 设备静态模型参数（含主表 ACGenerator 与扩展表 ACWindGen 合并）
+        # 设备静态模型参数（含主表 ACGenerator 与扩展表 ACWindGen 合并，并按扩展表自动分页）
         params = {p["key"]: p for p in pf["devices"]["ACGenerator-1"]["model_params"]}
         self.assertEqual(params["rated_capacity"]["value"], "10.1 kW")
         self.assertEqual(params["rated_voltage"]["value"], "380 V")
         self.assertEqual(params["wind_turbine_model"]["value"], "WT-5MW")
         self.assertEqual(params["cut_out_wind_speed"]["value"], "35 m/s")
+        tab_labels = [t["label"] for t in pf["devices"]["ACGenerator-1"]["model_param_tabs"]]
+        self.assertEqual(tab_labels, ["电气参数", "风机参数"])
         self.assertTrue(pf["breakers"]["ACBreak-1"]["closed"])
         # 潮流箭头矢量（支路与连接边）
         self.assertAlmostEqual(pf["flows"]["branches"]["ACBranch-20"]["p_kw"], 45.2)

@@ -119,6 +119,25 @@ _MODEL_EXTENSIONS: dict[str, tuple[str, str]] = {
     "DCPVGen": ("DCGenerator", "idx_dcgenerator"),
     "DCStorageGen": ("DCGenerator", "idx_dcgenerator"),
 }
+_EXT_TAB_LABELS: dict[str, str] = {
+    "ACWindGen": "风机参数",
+    "ACPVGen": "光伏参数",
+    "DCPVGen": "光伏参数",
+    "ACDieselGen": "柴发参数",
+    "ACStorageGen": "储能参数",
+    "DCStorageGen": "储能参数",
+}
+# 电-氢多能耦合设备外键 -> ((外键列, 目标表名, tab_key, tab_label), ...)
+_COUPLING_LINKS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
+    "AcE2Hydro": (
+        ("idx_ac_load_t1", "ACLoad", "ac", "交流侧"),
+        ("idx_h2_unit_t2", "HydroSource", "hydro", "氢能侧"),
+    ),
+    "Hydro2DcE": (
+        ("idx_dc_unit_t1", "DCGenerator", "dc", "直流侧"),
+        ("idx_h2_load_t2", "HydroLoad", "hydro", "氢能侧"),
+    ),
+}
 
 # 模型库设备参数中文字典与单位（eng_name -> (中文名, 单位)）
 MODEL_PARAM_META: dict[str, tuple[str, str]] = {
@@ -1468,6 +1487,9 @@ class PortalService:
             return self._model_params_cache[1]
 
         params_by_dev: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        base_params_by_dev: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        ext_tabs_by_dev: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        coupling_refs: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
         meta_by_dev: dict[str, dict[str, Any]] = {}
 
         def _fmt_param_val(eng: str, raw: Any, unit: str) -> str | None:
@@ -1492,9 +1514,16 @@ class PortalService:
                 return f"{s} {unit}".strip() if unit else s
             return str(raw)
 
-        def _append_fields(dev_id: str, fields: list[tuple[str, str]], row: tuple[Any, ...], seen: set[str]) -> None:
+        def _extract_fields(
+            fields: list[tuple[str, str]],
+            row: tuple[Any, ...],
+            seen: set[str],
+            *,
+            skip_extra: set[str] | None = None,
+        ) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
             for (eng, chn), raw in zip(fields, row):
-                if eng in _MODEL_SKIP_FIELDS or eng in seen:
+                if eng in _MODEL_SKIP_FIELDS or (skip_extra and eng in skip_extra) or eng in seen:
                     continue
                 if raw is None or (isinstance(raw, str) and not raw.strip()):
                     continue
@@ -1503,11 +1532,12 @@ class PortalService:
                 if val_str is None:
                     continue
                 seen.add(eng)
-                params_by_dev[dev_id].append({
+                out.append({
                     "key": eng,
                     "label": label,
                     "value": val_str,
                 })
+            return out
 
         try:
             with self._open_readonly(self.model_db) as conn:
@@ -1538,6 +1568,13 @@ class PortalService:
                     name_pos = eng_list.index("name") if "name" in eng_list else -1
                     sel = ", ".join(f'"c{int(r[0])}"' for r in cols)
                     fields = [(r[1], r[2]) for r in cols]
+                    link_defs = _COUPLING_LINKS.get(tbl, ())
+                    link_positions = [
+                        (eng_list.index(fk_col), child_tbl, tab_key, tab_label)
+                        for fk_col, child_tbl, tab_key, tab_label in link_defs
+                        if fk_col in eng_list
+                    ]
+                    link_fk_set = {fk_col for fk_col, _, _, _ in link_defs}
                     for row in conn.execute(f'SELECT {sel} FROM "rtdb_data_{tbl}"').fetchall():
                         try:
                             dev_idx = int(row[idx_pos])
@@ -1552,9 +1589,18 @@ class PortalService:
                             "name": dev_name,
                             "category": _classify_device(tbl, dev_name),
                         }
-                        _append_fields(dev_id, fields, tuple(row), seen_keys[dev_id])
+                        extracted = _extract_fields(fields, tuple(row), seen_keys[dev_id], skip_extra=link_fk_set)
+                        base_params_by_dev[dev_id].extend(extracted)
+                        params_by_dev[dev_id].extend(extracted)
+                        for pos, child_tbl, tab_key, tab_label in link_positions:
+                            try:
+                                c_idx = int(row[pos])
+                            except (TypeError, ValueError):
+                                continue
+                            if c_idx > 0:
+                                coupling_refs[dev_id].append((f"{child_tbl}-{c_idx}", tab_key, tab_label))
 
-                # 再按外键合并扩展表专项参数（风机/光伏/储能/柴发）
+                # 再按外键合并扩展表专项参数（风机/光伏/储能/柴发），同时保留扩展表独立分页
                 for ext_tbl, (parent_tbl, fk_col) in _MODEL_EXTENSIONS.items():
                     if ext_tbl not in tables:
                         continue
@@ -1570,15 +1616,97 @@ class PortalService:
                     fk_pos = eng_list.index(fk_col)
                     sel = ", ".join(f'"c{int(r[0])}"' for r in cols)
                     fields = [(r[1], r[2]) for r in cols]
+                    ext_label = _EXT_TAB_LABELS.get(ext_tbl, ext_tbl)
                     for row in conn.execute(f'SELECT {sel} FROM "rtdb_data_{ext_tbl}"').fetchall():
                         try:
                             parent_idx = int(row[fk_pos])
                         except (TypeError, ValueError):
                             continue
                         parent_dev_id = f"{parent_tbl}-{parent_idx}"
-                        _append_fields(parent_dev_id, fields, tuple(row), seen_keys[parent_dev_id])
+                        ext_items = _extract_fields(fields, tuple(row), seen_keys[parent_dev_id])
+                        if ext_items:
+                            params_by_dev[parent_dev_id].extend(ext_items)
+                            ext_tabs_by_dev[parent_dev_id].append({
+                                "key": f"ext_{ext_tbl.lower()}",
+                                "label": ext_label,
+                                "params": ext_items,
+                            })
         except sqlite3.Error:
             return {}, {}
+
+        # 为耦合设备与含扩展表的复合设备构建清晰的参数分页（param_tabs）
+        for dev_id, meta in meta_by_dev.items():
+            tbl = meta["table_name"]
+            base_items = base_params_by_dev.get(dev_id, [])
+            ext_tabs = ext_tabs_by_dev.get(dev_id, [])
+            links = coupling_refs.get(dev_id, [])
+            tabs: list[dict[str, Any]] = []
+
+            if links:
+                # 电-氢多能耦合设备：耦合参数 + 两侧关联子设备参数分页
+                if base_items:
+                    tabs.append({"key": "coupling", "label": "耦合参数", "params": base_items})
+                coupled_children: list[dict[str, Any]] = []
+                for child_dev_id, tab_key, tab_label in links:
+                    child_params = params_by_dev.get(child_dev_id, [])
+                    child_meta = meta_by_dev.get(child_dev_id)
+                    if child_params:
+                        tabs.append({"key": tab_key, "label": tab_label, "params": child_params})
+                    coupled_children.append({
+                        "dev_id": child_dev_id,
+                        "table_name": child_meta["table_name"] if child_meta else child_dev_id.split("-")[0],
+                        "idx": child_meta["idx"] if child_meta else 0,
+                        "side_label": tab_label,
+                    })
+                meta["coupled_children"] = coupled_children
+            elif tbl == "DCACConverter":
+                # 交直流变流器耦合设备：本体参数 | 交流侧 | 直流侧
+                core_p: list[dict[str, Any]] = []
+                ac_p: list[dict[str, Any]] = []
+                dc_p: list[dict[str, Any]] = []
+                for item in base_items:
+                    k = item["key"].lower()
+                    if k.startswith("ac_") or "_ac_" in k:
+                        ac_p.append(item)
+                    elif k.startswith("dc_") or "_dc_" in k:
+                        dc_p.append(item)
+                    else:
+                        core_p.append(item)
+                if core_p:
+                    tabs.append({"key": "base", "label": "本体参数", "params": core_p})
+                if ac_p:
+                    tabs.append({"key": "ac", "label": "交流侧", "params": ac_p})
+                if dc_p:
+                    tabs.append({"key": "dc", "label": "直流侧", "params": dc_p})
+            elif tbl == "DCDCConverter":
+                # 直流-直流变流器耦合设备：本体参数 | I 侧 | J 侧
+                core_p, i_p, j_p = [], [], []
+                for item in base_items:
+                    k = item["key"].lower()
+                    if k.startswith("i_") or "_i_" in k or k.startswith("high_"):
+                        i_p.append(item)
+                    elif k.startswith("j_") or "_j_" in k or k.startswith("low_"):
+                        j_p.append(item)
+                    else:
+                        core_p.append(item)
+                if i_p or j_p:
+                    if core_p:
+                        tabs.append({"key": "base", "label": "本体参数", "params": core_p})
+                    if i_p:
+                        tabs.append({"key": "side_i", "label": "I 侧", "params": i_p})
+                    if j_p:
+                        tabs.append({"key": "side_j", "label": "J 侧", "params": j_p})
+                elif base_items:
+                    tabs.append({"key": "params", "label": "设备参数", "params": base_items})
+            elif ext_tabs:
+                # 主表 + 专项扩展表（如交流柴发 / 风机 / 光伏 / 储能）：电气参数 | 专项参数
+                if base_items:
+                    tabs.append({"key": "electric", "label": "电气参数", "params": base_items})
+                tabs.extend(ext_tabs)
+            elif base_items:
+                tabs.append({"key": "params", "label": "设备参数", "params": base_items})
+
+            meta["param_tabs"] = tabs
 
         result = (dict(params_by_dev), meta_by_dev)
         self._model_params_cache = (mtime, result)
@@ -1696,6 +1824,7 @@ class PortalService:
             if slots:
                 svg_slots[dev_id] = slots
 
+            m_meta = model_meta_map.get(dev_id) or {}
             dev_summaries[dev_id] = {
                 "dev_id": dev_id,
                 "table_name": t,
@@ -1709,11 +1838,12 @@ class PortalService:
                 "control_count": dev.get("control_count", 0),
                 "alarm_count": dev.get("alarm_count", 0),
                 "metrics": dev["metrics"],
-                "controls": dev.get("controls", []),
+                "controls": list(dev.get("controls", [])),
                 "model_params": model_params_map.get(dev_id, []),
+                "model_param_tabs": m_meta.get("param_tabs") or [],
             }
 
-        # 补充仅存在于模型库、尚未在 scdfe_d 绑定量测的设备（如母线、阀门等），确保悬停仍显示模型参数
+        # 补充仅存在于模型库、尚未在 scdfe_d 绑定量测的设备（如母线、阀门、耦合主体等），确保悬停仍显示模型参数与分页
         for dev_id, meta in model_meta_map.items():
             if dev_id not in dev_summaries:
                 dev_summaries[dev_id] = {
@@ -1731,7 +1861,36 @@ class PortalService:
                     "metrics": [],
                     "controls": [],
                     "model_params": model_params_map.get(dev_id, []),
+                    "model_param_tabs": meta.get("param_tabs") or [],
                 }
+
+        # 为电-氢耦合设备自动聚合关联子设备的就地指令（保留真实 owner_table/owner_idx 供直接下发）
+        for dev_id, meta in model_meta_map.items():
+            children = meta.get("coupled_children") or ()
+            if not children or dev_id not in dev_summaries:
+                continue
+            parent_summary = dev_summaries[dev_id]
+            merged_ctrls = list(parent_summary["controls"])
+            seen_ctrl = {(parent_summary["table_name"], parent_summary["idx"], c["control"]) for c in merged_ctrls}
+            for child in children:
+                c_dev = by_dev_id.get(child["dev_id"])
+                if not c_dev:
+                    continue
+                side = child.get("side_label") or ""
+                for c in c_dev.get("controls") or ():
+                    ck = (c_dev["table_name"], c_dev["idx"], c["control"])
+                    if ck in seen_ctrl:
+                        continue
+                    seen_ctrl.add(ck)
+                    merged_ctrls.append({
+                        **c,
+                        "owner_table": c_dev["table_name"],
+                        "owner_idx": c_dev["idx"],
+                        "owner_name": c_dev["name"],
+                        "side_label": side,
+                    })
+            parent_summary["controls"] = merged_ctrls
+            parent_summary["control_count"] = len(merged_ctrls)
 
         # ACRealBs / DCRealBs 若自身无电压点，从同压级母线/节点补充代表电压
         ac_bus_v = [

@@ -1092,14 +1092,84 @@ input[type="search"], select {
   text-overflow: ellipsis;
 }
 
+#pf-dev-popover .pf-pop-head {
+  padding: 5px 10px;
+}
+
+#pf-dev-popover .pf-pop-title-wrap {
+  flex: 1;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+
+#pf-dev-popover .pf-pop-title-wrap strong {
+  flex: 0 1 auto;
+}
+
+#pf-dev-popover .pf-pop-title-wrap small {
+  flex: 0 1 auto;
+  font-family: var(--font-mono, monospace);
+}
+
 html[data-theme] .pf-popover button.pf-pop-jump {
   padding: 3px 8px !important;
   font-size: 11px !important;
   flex-shrink: 0;
 }
 
+.pf-pop-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-color, rgba(125, 162, 196, 0.2));
+  background: var(--bg-subtle, rgba(13, 27, 51, 0.45));
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.pf-pop-tabs::-webkit-scrollbar {
+  display: none;
+}
+.pf-pop-tabs[hidden],
+.pf-pop-metrics[hidden] {
+  display: none !important;
+}
+html[data-theme] .pf-pop-tabs button.pf-pop-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px !important;
+  min-height: 22px;
+  font-size: 11px !important;
+  font-weight: 500;
+  border-radius: 4px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--text-secondary, #7da2c4) !important;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+html[data-theme] .pf-pop-tabs button.pf-pop-tab:hover {
+  color: var(--text-primary, #e6f7ff) !important;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06)) !important;
+}
+html[data-theme] .pf-pop-tabs button.pf-pop-tab.active {
+  color: var(--accent, #38bdf8) !important;
+  background: var(--accent-soft, rgba(56, 189, 248, 0.14)) !important;
+  border-color: var(--accent-ring, rgba(56, 189, 248, 0.35)) !important;
+  font-weight: 600;
+}
+.pf-pop-tab small {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  opacity: 0.85;
+}
+
 .pf-pop-metrics {
-  max-height: 380px;
+  max-height: 244px;
   overflow-y: auto;
 }
 
@@ -3121,25 +3191,29 @@ html[data-theme] .ctrl-inline-input.limit-invalid {
   font-size: 11px;
   min-height: 22px;
 }
-/* 潮流图悬浮框就地控调区 */
+/* 潮流图悬浮框就地指令独立分页区 */
 .pf-pop-controls {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color, rgba(125, 162, 196, 0.25));
+  padding: 6px 10px 8px;
+  max-height: 244px;
+  overflow-y: auto;
 }
-.pf-pop-controls-title {
-  font-size: 11px;
-  font-weight: 600;
+.pf-pop-side-tag {
+  display: inline-block;
+  padding: 0 5px;
+  margin-right: 4px;
+  border-radius: 3px;
+  background: var(--accent-soft, rgba(56, 189, 248, 0.14));
   color: var(--accent, #38bdf8);
-  margin-bottom: 5px;
+  font-size: 10px;
+  font-weight: 600;
 }
 .pf-pop-ctrl-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 0;
-  font-size: 11px;
-  border-bottom: 1px solid var(--border-color, rgba(125, 162, 196, 0.12));
+  padding: 5px 0;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border-color, rgba(125, 162, 196, 0.14));
 }
 .pf-pop-ctrl-row:last-child {
   border-bottom: 0;
