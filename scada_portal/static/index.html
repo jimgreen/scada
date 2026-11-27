@@ -49,7 +49,6 @@
             <span class="dot"></span>
             <span id="conn-text">连接中</span>
           </div>
-          <span class="dq-pill" id="dq-pill" title="数据健康">--%</span>
         </div>
       </div>
 
@@ -60,9 +59,6 @@
       </div>
 
       <div class="header-tools">
-        <button type="button" class="btn secondary topbar-mini-btn" id="cmd-palette-btn" title="命令面板 (Ctrl+K)">⌘K</button>
-        <button type="button" class="btn secondary topbar-mini-btn" id="control-lock-btn" title="切换只读监盘 / 值班控调">值班控调</button>
-        <button type="button" class="btn secondary topbar-mini-btn" id="control-audit-btn" title="操作审计">操作审计</button>
         <a class="portal-cross-link" id="portal-jump-d" href="http://127.0.0.1:8980/" target="_blank" rel="noopener">工程配置 ↗</a>
         <span class="live-clock" id="live-clock">--:--:--</span>
       </div>
@@ -106,22 +102,33 @@
           </button>
         </nav>
 
-        <div class="sidebar-health" id="sidebar-health">
-          <div class="health-row">
-            <span>在线 RTU</span>
-            <strong id="health-rtus">--</strong>
+        <div class="sidebar-bottom">
+          <div class="sidebar-tools" aria-label="快捷工具">
+            <button type="button" class="btn secondary sidebar-mini-btn" id="control-lock-btn" title="切换只读监盘 / 值班控调">值班控调</button>
+            <button type="button" class="btn secondary sidebar-mini-btn" id="control-audit-btn" title="操作审计">操作审计</button>
+            <button type="button" class="btn secondary sidebar-mini-btn sidebar-cmd-btn" id="cmd-palette-btn" title="命令面板 (Ctrl+K)">⌘K</button>
           </div>
-          <div class="health-row">
-            <span>有效量测</span>
-            <strong id="health-points">--</strong>
-          </div>
-          <div class="health-row">
-            <span>总发电功率</span>
-            <strong id="health-gen">-- kW</strong>
-          </div>
-          <div class="health-row">
-            <span>总用电负荷</span>
-            <strong id="health-load">-- kW</strong>
+          <div class="sidebar-health" id="sidebar-health">
+            <div class="health-row">
+              <span>在线 RTU</span>
+              <strong id="health-rtus">--</strong>
+            </div>
+            <div class="health-row">
+              <span>有效量测</span>
+              <strong id="health-points">--</strong>
+            </div>
+            <div class="health-row">
+              <span>数据健康</span>
+              <span class="dq-pill dq-pill-inline" id="dq-pill" title="数据健康">--%</span>
+            </div>
+            <div class="health-row">
+              <span>总发电功率</span>
+              <strong id="health-gen">-- kW</strong>
+            </div>
+            <div class="health-row">
+              <span>总用电负荷</span>
+              <strong id="health-load">-- kW</strong>
+            </div>
           </div>
         </div>
       </aside>
@@ -466,21 +473,21 @@
                     <!-- 中央向上扩散全息极光光幕 -->
                     <polygon points="246,204 434,204 410,66 270,66" fill="url(#ck-beam-up)" opacity="0.68" />
 
-                    <!-- 6 条动态能量流光轨（左 3 源汇入中心，右 3 端与中心双向交互） -->
+                    <!-- 6 条动态能量流光轨（左 3：光伏/风电/氢能，右 3：负荷/电化学储能/柴发） -->
                     <g class="ck-hub-tracks">
                       <path id="ck-path-pv" class="ck-flow-track" d="M 116 84 Q 214 96 292 170" />
                       <path id="ck-path-wind" class="ck-flow-track" d="M 96 192 Q 196 196 266 196" />
-                      <path id="ck-path-storage" class="ck-flow-track" d="M 134 294 Q 232 282 298 222" />
+                      <path id="ck-path-hydrogen" class="ck-flow-track" d="M 134 294 Q 232 282 298 222" />
                       <path id="ck-path-load" class="ck-flow-track" d="M 388 170 Q 466 96 564 84" />
-                      <path id="ck-path-hydrogen" class="ck-flow-track" d="M 414 196 Q 484 196 584 192" />
+                      <path id="ck-path-storage" class="ck-flow-track" d="M 414 196 Q 484 196 584 192" />
                       <path id="ck-path-diesel" class="ck-flow-track" d="M 546 294 Q 448 282 382 222" />
                     </g>
                     <g class="ck-hub-pulses" filter="url(#ck-glow-filter)">
                       <path id="ck-pulse-pv" class="ck-flow-pulse" d="M 116 84 Q 214 96 292 170" />
                       <path id="ck-pulse-wind" class="ck-flow-pulse" d="M 96 192 Q 196 196 266 196" />
-                      <path id="ck-pulse-storage" class="ck-flow-pulse" d="M 134 294 Q 232 282 298 222" />
+                      <path id="ck-pulse-hydrogen" class="ck-flow-pulse" d="M 134 294 Q 232 282 298 222" />
                       <path id="ck-pulse-load" class="ck-flow-pulse" d="M 388 170 Q 466 96 564 84" />
-                      <path id="ck-pulse-hydrogen" class="ck-flow-pulse" d="M 414 196 Q 484 196 584 192" />
+                      <path id="ck-pulse-storage" class="ck-flow-pulse" d="M 414 196 Q 484 196 584 192" />
                       <path id="ck-pulse-diesel" class="ck-flow-pulse" d="M 546 294 Q 448 282 382 222" />
                     </g>
 
@@ -492,14 +499,14 @@
                       <circle r="3.6" class="ck-orb-bead" id="ck-bead-wind">
                         <animateMotion dur="2.1s" repeatCount="indefinite" path="M 96 192 Q 196 196 266 196" />
                       </circle>
-                      <circle r="3.6" class="ck-orb-bead ok" id="ck-bead-storage">
-                        <animateMotion dur="2.4s" repeatCount="indefinite" path="M 134 294 Q 232 282 298 222" />
+                      <circle r="3.4" class="ck-orb-bead ok" id="ck-bead-hydrogen">
+                        <animateMotion dur="2.5s" repeatCount="indefinite" path="M 134 294 Q 232 282 298 222" />
                       </circle>
                       <circle r="3.8" class="ck-orb-bead" id="ck-bead-load">
                         <animateMotion dur="1.9s" repeatCount="indefinite" path="M 388 170 Q 466 96 564 84" />
                       </circle>
-                      <circle r="3.4" class="ck-orb-bead ok" id="ck-bead-hydrogen">
-                        <animateMotion dur="2.5s" repeatCount="indefinite" path="M 414 196 Q 484 196 584 192" />
+                      <circle r="3.6" class="ck-orb-bead ok" id="ck-bead-storage">
+                        <animateMotion dur="2.4s" repeatCount="indefinite" path="M 414 196 Q 484 196 584 192" />
                       </circle>
                       <circle r="3.4" class="ck-orb-bead warn" id="ck-bead-diesel">
                         <animateMotion dur="2.3s" repeatCount="indefinite" path="M 546 294 Q 448 282 382 222" />

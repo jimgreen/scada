@@ -212,7 +212,7 @@
     const el = $("#dq-pill");
     if (!el || !dq || dq.health_pct === undefined) return;
     const pct = Number(dq.health_pct ?? 100);
-    el.textContent = `${tr("数据健康")} ${pct.toFixed(1)}%`;
+    el.textContent = `${pct.toFixed(1)}%`;
     el.className = `dq-pill${dq.level === "fault" ? " is-fault" : (dq.level === "warn" ? " is-warn" : "")}`;
     const tips = [
       `${tr("有效量测")}: ${dq.total_valid ?? 0}/${dq.total_bound ?? 0}`,
@@ -3902,10 +3902,12 @@
 
     setCkPulse("ck-pulse-pv", n.pv?.p_kw);
     setCkPulse("ck-pulse-wind", n.wind?.p_kw);
-    setCkPulse("ck-pulse-storage", n.storage?.p_kw, { reverse: n.storage?.state === "charge" });
+    // 储能位于右中（路径由中心指向右），放电指向中心需 reverse
+    setCkPulse("ck-pulse-storage", n.storage?.p_kw, { reverse: n.storage?.state === "discharge" });
     setCkPulse("ck-pulse-load", n.load?.p_kw);
+    // 氢能位于左下（路径由左下指向中心），制氢背离中心需 reverse
     setCkPulse("ck-pulse-hydrogen", Math.max(Number(n.hydrogen?.prod_kw || 0), Number(n.hydrogen?.gen_kw || 0)), {
-      reverse: h2Net > 0.2,
+      reverse: h2Net < -0.2,
     });
     setCkPulse("ck-pulse-diesel", n.diesel?.p_kw, { warn: true });
 

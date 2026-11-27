@@ -94,15 +94,17 @@ body:not(.view-home) .cockpit-bg-img {
 .topbar-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .topbar-controls {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .portal-brand {
@@ -183,8 +185,41 @@ body:not(.view-home) .cockpit-bg-img {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 1520px) {
+  .portal-topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .crest-wing {
+    display: none;
+  }
+  .bridge-crest {
+    padding: 5px 18px 7px;
+    gap: 8px;
+  }
+  .bridge-crest strong {
+    font-size: 17px;
+    letter-spacing: 0.06em;
+  }
+  .live-clock {
+    display: none;
+  }
+}
+
+@media (max-width: 1240px) {
+  .brand-titles {
+    display: none;
+  }
+  .bridge-crest strong {
+    font-size: 15px;
+    letter-spacing: 0.03em;
+  }
 }
 
 .live-clock {
@@ -4004,17 +4039,19 @@ html[data-color-scheme="light"] .ck-station-holo {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
-/* 6 大极地实景全息台座节点：彻底去掉死板方框，改为浮空光环底座 + 顶置胶囊 */
+/* 6 大极地实景全息台座节点：高权重覆写主题按钮框，紧凑尺寸杜绝遮挡 */
+html[data-theme] button.ck-node,
 .ck-node {
   position: absolute;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  min-width: 104px;
+  gap: 2px;
+  padding: 2px 4px !important;
+  min-width: 88px;
+  min-height: 0 !important;
   border: 0 !important;
-  border-radius: 10px;
+  border-radius: 8px !important;
   background: transparent !important;
   box-shadow: none !important;
   color: var(--text-primary);
@@ -4022,26 +4059,28 @@ html[data-color-scheme="light"] .ck-station-holo {
   z-index: 3;
   transition: transform 200ms cubic-bezier(0.2, 0, 0, 1);
 }
+html[data-theme] button.ck-node:hover,
 .ck-node:hover {
-  transform: translateY(-4px);
+  transform: translateY(-3px);
+  background: transparent !important;
 }
 .ck-node-title {
-  padding: 1px 10px;
+  padding: 1px 7px;
   border-radius: 3px;
   border: 1px solid color-mix(in srgb, var(--accent) 52%, transparent);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 20%, transparent), color-mix(in srgb, var(--bg-surface) 78%, transparent));
-  font-size: 11px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 20%, transparent), color-mix(in srgb, var(--bg-surface) 82%, transparent));
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--text-primary);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .ck-node-disc {
   position: relative;
-  width: 44px;
-  height: 44px;
-  margin: 2px 0 4px;
+  width: 34px;
+  height: 34px;
+  margin: 1px 0 3px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
@@ -4049,81 +4088,81 @@ html[data-color-scheme="light"] .ck-station-holo {
   border: 1.5px solid color-mix(in srgb, var(--accent) 88%, #ffffff);
   background: radial-gradient(circle at 35% 28%, color-mix(in srgb, var(--accent) 44%, #ffffff 18%), color-mix(in srgb, var(--bg-surface) 80%, transparent) 72%);
   color: #e0faff;
-  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 48%, transparent), inset 0 0 14px color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 0 10px color-mix(in srgb, var(--accent) 36%, transparent);
   transition: box-shadow 200ms ease, transform 200ms ease;
 }
-/* 节点下方透视悬浮光盘底座（还原原图立体光台） */
+/* 节点下方透视悬浮光盘底座（紧凑立体光台） */
 .ck-node-disc::before {
   content: "";
   position: absolute;
-  bottom: -9px;
+  bottom: -6px;
   left: 50%;
   transform: translateX(-50%);
-  width: 68px;
-  height: 18px;
+  width: 52px;
+  height: 13px;
   border-radius: 50%;
-  border: 1.2px solid color-mix(in srgb, var(--accent) 68%, transparent);
-  background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 36%, transparent) 0%, transparent 72%);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 68%, transparent);
+  background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 34%, transparent) 0%, transparent 72%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 36%, transparent);
   pointer-events: none;
 }
 .ck-node-disc::after {
   content: "";
   position: absolute;
-  bottom: -12px;
+  bottom: -9px;
   left: 50%;
   transform: translateX(-50%);
-  width: 82px;
-  height: 24px;
+  width: 64px;
+  height: 18px;
   border-radius: 50%;
-  border: 1px dashed color-mix(in srgb, var(--accent) 42%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
   pointer-events: none;
 }
 .ck-node:hover .ck-node-disc {
   transform: scale(1.06);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--accent) 72%, transparent), inset 0 0 18px color-mix(in srgb, var(--accent) 52%, transparent);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 70%, transparent), inset 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .ck-node-disc svg {
-  width: 21px;
-  height: 21px;
+  width: 17px;
+  height: 17px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 0 5px currentColor);
+  filter: drop-shadow(0 0 4px currentColor);
 }
 .ck-node-readout {
   display: flex;
   flex-direction: column;
   align-items: center;
-  line-height: 1.22;
-  margin-top: 6px;
-  padding: 2px 7px;
+  line-height: 1.15;
+  margin-top: 4px;
+  padding: 1px 6px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--bg-surface) 64%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
 }
 .ck-node-readout strong {
   font-family: var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
+  font-size: 11.5px;
   color: var(--accent);
-  text-shadow: 0 0 9px color-mix(in srgb, var(--accent) 52%, transparent);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 48%, transparent);
   white-space: nowrap;
 }
 .ck-node-readout small {
   font-family: var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--text-secondary);
   white-space: nowrap;
 }
-.ck-node-pv { top: 4%; left: 3%; }
+.ck-node-pv { top: 2%; left: 3%; }
 .ck-node-wind { top: 36%; left: 1.2%; }
-.ck-node-storage { bottom: 5%; left: 4.5%; }
-.ck-node-load { top: 4%; right: 3%; }
-.ck-node-hydrogen { top: 36%; right: 1.2%; }
-.ck-node-diesel { bottom: 5%; right: 4.5%; }
+.ck-node-hydrogen { bottom: 2%; left: 3.5%; }
+.ck-node-load { top: 2%; right: 3%; }
+.ck-node-storage { top: 36%; right: 1.2%; }
+.ck-node-diesel { bottom: 2%; right: 3.5%; }
 
 .ck-node-diesel .ck-node-disc {
   border-color: color-mix(in srgb, var(--warn) 88%, #ffffff);
@@ -4152,14 +4191,14 @@ html[data-color-scheme="light"] .ck-station-holo {
   background: radial-gradient(ellipse, color-mix(in srgb, var(--ok) 34%, transparent) 0%, transparent 72%);
 }
 
-/* 右上：2x3 镂空四隅科技括号框（精准还原原图角标） */
+/* 右上：3x2 镂空四隅科技括号框，避免与下方衍生指标条挤压 */
 .ck-stat-grid {
   flex: 1 1 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 5px;
 }
 .ck-stat-box {
   position: relative;
@@ -4488,6 +4527,35 @@ html[data-color-scheme="light"] .dq-pill.is-fault {
   background: rgba(239, 68, 68, 0.14);
 }
 
+/* 侧栏底部快捷工具条与内嵌数据健康徽标 */
+.sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sidebar-tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 4px;
+}
+html[data-theme] button.sidebar-mini-btn {
+  padding: 4px 5px !important;
+  font-size: 11px !important;
+  height: 26px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html[data-theme] button.sidebar-cmd-btn {
+  padding: 4px 7px !important;
+  font-family: var(--font-mono, monospace);
+}
+.dq-pill-inline {
+  height: 19px;
+  padding: 0 6px;
+  font-size: 10.5px;
+}
+
 html[data-theme] button.topbar-mini-btn {
   padding: 3px 8px !important;
   font-size: 11px !important;
@@ -4635,9 +4703,9 @@ html[data-color-scheme="light"] .ck-derived-strip {
 html[data-color-scheme="light"] .ck-panel-hub {
   background: linear-gradient(160deg, rgba(224, 242, 254, 0.72), rgba(248, 250, 252, 0.94));
 }
-html[data-color-scheme="light"] .ck-node {
+html[data-color-scheme="light"] .ck-node-readout {
   background: rgba(255, 255, 255, 0.88);
-  border-color: rgba(14, 116, 144, 0.22);
+  border: 1px solid rgba(14, 116, 144, 0.22);
   color: #0f172a;
 }
 html[data-color-scheme="light"] .ck-node-readout strong {
