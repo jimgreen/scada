@@ -685,6 +685,7 @@
       homeWxBtn.classList.toggle("is-manual", effWx.mode === "manual");
       homeWxBtn.title = cpl.strategy ? `${tr(effWx.preset_label || "")} · ${tr(cpl.strategy)}` : tr("配置南极气象工况");
     }
+    syncAllWeatherBadges(effWx, cpl);
 
     // 侧边栏健康速览
     $("#health-rtus").textContent = `${h.rtu_online ?? 0} / ${h.rtu_total ?? 0}`;
@@ -3085,13 +3086,36 @@
     $("#ef-ac-load-sub").textContent = `占总负荷 ${fmtNum(acLoad.share_pct, 1)}%`;
     setFlowLineState("ef-line-ac-load", (acLoad.p_kw || 0) > 0.2 ? "fwd" : "idle");
 
-    // 右侧环境与数据源面板
+    // 右侧环境与数据源面板（含极地气象与能源系统物理耦合）
     const sampleDt = data.latest_sample_time ? new Date(data.latest_sample_time) : new Date();
     $("#ef-sample-time").textContent = Number.isNaN(sampleDt.getTime())
       ? "--:--:--"
       : sampleDt.toLocaleTimeString("zh-CN", { hour12: false });
+    const efCpl = data.coupling || {};
+    if ($("#ef-env-temp")) {
+      $("#ef-env-temp").textContent = env.temperature_c != null ? `${fmtNum(env.temperature_c, 1)} °C` : "-- °C";
+      $("#ef-env-temp").title = `${tr("风寒体感")} ${fmtNum(env.wind_chill_c, 1)} °C`;
+    }
     $("#ef-env-wind").textContent = env.wind_speed_ms != null ? `${fmtNum(env.wind_speed_ms, 2)} m/s` : "--";
     $("#ef-env-irr").textContent = env.irradiance_wm2 != null ? `${fmtNum(env.irradiance_wm2, 1)} W/m²` : "--";
+    if ($("#ef-env-ice")) {
+      $("#ef-env-ice").textContent = `${tr(env.icing_label || "无覆冰")} · ${tr(env.snow_label || "晴朗")}`;
+    }
+    if ($("#ef-cpl-wb")) {
+      const wTxt = efCpl.wind?.state === "超速切出" ? tr("切出") : `${fmtNum(efCpl.wind?.avail_pct, 0)}%`;
+      $("#ef-cpl-wb").textContent = `${wTxt} / ${fmtNum(efCpl.bess?.cap_retention_pct, 0)}%`;
+    }
+    if ($("#ef-cpl-heat")) {
+      const hDelta = Number(efCpl.thermal?.heating_delta_kw || 0);
+      $("#ef-cpl-heat").textContent = `+${fmtNum(hDelta, 1)} kW`;
+      $("#ef-cpl-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--accent)");
+    }
+    const efWxBtn = $("#ef-weather-btn");
+    if (efWxBtn) {
+      efWxBtn.classList.toggle("is-manual", env.mode === "manual");
+      efWxBtn.textContent = env.mode === "manual" ? tr(env.preset_label || "推演") : tr("工况输入");
+    }
+    syncAllWeatherBadges(env, efCpl);
     $("#ef-env-dcu").textContent = `${fmtNum(env.dc_voltage_v, 1)} V`;
     $("#ef-env-acu").textContent = `${fmtNum(env.ac_voltage_v, 1)} V`;
     $("#ef-src-model").textContent = src.model_db || "—";
@@ -3996,6 +4020,7 @@
       wEl.textContent = wa === "extreme" ? tr("极端气候保供") : (wa === "elevated" ? tr("大风寒潮关注") : tr("极地气象正常"));
       wEl.title = tr(cpl.strategy || "");
     }
+    syncAllWeatherBadges(effWx, cpl);
 
     drawCockpitCharts();
   }
@@ -4742,6 +4767,7 @@
       $("#ds-wc-heat").textContent = `+${fmtNum(hDelta, 0)}kW`;
       $("#ds-wc-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
     }
+    syncAllWeatherBadges(effWx, cpl);
 
     // 左上：4 枚电气安全裕度弧形仪表
     const lvls = [
@@ -5148,6 +5174,7 @@
       if (state.dispatchData?.topo) renderDispatchComm(state.dispatchData.topo);
       drawDispatchCharts();
     }
+    syncAllWeatherBadges();
   });
 
   // 监听主题切换与窗口缩放，实时同步 SVG 和日曲线配色与尺寸
@@ -5179,6 +5206,48 @@
   }
 
   // ==================== 南极气象与环境工况输入弹窗与实时耦合预览 ====================
+  let lastEffectiveWeather = null;
+  let lastWeatherCoupling = null;
+
+  /**
+   * 同步全站所有主画面（潮流图/设备图/告警/通信/日志工具栏与侧栏健康速览）的气象胶囊
+   */
+  function syncAllWeatherBadges(effWx, cpl) {
+    if (effWx) lastEffectiveWeather = effWx;
+    if (cpl) lastWeatherCoupling = cpl;
+    const wx = effWx || lastEffectiveWeather;
+    const cp = cpl || lastWeatherCoupling;
+    if (!wx) return;
+    const labelTxt = tr(wx.preset_label || (wx.mode === "manual" ? "工况推演" : "现场实测"));
+    const tStr = wx.temperature_c != null ? `${fmtNum(wx.temperature_c, 0)}°C` : "--°C";
+    const wStr = wx.wind_speed_ms != null ? `${fmtNum(wx.wind_speed_ms, 1)}m/s` : "--m/s";
+    const valTxt = `${tStr} · ${wStr}`;
+    const windTxt = cp?.wind?.state === "超速切出"
+      ? `${tr("风耦")} ${tr("切出")}`
+      : `${tr("风耦")} ${fmtNum(cp?.wind?.avail_pct, 0)}%`;
+    const lvl = cp?.alert_level || "normal";
+    const tip = `${labelTxt} · ${tStr} / ${wStr} · ${tr(wx.icing_label || "无覆冰")} · ${tr(cp?.strategy || "")}`;
+
+    $$(".wx-inline-pill").forEach((pill) => {
+      pill.classList.toggle("is-elevated", lvl === "elevated");
+      pill.classList.toggle("is-extreme", lvl === "extreme");
+      pill.title = tip;
+      const lblEl = pill.querySelector("[data-wx-badge-label]");
+      const valEl = pill.querySelector("[data-wx-badge-val]");
+      const cplEl = pill.querySelector("[data-wx-badge-cpl]");
+      if (lblEl) lblEl.textContent = labelTxt;
+      if (valEl) valEl.textContent = valTxt;
+      if (cplEl) cplEl.textContent = windTxt;
+    });
+
+    const sbVal = $("#health-weather-val");
+    if (sbVal) {
+      sbVal.textContent = `${tStr} / ${wStr}`;
+      sbVal.style.color = lvl === "extreme" ? "var(--danger)" : (lvl === "elevated" ? "var(--warn)" : "var(--accent)");
+    }
+    if ($("#health-weather-row")) $("#health-weather-row").title = tip;
+  }
+
   const WX_PRESET_DEFAULTS = {
     live: { mode: "measured", temperature_c: -12, wind_speed_ms: 8.5, irradiance_wm2: 260, pressure_hpa: 985, icing_level: 0, snow_condition: "clear" },
     summer_sunny: { mode: "manual", temperature_c: -4, wind_speed_ms: 8.5, irradiance_wm2: 780, pressure_hpa: 988, icing_level: 0, snow_condition: "clear" },
@@ -5393,7 +5462,8 @@
   $("#wx-reset-live")?.addEventListener("click", async () => {
     const errEl = $("#wx-error");
     try {
-      await apiPut("/api/weather", { mode: "measured", preset: "live", icing_level: 0, snow_condition: "clear", pressure_hpa: 985 });
+      const res = await apiPut("/api/weather", { mode: "measured", preset: "live", icing_level: 0, snow_condition: "clear", pressure_hpa: 985 });
+      syncAllWeatherBadges(res?.effective, res?.coupling);
       $("#weather-dialog")?.close();
       window.ScadaExtras?.showToast(tr("已恢复现场实测气象"), "ok");
       refreshCurrentView();
@@ -5420,7 +5490,8 @@
         icing_level: Number($("#wx-icing")?.value || 0),
         snow_condition: $("#wx-snow")?.value || "clear",
       };
-      await apiPut("/api/weather", payload);
+      const res = await apiPut("/api/weather", payload);
+      syncAllWeatherBadges(res?.effective, res?.coupling);
       $("#weather-dialog")?.close();
       window.ScadaExtras?.showToast(tr("南极气象工况已应用生效"), "ok");
       refreshCurrentView();

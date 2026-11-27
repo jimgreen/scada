@@ -2303,6 +2303,173 @@
     syncUi();
   })();
 
+  // 南极气象与环境工况展示与输入（与 scada_portal 共用同一持久化配置库）
+  (() => {
+    const btn = $('#dk-weather-btn');
+    const dlg = $('#dk-weather-dialog');
+    if (!btn || !dlg) return;
+    const PRESETS = {
+      live: { mode: 'measured', temperature_c: -12, wind_speed_ms: 8.5, irradiance_wm2: 260, pressure_hpa: 985, icing_level: 0, snow_condition: 'clear' },
+      summer_sunny: { mode: 'manual', temperature_c: -4, wind_speed_ms: 8.5, irradiance_wm2: 780, pressure_hpa: 988, icing_level: 0, snow_condition: 'clear' },
+      katabatic_gale: { mode: 'manual', temperature_c: -22, wind_speed_ms: 26.5, irradiance_wm2: 180, pressure_hpa: 968, icing_level: 1, snow_condition: 'blowing_snow' },
+      polar_night_cold: { mode: 'manual', temperature_c: -38, wind_speed_ms: 6.0, irradiance_wm2: 0, pressure_hpa: 978, icing_level: 2, snow_condition: 'overcast' },
+      blizzard_icing: { mode: 'manual', temperature_c: -31, wind_speed_ms: 21.0, irradiance_wm2: 35, pressure_hpa: 962, icing_level: 3, snow_condition: 'blizzard' },
+      calm_overcast: { mode: 'manual', temperature_c: -14, wind_speed_ms: 2.2, irradiance_wm2: 95, pressure_hpa: 992, icing_level: 0, snow_condition: 'overcast' },
+    };
+    let wxState = { mode: 'measured', preset: 'live', measured: {} };
+    const tFn = s => (window.scadaI18n && typeof window.scadaI18n.translateText === 'function') ? window.scadaI18n.translateText(String(s ?? '')) : String(s ?? '');
+
+    const setPair = (id, rid, v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return;
+      if ($('#' + id)) $('#' + id).value = String(n);
+      const r = $('#' + rid);
+      if (r) r.value = String(Math.max(Number(r.min), Math.min(Number(r.max), n)));
+    };
+
+    const renderBtn = data => {
+      const eff = data?.effective || {};
+      const cpl = data?.coupling || {};
+      const lvl = cpl.alert_level || 'normal';
+      btn.classList.toggle('is-elevated', lvl === 'elevated');
+      btn.classList.toggle('is-extreme', lvl === 'extreme');
+      if ($('#dk-wx-label')) $('#dk-wx-label').textContent = tFn(eff.preset_label || '现场实测');
+      if ($('#dk-wx-val')) $('#dk-wx-val').textContent = `${Number(eff.temperature_c ?? -12).toFixed(0)}°C · ${Number(eff.wind_speed_ms ?? 0).toFixed(1)}m/s`;
+      if ($('#dk-wx-cpl')) {
+        $('#dk-wx-cpl').textContent = cpl.wind?.state === '超速切出'
+          ? `${tFn('风耦')} ${tFn('切出')}`
+          : `${tFn('风耦')} ${Number(cpl.wind?.avail_pct ?? 0).toFixed(0)}%`;
+      }
+      btn.title = `${tFn(eff.preset_label || '')} · ${tFn(cpl.strategy || '')}`;
+    };
+
+    const preview = () => {
+      const t = Number($('#dk-wx-temp')?.value ?? -12);
+      const ws = Math.max(0, Number($('#dk-wx-wind')?.value ?? 8.5));
+      const irr = Math.max(0, Number($('#dk-wx-irr')?.value ?? 260));
+      const pres = Number($('#dk-wx-pres')?.value ?? 985);
+      const icing = Number($('#dk-wx-icing')?.value ?? 0);
+      const snow = $('#dk-wx-snow')?.value || 'clear';
+      const vKmh = ws * 3.6;
+      const wc = t <= 10 && vKmh >= 4.8 ? (13.12 + 0.6215 * t - 11.37 * Math.pow(vKmh, 0.16) + 0.3965 * t * Math.pow(vKmh, 0.16)) : t;
+      const rho = (pres * 100) / (287.05 * Math.max(180, t + 273.15));
+      const rhoF = Math.min(1.22, Math.max(0.85, rho / 1.225));
+      const iceF = [1.0, 0.88, 0.72, 0.45][icing] ?? 1.0;
+      const wTxt = ws >= 25 ? tFn('超速切出') + ' (0%)' : ws < 3 ? tFn('低风待机') + ' (0%)' : `${Math.min(100, Math.pow((ws - 3) / 9, 3) * rhoF * iceF * 100).toFixed(0)}%`;
+      const pvF = Math.min(1.24, Math.max(0.85, 1 + (25 - t) * 0.0038)) * ({ clear: 1, overcast: 0.96, blowing_snow: 0.75, blizzard: 0.3 }[snow] ?? 1);
+      let bess = 98;
+      if (t < -5 && t >= -20) bess = 98 - (-5 - t) * 0.8;
+      else if (t < -20 && t >= -40) bess = 86 - (-20 - t) * 1.05;
+      else if (t < -40) bess = Math.max(55, 65 - (-40 - t) * 0.5);
+      const heat = Math.max(0, -10 - wc) * 1.45 + (snow === 'blizzard' ? 8 : snow === 'blowing_snow' ? 3.5 : 0);
+      let al = 'normal', st = '绿电优先消纳';
+      if (ws >= 25) { al = 'extreme'; st = '风机超速切出 · 柴储顶峰保供'; }
+      else if (icing >= 3 || snow === 'blizzard' || t <= -32) { al = 'extreme'; st = '极寒重冰保供 · 启动采暖与柴发备载'; }
+      else if (ws >= 17.2 || t <= -24 || icing === 2) { al = 'elevated'; st = '大风寒潮关注 · 预留储能热备'; }
+      else if (irr < 5 && ws < 3.5) { al = 'elevated'; st = '无风无光低出力 · 氢电柴发协同'; }
+      else if (irr >= 650 && ws >= 6) { al = 'normal'; st = '极昼风光充沛 · 制氢储能消纳'; }
+      if ($('#dk-wx-p-wc')) $('#dk-wx-p-wc').textContent = `${wc.toFixed(1)} °C`;
+      if ($('#dk-wx-p-rho')) $('#dk-wx-p-rho').textContent = `${rho.toFixed(3)} kg/m³`;
+      if ($('#dk-wx-p-wind')) $('#dk-wx-p-wind').textContent = wTxt;
+      if ($('#dk-wx-p-pv')) $('#dk-wx-p-pv').textContent = irr < 5 ? tFn('极夜无光') : `${(pvF * 100).toFixed(0)}%`;
+      if ($('#dk-wx-p-bess')) $('#dk-wx-p-bess').textContent = `${bess.toFixed(1)}%`;
+      if ($('#dk-wx-p-heat')) $('#dk-wx-p-heat').textContent = `+${heat.toFixed(1)} kW`;
+      if ($('#dk-wx-p-alert')) $('#dk-wx-p-alert').textContent = al === 'extreme' ? tFn('极端气候保供') : al === 'elevated' ? tFn('大风寒潮关注') : tFn('极地气象正常');
+      if ($('#dk-wx-p-strat')) $('#dk-wx-p-strat').textContent = tFn(st);
+    };
+
+    const syncForm = () => {
+      dlg.querySelectorAll('[data-dk-wx-mode]').forEach(b => b.classList.toggle('active', b.dataset.dkWxMode === wxState.mode));
+      dlg.querySelectorAll('[data-dk-wx-preset]').forEach(b => b.classList.toggle('active', b.dataset.dkWxPreset === wxState.preset));
+      preview();
+    };
+
+    const loadWx = async () => {
+      try {
+        const res = await api('/api/weather');
+        renderBtn(res);
+        return res;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    btn.addEventListener('click', async () => {
+      error('#dk-wx-error', '');
+      const res = await loadWx();
+      if (res) {
+        const eff = res.effective || {};
+        wxState = { mode: res.profile?.mode || 'measured', preset: res.profile?.preset || 'live', measured: res.measured || {} };
+        setPair('dk-wx-temp', 'dk-wx-temp-r', eff.temperature_c ?? -12);
+        setPair('dk-wx-wind', 'dk-wx-wind-r', eff.wind_speed_ms ?? 8.5);
+        setPair('dk-wx-irr', 'dk-wx-irr-r', eff.irradiance_wm2 ?? 260);
+        setPair('dk-wx-pres', 'dk-wx-pres-r', eff.pressure_hpa ?? 985);
+        if ($('#dk-wx-icing')) $('#dk-wx-icing').value = String(eff.icing_level ?? 0);
+        if ($('#dk-wx-snow')) $('#dk-wx-snow').value = String(eff.snow_condition || 'clear');
+        syncForm();
+      }
+      if (!dlg.open) dlg.showModal();
+    });
+    $('#dk-wx-close')?.addEventListener('click', () => dlg.close());
+    $('#dk-wx-cancel')?.addEventListener('click', () => dlg.close());
+    dlg.querySelectorAll('[data-dk-wx-mode]').forEach(b => b.addEventListener('click', () => {
+      wxState.mode = b.dataset.dkWxMode === 'manual' ? 'manual' : 'measured';
+      wxState.preset = wxState.mode === 'measured' ? 'live' : (wxState.preset === 'live' ? 'custom' : wxState.preset);
+      syncForm();
+    }));
+    dlg.querySelectorAll('[data-dk-wx-preset]').forEach(b => b.addEventListener('click', () => {
+      const k = b.dataset.dkWxPreset;
+      const d = PRESETS[k];
+      if (!d) return;
+      wxState.preset = k;
+      wxState.mode = d.mode;
+      const m = wxState.measured || {};
+      setPair('dk-wx-temp', 'dk-wx-temp-r', k === 'live' && m.temperature_c != null ? m.temperature_c : d.temperature_c);
+      setPair('dk-wx-wind', 'dk-wx-wind-r', k === 'live' && m.wind_speed_ms != null ? m.wind_speed_ms : d.wind_speed_ms);
+      setPair('dk-wx-irr', 'dk-wx-irr-r', k === 'live' && m.irradiance_wm2 != null ? m.irradiance_wm2 : d.irradiance_wm2);
+      setPair('dk-wx-pres', 'dk-wx-pres-r', d.pressure_hpa);
+      if ($('#dk-wx-icing')) $('#dk-wx-icing').value = String(d.icing_level);
+      if ($('#dk-wx-snow')) $('#dk-wx-snow').value = d.snow_condition;
+      syncForm();
+    }));
+    const onEdit = () => { wxState.mode = 'manual'; wxState.preset = 'custom'; syncForm(); };
+    [['dk-wx-temp', 'dk-wx-temp-r'], ['dk-wx-wind', 'dk-wx-wind-r'], ['dk-wx-irr', 'dk-wx-irr-r'], ['dk-wx-pres', 'dk-wx-pres-r']].forEach(([n, r]) => {
+      $('#' + r)?.addEventListener('input', e => { if ($('#' + n)) $('#' + n).value = e.target.value; onEdit(); });
+      $('#' + n)?.addEventListener('input', e => { setPair(n, r, e.target.value); onEdit(); });
+    });
+    $('#dk-wx-icing')?.addEventListener('change', onEdit);
+    $('#dk-wx-snow')?.addEventListener('change', onEdit);
+    $('#dk-wx-reset')?.addEventListener('click', async () => {
+      try {
+        const res = await api('/api/weather', 'PUT', { mode: 'measured', preset: 'live', icing_level: 0, snow_condition: 'clear', pressure_hpa: 985 });
+        renderBtn(res);
+        dlg.close();
+      } catch (err) { error('#dk-wx-error', err.message || '恢复失败'); }
+    });
+    $('#dk-wx-form')?.addEventListener('submit', async e => {
+      e.preventDefault();
+      error('#dk-wx-error', '');
+      try {
+        const res = await api('/api/weather', 'PUT', {
+          mode: wxState.mode,
+          preset: wxState.preset,
+          temperature_c: Number($('#dk-wx-temp')?.value),
+          wind_speed_ms: Number($('#dk-wx-wind')?.value),
+          irradiance_wm2: Number($('#dk-wx-irr')?.value),
+          pressure_hpa: Number($('#dk-wx-pres')?.value),
+          icing_level: Number($('#dk-wx-icing')?.value || 0),
+          snow_condition: $('#dk-wx-snow')?.value || 'clear',
+        });
+        renderBtn(res);
+        dlg.close();
+      } catch (err) { error('#dk-wx-error', err.message || '保存失败'); }
+    });
+    if (mode === '/') {
+      loadWx();
+      setInterval(() => { if (!document.hidden && !dlg.open) loadWx(); }, 8000);
+    }
+  })();
+
   run(init)();
   const update = run(refresh);
   setInterval(async () => {

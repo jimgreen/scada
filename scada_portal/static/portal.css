@@ -3171,16 +3171,19 @@ html[data-color-scheme="light"] .ef-ico.c-load {
 }
 .dev-filter-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 0;
   border: 0;
   background: transparent;
 }
 .dev-filter-tabs .sub-tab-btn {
-  padding: 3px 6px;
+  padding: 3px 2px;
   font-size: 11px;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dev-list-controls #dev-search {
   width: 100%;
@@ -5905,6 +5908,85 @@ html[data-theme] .wx-presets button.active {
 .wx-strategy-bar strong {
   color: var(--text-primary);
   font-weight: 600;
+}
+/* 潮流图 / 设备图 / 告警 / 通信 / 日志 工具栏紧凑气象胶囊与侧栏气象行 */
+html[data-theme] button.wx-inline-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 9px !important;
+  min-height: 25px;
+  border-radius: 999px !important;
+  border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 42%, transparent) !important;
+  background: color-mix(in srgb, var(--accent, #38bdf8) 10%, var(--bg-surface, #081529)) !important;
+  color: var(--text-secondary) !important;
+  font-size: 11px !important;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+html[data-theme] button.wx-inline-pill:hover {
+  border-color: var(--accent, #38bdf8) !important;
+  background: color-mix(in srgb, var(--accent, #38bdf8) 18%, var(--bg-surface, #081529)) !important;
+}
+button.wx-inline-pill strong {
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #38bdf8);
+  font-size: 11.5px;
+}
+button.wx-inline-pill em {
+  font-style: normal;
+  font-family: var(--font-mono, monospace);
+  color: var(--ok, #34d399);
+  font-size: 11px;
+}
+html[data-theme] button.wx-inline-pill.is-elevated {
+  border-color: color-mix(in srgb, var(--warn, #fbbf24) 55%, transparent) !important;
+  background: color-mix(in srgb, var(--warn, #fbbf24) 12%, var(--bg-surface, #081529)) !important;
+}
+button.wx-inline-pill.is-elevated strong,
+button.wx-inline-pill.is-elevated em {
+  color: var(--warn, #fbbf24);
+}
+html[data-theme] button.wx-inline-pill.is-extreme {
+  border-color: color-mix(in srgb, var(--danger, #f87171) 62%, transparent) !important;
+  background: color-mix(in srgb, var(--danger, #f87171) 14%, var(--bg-surface, #081529)) !important;
+}
+button.wx-inline-pill.is-extreme strong,
+button.wx-inline-pill.is-extreme em {
+  color: var(--danger, #f87171);
+}
+html[data-theme] button.health-weather-row {
+  width: 100%;
+  margin-top: 2px;
+  padding: 2px 4px !important;
+  min-height: 22px;
+  border: 1px dashed color-mix(in srgb, var(--accent, #38bdf8) 32%, transparent) !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  cursor: pointer;
+}
+html[data-theme] button.health-weather-row:hover {
+  border-color: var(--accent, #38bdf8) !important;
+  background: color-mix(in srgb, var(--accent, #38bdf8) 10%, transparent) !important;
+}
+html[data-theme] button.wx-inline-pill.topbar-weather-pill {
+  padding: 2px 8px !important;
+  min-height: 24px;
+  gap: 5px;
+  font-size: 11px !important;
+}
+@media (max-width: 1580px) {
+  .topbar-weather-pill em {
+    display: none;
+  }
+}
+@media (max-width: 1320px) {
+  .topbar-weather-pill span {
+    display: none;
+  }
 }
 @media (max-width: 600px) {
   .wx-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }

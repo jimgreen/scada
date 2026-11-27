@@ -1889,6 +1889,9 @@
     ["极夜无光", "Polar Night", "Поляр. ночь"],
     ["已恢复现场实测气象", "Restored to live sensor weather", "Возврат к датчикам"],
     ["南极气象工况已应用生效", "Antarctic weather scenario applied", "Метеоусловия применены"],
+    ["极地气象", "Polar Weather", "Поляр. метео"],
+    ["覆冰 / 天气", "Icing / Sky", "Лёд / Погода"],
+    ["风耦 / 储容", "Wind / BESS", "ВЭУ / АКБ"],
   ];
 
   for (const [zh, en, ru] of PHRASES) {

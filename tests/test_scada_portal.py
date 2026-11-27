@@ -722,6 +722,17 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertEqual(ck["coupling"]["alert_level"], "extreme")
         self.assertEqual(ck["weather"]["effective"]["preset"], "blizzard_icing")
 
+        st_ef, ef = req_json("GET", "/api/energy-flow")
+        self.assertEqual(st_ef, 200)
+        self.assertEqual(ef["coupling"]["alert_level"], "extreme")
+        self.assertEqual(ef["weather"]["effective"]["preset"], "blizzard_icing")
+
+        # 确认全站顶栏与各大屏均包含气象展示与工况输入入口
+        _, _, html_raw = http_get(self.httpd.server_port, "/")
+        html_txt = html_raw.decode("utf-8")
+        for el_id in ("topbar-weather-pill", "home-weather-btn", "ck-weather-btn", "ds-tk-weather-btn", "ef-weather-btn", "health-weather-row", "weather-dialog"):
+            self.assertIn(el_id, html_txt)
+
         # 3. 强下降风超速切出判定（风速 >= 25 m/s）
         st2, w2 = req_json("PUT", "/api/weather", {"mode": "manual", "preset": "custom", "wind_speed_ms": 27.5, "temperature_c": -20.0})
         self.assertEqual(st2, 200)

@@ -1556,6 +1556,33 @@ class PortalService:
         now_ms = now_utc.timestamp() * 1000.0
         age_sec = round(max(0.0, (now_ms - latest_src_ms) / 1000.0), 1) if latest_src_ms is not None else None
 
+        measured_env = {
+            "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
+            "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
+            "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
+            "dc_voltage_v": dc_voltage,
+            "ac_voltage_v": ac_voltage,
+        }
+        weather_profile = self._load_weather_profile()
+        eff_env = merge_effective_weather(measured_env, weather_profile)
+        wind_rated_est = sum(
+            _rated_kw(d["dev_id"])
+            for d in devices
+            if d["table_name"] == "ACGenerator" and ("风电" in str(d["name"]) or "风力" in str(d["name"]))
+        )
+        pv_rated_est = sum(
+            _rated_kw(d["dev_id"])
+            for d in devices
+            if d["table_name"] in {"ACGenerator", "DCGenerator"} and "光伏" in str(d["name"])
+        )
+        ef_coupling = compute_polar_weather_coupling(
+            effective=eff_env,
+            wind_rated_kw=wind_rated_est,
+            pv_rated_kw=pv_rated_est,
+            base_load_kw=total_load_kw,
+            base_autonomy_h=4.0,
+        )
+
         return {
             "timestamp": now_utc.isoformat(timespec="seconds"),
             "latest_sample_time": _iso_from_ms(latest_src_ms),
@@ -1668,16 +1695,13 @@ class PortalService:
                     "pressure_mpa": round(fc_pressure, 2) if fc_pressure is not None else None,
                 },
             },
-            "environment": merge_effective_weather(
-                {
-                    "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
-                    "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
-                    "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
-                    "dc_voltage_v": dc_voltage,
-                    "ac_voltage_v": ac_voltage,
-                },
-                self._load_weather_profile(),
-            ),
+            "environment": eff_env,
+            "weather": {
+                "measured": measured_env,
+                "profile": weather_profile,
+                "effective": eff_env,
+            },
+            "coupling": ef_coupling,
             "sources": {
                 "scene": f"{self.runtime_name}/{self.scene_name}",
                 "model_db": self.model_db.name if self.model_db.is_file() else "—",

@@ -59,6 +59,11 @@
       </div>
 
       <div class="header-tools">
+        <button type="button" class="wx-inline-pill topbar-weather-pill" id="topbar-weather-pill" data-open-weather title="点击配置南极气象与环境工况">
+          <span data-wx-badge-label>现场实测</span>
+          <strong data-wx-badge-val>--°C · --m/s</strong>
+          <em data-wx-badge-cpl>风耦 --%</em>
+        </button>
         <a class="portal-cross-link" id="portal-jump-d" href="http://127.0.0.1:8980/" target="_blank" rel="noopener">工程配置 ↗</a>
         <span class="live-clock" id="live-clock">--:--:--</span>
       </div>
@@ -141,6 +146,10 @@
               <span>总用电负荷</span>
               <strong id="health-load">-- kW</strong>
             </div>
+            <button type="button" class="health-row health-weather-row" id="health-weather-row" data-open-weather title="点击配置南极气象工况">
+              <span>极地气象</span>
+              <strong id="health-weather-val">--°C / --m/s</strong>
+            </button>
           </div>
         </div>
       </aside>
@@ -1170,11 +1179,17 @@
             <aside class="ef-card ef-side-card" aria-label="环境与数据源">
               <div class="ef-card-head">
                 <h2>环境与数据源</h2>
+                <button type="button" class="ck-mini-link ck-weather-trigger" id="ef-weather-btn" data-open-weather>工况输入</button>
                 <span class="ef-side-time" id="ef-sample-time">--:--:--</span>
               </div>
               <div class="ef-kv-list">
+                <div class="ef-kv"><span>极地气温</span><strong id="ef-env-temp">-- °C</strong></div>
                 <div class="ef-kv"><span>风速</span><strong id="ef-env-wind">-- m/s</strong></div>
                 <div class="ef-kv"><span>辐照度</span><strong id="ef-env-irr">-- W/m²</strong></div>
+                <div class="ef-kv"><span>覆冰 / 天气</span><strong id="ef-env-ice">--</strong></div>
+                <div class="ef-kv"><span>风耦 / 储容</span><strong id="ef-cpl-wb">-- / --</strong></div>
+                <div class="ef-kv"><span>采暖增荷</span><strong id="ef-cpl-heat">+0 kW</strong></div>
+                <div class="ef-kv-sep"></div>
                 <div class="ef-kv"><span>直流母线</span><strong id="ef-env-dcu">-- V</strong></div>
                 <div class="ef-kv"><span>交流母线</span><strong id="ef-env-acu">-- V</strong></div>
                 <div class="ef-kv-sep"></div>
@@ -1194,11 +1209,7 @@
 
         <!-- ==================== 2. 潮流图（SVG 底图实时刷新） ==================== -->
         <section id="view-powerflow" class="portal-view" hidden>
-          <div class="view-toolbar">
-            <div class="toolbar-left">
-              <h2>站内一次接线与实时潮流图</h2>
-              <span class="badge" id="pf-stat">加载中…</span>
-            </div>
+          <div class="view-toolbar view-toolbar-single">
             <div class="toolbar-right">
               <input id="pf-search" type="search" placeholder="搜索定位设备…" aria-label="搜索定位设备" />
               <select id="pf-canvas-mode" aria-label="画布风格">

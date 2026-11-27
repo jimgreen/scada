@@ -1,9 +1,11 @@
 import argparse
+from contextlib import closing
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sqlite3
+import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from core.web_database import (
@@ -22,10 +24,177 @@ from core.web_http import BaseScadaHandlerMixin, encode_json, send_static
 from core.web_request import RequestBodyMixin
 from core.web_workbench import ASSET_DIR, ASSETS, render_workbench
 from core.common import ApiError
+from scada_portal.history_store import ensure_extended_history_schema
+from scada_portal.report import (
+    POLAR_WEATHER_PRESETS,
+    compute_polar_weather_coupling,
+    default_weather_profile,
+    merge_effective_weather,
+    validate_weather_payload,
+)
 from scdfe_d.device_panel import device_catalog, read_device, update_parameters
 
 STATIC = Path(__file__).with_name("static")
 LOG = logging.getLogger("scdfe_d.web")
+
+
+def _d_weather_history_db(store) -> Path:
+    """定位与 scada_portal 共享的南极气象工况持久化库。"""
+    return store.db_path.parent / "scada_portal_history.db"
+
+
+def _d_extract_measured_weather(store) -> tuple[dict, float]:
+    """从 scdfe_d.db 实时宽表提取现场风速、辐照度、环境气温均值与实时负荷估算。"""
+    wind_speeds: list[float] = []
+    irradiances: list[float] = []
+    temperatures: list[float] = []
+    total_load_kw = 0.0
+    if store.db_path.is_file():
+        try:
+            with closing(sqlite3.connect(f"{store.db_path.as_uri()}?mode=ro", uri=True, timeout=5.0)) as conn:
+                tables = {
+                    r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                }
+                for tbl, col, bucket in (
+                    ("ACWindGen", "wind_speed", wind_speeds),
+                    ("ACPVGen", "irradiance", irradiances),
+                    ("DCPVGen", "irradiance", irradiances),
+                    ("ACWindGen", "temperature", temperatures),
+                    ("ACPVGen", "temperature", temperatures),
+                    ("DCPVGen", "temperature", temperatures),
+                ):
+                    if tbl not in tables:
+                        continue
+                    cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{tbl}")').fetchall()}
+                    if col not in cols:
+                        continue
+                    for (val,) in conn.execute(f'SELECT "{col}" FROM "{tbl}" WHERE "{col}" IS NOT NULL').fetchall():
+                        try:
+                            bucket.append(float(val))
+                        except (TypeError, ValueError):
+                            pass
+                for tbl in ("ACLoad", "DCLoad"):
+                    if tbl not in tables:
+                        continue
+                    cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{tbl}")').fetchall()}
+                    if "p" not in cols:
+                        continue
+                    for (val,) in conn.execute(f'SELECT "p" FROM "{tbl}" WHERE "p" IS NOT NULL').fetchall():
+                        try:
+                            v = float(val)
+                            if v > 0:
+                                total_load_kw += v
+                        except (TypeError, ValueError):
+                            pass
+        except sqlite3.Error:
+            LOG.debug("scdfe_d measured weather read fallback", exc_info=True)
+    measured = {
+        "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
+        "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
+        "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
+    }
+    return measured, max(15.0, round(total_load_kw, 1))
+
+
+def _d_load_weather_profile(store) -> dict:
+    prof = default_weather_profile()
+    hdb = _d_weather_history_db(store)
+    if not hdb.is_file():
+        return prof
+    try:
+        with closing(sqlite3.connect(hdb, timeout=5.0)) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='polar_weather_profile'"
+            ).fetchone()
+            if not exists:
+                return prof
+            row = conn.execute(
+                "SELECT mode, preset, temperature_c, wind_speed_ms, irradiance_wm2, "
+                "pressure_hpa, icing_level, snow_condition, updated_ms, operator "
+                "FROM polar_weather_profile WHERE id=1"
+            ).fetchone()
+            if row is not None:
+                prof.update({
+                    "mode": row[0] or "measured",
+                    "preset": row[1] or "live",
+                    "temperature_c": row[2],
+                    "wind_speed_ms": row[3],
+                    "irradiance_wm2": row[4],
+                    "pressure_hpa": float(row[5] if row[5] is not None else 985.0),
+                    "icing_level": int(row[6] if row[6] is not None else 0),
+                    "snow_condition": row[7] or "clear",
+                    "updated_ms": int(row[8] or 0),
+                    "operator": row[9] or "",
+                })
+    except sqlite3.Error:
+        LOG.debug("scdfe_d weather profile read fallback", exc_info=True)
+    return prof
+
+
+def _d_get_weather_state(store) -> dict:
+    measured, load_kw = _d_extract_measured_weather(store)
+    profile = _d_load_weather_profile(store)
+    effective = merge_effective_weather(measured, profile)
+    coupling = compute_polar_weather_coupling(
+        effective=effective,
+        wind_rated_kw=200.0,
+        pv_rated_kw=150.0,
+        base_load_kw=load_kw,
+        base_autonomy_h=4.0,
+    )
+    return {
+        "measured": measured,
+        "profile": profile,
+        "effective": effective,
+        "coupling": coupling,
+        "presets": list(POLAR_WEATHER_PRESETS),
+    }
+
+
+def _d_update_weather_profile(store, body: dict) -> dict:
+    current = _d_load_weather_profile(store)
+    norm = validate_weather_payload(body, current)
+    hdb = _d_weather_history_db(store)
+    hdb.parent.mkdir(parents=True, exist_ok=True)
+    now_ms = int(time.time() * 1000)
+    with closing(sqlite3.connect(hdb, timeout=10.0)) as conn:
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        ensure_extended_history_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO polar_weather_profile (
+                id, mode, preset, temperature_c, wind_speed_ms, irradiance_wm2,
+                pressure_hpa, icing_level, snow_condition, updated_ms, operator
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                mode=excluded.mode,
+                preset=excluded.preset,
+                temperature_c=excluded.temperature_c,
+                wind_speed_ms=excluded.wind_speed_ms,
+                irradiance_wm2=excluded.irradiance_wm2,
+                pressure_hpa=excluded.pressure_hpa,
+                icing_level=excluded.icing_level,
+                snow_condition=excluded.snow_condition,
+                updated_ms=excluded.updated_ms,
+                operator=excluded.operator
+            """,
+            (
+                norm["mode"],
+                norm["preset"],
+                norm["temperature_c"],
+                norm["wind_speed_ms"],
+                norm["irradiance_wm2"],
+                norm["pressure_hpa"],
+                norm["icing_level"],
+                norm["snow_condition"],
+                now_ms,
+                norm["operator"],
+            ),
+        )
+        conn.commit()
+    return _d_get_weather_state(store)
 
 
 class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
@@ -50,6 +219,11 @@ class Handler(BaseScadaHandlerMixin, RequestBodyMixin, BaseHTTPRequestHandler):
         store, collector = self.server.store, self.server.collector
         if parts == ["api", "health"] and method == "GET":
             return self._json(200, dict(status="ok", module="scdfe_d"))
+        if parts == ["api", "weather"]:
+            if method == "GET":
+                return self._json(200, _d_get_weather_state(store))
+            if method == "PUT":
+                return self._json(200, _d_update_weather_profile(store, self._body()))
         if parts == ["api", "overview"] and method == "GET":
             return self._json(200, dict(store.overview(), collector=collector.status()))
         if parts == ["api", "devices"]:
