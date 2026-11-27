@@ -1241,3 +1241,70 @@ html[data-theme] .dk-wx-presets button.active {
 .dk-wx-preview > div { display: flex; justify-content: space-between; gap: 4px; color: var(--text-secondary); }
 .dk-wx-preview strong { font-family: var(--font-mono, monospace); color: var(--text-primary); }
 .dk-wx-strat { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 11.5px; }
+
+/* ==================== scdfe_d 南极星岚 · 仙气柔美科幻琉璃润色层 ==================== */
+.dk-control-strip,
+.dk-panel {
+  border-radius: 14px !important;
+  border: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 18%, rgba(255, 255, 255, 0.10)) !important;
+  background: linear-gradient(
+    158deg,
+    color-mix(in srgb, var(--bg-surface, #0f1f3d) 76%, rgba(165, 180, 252, 0.08)) 0%,
+    color-mix(in srgb, var(--bg-surface, #0b172e) 66%, transparent) 100%
+  ) !important;
+  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 30px rgba(3, 10, 28, 0.28),
+    0 0 22px color-mix(in srgb, var(--accent, #67e8f9) 6%, transparent) !important;
+}
+html[data-color-scheme="light"] .dk-control-strip,
+html[data-color-scheme="light"] .dk-panel {
+  background: linear-gradient(158deg, rgba(255, 255, 255, 0.88), rgba(244, 248, 255, 0.80)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 8px 24px rgba(15, 23, 42, 0.06) !important;
+}
+.dk-panel::before {
+  height: 1px !important;
+  background: linear-gradient(
+    90deg,
+    transparent 6%,
+    color-mix(in srgb, var(--accent, #67e8f9) 64%, #ffffff) 40%,
+    rgba(196, 181, 253, 0.65) 64%,
+    transparent 94%
+  ) !important;
+}
+.dk-head-gem {
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  transform: none !important;
+  background: radial-gradient(circle, #ffffff 10%, var(--accent, #67e8f9) 70%) !important;
+  box-shadow: 0 0 10px var(--accent, #67e8f9), 0 0 18px rgba(167, 139, 250, 0.42) !important;
+}
+.dk-head-slash {
+  height: 1px !important;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent, #67e8f9) 42%, transparent), transparent) !important;
+}
+.dk-hub-badge,
+.dk-node-title {
+  border-radius: 999px !important;
+  backdrop-filter: blur(12px);
+}
+.dk-hub-badge {
+  background: linear-gradient(120deg, rgba(103, 232, 249, 0.22), rgba(167, 139, 250, 0.16)) !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 44%, rgba(255, 255, 255, 0.28)) !important;
+  box-shadow: 0 4px 20px rgba(103, 232, 249, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+}
+.dk-orb,
+.dk-node-disc {
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent, #67e8f9) 30%, transparent), inset 0 1px 6px rgba(255, 255, 255, 0.26) !important;
+}
+.dk-tabs,
+.dk-wx-mode {
+  border-radius: 999px !important;
+}
+html[data-theme] .dk-tabs button,
+html[data-theme] .dk-wx-mode button {
+  border-radius: 999px !important;
+}

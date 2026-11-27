@@ -5992,3 +5992,272 @@ html[data-theme] button.wx-inline-pill.topbar-weather-pill {
   .wx-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .wx-grid, .wx-preview { grid-template-columns: 1fr; }
 }
+
+/* ==================== 南极星岚 · 仙气柔美科幻琉璃精雕层（全视图统一） ==================== */
+
+/* 1. 顶栏与中央星翼琉璃铭牌（去生硬梯形与工业重边框） */
+.portal-topbar {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-surface, #0c1932) 84%, transparent) 0%,
+    color-mix(in srgb, var(--bg-surface, #0c1932) 68%, transparent) 100%
+  ) !important;
+  backdrop-filter: blur(20px) saturate(145%);
+  -webkit-backdrop-filter: blur(20px) saturate(145%);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 18%, transparent) !important;
+  box-shadow: 0 8px 32px rgba(4, 12, 30, 0.24), inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+.brand-badge {
+  border-radius: 10px !important;
+  background: linear-gradient(135deg, #7ee8fa 0%, #6ee7c8 55%, #a5b4fc 100%) !important;
+  box-shadow: 0 0 18px rgba(126, 232, 250, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.65) !important;
+}
+.bridge-crest {
+  clip-path: none !important;
+  border-radius: 999px !important;
+  padding: 5px 26px !important;
+  border: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 28%, rgba(255, 255, 255, 0.16)) !important;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent, #67e8f9) 14%, transparent) 0%,
+    rgba(165, 180, 252, 0.12) 50%,
+    color-mix(in srgb, var(--ok, #5eead4) 12%, transparent) 100%
+  ) !important;
+  box-shadow:
+    0 4px 24px color-mix(in srgb, var(--accent, #67e8f9) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+  backdrop-filter: blur(14px);
+}
+.bridge-crest strong {
+  font-weight: 600 !important;
+  letter-spacing: 0.14em !important;
+  background: linear-gradient(90deg, #f0faff 0%, #bae6fd 50%, #e0e7ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  text-shadow: none !important;
+  filter: drop-shadow(0 0 10px rgba(125, 211, 252, 0.35));
+}
+html[data-color-scheme="light"] .bridge-crest strong {
+  background: linear-gradient(90deg, #0f172a 0%, #1d4ed8 55%, #0f766e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: none;
+}
+.crest-wing {
+  width: 24px;
+  height: 1.5px;
+  border-radius: 999px;
+  opacity: 0.72;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent, #67e8f9) 80%, #c4b5fd));
+}
+.crest-wing.right {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent, #67e8f9) 80%, #c4b5fd), transparent);
+}
+
+/* 2. 侧边栏：仙雾半透明琉璃 + 柔和胶囊导航 */
+.portal-sidebar {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--sidebar-bg, #091529) 84%, transparent) 0%,
+    color-mix(in srgb, var(--sidebar-bg, #091529) 76%, rgba(30, 27, 75, 0.22)) 100%
+  ) !important;
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+  border-right: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 16%, transparent) !important;
+  box-shadow: 12px 0 36px rgba(3, 10, 26, 0.26) !important;
+}
+.portal-sidebar .nav-item {
+  border-radius: 11px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  transition: background 220ms ease, border-color 220ms ease, transform 200ms ease, box-shadow 220ms ease !important;
+}
+.portal-sidebar .nav-item:hover {
+  background: color-mix(in srgb, var(--accent, #67e8f9) 10%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 20%, transparent) !important;
+}
+.portal-sidebar .nav-item.active {
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--accent, #67e8f9) 22%, transparent),
+    rgba(167, 139, 250, 0.14)
+  ) !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 38%, rgba(255, 255, 255, 0.14)) !important;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent, #67e8f9) 18%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+}
+.sidebar-health {
+  border-radius: 12px !important;
+  border: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 16%, transparent) !important;
+  background: color-mix(in srgb, var(--bg-surface, #0e1b34) 56%, transparent) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* 3. 全系列大屏与业务主视图面板：柔弧 14px 琉璃玻璃 + 顶部轻纱高光线 */
+.ck-panel,
+.ef-card,
+.ef-kpi,
+.ds-ticker,
+.dev-list-panel,
+.dev-detail-panel,
+.table-panel,
+.log-files-panel,
+.log-reader-panel,
+.comm-topology-panel,
+.trend-card,
+.view-toolbar {
+  border-radius: 14px !important;
+  border: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 16%, rgba(255, 255, 255, 0.09)) !important;
+  background: linear-gradient(
+    158deg,
+    color-mix(in srgb, var(--bg-surface, #0f1f3d) 76%, rgba(165, 180, 252, 0.07)) 0%,
+    color-mix(in srgb, var(--bg-surface, #0b172e) 66%, transparent) 100%
+  ) !important;
+  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 30px rgba(3, 10, 28, 0.28),
+    0 0 24px color-mix(in srgb, var(--accent, #67e8f9) 6%, transparent) !important;
+}
+html[data-color-scheme="light"] .ck-panel,
+html[data-color-scheme="light"] .ef-card,
+html[data-color-scheme="light"] .ef-kpi,
+html[data-color-scheme="light"] .ds-ticker,
+html[data-color-scheme="light"] .dev-list-panel,
+html[data-color-scheme="light"] .dev-detail-panel,
+html[data-color-scheme="light"] .table-panel,
+html[data-color-scheme="light"] .log-files-panel,
+html[data-color-scheme="light"] .log-reader-panel,
+html[data-color-scheme="light"] .comm-topology-panel,
+html[data-color-scheme="light"] .trend-card,
+html[data-color-scheme="light"] .view-toolbar {
+  background: linear-gradient(158deg, rgba(255, 255, 255, 0.88), rgba(244, 248, 255, 0.78)) !important;
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 18%, rgba(148, 163, 184, 0.22)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 8px 26px rgba(15, 23, 42, 0.06),
+    0 0 18px color-mix(in srgb, var(--accent, #2563eb) 6%, transparent) !important;
+}
+
+/* 去除面板顶部僵硬工业切角装饰，改为轻盈星露高光线 */
+.ck-panel::before {
+  height: 1px !important;
+  background: linear-gradient(
+    90deg,
+    transparent 6%,
+    color-mix(in srgb, var(--accent, #67e8f9) 62%, #ffffff) 38%,
+    rgba(196, 181, 253, 0.65) 62%,
+    transparent 94%
+  ) !important;
+  opacity: 0.75 !important;
+}
+.ck-panel::after {
+  display: none !important;
+}
+.ck-head-gem {
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  transform: none !important;
+  background: radial-gradient(circle, #ffffff 10%, var(--accent, #67e8f9) 70%) !important;
+  box-shadow: 0 0 10px var(--accent, #67e8f9), 0 0 18px rgba(167, 139, 250, 0.45) !important;
+}
+.ck-head-slash {
+  height: 1px !important;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent, #67e8f9) 42%, transparent), transparent) !important;
+  opacity: 0.7 !important;
+}
+
+/* 4. 首页全息卡片、极地管控小卡、运行态势磁贴与设备列表项：柔美通透与轻盈呼吸感 */
+.kpi-card,
+.energy-node,
+.hero-bottom-strip,
+.env-chip,
+.ck-stat-box,
+.ds-gauge-card,
+.ds-alarm-card,
+.ds-comm-card,
+.metric-box,
+.dev-item {
+  border-radius: 12px !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 18%, rgba(255, 255, 255, 0.10)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 6px 20px rgba(3, 10, 26, 0.18);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 220ms ease,
+              box-shadow 220ms ease,
+              background 220ms ease !important;
+}
+.energy-node:hover,
+.dev-item:hover,
+html[data-theme] button.ds-tile:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 48%, rgba(255, 255, 255, 0.22)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    0 10px 26px color-mix(in srgb, var(--accent, #67e8f9) 18%, rgba(3, 10, 26, 0.24)) !important;
+}
+html[data-theme] button.ds-tile {
+  border-radius: 11px !important;
+  border-left-width: 3px !important;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--bg-subtle, #142646) 62%, rgba(165, 180, 252, 0.06)),
+    color-mix(in srgb, var(--bg-surface, #0c1932) 52%, transparent)
+  ) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+/* 5. 极光极地大屏柔和星雾光幕 */
+.ck-aurora-bg {
+  background:
+    radial-gradient(ellipse 64% 46% at 20% 14%, rgba(103, 232, 249, 0.16) 0%, transparent 65%),
+    radial-gradient(ellipse 56% 42% at 82% 16%, rgba(192, 132, 252, 0.14) 0%, transparent 64%),
+    radial-gradient(ellipse 68% 48% at 50% 88%, rgba(94, 234, 212, 0.13) 0%, transparent 66%) !important;
+  filter: blur(10px);
+}
+.ck-hub-badge {
+  border-radius: 999px !important;
+  padding: 4px 20px !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 46%, rgba(255, 255, 255, 0.28)) !important;
+  background: linear-gradient(120deg, rgba(103, 232, 249, 0.22), rgba(167, 139, 250, 0.16)) !important;
+  box-shadow: 0 4px 22px rgba(103, 232, 249, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.30) !important;
+  backdrop-filter: blur(12px);
+}
+.ck-node-title {
+  border-radius: 999px !important;
+  padding: 2px 10px !important;
+  border-color: color-mix(in srgb, var(--accent, #67e8f9) 34%, rgba(255, 255, 255, 0.18)) !important;
+  backdrop-filter: blur(10px);
+}
+.ck-orb,
+.ck-node-disc {
+  box-shadow:
+    0 0 20px color-mix(in srgb, var(--accent, #67e8f9) 32%, transparent),
+    inset 0 1px 6px rgba(255, 255, 255, 0.26) !important;
+}
+
+/* 6. 分段按钮与胶囊化 */
+.ck-hours-seg,
+.ds-matrix-tabs,
+.wx-mode-seg {
+  border-radius: 999px !important;
+  padding: 2px !important;
+}
+html[data-theme] .ck-hours-seg button,
+html[data-theme] .ds-matrix-tabs button,
+html[data-theme] .wx-mode-seg button {
+  border-radius: 999px !important;
+}
+.ds-weather-strip {
+  border-radius: 999px !important;
+  padding: 3px 12px !important;
+}
+.tab-btn,
+.sub-tab-btn {
+  border-radius: 10px !important;
+}
+.dev-item.selected {
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent, #67e8f9) 20%, transparent), rgba(167, 139, 250, 0.12)) !important;
+  box-shadow: inset 3px 0 0 var(--accent, #67e8f9), 0 6px 20px color-mix(in srgb, var(--accent, #67e8f9) 14%, transparent) !important;
+}

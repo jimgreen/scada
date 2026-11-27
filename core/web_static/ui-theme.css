@@ -149,56 +149,56 @@
   --font-heading: "JetBrains Mono", "Cascadia Code", "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
 
-  /* 60% Deep-Space Surface */
-  --bg-canvas: #040812;
-  --bg-surface: #081121;
-  --bg-subtle: #0D1B33;
-  --bg-hover: rgba(0, 229, 255, 0.07);
-  --table-stripe: #0A162B;
-  --table-hover: #102444;
-  --bg-selected: #072E3F;
+  /* 60% Ethereal Aurora Deep-Space Surface */
+  --bg-canvas: #071022;
+  --bg-surface: rgba(14, 27, 50, 0.72);
+  --bg-subtle: rgba(22, 41, 74, 0.62);
+  --bg-hover: rgba(125, 224, 255, 0.09);
+  --table-stripe: rgba(16, 33, 61, 0.56);
+  --table-hover: rgba(42, 82, 134, 0.42);
+  --bg-selected: rgba(56, 189, 248, 0.16);
 
   /* Sidebar */
-  --sidebar-bg: #030710;
-  --sidebar-border: rgba(0, 229, 255, 0.18);
-  --sidebar-title: #4C7AA1;
-  --sidebar-text: #8CB6D9;
-  --sidebar-hover: rgba(0, 229, 255, 0.08);
-  --sidebar-active-bg: rgba(0, 229, 255, 0.16);
-  --sidebar-active-text: #E6F7FF;
-  --sidebar-active-bar: #00E5FF;
+  --sidebar-bg: rgba(8, 17, 36, 0.80);
+  --sidebar-border: rgba(154, 226, 255, 0.14);
+  --sidebar-title: #719AC0;
+  --sidebar-text: #B4D5EE;
+  --sidebar-hover: rgba(142, 224, 255, 0.10);
+  --sidebar-active-bg: linear-gradient(120deg, rgba(103, 232, 249, 0.22), rgba(165, 180, 252, 0.14));
+  --sidebar-active-text: #F2FAFF;
+  --sidebar-active-bar: #67E8F9;
 
-  /* 30% Holographic Structure */
-  --text-primary: #E6F7FF;
-  --text-secondary: #7DA2C4;
-  --text-tertiary: #4E7294;
-  --border-color: rgba(0, 229, 255, 0.22);
-  --border-strong: rgba(0, 229, 255, 0.38);
+  /* 30% Soft Crystal Structure */
+  --text-primary: #EEF8FF;
+  --text-secondary: #9AC0DE;
+  --text-tertiary: #6A90B2;
+  --border-color: rgba(148, 224, 255, 0.16);
+  --border-strong: rgba(148, 224, 255, 0.30);
   --border: 1px solid var(--border-color);
 
-  /* 10% Electric Cyan & HUD Semantic */
-  --accent: #00E5FF;
-  --accent-hover: #38F2FF;
-  --accent-contrast: #040812;
-  --accent-soft: rgba(0, 229, 255, 0.14);
-  --accent-ring: rgba(0, 229, 255, 0.34);
+  /* 10% Luminous Aurora Cyan & Soft Semantic */
+  --accent: #67E8F9;
+  --accent-hover: #A5F3FC;
+  --accent-contrast: #061326;
+  --accent-soft: rgba(103, 232, 249, 0.15);
+  --accent-ring: rgba(103, 232, 249, 0.30);
 
-  --ok: #00E6A8;
-  --ok-soft: rgba(0, 230, 168, 0.14);
-  --warn: #FFB020;
-  --warn-soft: rgba(255, 176, 32, 0.15);
-  --danger: #FF4D6D;
-  --danger-soft: rgba(255, 77, 109, 0.16);
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.15);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.15);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.16);
 
-  /* Sharp HUD Geometry */
-  --radius-card: 6px;
-  --radius-btn: 4px;
-  --radius-input: 4px;
-  --radius-dialog: 8px;
-  --radius-pill: 4px;
-  --shadow-card: 0 0 0 1px rgba(0, 229, 255, 0.08), 0 8px 24px rgba(0, 8, 24, 0.55);
-  --shadow-dialog: 0 0 28px rgba(0, 229, 255, 0.18), 0 24px 64px rgba(0, 0, 0, 0.72);
-  --ease: 160ms cubic-bezier(0.2, 0, 0, 1);
+  /* Ethereal Soft Geometry */
+  --radius-card: 14px;
+  --radius-btn: 10px;
+  --radius-input: 10px;
+  --radius-dialog: 18px;
+  --radius-pill: 9999px;
+  --shadow-card: 0 10px 34px rgba(3, 10, 28, 0.42), 0 0 24px rgba(103, 232, 249, 0.07);
+  --shadow-dialog: 0 0 42px rgba(103, 232, 249, 0.16), 0 28px 68px rgba(2, 8, 22, 0.68);
+  --ease: 220ms cubic-bezier(0.22, 1, 0.36, 1);
 
   --ink: var(--text-primary);
   --muted: var(--text-secondary);
@@ -733,51 +733,51 @@
   --font-heading: var(--font-sans);
   --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
 
-  --bg-canvas: #071422;
-  --bg-surface: #0D2036;
-  --bg-subtle: #142C48;
-  --bg-hover: rgba(56, 189, 248, 0.08);
-  --table-stripe: #10263F;
-  --table-hover: #183657;
-  --bg-selected: #163B61;
+  --bg-canvas: #091529;
+  --bg-surface: rgba(17, 35, 62, 0.74);
+  --bg-subtle: rgba(26, 51, 86, 0.64);
+  --bg-hover: rgba(125, 211, 252, 0.10);
+  --table-stripe: rgba(19, 41, 71, 0.54);
+  --table-hover: rgba(45, 86, 136, 0.40);
+  --bg-selected: rgba(103, 232, 249, 0.16);
 
-  --sidebar-bg: #050F1A;
-  --sidebar-border: rgba(56, 189, 248, 0.14);
-  --sidebar-title: #5E87A8;
-  --sidebar-text: #9DC1DC;
-  --sidebar-hover: rgba(56, 189, 248, 0.08);
-  --sidebar-active-bg: rgba(56, 189, 248, 0.20);
-  --sidebar-active-text: #EAF4FC;
-  --sidebar-active-bar: #38BDF8;
+  --sidebar-bg: rgba(9, 20, 38, 0.80);
+  --sidebar-border: rgba(147, 215, 255, 0.14);
+  --sidebar-title: #78A4C9;
+  --sidebar-text: #B8D5EC;
+  --sidebar-hover: rgba(125, 211, 252, 0.10);
+  --sidebar-active-bg: linear-gradient(120deg, rgba(125, 211, 252, 0.22), rgba(167, 139, 250, 0.14));
+  --sidebar-active-text: #F2F9FF;
+  --sidebar-active-bar: #7DD3FC;
 
-  --text-primary: #EAF4FC;
-  --text-secondary: #8EB2CE;
-  --text-tertiary: #5C819E;
-  --border-color: rgba(56, 189, 248, 0.16);
-  --border-strong: rgba(56, 189, 248, 0.34);
+  --text-primary: #F0F8FF;
+  --text-secondary: #9EC0DC;
+  --text-tertiary: #6C91B0;
+  --border-color: rgba(147, 215, 255, 0.16);
+  --border-strong: rgba(147, 215, 255, 0.30);
   --border: 1px solid var(--border-color);
 
-  --accent: #38BDF8;
-  --accent-hover: #0EA5E9;
-  --accent-contrast: #071422;
-  --accent-soft: rgba(56, 189, 248, 0.16);
-  --accent-ring: rgba(56, 189, 248, 0.30);
+  --accent: #7DD3FC;
+  --accent-hover: #BAE6FD;
+  --accent-contrast: #081529;
+  --accent-soft: rgba(125, 211, 252, 0.16);
+  --accent-ring: rgba(125, 211, 252, 0.30);
 
-  --ok: #34D399;
-  --ok-soft: rgba(52, 211, 153, 0.15);
-  --warn: #FBBF24;
-  --warn-soft: rgba(251, 191, 36, 0.16);
-  --danger: #FB7185;
-  --danger-soft: rgba(251, 113, 133, 0.16);
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.16);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.16);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.16);
 
-  --radius-card: 8px;
-  --radius-btn: 6px;
-  --radius-input: 6px;
-  --radius-dialog: 12px;
+  --radius-card: 14px;
+  --radius-btn: 10px;
+  --radius-input: 10px;
+  --radius-dialog: 18px;
   --radius-pill: 9999px;
-  --shadow-card: 0 4px 18px rgba(2, 10, 20, 0.36);
-  --shadow-dialog: 0 22px 54px rgba(0, 6, 14, 0.65);
-  --ease: 180ms cubic-bezier(0.2, 0, 0, 1);
+  --shadow-card: 0 10px 30px rgba(3, 12, 28, 0.38), 0 0 22px rgba(125, 211, 252, 0.07);
+  --shadow-dialog: 0 0 38px rgba(125, 211, 252, 0.15), 0 26px 64px rgba(2, 9, 20, 0.64);
+  --ease: 220ms cubic-bezier(0.22, 1, 0.36, 1);
 
   --ink: var(--text-primary);
   --muted: var(--text-secondary);
@@ -2851,4 +2851,125 @@ td.col-num {
   .ui-theme-select {
     max-width: 120px;
   }
+}
+
+/* ==================== 南极星岚 · 仙气柔美科幻琉璃美学层（全站共享） ==================== */
+html[data-color-scheme="dark"] body,
+html[data-color-scheme="dark"] body.workbench,
+html[data-color-scheme="dark"] .workbench-content,
+html[data-color-scheme="dark"] .workspace {
+  background-color: var(--bg-canvas) !important;
+  background-image:
+    radial-gradient(ellipse 68% 52% at 14% 6%, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 62%),
+    radial-gradient(ellipse 56% 48% at 86% 10%, rgba(167, 139, 250, 0.13) 0%, transparent 60%),
+    radial-gradient(ellipse 64% 44% at 52% 98%, rgba(94, 234, 212, 0.11) 0%, transparent 64%) !important;
+  background-attachment: fixed;
+}
+
+html[data-color-scheme="light"] body,
+html[data-color-scheme="light"] body.workbench,
+html[data-color-scheme="light"] .workbench-content,
+html[data-color-scheme="light"] .workspace {
+  background-color: var(--bg-canvas) !important;
+  background-image:
+    radial-gradient(ellipse 70% 50% at 12% 4%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 60%),
+    radial-gradient(ellipse 55% 44% at 88% 8%, rgba(167, 139, 250, 0.08) 0%, transparent 58%),
+    radial-gradient(ellipse 62% 42% at 50% 98%, rgba(45, 212, 191, 0.07) 0%, transparent 62%) !important;
+  background-attachment: fixed;
+}
+
+/* 顶栏与侧栏：冰晶半透明磨砂琉璃 + 柔和微光丝线 */
+html[data-theme] .workbench-topbar,
+html[data-theme] .topbar {
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-color)) !important;
+  box-shadow: 0 6px 26px rgba(4, 12, 30, 0.18), inset 0 -1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+html[data-theme] .workbench-sidebar,
+html[data-theme] .sidebar {
+  background: color-mix(in srgb, var(--sidebar-bg) 86%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  border-right: 1px solid color-mix(in srgb, var(--accent) 16%, var(--sidebar-border)) !important;
+}
+
+/* 主面板、卡片与弹窗：柔弧琉璃 + 顶部 1px 冰晶高光折射线（去工业硬框） */
+html[data-theme] .workbench .card,
+html[data-theme] .workbench .panel,
+html[data-theme] .card,
+html[data-theme] .panel,
+html[data-theme] .page-panel,
+html[data-theme] .table-wrap,
+html[data-theme] .ui-prefs-popover,
+html[data-theme] dialog {
+  border-radius: max(var(--radius-card, 12px), 12px) !important;
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border-color)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 10px 30px rgba(3, 10, 26, 0.24),
+    0 0 22px color-mix(in srgb, var(--accent) 6%, transparent);
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+}
+html[data-color-scheme="light"] .workbench .card,
+html[data-color-scheme="light"] .workbench .panel,
+html[data-color-scheme="light"] .card,
+html[data-color-scheme="light"] .panel,
+html[data-color-scheme="light"] .page-panel,
+html[data-color-scheme="light"] .ui-prefs-popover,
+html[data-color-scheme="light"] dialog {
+  background: color-mix(in srgb, var(--bg-surface) 88%, #ffffff) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 10px 28px rgba(15, 23, 42, 0.06),
+    0 0 18px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* 按钮与选择控件：柔光温润弧角与悬停微晕（排除表格内嵌子控件与导航项） */
+html[data-theme] button:not(.nav):not(.nav-item):not(.row-button):not(.sort-button):not(.icon-button):not(.ck-node):not(.energy-node):not(.ds-tile):not(.dev-item):not(.health-weather-row):not([class*="tab-btn"]):not(td button),
+html[data-theme] select:not(td select):not(th select),
+html[data-theme] input[type="search"]:not(td input),
+html[data-theme] input[type="text"]:not(td input),
+html[data-theme] input[type="number"]:not(td input),
+html[data-theme] input[type="date"]:not(td input) {
+  border-radius: max(var(--radius-btn, 8px), 9px);
+  transition: border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+              background 220ms cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+              transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html[data-theme] button.primary,
+html[data-theme] .btn.primary {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #a5b4fc)) !important;
+  border-color: color-mix(in srgb, var(--accent) 60%, #ffffff) !important;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 32%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+html[data-theme] button.primary:hover:not(:disabled),
+html[data-theme] .btn.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--accent) 44%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* 徽章与状态胶囊：轻盈全圆柔光胶囊 */
+html[data-theme] .badge,
+html[data-theme] .status {
+  border-radius: 999px !important;
+  backdrop-filter: blur(6px);
+}
+
+/* 柔和表格分隔线与柔光悬停 */
+html[data-theme] table th,
+html[data-theme] table td {
+  border-bottom-color: color-mix(in srgb, var(--accent) 10%, var(--border-color)) !important;
+}
+
+/* 弹窗背景柔雾虚化 */
+html[data-theme] dialog::backdrop {
+  background: rgba(6, 13, 28, 0.56);
+  backdrop-filter: blur(8px);
 }
