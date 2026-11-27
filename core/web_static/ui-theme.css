@@ -1076,6 +1076,30 @@ html[data-theme] button.ui-prefs-toggle[aria-expanded="true"] {
   border-color: var(--accent) !important;
   background: var(--bg-hover, var(--bg-subtle)) !important;
 }
+html[data-theme] button.ui-fullscreen-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 !important;
+  border-radius: var(--radius-btn) !important;
+  border: var(--border) !important;
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color var(--ease), background var(--ease), color var(--ease), box-shadow var(--ease);
+}
+html[data-theme] button.ui-fullscreen-toggle:hover,
+html[data-theme] button.ui-fullscreen-toggle.is-active {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--accent-soft, var(--bg-hover)) !important;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 26%, transparent);
+}
 .ui-prefs-dot {
   width: 7px;
   height: 7px;

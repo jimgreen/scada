@@ -1892,6 +1892,8 @@
     ["极地气象", "Polar Weather", "Поляр. метео"],
     ["覆冰 / 天气", "Icing / Sky", "Лёд / Погода"],
     ["风耦 / 储容", "Wind / BESS", "ВЭУ / АКБ"],
+    ["全屏显示", "Fullscreen", "Полный экран"],
+    ["退出全屏", "Exit Fullscreen", "Выход из полного экрана"],
   ];
 
   for (const [zh, en, ru] of PHRASES) {
@@ -2462,7 +2464,7 @@
   function translateTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE) return;
     const parent = node.parentElement;
-    if (!parent || parent.closest("script, style, code, pre, .lb-content, .log-content, #status-json, #schema-json, #ui-lang-select, #ui-theme-select, #ui-prefs-toggle, #ui-prefs-popover")) {
+    if (!parent || parent.closest("script, style, code, pre, .lb-content, .log-content, #status-json, #schema-json, #ui-lang-select, #ui-theme-select, #ui-prefs-toggle, #ui-prefs-popover, #ui-fullscreen-toggle")) {
       return;
     }
     const raw = node.nodeValue || "";
@@ -2598,6 +2600,18 @@
       pop.querySelectorAll("[data-ui-lang-btn]").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.uiLangBtn === currentLang);
       });
+    }
+    const fsBtn = document.getElementById("ui-fullscreen-toggle");
+    if (fsBtn) {
+      const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      fsBtn.classList.toggle("is-active", isFs);
+      fsBtn.setAttribute("aria-pressed", String(isFs));
+      const fsLabel = translateString(isFs ? "退出全屏" : "全屏显示");
+      fsBtn.title = fsLabel;
+      fsBtn.setAttribute("aria-label", fsLabel);
+      fsBtn.innerHTML = isFs
+        ? '<svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>'
+        : '<svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     }
   }
 
@@ -2749,7 +2763,32 @@
       if (!pop.hidden) positionPopover();
     });
 
-    box.append(toggleBtn);
+    // 顶栏最右侧「全屏显示 / 退出全屏」图标按钮（全站每个页面自动生效）
+    const fsBtn = document.createElement("button");
+    fsBtn.type = "button";
+    fsBtn.id = "ui-fullscreen-toggle";
+    fsBtn.className = "ui-fullscreen-toggle";
+    fsBtn.setAttribute("aria-pressed", "false");
+    fsBtn.addEventListener("click", () => {
+      const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      try {
+        if (!isFs) {
+          const req = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+          if (req) Promise.resolve(req.call(document.documentElement)).catch(() => {});
+        } else {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) Promise.resolve(exit.call(document)).catch(() => {});
+        }
+      } catch (_) { /* ignore */ }
+    });
+    const onFsChange = () => {
+      updateControls();
+      requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+
+    box.append(toggleBtn, fsBtn);
     tools.append(box);
     updateControls();
   }
