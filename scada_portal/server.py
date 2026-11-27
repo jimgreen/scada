@@ -417,6 +417,8 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 ))
             if path == "/api/logs/files":
                 return self._json(200, self.service.list_log_files(record=query.get("record", "runtime")))
+            if path == "/api/weather":
+                return self._json(200, self.service.get_weather_state())
             if path == "/api/logs/read":
                 limit_val = _parse_int(query.get("limit"), "limit", default=300, min_val=10, max_val=1000)
                 return self._json(200, self.service.read_logs(
@@ -448,6 +450,9 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
         parts = [unquote(p) for p in parsed.path.split("/") if p]
         path = "/" + "/".join(parts) if parts else "/"
         try:
+            if path == "/api/weather":
+                body = self._read_json_body()
+                return self._json(200, self.service.update_weather_profile(body))
             if not (len(parts) == 5 and parts[:2] == ["api", "devices"] and parts[4] == "limits"):
                 return self._json(404, {"error": "接口路径不存在"})
             length = _parse_int(self.headers.get("Content-Length"), "Content-Length", default=0, min_val=0)

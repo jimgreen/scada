@@ -192,6 +192,25 @@ def ensure_extended_history_schema(conn: sqlite3.Connection) -> None:
         if "ack_note" not in cols:
             conn.execute("ALTER TABLE alarm_events ADD COLUMN ack_note TEXT NOT NULL DEFAULT ''")
 
+    # 5. 南极气象条件与环境工况输入持久化配置表（单行 id=1）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS polar_weather_profile (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            mode TEXT NOT NULL DEFAULT 'measured',
+            preset TEXT NOT NULL DEFAULT 'live',
+            temperature_c REAL,
+            wind_speed_ms REAL,
+            irradiance_wm2 REAL,
+            pressure_hpa REAL NOT NULL DEFAULT 985.0,
+            icing_level INTEGER NOT NULL DEFAULT 0,
+            snow_condition TEXT NOT NULL DEFAULT 'clear',
+            updated_ms INTEGER NOT NULL DEFAULT 0,
+            operator TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+
 
 def upsert_minute_rollup(
     conn: sqlite3.Connection,

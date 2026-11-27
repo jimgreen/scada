@@ -32,10 +32,15 @@ from scada_portal.history_store import (
     upsert_minute_rollup,
 )
 from scada_portal.report import (
+    POLAR_WEATHER_PRESETS,
     compute_polar_derived_metrics,
+    compute_polar_weather_coupling,
+    default_weather_profile,
+    merge_effective_weather,
     render_daily_report_csv,
     render_daily_report_html,
     summarize_data_quality,
+    validate_weather_payload,
 )
 from scada_portal.stream import PortalEventBus
 from scdfe_d.measurement_layout import (
@@ -1052,6 +1057,30 @@ class PortalService:
         # 约 0.25 kg/kWh 柴油节约换算（1 万 kWh ≈ 2.5 吨，基数 128.3 吨）
         diesel_saved_tons = round(128.3 + (inc.get("wind", 0.0) + inc.get("pv", 0.0)) * 0.00025, 2)
 
+        measured_env = self._extract_measured_env(devices)
+        weather_profile = self._load_weather_profile()
+        eff_weather = merge_effective_weather(measured_env, weather_profile)
+        model_params_map = self._read_model_params()[0]
+        derived_tmp = compute_polar_derived_metrics(
+            rt=energy,
+            env=eff_weather,
+            model_params_map=model_params_map,
+            devices=devices,
+        )
+        base_autonomy_h = round(
+            (400.0 * max(0.0, float(energy.get("storage_soc_pct") or 0.0) - 10.0) / 100.0
+             + 1500.0 * max(0.0, float(energy.get("hydro_soc_pct") or 0.0) - 5.0) / 100.0)
+            / max(float(energy.get("total_load_kw") or 0.0), 15.0),
+            1,
+        )
+        coupling = compute_polar_weather_coupling(
+            effective=eff_weather,
+            wind_rated_kw=derived_tmp.get("wind_rated_kw", 0.0),
+            pv_rated_kw=derived_tmp.get("pv_rated_kw", 0.0),
+            base_load_kw=float(energy.get("total_load_kw") or 0.0),
+            base_autonomy_h=base_autonomy_h,
+        )
+
         result = {
             "timestamp": now_utc.isoformat(timespec="seconds"),
             "station_name": "南极秦岭站综合能量管理系统",
@@ -1069,6 +1098,12 @@ class PortalService:
                 "renewable_share_pct": energy["renewable_ratio_pct"],
             },
             "realtime": energy,
+            "weather": {
+                "measured": measured_env,
+                "profile": weather_profile,
+                "effective": eff_weather,
+            },
+            "coupling": coupling,
             "health": {
                 "device_count": len(devices),
                 "bound_measurements": total_bound,
@@ -1084,6 +1119,149 @@ class PortalService:
         with self._cache_lock:
             self._overview_cache = (time.monotonic(), sig, result)
         return result
+
+    def _extract_measured_env(self, devices: list[dict[str, Any]]) -> dict[str, Any]:
+        """从实时设备快照中提取现场实测风速、太阳辐照度与环境气温均值。"""
+        wind_speeds: list[float] = []
+        irradiances: list[float] = []
+        temperatures: list[float] = []
+        for dev in devices:
+            t = dev.get("table_name")
+            m_map = {m["metric"]: m for m in (dev.get("metrics") or ())}
+            if t == "ACWindGen" and "wind_speed" in m_map:
+                ws = _to_float(m_map["wind_speed"].get("value"))
+                if ws is not None:
+                    wind_speeds.append(ws)
+            elif t in {"ACPVGen", "DCPVGen"} and "irradiance" in m_map:
+                irr = _to_float(m_map["irradiance"].get("value"))
+                if irr is not None:
+                    irradiances.append(irr)
+            if t in {"ACWindGen", "ACPVGen", "DCPVGen"} and "temperature" in m_map:
+                tv = _to_float(m_map["temperature"].get("value"))
+                if tv is not None:
+                    temperatures.append(tv)
+        return {
+            "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
+            "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
+            "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
+        }
+
+    def _load_weather_profile(self) -> dict[str, Any]:
+        """从历史库读取持久化的南极气象与环境工况输入配置。"""
+        prof = default_weather_profile()
+        if not self.history_db.is_file():
+            return prof
+        try:
+            with self._open_history(readonly=True) as conn:
+                row = conn.execute(
+                    "SELECT mode, preset, temperature_c, wind_speed_ms, irradiance_wm2, "
+                    "pressure_hpa, icing_level, snow_condition, updated_ms, operator "
+                    "FROM polar_weather_profile WHERE id=1"
+                ).fetchone()
+                if row is not None:
+                    prof.update({
+                        "mode": row[0] or "measured",
+                        "preset": row[1] or "live",
+                        "temperature_c": row[2],
+                        "wind_speed_ms": row[3],
+                        "irradiance_wm2": row[4],
+                        "pressure_hpa": float(row[5] if row[5] is not None else 985.0),
+                        "icing_level": int(row[6] if row[6] is not None else 0),
+                        "snow_condition": row[7] or "clear",
+                        "updated_ms": int(row[8] or 0),
+                        "operator": row[9] or "",
+                    })
+        except sqlite3.Error:
+            LOG.debug("polar_weather_profile read fallback", exc_info=True)
+        return prof
+
+    def get_weather_state(self) -> dict[str, Any]:
+        """返回现场实测气象、当前工况输入配置、合并生效值、预设列表及能源耦合结果。"""
+        devices = self._read_all_devices()
+        energy = self._aggregate_energy(devices)
+        measured = self._extract_measured_env(devices)
+        profile = self._load_weather_profile()
+        effective = merge_effective_weather(measured, profile)
+        model_params_map = self._read_model_params()[0]
+        derived = compute_polar_derived_metrics(
+            rt=energy,
+            env=effective,
+            model_params_map=model_params_map,
+            devices=devices,
+        )
+        base_autonomy_h = round(
+            (400.0 * max(0.0, float(energy.get("storage_soc_pct") or 0.0) - 10.0) / 100.0
+             + 1500.0 * max(0.0, float(energy.get("hydro_soc_pct") or 0.0) - 5.0) / 100.0)
+            / max(float(energy.get("total_load_kw") or 0.0), 15.0),
+            1,
+        )
+        coupling = compute_polar_weather_coupling(
+            effective=effective,
+            wind_rated_kw=derived.get("wind_rated_kw", 0.0),
+            pv_rated_kw=derived.get("pv_rated_kw", 0.0),
+            base_load_kw=float(energy.get("total_load_kw") or 0.0),
+            base_autonomy_h=base_autonomy_h,
+        )
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "measured": measured,
+            "profile": profile,
+            "effective": effective,
+            "coupling": coupling,
+            "presets": list(POLAR_WEATHER_PRESETS),
+        }
+
+    def update_weather_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """校验并持久化南极气象与环境工况输入，清除缓存并推送 SSE 刷新全站大屏。"""
+        current = self._load_weather_profile()
+        norm = validate_weather_payload(payload, current)
+        now_ms = int(time.time() * 1000)
+        with self._history_lock, self._open_history() as conn:
+            ensure_extended_history_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO polar_weather_profile (
+                    id, mode, preset, temperature_c, wind_speed_ms, irradiance_wm2,
+                    pressure_hpa, icing_level, snow_condition, updated_ms, operator
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    mode=excluded.mode,
+                    preset=excluded.preset,
+                    temperature_c=excluded.temperature_c,
+                    wind_speed_ms=excluded.wind_speed_ms,
+                    irradiance_wm2=excluded.irradiance_wm2,
+                    pressure_hpa=excluded.pressure_hpa,
+                    icing_level=excluded.icing_level,
+                    snow_condition=excluded.snow_condition,
+                    updated_ms=excluded.updated_ms,
+                    operator=excluded.operator
+                """,
+                (
+                    norm["mode"],
+                    norm["preset"],
+                    norm["temperature_c"],
+                    norm["wind_speed_ms"],
+                    norm["irradiance_wm2"],
+                    norm["pressure_hpa"],
+                    norm["icing_level"],
+                    norm["snow_condition"],
+                    now_ms,
+                    norm["operator"],
+                ),
+            )
+            conn.commit()
+        with self._cache_lock:
+            self._overview_cache = None
+            self._cockpit_cache.clear()
+        self._audit_portal_log(
+            "scdfe_d-web",
+            "INFO",
+            f"门户更新南极气象工况 模式={norm['mode']} 预设={norm['preset']} "
+            f"气温={norm['temperature_c']}°C 风速={norm['wind_speed_ms']}m/s "
+            f"辐照={norm['irradiance_wm2']}W/m² 覆冰={norm['icing_level']} 天气={norm['snow_condition']}",
+        )
+        self.event_bus.publish("weather", {"mode": norm["mode"], "preset": norm["preset"], "updated_ms": now_ms})
+        return self.get_weather_state()
 
     def _count_comm_points(self) -> dict[str, int]:
         """复用通信快照统计 scdfe_c 四遥点表（YC/YX/YT/YK）配置总数。"""
@@ -1490,13 +1668,16 @@ class PortalService:
                     "pressure_mpa": round(fc_pressure, 2) if fc_pressure is not None else None,
                 },
             },
-            "environment": {
-                "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
-                "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
-                "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
-                "dc_voltage_v": dc_voltage,
-                "ac_voltage_v": ac_voltage,
-            },
+            "environment": merge_effective_weather(
+                {
+                    "wind_speed_ms": round(sum(wind_speeds) / len(wind_speeds), 2) if wind_speeds else None,
+                    "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
+                    "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
+                    "dc_voltage_v": dc_voltage,
+                    "ac_voltage_v": ac_voltage,
+                },
+                self._load_weather_profile(),
+            ),
             "sources": {
                 "scene": f"{self.runtime_name}/{self.scene_name}",
                 "model_db": self.model_db.name if self.model_db.is_file() else "—",
@@ -3866,6 +4047,21 @@ class PortalService:
         h2_prod = float(rt["hydrogen_prod_kw"])
         h2_gen = float(rt["hydrogen_gen_kw"])
 
+        derived_metrics = compute_polar_derived_metrics(
+            rt=rt,
+            env=env,
+            model_params_map=self._read_model_params()[0],
+            devices=devices,
+        )
+        weather_coupling = compute_polar_weather_coupling(
+            effective=env,
+            wind_rated_kw=derived_metrics.get("wind_rated_kw", 0.0),
+            pv_rated_kw=derived_metrics.get("pv_rated_kw", 0.0),
+            base_load_kw=base_load_kw,
+            base_autonomy_h=autonomy_hours,
+        )
+        derived_metrics["weather_alert"] = weather_coupling["alert_level"]
+
         result = {
             "timestamp": overview["timestamp"],
             "hours": span_hours,
@@ -3881,6 +4077,7 @@ class PortalService:
             },
             "resilience": {
                 "autonomy_hours": autonomy_hours,
+                "coupled_autonomy_hours": weather_coupling["thermal"]["coupled_autonomy_hours"],
                 "diesel_replace_pct": diesel_replace_pct,
                 "wind_saved_tons": wind_saved_tons,
                 "pv_saved_tons": pv_saved_tons,
@@ -3933,8 +4130,15 @@ class PortalService:
             "polar_stats": {
                 "green_ratio_pct": round(float(summary["green_ratio_pct"]), 1),
                 "temperature_c": env.get("temperature_c"),
+                "wind_chill_c": env.get("wind_chill_c"),
                 "wind_speed_ms": env.get("wind_speed_ms"),
                 "irradiance_wm2": env.get("irradiance_wm2"),
+                "pressure_hpa": env.get("pressure_hpa"),
+                "air_density_kgm3": env.get("air_density_kgm3"),
+                "icing_level": env.get("icing_level"),
+                "icing_label": env.get("icing_label"),
+                "snow_condition": env.get("snow_condition"),
+                "snow_label": env.get("snow_label"),
                 "dc_voltage_v": env.get("dc_voltage_v"),
                 "ac_voltage_v": env.get("ac_voltage_v"),
                 "rtu_online": summary["rtu_online"],
@@ -3942,6 +4146,12 @@ class PortalService:
                 "alarm_unacked": summary["alarm_unacked"],
                 "collector_running": summary["collector_running"],
             },
+            "weather": {
+                "measured": overview.get("weather", {}).get("measured") or {},
+                "profile": overview.get("weather", {}).get("profile") or default_weather_profile(),
+                "effective": env,
+            },
+            "coupling": weather_coupling,
             "renewables": {
                 "wind": {
                     "total_wkwh": round(wind_wkwh, 2),
@@ -3966,12 +4176,7 @@ class PortalService:
                 {"key": "load", "label": "总负荷", "points": power_series["load"]},
             ],
             "storage_schedule": storage_schedule,
-            "derived": compute_polar_derived_metrics(
-                rt=rt,
-                env=env,
-                model_params_map=self._read_model_params()[0],
-                devices=devices,
-            ),
+            "derived": derived_metrics,
             "data_quality": overview.get("data_quality") or {},
             "health": overview["health"],
         }

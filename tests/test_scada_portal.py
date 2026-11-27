@@ -691,6 +691,54 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertIn("diesel_endurance_hours", ck["derived"])
         self.assertIn("data_quality", ck)
 
+    def test_polar_weather_input_and_coupling(self):
+        def req_json(method: str, path: str, payload: dict | None = None):
+            c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+            b = json.dumps(payload).encode("utf-8") if payload is not None else None
+            h = {"Content-Type": "application/json"} if b is not None else {}
+            c.request(method, path, body=b, headers=h)
+            r = c.getresponse()
+            raw = r.read().decode("utf-8")
+            c.close()
+            return r.status, (json.loads(raw) if raw else {})
+
+        # 1. 默认读取现场实测模式与 6 组南极气象预设
+        st0, w0 = req_json("GET", "/api/weather")
+        self.assertEqual(st0, 200)
+        self.assertEqual(w0["profile"]["mode"], "measured")
+        self.assertGreaterEqual(len(w0["presets"]), 6)
+        self.assertIn("coupling", w0)
+
+        # 2. 切换为暴雪重冰工况并验证耦合影响同步至 polar-cockpit 与 overview
+        st1, w1 = req_json("PUT", "/api/weather", {"preset": "blizzard_icing"})
+        self.assertEqual(st1, 200)
+        self.assertEqual(w1["effective"]["mode"], "manual")
+        self.assertEqual(w1["coupling"]["alert_level"], "extreme")
+        self.assertLess(w1["coupling"]["bess"]["cap_retention_pct"], 80.0)
+        self.assertGreater(w1["coupling"]["thermal"]["heating_delta_kw"], 25.0)
+
+        st_ck, ck = req_json("GET", "/api/polar-cockpit?hours=6")
+        self.assertEqual(st_ck, 200)
+        self.assertEqual(ck["coupling"]["alert_level"], "extreme")
+        self.assertEqual(ck["weather"]["effective"]["preset"], "blizzard_icing")
+
+        # 3. 强下降风超速切出判定（风速 >= 25 m/s）
+        st2, w2 = req_json("PUT", "/api/weather", {"mode": "manual", "preset": "custom", "wind_speed_ms": 27.5, "temperature_c": -20.0})
+        self.assertEqual(st2, 200)
+        self.assertEqual(w2["coupling"]["wind"]["avail_pct"], 0.0)
+        self.assertEqual(w2["coupling"]["wind"]["state"], "超速切出")
+
+        # 4. 非法越界输入拒绝返回 400
+        st_bad1, _ = req_json("PUT", "/api/weather", {"mode": "manual", "temperature_c": -99.0})
+        self.assertEqual(st_bad1, 400)
+        st_bad2, _ = req_json("PUT", "/api/weather", {"mode": "manual", "icing_level": 9})
+        self.assertEqual(st_bad2, 400)
+
+        # 5. 一键恢复现场实测模式
+        st3, w3 = req_json("PUT", "/api/weather", {"mode": "measured", "preset": "live"})
+        self.assertEqual(st3, 200)
+        self.assertEqual(w3["effective"]["mode"], "measured")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -202,11 +202,15 @@
               <g id="hero-flow-pulses"></g>
             </svg>
 
-            <!-- 气象与储氢环境微标 -->
+            <!-- 气象与储氢环境微标（点击工况按钮可输入/推演南极极端气象） -->
             <div class="hero-env-badges" id="hero-env-badges">
+              <span class="env-chip">气温 <strong id="env-temp">--</strong> °C</span>
               <span class="env-chip">风速 <strong id="env-wind">--</strong> m/s</span>
               <span class="env-chip">辐照度 <strong id="env-irr">--</strong> W/m²</span>
               <span class="env-chip">储氢 <strong id="env-h2">--</strong></span>
+              <button type="button" class="env-chip env-weather-btn" id="home-weather-btn" data-open-weather>
+                <span id="home-weather-tag">现场实测</span> · <em>工况输入</em>
+              </button>
             </div>
 
             <!-- 左侧 4 组实时能源卡片 -->
@@ -655,6 +659,7 @@
                   <h2>极地能效与环境</h2>
                   <span class="ck-head-slash" aria-hidden="true"></span>
                   <div class="ck-report-actions">
+                    <button type="button" class="ck-mini-link ck-weather-trigger" id="ck-weather-btn" data-open-weather>工况输入</button>
                     <a class="ck-mini-link" id="ck-report-csv" href="/api/report/daily?format=csv" download>导出 CSV</a>
                     <a class="ck-mini-link" id="ck-report-html" href="/api/report/daily?format=html" target="_blank" rel="noopener">打印报表</a>
                   </div>
@@ -686,10 +691,11 @@
                   </button>
                 </div>
                 <div class="ck-derived-strip" id="ck-derived-strip">
+                  <span title="风电耦合可用率">风耦 <strong id="ck-drv-wind">--%</strong></span>
+                  <span title="电储能低温容量保持率">储容 <strong id="ck-drv-bess">--%</strong></span>
+                  <span title="极寒采暖负荷增量">采暖 <strong id="ck-drv-heat">+0kW</strong></span>
                   <span title="柴油续航">续航 <strong id="ck-drv-endurance">--h</strong></span>
-                  <span title="氢能往返效率">氢效 <strong id="ck-drv-h2eff">--%</strong></span>
-                  <span title="估算限电">限电 <strong id="ck-drv-curtail">--kW</strong></span>
-                  <span class="ck-drv-badge" id="ck-drv-weather">极地气象正常</span>
+                  <button type="button" class="ck-drv-badge" id="ck-drv-weather" data-open-weather>极地气象正常</button>
                 </div>
               </article>
 
@@ -800,6 +806,10 @@
             <div class="ds-tick-item"><span>功率平衡</span><strong id="ds-tk-bal">-- kW</strong></div>
             <div class="ds-tick-item"><span>绿电占比</span><strong id="ds-tk-green">--%</strong></div>
             <div class="ds-tick-item"><span>在线 RTU</span><strong id="ds-tk-rtu">-- / --</strong></div>
+            <button type="button" class="ds-tick-btn ds-weather-tick" id="ds-tk-weather-btn" data-open-weather>
+              <span id="ds-tk-wlabel">现场实测</span>
+              <strong id="ds-tk-wval">--°C / --m/s</strong>
+            </button>
             <button type="button" class="ds-tick-btn" id="ds-tk-alarm-btn"><span>未确认告警</span><strong id="ds-tk-alarm">0</strong></button>
           </div>
 
@@ -847,6 +857,12 @@
                     <div class="ds-g-val"><strong id="ds-gv-h2">--</strong><small>%</small></div>
                     <span class="ds-g-lbl">储氢余量</span>
                   </div>
+                </div>
+                <div class="ds-weather-strip" id="ds-weather-strip" data-open-weather title="点击配置南极气象工况">
+                  <span>风耦 <strong id="ds-wc-wind">--%</strong></span>
+                  <span>光效 <strong id="ds-wc-pv">--%</strong></span>
+                  <span>储容 <strong id="ds-wc-bess">--%</strong></span>
+                  <span>采暖 <strong id="ds-wc-heat">+0kW</strong></span>
                 </div>
               </article>
 
@@ -1623,6 +1639,99 @@
         <div class="limit-dialog-actions">
           <button type="button" class="btn secondary" id="alarm-note-cancel">取消</button>
           <button type="submit" class="btn primary" id="alarm-note-ok">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- 南极气象与环境工况输入弹窗（支持实测/推演双模式、极端气象预设与实时耦合预览） -->
+    <dialog id="weather-dialog" class="limit-dialog weather-dialog" aria-labelledby="weather-dialog-title">
+      <form id="weather-form" novalidate>
+        <div class="limit-dialog-head">
+          <h3 id="weather-dialog-title">南极气象与环境工况</h3>
+          <div class="wx-mode-seg" id="wx-mode-seg" role="group" aria-label="气象数据来源">
+            <button type="button" class="active" data-wx-mode="measured">现场实测</button>
+            <button type="button" data-wx-mode="manual">工况推演</button>
+          </div>
+          <button type="button" class="btn secondary" id="wx-close" aria-label="关闭">×</button>
+        </div>
+
+        <div class="wx-presets" id="wx-presets" role="group" aria-label="南极典型气象预设">
+          <button type="button" data-wx-preset="live">现场实测</button>
+          <button type="button" data-wx-preset="summer_sunny">极昼晴朗</button>
+          <button type="button" data-wx-preset="katabatic_gale">强下降风</button>
+          <button type="button" data-wx-preset="polar_night_cold">极夜极寒</button>
+          <button type="button" data-wx-preset="blizzard_icing">暴雪重冰</button>
+          <button type="button" data-wx-preset="calm_overcast">静风阴天</button>
+        </div>
+
+        <div class="wx-grid">
+          <label class="wx-field">
+            <span class="wx-flbl">环境气温 <small>°C</small></span>
+            <div class="wx-range-row">
+              <input id="wx-temp-range" type="range" min="-55" max="10" step="0.5" value="-12" />
+              <input id="wx-temp" type="number" min="-65" max="20" step="0.5" value="-12" />
+            </div>
+          </label>
+          <label class="wx-field">
+            <span class="wx-flbl">瞬时风速 <small>m/s</small></span>
+            <div class="wx-range-row">
+              <input id="wx-wind-range" type="range" min="0" max="40" step="0.5" value="8.5" />
+              <input id="wx-wind" type="number" min="0" max="60" step="0.5" value="8.5" />
+            </div>
+          </label>
+          <label class="wx-field">
+            <span class="wx-flbl">太阳辐照 <small>W/m²</small></span>
+            <div class="wx-range-row">
+              <input id="wx-irr-range" type="range" min="0" max="1100" step="10" value="260" />
+              <input id="wx-irr" type="number" min="0" max="1400" step="5" value="260" />
+            </div>
+          </label>
+          <label class="wx-field">
+            <span class="wx-flbl">大气气压 <small>hPa</small></span>
+            <div class="wx-range-row">
+              <input id="wx-pres-range" type="range" min="930" max="1030" step="1" value="985" />
+              <input id="wx-pres" type="number" min="900" max="1050" step="1" value="985" />
+            </div>
+          </label>
+          <label class="wx-field">
+            <span class="wx-flbl">叶片覆冰</span>
+            <select id="wx-icing">
+              <option value="0">无覆冰</option>
+              <option value="1">轻度覆冰</option>
+              <option value="2">中度覆冰</option>
+              <option value="3">重度覆冰</option>
+            </select>
+          </label>
+          <label class="wx-field">
+            <span class="wx-flbl">积雪天气</span>
+            <select id="wx-snow">
+              <option value="clear">晴朗</option>
+              <option value="overcast">阴云</option>
+              <option value="blowing_snow">吹雪</option>
+              <option value="blizzard">暴雪积雪</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="wx-preview" id="wx-preview">
+          <div class="wx-prev-item"><span>风寒体感</span><strong id="wx-pv-wc">--°C</strong></div>
+          <div class="wx-prev-item"><span>空气密度</span><strong id="wx-pv-rho">-- kg/m³</strong></div>
+          <div class="wx-prev-item"><span>风电耦合</span><strong id="wx-pv-wind">--</strong></div>
+          <div class="wx-prev-item"><span>光伏温效</span><strong id="wx-pv-pv">--</strong></div>
+          <div class="wx-prev-item"><span>电储温容</span><strong id="wx-pv-bess">--%</strong></div>
+          <div class="wx-prev-item"><span>采暖增荷</span><strong id="wx-pv-heat">+0 kW</strong></div>
+        </div>
+        <div class="wx-strategy-bar">
+          <span class="ck-drv-badge" id="wx-pv-alert">极地气象正常</span>
+          <strong id="wx-pv-strategy">绿电优先消纳</strong>
+        </div>
+
+        <div class="limit-error" id="wx-error" role="alert" hidden></div>
+        <div class="limit-dialog-actions">
+          <button type="button" class="btn secondary" id="wx-reset-live">恢复实测</button>
+          <span style="flex:1"></span>
+          <button type="button" class="btn secondary" id="wx-cancel">取消</button>
+          <button type="submit" class="btn primary" id="wx-apply">应用生效</button>
         </div>
       </form>
     </dialog>
