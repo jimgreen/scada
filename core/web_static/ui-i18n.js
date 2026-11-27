@@ -957,6 +957,55 @@
     ["0 · 正常", "0 · Normal", "0 · Норма"],
     ["合并检索最近文件", "Search Recent Files", "Поиск в недавних"],
     ["通信质量异常或数据超时（点击展开/收起）", "Bad quality or stale data (click to toggle)", "Сбой качества или устаревшие данные (нажмите)"],
+    ["实时量测", "Live Meas", "Изм."],
+    ["固定弹窗", "Pin Popover", "Закрепить"],
+    ["取消固定", "Unpin", "Открепить"],
+    ["原色画布", "Native Canvas", "Оригинал"],
+    ["暗夜融合", "Dark Blend", "Тёмный"],
+    ["仅异常/分闸", "Faults / Open", "Сбои / Откл"],
+    ["值班控调", "Control Unlocked", "Упр. открыто"],
+    ["只读监盘", "Read-Only Lock", "Только просмотр"],
+    ["操作审计", "Control Audit", "Аудит команд"],
+    ["命令面板", "Command Palette", "Команды"],
+    ["运行日报", "Daily Report", "Суточный отчёт"],
+    ["导出 CSV", "Export CSV", "Экспорт CSV"],
+    ["打印报表", "Print Report", "Печать отчёта"],
+    ["自动双轴", "Dual Axis", "Две оси"],
+    ["单轴", "Single Axis", "Одна ось"],
+    ["归一化 %", "Normalize %", "Норм. %"],
+    ["昨日同比", "vs Yesterday", "Сравн. со вчера"],
+    ["复位缩放", "Reset Zoom", "Сброс зума"],
+    ["拖拽框选放大 · 双击复位", "Drag to zoom · Double-click to reset", "Выделите для зума · Двойной клик сброс"],
+    ["检修挂牌", "Maintenance Tag", "Тег ремонта"],
+    ["已挂牌", "Tagged", "В ремонте"],
+    ["解除挂牌", "Clear Tag", "Снять тег"],
+    ["隐藏挂牌", "Hide Tagged", "Скрыть ремонт"],
+    ["定位潮流图", "Locate on Flow", "На схеме"],
+    ["告警声音", "Alarm Audio", "Звук аварий"],
+    ["数据健康", "Data Quality", "Качество данных"],
+    ["柴油续航", "Diesel Endurance", "Запас дизеля"],
+    ["氢能往返效率", "H₂ Roundtrip Eff", "КПД цикла H₂"],
+    ["估算限电", "Est. Curtailment", "Огран. ВИЭ"],
+    ["安全压力区", "Safe Pressure", "Норма давления"],
+    ["低压预警", "Low Pressure", "Низкое давл."],
+    ["高压预警", "High Pressure", "Высокое давл."],
+    ["极端气候保供", "Extreme Weather", "Экстр. погода"],
+    ["大风寒潮关注", "Wind/Cold Watch", "Ветер/холод"],
+    ["极地气象正常", "Weather Normal", "Погода в норме"],
+    ["通信链路拓扑", "Comm Link Topology", "Топология связи"],
+    ["SCADA 主站", "SCADA Master", "Мастер SCADA"],
+    ["暂无可绘制的日曲线采样数据", "No trend samples available", "Нет данных для построения кривой"],
+    ["暂无控调审计记录", "No control audit entries yet", "Записей аудита команд нет"],
+    ["暂无检修挂牌设备", "No devices under maintenance", "Нет устройств в ремонте"],
+    ["已锁定只读监盘模式，请先切换为「值班控调」后再下发指令", "Read-only lock active. Switch to Control Unlocked before dispatching.", "Включён режим «Только просмотр». Разблокируйте управление."],
+    ["快速搜索设备、视图、主题或操作…", "Search devices, views, themes or actions…", "Поиск устройств, разделов, тем или команд…"],
+    ["操作人（可选）", "Operator (optional)", "Оператор (опц.)"],
+    ["处置备注（可选）", "Resolution note (optional)", "Примечание (опц.)"],
+    ["挂牌原因", "Maintenance reason", "Причина ремонта"],
+    ["收藏关注", "Pinned / Starred", "Избранное"],
+    ["仅看收藏", "Starred Only", "Только избранное"],
+    ["选择历史日期", "Select History Date", "Выбрать дату"],
+    ["今天", "Today", "Сегодня"],
     ["全局写库", "Global DB Writer", "Глобальная запись БД"],
 
     // ==================== 状态与提示文案 ====================
@@ -2107,6 +2156,91 @@
       /^(.+?)\s*·\s*上下限$/,
       { "en-US": (_, name) => `${name} · Limits`, "ru-RU": (_, name) => `${name} · Пределы` },
     ],
+    [
+      /^(.+?)\s*\(昨日\)$/,
+      {
+        "en-US": (_, name) => `${translateString(name)} (Yesterday)`,
+        "ru-RU": (_, name) => `${translateString(name)} (вчера)`,
+      },
+    ],
+    // 设备标准中文命名前缀自动三语映射，消除中英/中俄混排
+    [
+      /^(直流断路器|交流断路器|交流柴油发电机|交流风力发电机|交流风电|直流风电|交流光伏发电|交流光伏|直流光伏发电|直流光伏|交流电化学储能|直流电化学储能|电化学储能|风机变流器|储能变流器|光伏变流器|DCAC变流器|交流电制氢|直流燃料电池|储氢罐|盒型开关|交流线路|直流线路|燃料电池直流线路|交流母线|直流母线|交流负荷|直流负荷|交流节点|直流节点|氢能节点)(?:（[^）]*）)?\s*[-#]\s*(\d+)$/,
+      {
+        "en-US": (_, prefix, num) => {
+          const map = {
+            "直流断路器": "DC Breaker",
+            "交流断路器": "AC Breaker",
+            "交流柴油发电机": "AC Diesel Gen",
+            "交流风力发电机": "AC Wind Turbine",
+            "交流风电": "AC Wind",
+            "直流风电": "DC Wind",
+            "交流光伏发电": "AC PV Array",
+            "交流光伏": "AC PV",
+            "直流光伏发电": "DC PV Array",
+            "直流光伏": "DC PV",
+            "交流电化学储能": "AC BESS",
+            "直流电化学储能": "DC BESS",
+            "电化学储能": "BESS",
+            "风机变流器": "Wind Converter",
+            "储能变流器": "BESS Converter",
+            "光伏变流器": "PV Converter",
+            "DCAC变流器": "DC/AC Converter",
+            "交流电制氢": "AC Electrolyzer",
+            "直流燃料电池": "DC Fuel Cell",
+            "储氢罐": "H₂ Tank",
+            "盒型开关": "Box Switch",
+            "交流线路": "AC Line",
+            "直流线路": "DC Line",
+            "燃料电池直流线路": "Fuel Cell DC Line",
+            "交流母线": "AC Bus",
+            "直流母线": "DC Bus",
+            "交流负荷": "AC Load",
+            "直流负荷": "DC Load",
+            "交流节点": "AC Node",
+            "直流节点": "DC Node",
+            "氢能节点": "H₂ Node",
+          };
+          return `${map[prefix] || prefix} #${num}`;
+        },
+        "ru-RU": (_, prefix, num) => {
+          const map = {
+            "直流断路器": "Выкл. DC",
+            "交流断路器": "Выкл. AC",
+            "交流柴油发电机": "Дизель-ген. AC",
+            "交流风力发电机": "ВЭУ AC",
+            "交流风电": "ВЭУ AC",
+            "直流风电": "ВЭУ DC",
+            "交流光伏发电": "ФЭС AC",
+            "交流光伏": "ФЭС AC",
+            "直流光伏发电": "ФЭС DC",
+            "直流光伏": "ФЭС DC",
+            "交流电化学储能": "СНЭ AC",
+            "直流电化学储能": "СНЭ DC",
+            "电化学储能": "СНЭ",
+            "风机变流器": "Преобр. ВЭУ",
+            "储能变流器": "Преобр. СНЭ",
+            "光伏变流器": "Преобр. ФЭС",
+            "DCAC变流器": "Преобр. DC/AC",
+            "交流电制氢": "Электролизёр AC",
+            "直流燃料电池": "Топл. элемент DC",
+            "储氢罐": "Резервуар H₂",
+            "盒型开关": "Короб. выкл.",
+            "交流线路": "Линия AC",
+            "直流线路": "Линия DC",
+            "燃料电池直流线路": "Линия ТЭ DC",
+            "交流母线": "Шина AC",
+            "直流母线": "Шина DC",
+            "交流负荷": "Нагрузка AC",
+            "直流负荷": "Нагрузка DC",
+            "交流节点": "Узел AC",
+            "直流节点": "Узел DC",
+            "氢能节点": "Узел H₂",
+          };
+          return `${map[prefix] || prefix}-${num}`;
+        },
+      },
+    ],
   ];
 
   let currentTheme = "minimalist-light";
@@ -2237,12 +2371,17 @@
     if (document.title !== nextTitle) document.title = nextTitle;
   }
 
-  function translateRoot(root = document.body) {
+  const perf = { fullScans: 0, incrementalScans: 0, nodesVisited: 0 };
+
+  function translateRoot(root = document.body, { incremental = false } = {}) {
     if (!root) return;
     isTranslating = true;
     try {
+      if (incremental) perf.incrementalScans += 1;
+      else perf.fullScans += 1;
       if (root === document.body) translateDocumentTitle();
       if (root.nodeType === Node.TEXT_NODE) {
+        perf.nodesVisited += 1;
         translateTextNode(root);
         return;
       }
@@ -2262,7 +2401,10 @@
       }
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let node;
-      while ((node = walker.nextNode())) translateTextNode(node);
+      while ((node = walker.nextNode())) {
+        perf.nodesVisited += 1;
+        translateTextNode(node);
+      }
     } finally {
       isTranslating = false;
     }
@@ -2378,15 +2520,55 @@
   document.documentElement.lang = currentLang;
 
   let pendingTranslate = false;
-  function scheduleTranslate() {
-    if (isTranslating || currentLang === "zh-CN" || pendingTranslate) return;
+  const dirtyNodes = new Set();
+
+  function flushDirtyTranslate() {
+    pendingTranslate = false;
+    if (currentLang === "zh-CN" || !dirtyNodes.size) {
+      dirtyNodes.clear();
+      return;
+    }
+    const batch = Array.from(dirtyNodes);
+    dirtyNodes.clear();
+    // 剔除已断离 DOM 或已被同批祖先节点覆盖的冗余子节点，避免重复扫描
+    const roots = [];
+    for (const node of batch) {
+      if (!node || !node.isConnected) continue;
+      let covered = false;
+      for (const other of batch) {
+        if (other !== node && other && other.isConnected && other.nodeType === Node.ELEMENT_NODE && other.contains(node)) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) roots.push(node);
+    }
+    for (const r of roots) {
+      translateRoot(r, { incremental: true });
+    }
+  }
+
+  function scheduleTranslate(mutations) {
+    if (isTranslating || currentLang === "zh-CN") return;
+    if (Array.isArray(mutations)) {
+      for (const m of mutations) {
+        if (m.type === "childList") {
+          for (const added of m.addedNodes) {
+            if (added.nodeType === Node.ELEMENT_NODE || added.nodeType === Node.TEXT_NODE) {
+              dirtyNodes.add(added);
+            }
+          }
+        } else if (m.type === "characterData" || m.type === "attributes") {
+          if (m.target) dirtyNodes.add(m.target);
+        }
+      }
+    } else if (document.body) {
+      dirtyNodes.add(document.body);
+    }
+    if (!dirtyNodes.size || pendingTranslate) return;
     pendingTranslate = true;
-    const run = () => {
-      pendingTranslate = false;
-      if (currentLang !== "zh-CN") translateRoot(document.body);
-    };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else setTimeout(run, 16);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(flushDirtyTranslate);
+    else setTimeout(flushDirtyTranslate, 16);
   }
 
   function boot() {
@@ -2485,6 +2667,7 @@
     setLang: lang => applyLang(lang, true),
     getTheme: () => currentTheme,
     setTheme: theme => applyTheme(theme, true),
+    perfStats: () => ({ ...perf }),
     dict: I18N_DICT,
   };
 })();

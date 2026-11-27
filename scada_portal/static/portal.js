@@ -14,12 +14,18 @@
 
   const SERIES_COLORS_DARK = ["#38BDF8", "#34D399", "#FBBF24", "#FB7185", "#A78BFA", "#2DD4BF", "#F97316"];
   const SERIES_COLORS_LIGHT = ["#2563EB", "#0D9488", "#D97706", "#DC2626", "#7C3AED", "#0284C7", "#EA580C"];
+  const savedPrefs = window.ScadaExtras ? window.ScadaExtras.loadPrefs() : {};
 
   const state = {
     view: "home",
-    refreshMs: 5000,
+    refreshMs: Number.isFinite(Number(savedPrefs.refreshMs)) ? Number(savedPrefs.refreshMs) : 5000,
     timer: null,
     refreshing: false,
+    controlUnlocked: savedPrefs.controlUnlocked !== false,
+    alarmAudio: Boolean(savedPrefs.alarmAudio),
+    hideMaintAlarms: Boolean(savedPrefs.hideMaintAlarms),
+    starredDevs: new Set(Array.isArray(savedPrefs.starredDevs) ? savedPrefs.starredDevs : []),
+    lastUnackedCount: null,
     // 潮流图状态
     svgLoaded: false,
     svgWidth: 2518,
@@ -27,9 +33,14 @@
     pfScale: 0.4,
     pfX: 0,
     pfY: 0,
+    pfMeta: null,
+    pfMetaEtag: "",
     pfData: null,
     pfSelectedDev: null,
     pfHoverDev: null,
+    pfPinned: false,
+    pfCanvasMode: savedPrefs.pfCanvasMode || "native",
+    pfFaultOnly: Boolean(savedPrefs.pfFaultOnly),
     pfPopTab: "",
     pfHoverMeas: null, // { devId, mt, slot }
     pfMpGran: "hour", // "minute" | "hour" | "day"
@@ -40,20 +51,26 @@
     pfMpPoints: [],
     pfMpHoverX: null,
     pfPopHideTimer: null,
-    pfShowArrows: true,
+    pfShowArrows: savedPrefs.pfArrows !== false,
     pfArrowPaths: [], // [{ key, kind, voltageType, pathEl, length, pKw, dir, speed, scale, arrows: [{el, offset}] }]
     pfAnimRaf: null,
     pfLastFrameTs: 0,
     // 设备图状态
     devCategories: [],
     devCategory: "",
-    devFilter: "all", // "all" | "alarm" | "running"
+    devFilter: "all", // "all" | "alarm" | "running" | "starred"
     devDetailTab: "monitor", // "monitor" | "control"
     devItems: [],
     devSelected: null, // { table_name, idx, dev_id }
     trendData: null,
     trendHidden: new Set(),
     trendHoverX: null,
+    trendAxisMode: savedPrefs.trendAxisMode || "dual",
+    trendDate: "",
+    trendComparePrev: false,
+    trendZoomRange: null,
+    trendBrushRange: null,
+    trendPlotMeta: null,
     compareTargets: [], // [{ key, table_name, idx, metric, label }]
     compareMode: false,
     ctrlDrafts: new Map(), // `${table}:${idx}:${control}` -> rawString
@@ -187,6 +204,36 @@
     return fetchJson(url, { ...(opts || {}), method: "POST", body });
   }
 
+  function apiDelete(url, opts) {
+    return fetchJson(url, { ...(opts || {}), method: "DELETE" });
+  }
+
+  function updateDataQualityPill(dq) {
+    const el = $("#dq-pill");
+    if (!el || !dq || dq.health_pct === undefined) return;
+    const pct = Number(dq.health_pct ?? 100);
+    el.textContent = `${tr("数据健康")} ${pct.toFixed(1)}%`;
+    el.className = `dq-pill${dq.level === "fault" ? " is-fault" : (dq.level === "warn" ? " is-warn" : "")}`;
+    const tips = [
+      `${tr("有效量测")}: ${dq.total_valid ?? 0}/${dq.total_bound ?? 0}`,
+      dq.offline_count ? `${tr("离线设备")}: ${dq.offline_count}` : "",
+      dq.stale_count ? `${tr("数据超时")}: ${dq.stale_count}` : "",
+      dq.overlimit_count ? `${tr("越限告警")}: ${dq.overlimit_count}` : "",
+      dq.disabled_points ? `${tr("禁用")}: ${dq.disabled_points}` : "",
+    ].filter(Boolean);
+    if (Array.isArray(dq.offline_devices) && dq.offline_devices.length) {
+      tips.push(dq.offline_devices.slice(0, 5).map((d) => tr(d.name)).join(", "));
+    }
+    el.title = tips.join(" | ");
+  }
+
+  function applyControlLockUi() {
+    const btn = $("#control-lock-btn");
+    if (!btn) return;
+    btn.classList.toggle("is-locked", !state.controlUnlocked);
+    btn.textContent = state.controlUnlocked ? tr("值班控调") : tr("只读监盘");
+  }
+
   // 动态同步顶栏跳转 scdfe_d（同主机 8980 端口）
   const jumpDLink = $("#portal-jump-d");
   if (jumpDLink) {
@@ -197,6 +244,10 @@
     const badge = $("#nav-alarm-badge");
     if (!badge) return;
     const count = Number(unacked || 0);
+    if (state.alarmAudio && state.lastUnackedCount !== null && count > state.lastUnackedCount) {
+      window.ScadaExtras?.playAlarmBeep("high");
+    }
+    state.lastUnackedCount = count;
     badge.hidden = count <= 0;
     badge.textContent = count > 99 ? "99+" : String(count);
   }
@@ -221,6 +272,12 @@
 
   async function dispatchPortalControl(dev, ctrl, rawValue) {
     if (!dev || !ctrl) return;
+    if (!state.controlUnlocked) {
+      const msg = "已锁定只读监盘模式，请先切换为「值班控调」后再下发指令";
+      window.ScadaExtras?.showToast(msg, "warn");
+      setConnection(false, tr(msg));
+      return;
+    }
     const isYk = ctrl.kind === "yk";
     let parsedValue;
     if (isYk) {
@@ -267,8 +324,11 @@
     updateCollectorBadge(res.collector_running);
     if (res.warning) {
       setConnection(false, res.warning);
+      window.ScadaExtras?.showToast(res.warning, "warn");
     } else {
-      setConnection(true, `已下发 ${dev.name} · ${ctrl.label || ctrl.control} = ${actionDesc}`);
+      const okTxt = `已下发 ${tr(dev.name)} · ${tr(ctrl.label || ctrl.control)} = ${actionDesc}`;
+      setConnection(true, okTxt);
+      window.ScadaExtras?.showToast(okTxt, "ok");
     }
     if (state.view === "devices") await loadDevices();
     else if (state.view === "powerflow") await loadPowerflow();
@@ -571,6 +631,7 @@
     lastRealtimeEnergy = rt;
     updateAlarmBadge(h.alarm_unacked);
     updateCollectorBadge(h.collector_running);
+    updateDataQualityPill(data.data_quality);
 
     $("#kpi-days").textContent = k.running_days ?? "--";
     $("#kpi-load-total").textContent = fmtNum(k.load_total_wkwh, 1);
@@ -626,12 +687,14 @@
   });
 
   // ==================== 2. 潮流图（qinling.svg 实时刷新） ====================
+  let pfMinimap = null;
   function applySvgTransform() {
     const stage = $("#pf-stage");
     if (!stage) return;
     stage.style.transform = `translate(${state.pfX}px, ${state.pfY}px) scale(${state.pfScale})`;
     const label = $("#pf-zoom-label");
     if (label) label.textContent = Math.round(state.pfScale * 100) + "%";
+    pfMinimap?.update();
   }
 
   function fitSvgView() {
@@ -755,6 +818,7 @@
 
     svg.addEventListener("mousemove", (event) => {
       if ($("#pf-canvas-wrap")?.classList.contains("dragging")) return;
+      if (state.pfPinned) return;
       const measText = event.target.closest("#Measurement_Layer g.mg[dev] text");
       if (measText) {
         const group = measText.closest("g.mg[dev]");
@@ -786,16 +850,26 @@
     });
 
     svg.addEventListener("mouseleave", () => {
-      scheduleHidePfPopovers();
+      if (!state.pfPinned) scheduleHidePfPopovers();
     });
 
     svg.addEventListener("click", (event) => {
       const devNode = event.target.closest("use[dev-id], text[dev-id]");
       if (!devNode) return;
       const devId = devNode.getAttribute("dev-id");
+      if (!devId) return;
+      // 单击设备锁定弹窗，方便切换耦合参数/实时量测与下发指令；双击或点「日曲线 →」跳转设备详情
+      state.pfPinned = true;
+      showDevicePopover(devId, event.clientX, event.clientY, true);
+    });
+
+    svg.addEventListener("dblclick", (event) => {
+      const devNode = event.target.closest("use[dev-id], text[dev-id]");
+      if (!devNode) return;
+      const devId = devNode.getAttribute("dev-id");
       const dev = devId ? state.pfData?.devices?.[devId] : null;
       if (dev) {
-        hidePfPopovers();
+        hidePfPopovers(true);
         state.devCategory = dev.category;
         state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
         switchView("devices");
@@ -1126,8 +1200,21 @@
     }
   }
 
-  function hidePfPopovers() {
+  function syncPinButtonUi() {
+    const devPop = $("#pf-dev-popover");
+    const pinBtn = $("#pf-pin-device");
+    if (devPop) devPop.classList.toggle("is-pinned", state.pfPinned);
+    if (pinBtn) {
+      pinBtn.classList.toggle("active", state.pfPinned);
+      pinBtn.title = state.pfPinned ? tr("取消固定") : tr("固定弹窗");
+    }
+  }
+
+  function hidePfPopovers(force = false) {
     cancelHidePfPopovers();
+    if (!force && state.pfPinned) return;
+    state.pfPinned = false;
+    syncPinButtonUi();
     const devPop = $("#pf-dev-popover");
     const measPop = $("#pf-meas-popover");
     if (devPop) devPop.hidden = true;
@@ -1137,9 +1224,10 @@
   }
 
   function scheduleHidePfPopovers(delay = 180) {
+    if (state.pfPinned) return;
     cancelHidePfPopovers();
     state.pfPopHideTimer = setTimeout(() => {
-      hidePfPopovers();
+      hidePfPopovers(false);
     }, delay);
   }
 
@@ -1214,21 +1302,48 @@
     if (jumpBtn) {
       jumpBtn.disabled = !dev.bound_count;
       jumpBtn.onclick = () => {
-        hidePfPopovers();
+        hidePfPopovers(true);
         state.devCategory = dev.category;
         state.devSelected = { table_name: dev.table_name, idx: dev.idx, dev_id: dev.dev_id };
         switchView("devices");
       };
     }
+    const pinBtn = $("#pf-pin-device");
+    if (pinBtn) {
+      pinBtn.onclick = () => {
+        state.pfPinned = !state.pfPinned;
+        syncPinButtonUi();
+      };
+    }
+    const closeBtn = $("#pf-close-device");
+    if (closeBtn) {
+      closeBtn.onclick = () => hidePfPopovers(true);
+    }
+    syncPinButtonUi();
 
-    // 组装分页清单（耦合/扩展参数各自独立成页 + 存在指令时增加「就地指令」分页）
-    const tabs = rawParamTabs.map((t) => ({
-      key: t.key,
-      label: t.label,
-      count: (t.params || []).length,
-      kind: "params",
-      params: t.params || [],
-    }));
+    // 实时量测分页（展示有效实时遥测/遥信，无需离开弹窗去 SVG 中找数值）
+    const liveMetrics = (dev.metrics || []).filter((m) => m.value !== null && m.value !== undefined);
+    const livePairs = liveMetrics.map((m) => {
+      const valText = m.kind === "yx"
+        ? (m.metric === "position" ? (Number(m.value) ? "合闸" : "分闸") : (Number(m.value) ? "运行" : "停运"))
+        : `${fmtNum(m.display_value ?? m.value, 2)}${m.unit ? " " + m.unit : ""}`;
+      return { label: m.label || m.metric, value: valText };
+    });
+
+    // 组装分页清单（实时量测 + 耦合/扩展参数各自独立成页 + 存在指令时增加「就地指令」分页）
+    const tabs = [];
+    if (livePairs.length) {
+      tabs.push({ key: "__live__", label: "实时量测", count: livePairs.length, kind: "params", params: livePairs });
+    }
+    rawParamTabs.forEach((t) => {
+      tabs.push({
+        key: t.key,
+        label: t.label,
+        count: (t.params || []).length,
+        kind: "params",
+        params: t.params || [],
+      });
+    });
     if (ctrls.length) {
       tabs.push({ key: "__controls__", label: "就地指令", count: ctrls.length, kind: "controls" });
     }
@@ -1784,11 +1899,71 @@
     showDevicePopover(devId, rect.left + rect.width / 2 + 24, rect.top + rect.height / 2 - 20, true);
   }
 
+  function applyPfCanvasModes() {
+    const wrap = $("#pf-canvas-wrap");
+    if (!wrap) return;
+    wrap.classList.toggle("pf-dark-blend", state.pfCanvasMode === "dark-blend");
+    wrap.classList.toggle("pf-fault-filter", state.pfFaultOnly);
+  }
+
+  async function ensurePowerflowMeta() {
+    const headers = state.pfMetaEtag ? { "If-None-Match": state.pfMetaEtag } : {};
+    const resp = await fetch("/api/powerflow/meta", { headers });
+    if (resp.status === 304 && state.pfMeta) return state.pfMeta;
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const etag = resp.headers.get("ETag") || "";
+    const meta = await resp.json();
+    state.pfMeta = meta;
+    state.pfMetaEtag = etag;
+    return meta;
+  }
+
   async function loadPowerflow() {
     await ensureSvgLoaded();
-    const pf = await api("/api/powerflow");
+    const [meta, live] = await Promise.all([
+      state.pfMeta ? Promise.resolve(state.pfMeta) : ensurePowerflowMeta(),
+      api("/api/powerflow/live"),
+    ]);
+    // 将静态模型元数据与轻量实时快照合并为统一结构，保持所有下游渲染零侵入
+    const mergedDevices = {};
+    const metaDevs = meta?.devices || {};
+    const liveDevs = live?.devices_live || {};
+    const allIds = new Set([...Object.keys(metaDevs), ...Object.keys(liveDevs)]);
+    allIds.forEach((devId) => {
+      const m = metaDevs[devId] || {};
+      const lv = liveDevs[devId] || {};
+      mergedDevices[devId] = {
+        ...m,
+        ...lv,
+        dev_id: devId,
+        name: m.name || lv.name || devId,
+        model_params: m.model_params || [],
+        model_param_tabs: m.model_param_tabs || [],
+        metrics: lv.metrics || [],
+        controls: lv.controls || [],
+      };
+    });
+    const pf = {
+      timestamp: live.timestamp,
+      svg_slots: live.svg_slots || {},
+      breakers: live.breakers || {},
+      flows: live.flows || {},
+      devices: mergedDevices,
+    };
     state.pfData = pf;
     updateSvgLiveValues(pf);
+    // 标注异常或分闸设备，支持「仅异常/分闸」过滤高亮
+    const svg = $("#pf-stage svg");
+    if (svg) {
+      svg.querySelectorAll("use[dev-id]").forEach((el) => {
+        const id = el.getAttribute("dev-id");
+        const d = mergedDevices[id];
+        const abnormal = Boolean(d && (Number(d.alarm_count || 0) > 0 || d.position === 0));
+        el.classList.toggle("pf-is-abnormal", abnormal);
+      });
+    }
+    applyPfCanvasModes();
+    pfMinimap?.update();
   }
 
   // 潮流图平移与缩放交互
@@ -1962,6 +2137,7 @@
     }
     state.devItems = data.items || [];
     const filteredDevs = state.devItems.filter((d) => {
+      if (state.devFilter === "starred") return state.starredDevs.has(d.dev_id);
       if (state.devFilter === "alarm") return Number(d.alarm_count || 0) > 0;
       if (state.devFilter === "running") {
         if (d.position !== null) return Boolean(d.position);
@@ -1969,6 +2145,8 @@
       }
       return true;
     });
+    // 收藏设备自动靠前展示，方便值班员快速切换关注目标
+    filteredDevs.sort((a, b) => (state.starredDevs.has(b.dev_id) ? 1 : 0) - (state.starredDevs.has(a.dev_id) ? 1 : 0));
 
     // 渲染设备类别标签
     const tabsEl = $("#dev-cat-tabs");
@@ -2019,14 +2197,27 @@
         const alarmDot = Number(d.alarm_count || 0) > 0
           ? `<span class="dev-alarm-dot" title="当前 ${d.alarm_count} 项告警"></span>`
           : "";
+        const starred = state.starredDevs.has(d.dev_id);
         return (
           `<button type="button" class="dev-item ${selected ? "selected" : ""}" data-dev-id="${esc(d.dev_id)}">` +
-          `<div class="dev-item-top"><strong title="${esc(d.name)}">${alarmDot}${esc(d.name)}</strong>${okBadge}</div>` +
+          `<div class="dev-item-top"><strong title="${esc(d.name)}">${alarmDot}${esc(d.name)}</strong><span><span role="button" tabindex="0" class="dev-star-btn ${starred ? "active" : ""}" data-star-dev="${esc(d.dev_id)}" title="收藏关注">${starred ? "★" : "☆"}</span>${okBadge}</span></div>` +
           `<div class="dev-item-sub"><span>${esc(d.table_name)} #${d.idx}</span><span class="num">${esc(primaryMetricSummary(d))}</span></div>` +
           `</button>`
         );
       })
       .join("");
+
+    listEl.querySelectorAll("[data-star-dev]").forEach((starEl) => {
+      starEl.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const id = starEl.dataset.starDev;
+        if (!id) return;
+        if (state.starredDevs.has(id)) state.starredDevs.delete(id);
+        else state.starredDevs.add(id);
+        window.ScadaExtras?.savePrefs({ starredDevs: Array.from(state.starredDevs) });
+        loadDevices().catch(() => {});
+      });
+    });
 
     listEl.querySelectorAll(".dev-item").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2305,9 +2496,14 @@
   async function loadDeviceTrend(dev) {
     const seq = ++trendReqSeq;
     const hours = Number($("#trend-hours")?.value || 24);
-    const data = await api(`/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/trend?hours=${hours}`);
+    const qs = new URLSearchParams({ hours: String(hours) });
+    if (state.trendDate) qs.set("date", state.trendDate);
+    if (state.trendComparePrev) qs.set("compare", "prev_day");
+    const data = await api(`/api/devices/${encodeURIComponent(dev.table_name)}/${dev.idx}/trend?${qs.toString()}`);
     if (seq !== trendReqSeq) return;
     state.trendData = data;
+    state.trendZoomRange = null;
+    if ($("#trend-reset-zoom")) $("#trend-reset-zoom").hidden = true;
     renderTrendChips();
     drawTrendChart();
   }
@@ -2359,193 +2555,37 @@
     const canvas = $("#trend-canvas");
     const wrap = $("#trend-canvas-wrap");
     if (!canvas || !wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    if (rect.width < 40 || rect.height < 40) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const targetW = Math.round(rect.width * dpr);
-    const targetH = Math.round(rect.height * dpr);
-    if (canvas.width !== targetW || canvas.height !== targetH) {
-      canvas.width = targetW;
-      canvas.height = targetH;
-    }
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
-
-    const pal = chartPalette();
-    const allSeries = state.trendData?.series || [];
-    const visible = allSeries
-      .map((s, idx) => ({ ...s, color: pal.colors[idx % pal.colors.length] }))
-      .filter((s) => !state.trendHidden.has(s.key || s.metric) && s.points && s.points.length);
-
-    if (!visible.length) {
-      ctx.fillStyle = pal.axis;
-      ctx.font = "13px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("暂无可绘制的日曲线采样数据", rect.width / 2, rect.height / 2);
+    if (window.ScadaCharts && typeof window.ScadaCharts.drawTrend === "function") {
+      state.trendPlotMeta = window.ScadaCharts.drawTrend({
+        canvas,
+        wrap,
+        palette: chartPalette(),
+        allSeries: state.trendData?.series || [],
+        hiddenSet: state.trendHidden,
+        axisMode: state.trendAxisMode || "dual",
+        zoomRange: state.trendZoomRange,
+        hoverX: state.trendHoverX,
+        brushRange: state.trendBrushRange,
+      });
       return;
-    }
-
-    const pad = { top: 16, right: 20, bottom: 28, left: 60 };
-    const plotW = Math.max(10, rect.width - pad.left - pad.right);
-    const plotH = Math.max(10, rect.height - pad.top - pad.bottom);
-
-    let minT = Infinity;
-    let maxT = -Infinity;
-    let minV = Infinity;
-    let maxV = -Infinity;
-    visible.forEach((s) => {
-      s.points.forEach(([t, v]) => {
-        if (t < minT) minT = t;
-        if (t > maxT) maxT = t;
-        if (v < minV) minV = v;
-        if (v > maxV) maxV = v;
-      });
-    });
-    if (maxT <= minT) {
-      minT -= 60000;
-      maxT += 60000;
-    }
-    if (maxV <= minV) {
-      const delta = Math.max(1, Math.abs(minV) * 0.1);
-      minV -= delta;
-      maxV += delta;
-    } else {
-      const margin = (maxV - minV) * 0.08;
-      minV -= margin;
-      maxV += margin;
-    }
-
-    const xFor = (t) => pad.left + ((t - minT) / (maxT - minT)) * plotW;
-    const yFor = (v) => pad.top + (1 - (v - minV) / (maxV - minV)) * plotH;
-
-    // 水平网格与 Y 轴刻度
-    ctx.strokeStyle = pal.grid;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.fillStyle = pal.axis;
-    ctx.font = '11px "JetBrains Mono", Consolas, monospace';
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    const yTicks = 5;
-    for (let i = 0; i <= yTicks; i += 1) {
-      const ratio = i / yTicks;
-      const y = pad.top + ratio * plotH;
-      const val = maxV - ratio * (maxV - minV);
-      ctx.beginPath();
-      ctx.moveTo(pad.left, y);
-      ctx.lineTo(pad.left + plotW, y);
-      ctx.stroke();
-      ctx.fillText(val.toFixed(Math.abs(val) >= 100 ? 1 : 2), pad.left - 8, y);
-    }
-
-    // X 轴时间刻度
-    ctx.setLineDash([]);
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    const xTicks = Math.max(2, Math.min(6, Math.floor(plotW / 110)));
-    for (let i = 0; i <= xTicks; i += 1) {
-      const t = minT + (i / xTicks) * (maxT - minT);
-      const x = xFor(t);
-      const d = new Date(t);
-      const txt = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-      ctx.fillText(txt, x, pad.top + plotH + 8);
-    }
-
-    // 曲线绘制
-    visible.forEach((s) => {
-      ctx.strokeStyle = s.color;
-      ctx.fillStyle = s.color;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      s.points.forEach(([t, v], idx) => {
-        const x = xFor(t);
-        const y = yFor(v);
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-      if (s.points.length <= 2) {
-        s.points.forEach(([t, v]) => {
-          ctx.beginPath();
-          ctx.arc(xFor(t), yFor(v), 3.5, 0, Math.PI * 2);
-          ctx.fill();
-        });
-      }
-    });
-
-    // 悬停十字准星与主题胶囊提示
-    if (state.trendHoverX !== null && state.trendHoverX >= pad.left && state.trendHoverX <= pad.left + plotW) {
-      const hoverT = minT + ((state.trendHoverX - pad.left) / plotW) * (maxT - minT);
-      ctx.strokeStyle = pal.crosshair;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(state.trendHoverX, pad.top);
-      ctx.lineTo(state.trendHoverX, pad.top + plotH);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      const rows = [];
-      let snapT = hoverT;
-      visible.forEach((s) => {
-        let best = s.points[0];
-        let bestDist = Infinity;
-        for (const pt of s.points) {
-          const dist = Math.abs(pt[0] - hoverT);
-          if (dist < bestDist) {
-            bestDist = dist;
-            best = pt;
-          }
-        }
-        snapT = best[0];
-        const px = xFor(best[0]);
-        const py = yFor(best[1]);
-        ctx.fillStyle = s.color;
-        ctx.beginPath();
-        ctx.arc(px, py, 4, 0, Math.PI * 2);
-        ctx.fill();
-        rows.push({ color: s.color, text: `${s.label}: ${best[1].toFixed(2)} ${s.unit || ""}`.trim() });
-      });
-
-      const d = new Date(snapT);
-      const header = d.toLocaleTimeString("zh-CN", { hour12: false });
-      ctx.font = '11px "JetBrains Mono", Consolas, monospace';
-      const maxTextW = Math.max(ctx.measureText(header).width, ...rows.map((r) => ctx.measureText(r.text).width + 14));
-      const boxW = maxTextW + 22;
-      const boxH = 22 + rows.length * 17 + 6;
-      const bx = state.trendHoverX + 12 + boxW > rect.width ? state.trendHoverX - 12 - boxW : state.trendHoverX + 12;
-      const by = pad.top + 6;
-
-      ctx.fillStyle = pal.tooltipBg;
-      ctx.strokeStyle = pal.tooltipBorder;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(bx, by, boxW, boxH, 6);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = pal.tooltipText;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillText(header, bx + 10, by + 6);
-      rows.forEach((r, idx) => {
-        const ry = by + 23 + idx * 17;
-        ctx.fillStyle = r.color;
-        ctx.beginPath();
-        ctx.arc(bx + 13, ry + 5, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = pal.tooltipText;
-        ctx.fillText(r.text, bx + 22, ry);
-      });
     }
   }
 
   let trendHoverRaf = 0;
+  let trendBrushing = false;
+  let trendBrushStartX = 0;
+  $("#trend-canvas")?.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || !state.trendPlotMeta) return;
+    const rect = e.target.getBoundingClientRect();
+    trendBrushing = true;
+    trendBrushStartX = e.clientX - rect.left;
+    state.trendBrushRange = [trendBrushStartX, trendBrushStartX];
+  });
   $("#trend-canvas")?.addEventListener("mousemove", (e) => {
     const rect = e.target.getBoundingClientRect();
-    state.trendHoverX = e.clientX - rect.left;
+    const x = e.clientX - rect.left;
+    state.trendHoverX = x;
+    if (trendBrushing) state.trendBrushRange = [trendBrushStartX, x];
     if (!trendHoverRaf) {
       trendHoverRaf = requestAnimationFrame(() => {
         trendHoverRaf = 0;
@@ -2553,9 +2593,52 @@
       });
     }
   });
+  window.addEventListener("mouseup", () => {
+    if (!trendBrushing) return;
+    trendBrushing = false;
+    const br = state.trendBrushRange;
+    state.trendBrushRange = null;
+    const meta = state.trendPlotMeta;
+    if (br && meta && Math.abs(br[1] - br[0]) >= 14) {
+      const x1 = Math.max(meta.pad.left, Math.min(meta.pad.left + meta.plotW, Math.min(br[0], br[1])));
+      const x2 = Math.max(meta.pad.left, Math.min(meta.pad.left + meta.plotW, Math.max(br[0], br[1])));
+      if (x2 - x1 >= 10) {
+        const t1 = meta.minT + ((x1 - meta.pad.left) / meta.plotW) * (meta.maxT - meta.minT);
+        const t2 = meta.minT + ((x2 - meta.pad.left) / meta.plotW) * (meta.maxT - meta.minT);
+        state.trendZoomRange = [t1, t2];
+        if ($("#trend-reset-zoom")) $("#trend-reset-zoom").hidden = false;
+      }
+    }
+    drawTrendChart();
+  });
+  $("#trend-canvas")?.addEventListener("dblclick", () => {
+    if (!state.trendZoomRange) return;
+    state.trendZoomRange = null;
+    if ($("#trend-reset-zoom")) $("#trend-reset-zoom").hidden = true;
+    drawTrendChart();
+  });
   $("#trend-canvas")?.addEventListener("mouseleave", () => {
     state.trendHoverX = null;
+    if (!trendBrushing) drawTrendChart();
+  });
+  $("#trend-reset-zoom")?.addEventListener("click", () => {
+    state.trendZoomRange = null;
+    if ($("#trend-reset-zoom")) $("#trend-reset-zoom").hidden = true;
     drawTrendChart();
+  });
+  $("#trend-axis-mode")?.addEventListener("change", (e) => {
+    state.trendAxisMode = e.target.value || "dual";
+    window.ScadaExtras?.savePrefs({ trendAxisMode: state.trendAxisMode });
+    window.ScadaCharts?.clearCache();
+    drawTrendChart();
+  });
+  $("#trend-date")?.addEventListener("change", (e) => {
+    state.trendDate = e.target.value || "";
+    if (state.devSelected && !state.compareMode) loadDeviceTrend(state.devSelected).catch(() => {});
+  });
+  $("#trend-compare-prev")?.addEventListener("change", (e) => {
+    state.trendComparePrev = Boolean(e.target.checked);
+    if (state.devSelected && !state.compareMode) loadDeviceTrend(state.devSelected).catch(() => {});
   });
   $("#trend-hours")?.addEventListener("change", () => {
     if (state.compareMode && state.compareTargets.length) loadCompareTrends().catch(() => {});
@@ -2591,7 +2674,33 @@
     }
 
     if (state.commTab === "overview") {
-      const chRes = await api("/api/comm/channels");
+      const [chRes, topoRes] = await Promise.all([
+        api("/api/comm/channels"),
+        api("/api/comm/topology").catch(() => null),
+      ]);
+      const topoEl = $("#comm-topology-bar");
+      if (topoEl && topoRes) {
+        const links = topoRes.links || [];
+        topoEl.innerHTML =
+          `<div class="comm-topo-root"><strong>SCADA 主站</strong><small>${online}/${rtus.length} RTU</small></div>` +
+          `<div class="comm-topo-links">` +
+          (links.length
+            ? links.map((lk) => {
+                const onlineCls = lk.connection_state === "connected"
+                  ? (lk.health_pct < 90 ? "is-online is-warn" : "is-online")
+                  : "is-offline";
+                const faultHint = lk.fault_devices?.length ? ` · 异常 ${lk.fault_devices.length}` : "";
+                return (
+                  `<div class="comm-topo-card ${onlineCls}">` +
+                  `<div class="comm-topo-top"><strong>RTU ${lk.rtu_id} · ${esc(lk.rtu_name)}</strong><span>${lk.health_pct}%</span></div>` +
+                  `<div class="muted">${esc(lk.channel_type)} · ${lk.device_count} 台设备${faultHint}</div>` +
+                  `<div class="comm-topo-bar"><i style="width:${Math.max(0, Math.min(100, Number(lk.health_pct || 0)))}%"></i></div>` +
+                  `</div>`
+                );
+              }).join("")
+            : '<span class="muted">暂无链路</span>') +
+          `</div>`;
+      }
       const channels = chRes.items || [];
       if ($("#comm-rtus-count")) $("#comm-rtus-count").textContent = String(rtus.length);
       if ($("#comm-channels-count")) $("#comm-channels-count").textContent = String(channels.length);
@@ -3003,24 +3112,34 @@
       ? (a.state === "recovered"
           ? `<span class="badge ok">已恢复</span>`
           : (a.acked ? '<span class="badge muted">已确认</span>' : '<span class="badge danger">活动中</span>'))
-      : (a.acked ? '<span class="badge muted">已确认</span>' : '<span class="badge danger">未确认</span>');
+      : (a.maintenance
+          ? `<span class="badge maint" title="${esc(a.maintenance_reason || "检修挂牌")}">已挂牌</span>`
+          : (a.acked ? '<span class="badge muted">已确认</span>' : '<span class="badge danger">未确认</span>'));
     const timeText = isHist
       ? `${fmtTime(a.first_seen_ms)}${a.recovered_ms ? " → " + fmtTime(a.recovered_ms) : ""}`
       : fmtTime(a.time_ms || a.time_iso);
     const ackBtn = (!isHist && !a.acked)
       ? `<button type="button" class="btn secondary" data-alarm-ack="${idx}">确认</button>`
       : "";
-    return `<tr class="${a.acked ? "alarm-row-acked " : ""}${childClass}">` +
+    const maintBtn = !isHist
+      ? (a.maintenance
+          ? `<button type="button" class="btn secondary" data-alarm-unmaint="${idx}">解除挂牌</button>`
+          : `<button type="button" class="btn secondary" data-alarm-maint="${idx}">检修挂牌</button>`)
+      : "";
+    const ackMeta = (isHist && (a.ack_operator || a.ack_note))
+      ? ` <small class="muted">${esc([a.ack_operator, a.ack_note].filter(Boolean).join(" · "))}</small>`
+      : "";
+    return `<tr class="${a.acked ? "alarm-row-acked " : ""}${a.maintenance ? "is-maint-row " : ""}${childClass}">` +
       `<td>${alarmTypeBadge(a.type)}</td>` +
       `<td><strong>${esc(a.device_name)}</strong> <small class="muted">${esc(a.table_name)} #${a.idx}</small></td>` +
       `<td>${esc(a.attr_label)} <small class="muted">${esc(a.attr)}</small></td>` +
       `<td class="num">${valStr}</td>` +
-      `<td>${esc(a.detail)}</td>` +
+      `<td>${esc(a.detail)}${ackMeta}</td>` +
       `<td class="num">RTU ${a.rtu_id ?? "-"} / #${a.point_no ?? "-"}</td>` +
       `<td>${esc(timeText)}</td>` +
       `<td>${stateBadge}</td>` +
-      `<td><span class="alarm-ops">${ackBtn}` +
-      `<button type="button" class="btn secondary" data-alarm-loc="${idx}">定位</button>` +
+      `<td><span class="alarm-ops">${ackBtn}${maintBtn}` +
+      `<button type="button" class="btn secondary" data-alarm-loc="${idx}" title="定位潮流图">定位</button>` +
       `<button type="button" class="btn secondary" data-alarm-dev="${idx}">曲线</button>` +
       `</span></td></tr>`;
   }
@@ -3069,6 +3188,7 @@
     if (statusVal !== "") qs.set(isHist ? "state" : "acked", statusVal);
     const kw = ($("#alarm-search")?.value || "").trim();
     if (kw) qs.set("search", kw);
+    if (!isHist && state.hideMaintAlarms) qs.set("hide_maintenance", "1");
 
     const endpoint = isHist ? "/api/alarms/history?" : "/api/alarms?";
     const data = await api(endpoint + qs.toString());
@@ -3182,7 +3302,45 @@
       btn.addEventListener("click", async () => {
         const a = state.alarmItems[Number(btn.dataset.alarmAck)];
         if (!a) return;
-        await apiPost("/api/alarms/ack", { keys: [a.key] });
+        const noteRes = await openAlarmNoteDialog({
+          title: "确认告警",
+          meta: `${a.device_name} · ${a.attr_label}`,
+          reasonPlaceholder: "处置备注（可选）",
+        });
+        if (!noteRes) return;
+        await apiPost("/api/alarms/ack", { keys: [a.key], operator: noteRes.operator, note: noteRes.text });
+        window.ScadaExtras?.showToast("告警已确认", "ok");
+        await loadAlarms();
+      });
+    });
+    tbody.querySelectorAll("[data-alarm-maint]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = state.alarmItems[Number(btn.dataset.alarmMaint)];
+        if (!a) return;
+        const noteRes = await openAlarmNoteDialog({
+          title: "检修挂牌",
+          meta: `${a.device_name}（${a.table_name} #${a.idx}）`,
+          reasonPlaceholder: "挂牌原因",
+        });
+        if (!noteRes) return;
+        await apiPost("/api/maintenance", {
+          table_name: a.table_name,
+          idx: a.idx,
+          device_name: a.device_name,
+          operator: noteRes.operator,
+          reason: noteRes.text || "检修挂牌",
+          hours: 8,
+        });
+        window.ScadaExtras?.showToast(`已挂牌：${a.device_name}`, "info");
+        await loadAlarms();
+      });
+    });
+    tbody.querySelectorAll("[data-alarm-unmaint]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = state.alarmItems[Number(btn.dataset.alarmUnmaint)];
+        if (!a) return;
+        await apiDelete(`/api/maintenance/${encodeURIComponent(a.dev_id)}`);
+        window.ScadaExtras?.showToast(`已解除挂牌：${a.device_name}`, "ok");
         await loadAlarms();
       });
     });
@@ -3192,6 +3350,7 @@
         if (!a) return;
         switchView("powerflow");
         await loadPowerflow();
+        state.pfPinned = true;
         focusSvgDevice(a.dev_id);
       });
     });
@@ -3777,6 +3936,20 @@
       updateAlarmBadge(data.health.alarm_unacked);
       updateCollectorBadge(data.health.collector_running);
     }
+    if (data.data_quality) {
+      updateDataQualityPill(data.data_quality);
+    }
+    // 极地特色衍生指标（柴油续航 / 氢能往返效率 / 估算限电 / 气象状态）
+    const drv = data.derived || {};
+    if ($("#ck-drv-endurance")) $("#ck-drv-endurance").textContent = `${fmtNum(drv.diesel_endurance_hours, 1)} h`;
+    if ($("#ck-drv-h2eff")) $("#ck-drv-h2eff").textContent = `${fmtNum(drv.h2_roundtrip_eff_pct, 1)}%`;
+    if ($("#ck-drv-curtail")) $("#ck-drv-curtail").textContent = `${fmtNum(drv.curtailment_kw, 1)} kW`;
+    const wEl = $("#ck-drv-weather");
+    if (wEl) {
+      const wa = drv.weather_alert || "normal";
+      wEl.className = `ck-drv-badge${wa === "extreme" ? " is-extreme" : (wa === "elevated" ? " is-elevated" : "")}`;
+      wEl.textContent = wa === "extreme" ? tr("极端气候保供") : (wa === "elevated" ? tr("大风寒潮关注") : tr("极地气象正常"));
+    }
 
     drawCockpitCharts();
   }
@@ -3786,7 +3959,7 @@
     renderPolarCockpit(data);
   }
 
-  // 极地管控交互绑定（节点跳转、时间窗切换、Canvas 十字准星）
+  // 极地管控交互绑定（节点跳转、时间窗切换、Canvas 十字准星 rAF 节流）
   $$("#view-cockpit [data-ck-cat]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.devCategory = btn.dataset.ckCat || "";
@@ -3801,13 +3974,19 @@
       loadPolarCockpit().catch((err) => setConnection(false, err.message));
     });
   });
+  let ckHoverRaf = 0;
   function bindCkCanvasHover(canvasId, key) {
     const el = $("#" + canvasId);
     if (!el) return;
     el.addEventListener("mousemove", (e) => {
       const r = el.getBoundingClientRect();
       state[key] = e.clientX - r.left;
-      drawCockpitCharts();
+      if (!ckHoverRaf) {
+        ckHoverRaf = requestAnimationFrame(() => {
+          ckHoverRaf = 0;
+          drawCockpitCharts();
+        });
+      }
     });
     el.addEventListener("mouseleave", () => {
       state[key] = null;
@@ -3867,7 +4046,9 @@
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "Escape") {
-      hidePfPopovers?.();
+      hidePfPopovers?.(true);
+      const drawer = $("#control-audit-drawer");
+      if (drawer && !drawer.hidden) drawer.hidden = true;
       return;
     }
     const tag = (e.target?.tagName || "").toUpperCase();
@@ -3904,12 +4085,224 @@
 
   $("#refresh-interval")?.addEventListener("change", (e) => {
     state.refreshMs = Number(e.target.value || 0);
+    window.ScadaExtras?.savePrefs({ refreshMs: state.refreshMs });
     resetTimer();
   });
   $("#manual-refresh")?.addEventListener("click", refreshCurrentView);
 
-  // 监听语言切换，实时重绘 Canvas 图表与极地管控面板
+  // ==================== 告警备注弹窗、控调审计抽屉、小地图、命令面板与 SSE ====================
+  function openAlarmNoteDialog({ title, meta, reasonPlaceholder }) {
+    const dialog = $("#alarm-note-dialog");
+    if (!dialog || typeof dialog.showModal !== "function") {
+      return Promise.resolve({ operator: "", text: "" });
+    }
+    $("#alarm-note-title").textContent = tr(title || "确认告警");
+    $("#alarm-note-meta").textContent = meta || "";
+    const opInput = $("#alarm-note-operator");
+    const txtInput = $("#alarm-note-text");
+    opInput.value = localStorage.getItem("scada_last_operator") || "";
+    txtInput.value = "";
+    txtInput.placeholder = tr(reasonPlaceholder || "处置备注（可选）");
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (res) => {
+        if (settled) return;
+        settled = true;
+        if (dialog.open) dialog.close();
+        resolve(res);
+      };
+      $("#alarm-note-close").onclick = () => done(null);
+      $("#alarm-note-cancel").onclick = () => done(null);
+      dialog.oncancel = (ev) => { ev.preventDefault(); done(null); };
+      $("#alarm-note-form").onsubmit = (ev) => {
+        ev.preventDefault();
+        const op = opInput.value.trim();
+        if (op) {
+          try { localStorage.setItem("scada_last_operator", op); } catch (_) {}
+        }
+        done({ operator: op, text: txtInput.value.trim() });
+      };
+      dialog.showModal();
+      txtInput.focus();
+    });
+  }
+
+  async function loadControlAuditDrawer() {
+    const body = $("#audit-drawer-body");
+    if (!body) return;
+    body.innerHTML = `<div class="empty-hint">${tr("正在读取…")}</div>`;
+    try {
+      const res = await api("/api/controls/audit?limit=50");
+      const items = res.items || [];
+      if (!items.length) {
+        body.innerHTML = `<div class="empty-hint">${tr("暂无控调审计记录")}</div>`;
+        return;
+      }
+      body.innerHTML = items.map((it) => {
+        const stBadge = it.status === "pending"
+          ? '<span class="badge ok">已提交</span>'
+          : '<span class="badge warn">待转发</span>';
+        return (
+          `<div class="audit-row">` +
+          `<div class="audit-row-top"><strong>${esc(it.device_name)} · ${esc(it.control_label)}</strong>${stBadge}</div>` +
+          `<div class="audit-row-meta"><span>${esc(it.kind)} = <strong>${esc(it.target_value)}</strong></span><span>${esc(fmtTime(it.ts_ms))}</span></div>` +
+          `<div class="audit-row-meta"><span>${esc(it.detail || "")}</span><span>${esc(it.operator || "")}</span></div>` +
+          `</div>`
+        );
+      }).join("");
+    } catch (err) {
+      body.innerHTML = `<div class="empty-hint">${esc(err.message)}</div>`;
+    }
+  }
+
+  // 偏好恢复与控件绑定
+  if ($("#refresh-interval")) $("#refresh-interval").value = String(state.refreshMs);
+  if ($("#pf-show-arrows")) $("#pf-show-arrows").checked = state.pfShowArrows;
+  if ($("#pf-canvas-mode")) $("#pf-canvas-mode").value = state.pfCanvasMode;
+  if ($("#pf-fault-only")) $("#pf-fault-only").checked = state.pfFaultOnly;
+  if ($("#trend-axis-mode")) $("#trend-axis-mode").value = state.trendAxisMode;
+  if ($("#alarm-hide-maint")) $("#alarm-hide-maint").checked = state.hideMaintAlarms;
+  if ($("#alarm-audio-toggle")) $("#alarm-audio-toggle").checked = state.alarmAudio;
+  applyControlLockUi();
+  applyPfCanvasModes();
+
+  $("#control-lock-btn")?.addEventListener("click", () => {
+    state.controlUnlocked = !state.controlUnlocked;
+    window.ScadaExtras?.savePrefs({ controlUnlocked: state.controlUnlocked });
+    applyControlLockUi();
+    window.ScadaExtras?.showToast(state.controlUnlocked ? "值班控调" : "只读监盘", state.controlUnlocked ? "ok" : "warn");
+  });
+  $("#control-audit-btn")?.addEventListener("click", () => {
+    const drawer = $("#control-audit-drawer");
+    if (!drawer) return;
+    drawer.hidden = !drawer.hidden;
+    if (!drawer.hidden) loadControlAuditDrawer();
+  });
+  $("#audit-close-btn")?.addEventListener("click", () => {
+    const drawer = $("#control-audit-drawer");
+    if (drawer) drawer.hidden = true;
+  });
+  $("#audit-refresh-btn")?.addEventListener("click", loadControlAuditDrawer);
+
+  $("#pf-canvas-mode")?.addEventListener("change", (e) => {
+    state.pfCanvasMode = e.target.value || "native";
+    window.ScadaExtras?.savePrefs({ pfCanvasMode: state.pfCanvasMode });
+    applyPfCanvasModes();
+  });
+  $("#pf-fault-only")?.addEventListener("change", (e) => {
+    state.pfFaultOnly = Boolean(e.target.checked);
+    window.ScadaExtras?.savePrefs({ pfFaultOnly: state.pfFaultOnly });
+    applyPfCanvasModes();
+  });
+  $("#alarm-hide-maint")?.addEventListener("change", (e) => {
+    state.hideMaintAlarms = Boolean(e.target.checked);
+    window.ScadaExtras?.savePrefs({ hideMaintAlarms: state.hideMaintAlarms });
+    loadAlarms().catch(() => {});
+  });
+  $("#alarm-audio-toggle")?.addEventListener("change", (e) => {
+    state.alarmAudio = Boolean(e.target.checked);
+    window.ScadaExtras?.savePrefs({ alarmAudio: state.alarmAudio });
+    if (state.alarmAudio) window.ScadaExtras?.playAlarmBeep("normal");
+  });
+
+  // 初始化潮流图缩略小地图
+  if (window.ScadaExtras && $("#pf-minimap")) {
+    pfMinimap = window.ScadaExtras.createMinimap({
+      hostEl: $("#pf-minimap"),
+      getSvgMeta: () => ({ w: state.svgWidth, h: state.svgHeight }),
+      getViewport: () => {
+        const wrap = $("#pf-canvas-wrap");
+        if (!wrap || !state.pfScale) return null;
+        const r = wrap.getBoundingClientRect();
+        return {
+          x: -state.pfX / state.pfScale,
+          y: -state.pfY / state.pfScale,
+          w: r.width / state.pfScale,
+          h: r.height / state.pfScale,
+        };
+      },
+      onPanTo: (cx, cy) => {
+        const wrap = $("#pf-canvas-wrap");
+        if (!wrap) return;
+        const r = wrap.getBoundingClientRect();
+        state.pfX = r.width / 2 - cx * state.pfScale;
+        state.pfY = r.height / 2 - cy * state.pfScale;
+        applySvgTransform();
+      },
+    });
+  }
+
+  // 全局命令面板 (Ctrl+K)
+  const palette = window.ScadaExtras?.createCommandPalette(() => {
+    const items = [
+      { group: "视图", title: "系统首页", sub: "1", action: () => switchView("home") },
+      { group: "视图", title: "极地管控", sub: "2", action: () => switchView("cockpit") },
+      { group: "视图", title: "全景流向", sub: "3", action: () => switchView("energyflow") },
+      { group: "视图", title: "潮流图", sub: "4", action: () => switchView("powerflow") },
+      { group: "视图", title: "设备图", sub: "5", action: () => switchView("devices") },
+      { group: "视图", title: "告警中心", sub: "6", action: () => switchView("alarms") },
+      { group: "视图", title: "通信图", sub: "7", action: () => switchView("comm") },
+      { group: "视图", title: "运行日志", sub: "8", action: () => switchView("logs") },
+      {
+        group: "操作",
+        title: state.controlUnlocked ? "只读监盘" : "值班控调",
+        sub: "LOCK",
+        action: () => $("#control-lock-btn")?.click(),
+      },
+      { group: "操作", title: "操作审计", sub: "AUDIT", action: () => $("#control-audit-btn")?.click() },
+      { group: "操作", title: "打印报表", sub: "REPORT", action: () => window.open("/api/report/daily?format=html", "_blank", "noopener") },
+      { group: "操作", title: "导出 CSV", sub: "CSV", action: () => { location.href = "/api/report/daily?format=csv"; } },
+    ];
+    const devs = Object.values(state.pfData?.devices || {}).length
+      ? Object.values(state.pfData.devices)
+      : (state.devItems || []);
+    devs.slice(0, 120).forEach((d) => {
+      items.push({
+        group: "设备",
+        title: d.name || d.dev_id,
+        sub: `${d.table_name} #${d.idx}`,
+        action: async () => {
+          switchView("powerflow");
+          await loadPowerflow();
+          state.pfPinned = true;
+          focusSvgDevice(d.dev_id);
+        },
+      });
+    });
+    return items;
+  });
+  $("#cmd-palette-btn")?.addEventListener("click", () => palette?.open());
+
+  // 启动 SSE 实时事件流（有告警/指令/采样更新时即时触发轻量刷新，断线自动退避并由轮询兜底）
+  let sseThrottleTimer = null;
+  const sseClient = window.ScadaExtras
+    ? new window.ScadaExtras.SseClient("/api/events", (ev, payload) => {
+        if (document.hidden) return;
+        if (ev === "control") {
+          window.ScadaExtras.showToast(
+            `${tr(payload.device_name || "")} · ${tr(payload.label || payload.control || "")} = ${payload.value ?? ""}`,
+            "info"
+          );
+          if (!$("#control-audit-drawer")?.hidden) loadControlAuditDrawer();
+        }
+        if (ev === "alarm" || ev === "maintenance" || ev === "control") {
+          if (!sseThrottleTimer) {
+            sseThrottleTimer = setTimeout(() => {
+              sseThrottleTimer = null;
+              refreshCurrentView();
+            }, 400);
+          }
+        }
+      })
+    : null;
+  sseClient?.start();
+
+  // 监听语言切换，实时重绘 Canvas 图表、顶栏动态状态与极地管控面板
   document.addEventListener("scada:lang-change", () => {
+    applyControlLockUi();
+    syncPinButtonUi();
+    window.ScadaCharts?.clearCache();
     drawTrendChart();
     if (state.view === "cockpit") drawCockpitCharts();
   });

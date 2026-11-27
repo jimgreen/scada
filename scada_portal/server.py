@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from pathlib import Path
+import queue
 import sqlite3
 import sys
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -155,7 +156,31 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 if keys is not None and (not isinstance(keys, list) or not all(isinstance(k, str) for k in keys)):
                     raise ValueError("keys 必须为字符串数组")
                 ack_all = bool(body.get("ack_all"))
-                return self._json(200, self.service.ack_alarms(keys=keys, ack_all=ack_all))
+                operator = str(body.get("operator") or "")
+                note = str(body.get("note") or "")
+                return self._json(200, self.service.ack_alarms(keys=keys, ack_all=ack_all, operator=operator, note=note))
+            if path == "/api/maintenance":
+                body = self._read_json_body()
+                table_name = str(body.get("table_name") or "").strip()
+                idx_val = _parse_int(str(body.get("idx")) if body.get("idx") is not None else None, "idx", min_val=0)
+                if idx_val is None:
+                    raise ValueError("设备编号 idx 不能为空")
+                hours_val = _parse_float(
+                    str(body.get("hours")) if body.get("hours") is not None else None,
+                    "hours",
+                    default=8.0,
+                )
+                return self._json(
+                    200,
+                    self.service.set_maintenance(
+                        table_name=table_name,
+                        idx=idx_val,
+                        device_name=str(body.get("device_name") or ""),
+                        reason=str(body.get("reason") or ""),
+                        operator=str(body.get("operator") or ""),
+                        hours=hours_val,
+                    ),
+                )
             if len(parts) == 5 and parts[:2] == ["api", "devices"] and parts[4] == "control":
                 body = self._read_json_body()
                 ctrl = body.get("control")
@@ -187,7 +212,47 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
             return self._json(500, {"error": "服务器内部错误，请查看运行日志"})
 
     def do_DELETE(self):
-        self._method_not_allowed()
+        parsed = urlsplit(self.path)
+        parts = [unquote(p) for p in parsed.path.split("/") if p]
+        try:
+            if len(parts) == 3 and parts[:2] == ["api", "maintenance"] and parts[2]:
+                return self._json(200, self.service.clear_maintenance(parts[2]))
+            return self._method_not_allowed()
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
+        except Exception:
+            LOG.exception("Portal DELETE error on %s", parsed.path)
+            return self._json(500, {"error": "服务器内部错误，请查看运行日志"})
+
+    def _serve_sse(self):
+        """建立轻量 SSE 实时事件流，客户端断开或服务关闭时自动回收。"""
+        q = self.service.event_bus.subscribe()
+        if q is None:
+            return self._json(503, {"error": "实时订阅连接数已达上限"})
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(
+                self.service.event_bus.format_sse("hello", {"version": self.service.event_bus.version})
+            )
+            self.wfile.flush()
+            while not self.service._stop_event.is_set():
+                try:
+                    event_name, payload = q.get(timeout=15.0)
+                    self.wfile.write(self.service.event_bus.format_sse(event_name, payload))
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, OSError):
+            pass
+        finally:
+            self.service.event_bus.unsubscribe(q)
 
     def do_PATCH(self):
         self._method_not_allowed()
@@ -234,7 +299,11 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                     "c_db_ready": self.service.c_db.is_file(),
                     "d_db_ready": self.service.d_db.is_file(),
                     "collector_running": self.service.is_collector_running(),
+                    "sse_clients": self.service.event_bus.subscriber_count,
+                    "history": self.service.get_history_summary(),
                 })
+            if path == "/api/events":
+                return self._serve_sse()
             if path == "/api/overview":
                 return self._json(200, self.service.get_overview())
             if path == "/api/polar-cockpit":
@@ -248,6 +317,15 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 return self._serve_file(self.service.svg_path)
             if path == "/api/powerflow":
                 return self._json(200, self.service.get_powerflow())
+            if path == "/api/powerflow/meta":
+                etag, payload = self.service.get_powerflow_meta()
+                headers = {"Cache-Control": "no-cache", "ETag": etag}
+                if self.headers.get("If-None-Match") == etag:
+                    self._send_bytes(304, "application/json; charset=utf-8", b"", headers)
+                    return
+                return self._json(200, payload, headers)
+            if path == "/api/powerflow/live":
+                return self._json(200, self.service.get_powerflow_live())
             if path == "/api/devices":
                 return self._json(200, self.service.get_devices(
                     category=query.get("category"),
@@ -261,19 +339,48 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
                 start_ms = _parse_int(query.get("start_ms"), "start_ms", min_val=0)
                 end_ms = _parse_int(query.get("end_ms"), "end_ms", min_val=0)
                 metric = query.get("metric")
+                date_str = query.get("date")
+                compare = query.get("compare")
                 return self._json(
                     200,
                     self.service.get_device_trend(
-                        table_name, idx, hours=hours, start_ms=start_ms, end_ms=end_ms, metric=metric
+                        table_name,
+                        idx,
+                        hours=hours,
+                        start_ms=start_ms,
+                        end_ms=end_ms,
+                        metric=metric,
+                        date_str=date_str,
+                        compare=compare,
                     ),
                 )
             if path == "/api/alarms":
+                hide_maint = query.get("hide_maintenance") in {"1", "true", "yes"}
                 return self._json(200, self.service.get_alarms(
                     alarm_type=query.get("type"),
                     acked=query.get("acked"),
                     category=query.get("category"),
                     search=query.get("search"),
+                    hide_maintenance=hide_maint,
                 ))
+            if path == "/api/maintenance":
+                return self._json(200, self.service.list_maintenance())
+            if path == "/api/controls/audit":
+                limit_val = _parse_int(query.get("limit"), "limit", default=50, min_val=1, max_val=200)
+                return self._json(200, self.service.get_control_audit(limit=limit_val))
+            if path == "/api/comm/topology":
+                return self._json(200, self.service.get_comm_topology())
+            if path == "/api/report/daily":
+                fmt = (query.get("format") or "json").lower()
+                date_str = query.get("date")
+                ctype, data = self.service.build_daily_report(date_str=date_str, fmt=fmt)
+                if isinstance(data, dict):
+                    return self._json(200, data)
+                extra_headers = {}
+                if fmt == "csv":
+                    fname = f"scada-daily-report-{date_str or 'today'}.csv"
+                    extra_headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+                return self._send_bytes(200, ctype, data, extra_headers)
             if path == "/api/alarms/history":
                 limit_val = _parse_int(query.get("limit"), "limit", default=300, min_val=10, max_val=1000)
                 return self._json(200, self.service.get_alarm_history(

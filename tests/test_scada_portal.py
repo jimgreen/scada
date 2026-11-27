@@ -512,11 +512,14 @@ class ScadaPortalTests(unittest.TestCase):
             history_db=self.hist_db,
             enable_sampler=False,
         )
-        restarted_unacked = restarted_svc.get_alarms(alarm_type="over_max", acked="0")
-        self.assertEqual(len(restarted_unacked["items"]), 0)
-        restarted_all = restarted_svc.get_alarms(alarm_type="over_max")
-        self.assertEqual(len(restarted_all["items"]), 1)
-        self.assertTrue(restarted_all["items"][0]["acked"])
+        try:
+            restarted_unacked = restarted_svc.get_alarms(alarm_type="over_max", acked="0")
+            self.assertEqual(len(restarted_unacked["items"]), 0)
+            restarted_all = restarted_svc.get_alarms(alarm_type="over_max")
+            self.assertEqual(len(restarted_all["items"]), 1)
+            self.assertTrue(restarted_all["items"][0]["acked"])
+        finally:
+            restarted_svc.close()
 
         # 恢复合理上限，验证历史告警自动标记为 recovered 且保留 acked=True
         http_json("PUT", "/api/devices/ACGenerator/1/limits", {"metric": "p", "max_value": 100.0, "min_value": 0.0})
@@ -599,6 +602,94 @@ class ScadaPortalTests(unittest.TestCase):
         web_log_text = "\n".join(p.read_text(encoding="utf-8") for p in d_web_logs)
         self.assertIn("门户修改量测上下限", web_log_text)
         self.assertIn("门户确认告警", web_log_text)
+
+    def test_upgrade_split_powerflow_maintenance_topology_report_and_rollup(self):
+        # 1. 潮流图动静分离 + 强 ETag 304 缓存
+        conn0 = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+        conn0.request("GET", "/api/powerflow/meta")
+        resp0 = conn0.getresponse()
+        st_m = resp0.status
+        etag = resp0.getheader("ETag")
+        body_m = resp0.read()
+        conn0.close()
+        self.assertEqual(st_m, 200)
+        self.assertTrue(etag and etag.startswith('"pf-meta-'))
+        meta = json.loads(body_m.decode("utf-8"))
+        self.assertIn("ACGenerator-1", meta["devices"])
+        self.assertTrue(meta["devices"]["ACGenerator-1"]["model_param_tabs"])
+
+        # 带 If-None-Match 命中 304
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+        conn.request("GET", "/api/powerflow/meta", headers={"If-None-Match": etag})
+        resp304 = conn.getresponse()
+        resp304.read()
+        conn.close()
+        self.assertEqual(resp304.status, 304)
+
+        # 轻量动态接口不含静态 model_params，体积明显小于全量 /api/powerflow
+        st_l, _, body_l = http_get(self.httpd.server_port, "/api/powerflow/live")
+        st_f, _, body_f = http_get(self.httpd.server_port, "/api/powerflow")
+        self.assertEqual((st_l, st_f), (200, 200))
+        live = json.loads(body_l.decode("utf-8"))
+        self.assertIn("devices_live", live)
+        self.assertNotIn("model_params", live["devices_live"]["ACGenerator-1"])
+        self.assertLess(len(body_l), len(body_f))
+
+        # 2. 检修挂牌增删 + 告警隐藏过滤 + 确认操作人/备注留痕
+        def req_json(method: str, path: str, payload: dict | None = None):
+            c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=10)
+            b = json.dumps(payload).encode("utf-8") if payload is not None else None
+            h = {"Content-Type": "application/json"} if b is not None else {}
+            c.request(method, path, body=b, headers=h)
+            r = c.getresponse()
+            raw = r.read().decode("utf-8")
+            c.close()
+            return r.status, (json.loads(raw) if raw else {})
+
+        st_set, maint = req_json(
+            "POST",
+            "/api/maintenance",
+            {"table_name": "ACGenerator", "idx": 1, "device_name": "交流风电-1", "reason": "定期巡检", "operator": "王工", "hours": 4},
+        )
+        self.assertEqual(st_set, 200)
+        self.assertEqual(maint["dev_id"], "ACGenerator-1")
+        st_list, mlist = req_json("GET", "/api/maintenance")
+        self.assertEqual(st_list, 200)
+        self.assertEqual(mlist["total"], 1)
+        st_del, mdel = req_json("DELETE", "/api/maintenance/ACGenerator-1")
+        self.assertEqual(st_del, 200)
+        self.assertEqual(mdel["removed"], 1)
+
+        # 3. 通信链路拓扑、站级运行日报（JSON/CSV/HTML）、健康检查与 1 分钟降采样表
+        st_topo, topo = req_json("GET", "/api/comm/topology")
+        self.assertEqual(st_topo, 200)
+        self.assertEqual(len(topo["links"]), 1)
+        self.assertGreaterEqual(topo["links"][0]["device_count"], 1)
+
+        st_rj, rj = req_json("GET", "/api/report/daily?format=json")
+        self.assertEqual(st_rj, 200)
+        self.assertGreaterEqual(len(rj["kpis"]), 8)
+        st_rc, _, rc_body = http_get(self.httpd.server_port, "/api/report/daily?format=csv")
+        self.assertEqual(st_rc, 200)
+        self.assertIn("站级运行日报", rc_body.decode("utf-8"))
+        st_rh, _, rh_body = http_get(self.httpd.server_port, "/api/report/daily?format=html")
+        self.assertEqual(st_rh, 200)
+        self.assertIn("window.print()", rh_body.decode("utf-8"))
+
+        st_h, health = req_json("GET", "/api/health")
+        self.assertEqual(st_h, 200)
+        self.assertIn("history", health)
+        self.assertGreaterEqual(health["history"]["minute_rollup_rows"], 1)
+
+        # 4. 昨日同比曲线 + 极地衍生指标 + 数据质量传导
+        st_tr, tr_data = req_json("GET", "/api/devices/ACGenerator/1/trend?hours=24&compare=prev_day")
+        self.assertEqual(st_tr, 200)
+        self.assertEqual(tr_data["compare"], "prev_day")
+        st_ck, ck = req_json("GET", "/api/polar-cockpit?hours=6")
+        self.assertEqual(st_ck, 200)
+        self.assertIn("derived", ck)
+        self.assertIn("diesel_endurance_hours", ck["derived"])
+        self.assertIn("data_quality", ck)
 
 
 if __name__ == "__main__":

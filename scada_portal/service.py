@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
 import math
@@ -23,6 +24,20 @@ from core.web_database import DEFAULT_WORKSPACE_ROOT
 from core.log_query import LOG_PATTERNS, search_logs
 from core.rtdb_schema import sync_embedded_schema
 from core.common import CHANNEL_PARAMETER_TABLES, KIND_TABLES
+from scada_portal.history_store import (
+    ReadOnlyConnPool,
+    ensure_extended_history_schema,
+    get_history_stats,
+    prune_history_samples,
+    upsert_minute_rollup,
+)
+from scada_portal.report import (
+    compute_polar_derived_metrics,
+    render_daily_report_csv,
+    render_daily_report_html,
+    summarize_data_quality,
+)
+from scada_portal.stream import PortalEventBus
 from scdfe_d.measurement_layout import (
     CONTROL_META,
     CTRL_STATUS_FAILED,
@@ -418,11 +433,19 @@ class PortalService:
         self._session_kwh: dict[str, float] = defaultdict(float)
         self._svg_topo_cache: tuple[tuple[int, int], dict[str, Any]] | None = None
         self._model_params_cache: tuple[tuple[int, int], tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]] | None = None
+        self._pf_meta_cache: tuple[tuple[int, int, int, int, int, int], str, dict[str, Any]] | None = None
+        self._pf_live_cache: tuple[float, tuple[int, int, int, int], dict[str, Any]] | None = None
+        self._overview_cache: tuple[float, tuple[int, int, int, int], dict[str, Any]] | None = None
+        # 线程局部 SQLite 只读连接复用池与 SSE 实时事件总线
+        self._ro_pool = ReadOnlyConnPool()
+        self.event_bus = PortalEventBus()
         # 高频只读短 TTL 快照缓存，消除同周期多次重复全库扫表
         self._d_schema_cache: tuple[int, list[tuple[str, list[str], dict[str, str], list[str]]]] | None = None
         self._devices_cache: tuple[float, tuple[int, int, int, int], list[dict[str, Any]]] | None = None
         self._comm_cache: tuple[float, tuple[int, int, int, int], dict[str, Any]] | None = None
         self._log_files_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._maint_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
+        self._history_stats_cache: tuple[float, dict[str, Any]] | None = None
 
         self._init_history_db()
         if enable_sampler:
@@ -447,6 +470,10 @@ class PortalService:
     def _invalidate_devices_cache(self) -> None:
         with self._cache_lock:
             self._devices_cache = None
+            self._pf_live_cache = None
+            self._overview_cache = None
+            self._pf_live_cache = None
+            self._overview_cache = None
 
     @staticmethod
     def _resolve_svg(explicit: Path | str | None, model_dir: Path, scene_name: str) -> Path:
@@ -462,15 +489,8 @@ class PortalService:
 
     @contextmanager
     def _open_readonly(self, db_path: Path):
-        if not db_path.is_file():
-            raise FileNotFoundError(f"数据库不存在：{db_path}")
-        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=10.0)
-        try:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=10000")
+        with self._ro_pool.acquire(db_path, timeout=10.0) as conn:
             yield conn
-        finally:
-            conn.close()
 
     @contextmanager
     def _open_readwrite(self, db_path: Path):
@@ -561,15 +581,13 @@ class PortalService:
     @contextmanager
     def _open_history(self, *, readonly: bool = False):
         if readonly:
-            if not self.history_db.is_file():
-                raise FileNotFoundError(f"历史库不存在：{self.history_db}")
-            conn = sqlite3.connect(f"{self.history_db.as_uri()}?mode=ro", uri=True, timeout=15.0)
-        else:
-            conn = sqlite3.connect(self.history_db, timeout=15.0)
+            with self._ro_pool.acquire(self.history_db, timeout=15.0) as conn:
+                yield conn
+            return
+        conn = sqlite3.connect(self.history_db, timeout=15.0)
         try:
             conn.execute("PRAGMA busy_timeout=10000")
-            if not readonly:
-                conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             yield conn
         finally:
             conn.close()
@@ -627,6 +645,8 @@ class PortalService:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alarm_events_state_time ON alarm_events(state, last_seen_ms)"
             )
+            # 平滑初始化 1 分钟级降采样表、检修挂牌表、控调审计表与告警操作人字段
+            ensure_extended_history_schema(conn)
             # 同步 RTDB 原生内置结构定义，确保 RTDB 打开 sqldb/scada 目录时零告警
             conn.execute("BEGIN IMMEDIATE")
             sync_embedded_schema(
@@ -637,11 +657,16 @@ class PortalService:
             conn.commit()
             # 启动时恢复持久化的活动告警确认记录，重启不丢失
             rows = conn.execute(
-                "SELECT alarm_key, fingerprint, acked_at FROM alarm_events WHERE state='active' AND acked=1"
+                "SELECT alarm_key, fingerprint, acked_at, ack_operator, ack_note FROM alarm_events WHERE state='active' AND acked=1"
             ).fetchall()
             with self._alarm_lock:
-                for key, fp, acked_at in rows:
-                    self._acked_alarms[str(key)] = {"fp": str(fp or ""), "acked_at": acked_at}
+                for key, fp, acked_at, ack_op, ack_note in rows:
+                    self._acked_alarms[str(key)] = {
+                        "fp": str(fp or ""),
+                        "acked_at": acked_at,
+                        "ack_operator": ack_op or "",
+                        "ack_note": ack_note or "",
+                    }
 
     def start_sampler(self) -> None:
         if self._sampler_thread is not None and self._sampler_thread.is_alive():
@@ -661,6 +686,7 @@ class PortalService:
         self._stop_event.set()
         if self._sampler_thread is not None and self._sampler_thread.is_alive():
             self._sampler_thread.join(timeout=3.0)
+        self._ro_pool.close_all()
 
     def _sampler_loop(self) -> None:
         prune_counter = 0
@@ -711,16 +737,17 @@ class PortalService:
                     self._session_kwh["load"] += max(0.0, agg["total_load_kw"]) * dt_h
             self._last_sample_ts = now_sec
 
-        cutoff_ms = now_ms - 24 * 3600 * 1000
         with self._history_lock, self._open_history() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO device_daily_samples(ts_ms, table_name, idx, metric, value) "
                 "VALUES (?, ?, ?, ?, ?)",
                 rows_to_insert,
             )
+            upsert_minute_rollup(conn, rows_to_insert)
             if prune:
-                conn.execute("DELETE FROM device_daily_samples WHERE ts_ms < ?", (cutoff_ms,))
+                prune_history_samples(conn, raw_retention_days=14, rollup_retention_days=365, batch_limit=20000)
             conn.commit()
+        self.event_bus.publish("tick", {"samples": len(rows_to_insert)})
         return len(rows_to_insert)
 
     # -------------------- 设备全量快照读取（带 schema 缓存与短 TTL 快照缓存） --------------------
@@ -996,6 +1023,12 @@ class PortalService:
         }
 
     def get_overview(self) -> dict[str, Any]:
+        now_mono = time.monotonic()
+        sig = self._db_file_sig(self.d_db) if self.d_db.is_file() else (0, 0, 0, 0)
+        with self._cache_lock:
+            cached_ov = self._overview_cache
+            if cached_ov is not None and (now_mono - cached_ov[0]) < 1.2 and cached_ov[1] == sig:
+                return cached_ov[2]
         devices = self._read_all_devices()
         energy = self._aggregate_energy(devices)
         comm_rtus = self.get_comm_rtus()["items"]
@@ -1019,7 +1052,7 @@ class PortalService:
         # 约 0.25 kg/kWh 柴油节约换算（1 万 kWh ≈ 2.5 吨，基数 128.3 吨）
         diesel_saved_tons = round(128.3 + (inc.get("wind", 0.0) + inc.get("pv", 0.0)) * 0.00025, 2)
 
-        return {
+        result = {
             "timestamp": now_utc.isoformat(timespec="seconds"),
             "station_name": "南极秦岭站综合能量管理系统",
             "scene": f"{self.runtime_name}/{self.scene_name}",
@@ -1045,7 +1078,12 @@ class PortalService:
                 "collector_running": self.is_collector_running(),
                 **self._summarize_alarm_counts(devices),
             },
+            "data_quality": summarize_data_quality(devices),
+            "event_version": self.event_bus.version,
         }
+        with self._cache_lock:
+            self._overview_cache = (time.monotonic(), sig, result)
+        return result
 
     def _count_comm_points(self) -> dict[str, int]:
         """复用通信快照统计 scdfe_c 四遥点表（YC/YX/YT/YK）配置总数。"""
@@ -1971,6 +2009,92 @@ class PortalService:
             "devices": dev_summaries,
         }
 
+    def get_powerflow_meta(self) -> tuple[str, dict[str, Any]]:
+        """返回潮流图静态设备元数据（模型参数、分页定义、基础台账）及强 ETag，支持浏览器 304 缓存。"""
+        m_sig = self._db_file_sig(self.model_db) if self.model_db.is_file() else (0, 0, 0, 0)
+        d_sig = self._db_file_sig(self.d_db) if self.d_db.is_file() else (0, 0, 0, 0)
+        cache_key = (m_sig[0], m_sig[1], d_sig[0], d_sig[1], m_sig[2], m_sig[3])
+        with self._cache_lock:
+            cached = self._pf_meta_cache
+            if cached is not None and cached[0] == cache_key:
+                return cached[1], cached[2]
+
+        full = self.get_powerflow()
+        devices_meta: dict[str, dict[str, Any]] = {}
+        for dev_id, d in full["devices"].items():
+            devices_meta[dev_id] = {
+                "dev_id": dev_id,
+                "table_name": d["table_name"],
+                "idx": d["idx"],
+                "name": d["name"],
+                "category": d["category"],
+                "bound_count": d["bound_count"],
+                "control_count": d["control_count"],
+                "model_params": d.get("model_params") or [],
+                "model_param_tabs": d.get("model_param_tabs") or [],
+            }
+        payload = {
+            "timestamp": full["timestamp"],
+            "devices": devices_meta,
+        }
+        digest = hashlib.sha1(
+            json.dumps(devices_meta, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:16]
+        etag = f'"pf-meta-{digest}"'
+        with self._cache_lock:
+            self._pf_meta_cache = (cache_key, etag, payload)
+        return etag, payload
+
+    def get_powerflow_live(self) -> dict[str, Any]:
+        """返回潮流图轻量动态快照（短 TTL 缓存 + 剥离静态模型参数与冗余空值），大幅压缩轮询体积与耗时。"""
+        now_mono = time.monotonic()
+        sig = self._db_file_sig(self.d_db) if self.d_db.is_file() else (0, 0, 0, 0)
+        with self._cache_lock:
+            cached = self._pf_live_cache
+            if cached is not None and (now_mono - cached[0]) < 1.2 and cached[1] == sig:
+                return cached[2]
+
+        full = self.get_powerflow()
+        live_devices: dict[str, dict[str, Any]] = {}
+        for dev_id, d in full["devices"].items():
+            # 仅下发非空实时量测的精简字段（去除重复元信息），有效压缩包体
+            slim_metrics = [
+                {
+                    "metric": m["metric"],
+                    "label": m["label"],
+                    "kind": m["kind"],
+                    "value": m["value"],
+                    "display_value": m.get("display_value"),
+                    "unit": m.get("unit", ""),
+                    "valid": m.get("valid", False),
+                }
+                for m in (d.get("metrics") or ())
+                if m.get("value") is not None
+            ]
+            item: dict[str, Any] = {
+                "run": d.get("run"),
+                "position": d.get("position"),
+                "valid_count": d.get("valid_count", 0),
+                "bound_count": d.get("bound_count", 0),
+                "alarm_count": d.get("alarm_count", 0),
+            }
+            if slim_metrics:
+                item["metrics"] = slim_metrics
+            if d.get("controls"):
+                item["controls"] = d["controls"]
+            live_devices[dev_id] = item
+        res = {
+            "timestamp": full["timestamp"],
+            "version": self.event_bus.version,
+            "svg_slots": full["svg_slots"],
+            "breakers": full["breakers"],
+            "flows": full["flows"],
+            "devices_live": live_devices,
+        }
+        with self._cache_lock:
+            self._pf_live_cache = (time.monotonic(), sig, res)
+        return res
+
     def _load_svg_topology(self) -> dict[str, Any]:
         """解析并缓存 SVG 中设备节点拓扑与 Segment_Layer 连接边关系。"""
         if not self.svg_path.is_file():
@@ -2208,11 +2332,22 @@ class PortalService:
         start_ms: int | None = None,
         end_ms: int | None = None,
         metric: str | None = None,
+        date_str: str | None = None,
+        compare: str | None = None,
     ) -> dict[str, Any]:
         now_ms = int(time.time() * 1000)
-        if (start_ms is None) != (end_ms is None):
+        if date_str and str(date_str).strip():
+            raw_date = str(date_str).strip()
+            try:
+                day_dt = datetime.strptime(raw_date, "%Y-%m-%d").astimezone()
+            except ValueError as exc:
+                raise ValueError("日期参数格式应为 YYYY-MM-DD") from exc
+            since_ms = int(day_dt.timestamp() * 1000)
+            until_ms = since_ms + 24 * 3600 * 1000 - 1
+            span_hours = 24.0
+        elif (start_ms is None) != (end_ms is None):
             raise ValueError("start_ms 与 end_ms 须同时指定")
-        if start_ms is not None and end_ms is not None:
+        elif start_ms is not None and end_ms is not None:
             since_ms = int(start_ms)
             until_ms = int(end_ms)
             if since_ms < 0 or until_ms <= since_ms:
@@ -2227,30 +2362,63 @@ class PortalService:
             span_hours = max(1 / 60.0, min(24.0, hours_f))
             since_ms = now_ms - int(span_hours * 3600 * 1000)
             until_ms = now_ms
-        series_map: dict[str, list[list[float]]] = defaultdict(list)
 
-        # 使用只读连接并发查询 WAL，不与后台采样线程争抢 _history_lock
-        metric_filter = str(metric).strip() if metric else None
-        if self.history_db.is_file():
+        def _query_window(s_ms: int, e_ms: int) -> dict[str, list[list[float]]]:
+            out: dict[str, list[list[float]]] = defaultdict(list)
+            if not self.history_db.is_file():
+                return out
+            metric_filter = str(metric).strip() if metric else None
             with self._open_history(readonly=True) as conn:
                 if metric_filter:
                     rows = conn.execute(
                         "SELECT metric, ts_ms, value FROM device_daily_samples "
                         "WHERE table_name=? AND idx=? AND metric=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
-                        (table_name, idx, metric_filter, since_ms, until_ms),
+                        (table_name, idx, metric_filter, s_ms, e_ms),
                     ).fetchall()
                 else:
                     rows = conn.execute(
                         "SELECT metric, ts_ms, value FROM device_daily_samples "
                         "WHERE table_name=? AND idx=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC",
-                        (table_name, idx, since_ms, until_ms),
+                        (table_name, idx, s_ms, e_ms),
                     ).fetchall()
-        else:
-            rows = []
-        for m_name, ts_ms, val in rows:
-            series_map[m_name].append([int(ts_ms), round(float(val), 4)])
+                # 原始明细无数据时自动回退查询 1 分钟级降采样汇总表
+                if not rows:
+                    try:
+                        if metric_filter:
+                            rows = conn.execute(
+                                "SELECT metric, bucket_ms, avg_val FROM device_minute_rollup "
+                                "WHERE table_name=? AND idx=? AND metric=? AND bucket_ms>=? AND bucket_ms<=? ORDER BY bucket_ms ASC",
+                                (table_name, idx, metric_filter, s_ms, e_ms),
+                            ).fetchall()
+                        else:
+                            rows = conn.execute(
+                                "SELECT metric, bucket_ms, avg_val FROM device_minute_rollup "
+                                "WHERE table_name=? AND idx=? AND bucket_ms>=? AND bucket_ms<=? ORDER BY bucket_ms ASC",
+                                (table_name, idx, s_ms, e_ms),
+                            ).fetchall()
+                    except sqlite3.Error:
+                        rows = []
+            for m_name, ts_ms, val in rows:
+                out[m_name].append([int(ts_ms), round(float(val), 4)])
+            return out
 
-        # 若历史点数超出 720 点，均匀降采样保留首尾保证绘制流畅
+        series_map = _query_window(since_ms, until_ms)
+
+        # 读取设备当前量测上下限与类型（yc/yx），用于曲线叠加警戒虚线与开关量阶梯绘制
+        meta_by_metric: dict[str, dict[str, Any]] = {}
+        try:
+            for d in self._read_all_devices():
+                if d["table_name"] == table_name and int(d["idx"]) == int(idx):
+                    for m in d.get("metrics") or ():
+                        meta_by_metric[m["metric"]] = {
+                            "kind": m.get("kind", "yc"),
+                            "min_value": m.get("min_value"),
+                            "max_value": m.get("max_value"),
+                        }
+                    break
+        except Exception:
+            pass
+
         max_pts = 720
         series: list[dict[str, Any]] = []
         for m_name, pts in sorted(series_map.items()):
@@ -2258,17 +2426,48 @@ class PortalService:
                 step = (len(pts) - 1) / (max_pts - 1)
                 pts = [pts[int(round(i * step))] for i in range(max_pts)]
             label, unit = METRIC_META.get(m_name, (m_name, ""))
+            m_info = meta_by_metric.get(m_name) or {}
             series.append({
                 "metric": m_name,
                 "label": label,
                 "unit": unit,
+                "kind": m_info.get("kind", "yx" if m_name in {"position", "run_state", "fault", "overload"} else "yc"),
+                "min_limit": m_info.get("min_value"),
+                "max_limit": m_info.get("max_value"),
                 "points": pts,
                 "latest": pts[-1][1] if pts else None,
             })
 
+        # 昨日同比叠加（时间轴平移 +24h 对齐至当前窗口）
+        compare_mode = str(compare or "").strip().lower()
+        if compare_mode == "prev_day":
+            shift_ms = 24 * 3600 * 1000
+            prev_map = _query_window(since_ms - shift_ms, until_ms - shift_ms)
+            for m_name, pts in sorted(prev_map.items()):
+                if not pts:
+                    continue
+                if len(pts) > max_pts:
+                    step = (len(pts) - 1) / (max_pts - 1)
+                    pts = [pts[int(round(i * step))] for i in range(max_pts)]
+                aligned_pts = [[p[0] + shift_ms, p[1]] for p in pts]
+                label, unit = METRIC_META.get(m_name, (m_name, ""))
+                series.append({
+                    "key": f"{m_name}__prev_day",
+                    "metric": m_name,
+                    "label": f"{label} (昨日)",
+                    "unit": unit,
+                    "kind": "yc",
+                    "dashed": True,
+                    "compare": "prev_day",
+                    "points": aligned_pts,
+                    "latest": aligned_pts[-1][1] if aligned_pts else None,
+                })
+
         return {
             "table_name": table_name,
             "idx": idx,
+            "date": date_str or "",
+            "compare": compare_mode,
             "hours": span_hours,
             "since_ms": since_ms,
             "end_ms": until_ms,
@@ -2761,6 +2960,100 @@ class PortalService:
         unacked = sum(1 for a in alarms if not a["acked"])
         return {"alarm_total": len(alarms), "alarm_unacked": unacked}
 
+    # -------------------- 设备检修挂牌（告警屏蔽） --------------------
+    def _load_maintenance_map(self) -> dict[str, dict[str, Any]]:
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = self._maint_cache
+            if cached is not None and (now_mono - cached[0]) < 2.0:
+                return cached[1]
+        out: dict[str, dict[str, Any]] = {}
+        if self.history_db.is_file():
+            now_ms = int(time.time() * 1000)
+            try:
+                with self._open_history(readonly=True) as conn:
+                    rows = conn.execute(
+                        "SELECT dev_id, table_name, idx, device_name, reason, operator, created_ms, expires_ms "
+                        "FROM device_maintenance WHERE expires_ms IS NULL OR expires_ms > ?",
+                        (now_ms,),
+                    ).fetchall()
+                    for r in rows:
+                        out[str(r["dev_id"])] = dict(r)
+            except sqlite3.Error:
+                pass
+        with self._cache_lock:
+            self._maint_cache = (now_mono, out)
+        return out
+
+    def list_maintenance(self) -> dict[str, Any]:
+        m_map = self._load_maintenance_map()
+        items = sorted(m_map.values(), key=lambda x: -(x.get("created_ms") or 0))
+        return {"items": items, "total": len(items)}
+
+    def set_maintenance(
+        self,
+        *,
+        table_name: str,
+        idx: int,
+        device_name: str = "",
+        reason: str = "",
+        operator: str = "",
+        hours: float | None = 8.0,
+    ) -> dict[str, Any]:
+        if not table_name or not table_name.isidentifier():
+            raise ValueError("设备表名不合法")
+        dev_id = f"{table_name}-{int(idx)}"
+        now_ms = int(time.time() * 1000)
+        expires_ms = None
+        if hours is not None and float(hours) > 0:
+            expires_ms = now_ms + int(min(720.0, float(hours)) * 3600 * 1000)
+        name_text = (device_name or dev_id).strip()[:120]
+        reason_text = (reason or "检修挂牌").strip()[:240]
+        op_text = (operator or "值班员").strip()[:64]
+        with self._history_lock, self._open_history() as conn:
+            conn.execute(
+                """
+                INSERT INTO device_maintenance(dev_id, table_name, idx, device_name, reason, operator, created_ms, expires_ms)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dev_id) DO UPDATE SET
+                    device_name=excluded.device_name,
+                    reason=excluded.reason,
+                    operator=excluded.operator,
+                    created_ms=excluded.created_ms,
+                    expires_ms=excluded.expires_ms
+                """,
+                (dev_id, table_name, int(idx), name_text, reason_text, op_text, now_ms, expires_ms),
+            )
+            conn.commit()
+        with self._cache_lock:
+            self._maint_cache = None
+        self.event_bus.publish("maintenance", {"action": "set", "dev_id": dev_id})
+        self._audit_portal_log("scdfe_d-web", "INFO", f"门户检修挂牌 设备={dev_id} 操作人={op_text} 原因={reason_text}")
+        return {
+            "dev_id": dev_id,
+            "table_name": table_name,
+            "idx": int(idx),
+            "device_name": name_text,
+            "reason": reason_text,
+            "operator": op_text,
+            "created_ms": now_ms,
+            "expires_ms": expires_ms,
+        }
+
+    def clear_maintenance(self, dev_id: str) -> dict[str, Any]:
+        key = str(dev_id or "").strip()
+        if not key:
+            raise ValueError("设备编号不能为空")
+        with self._history_lock, self._open_history() as conn:
+            cur = conn.execute("DELETE FROM device_maintenance WHERE dev_id=?", (key,))
+            conn.commit()
+            removed = int(cur.rowcount or 0)
+        with self._cache_lock:
+            self._maint_cache = None
+        self.event_bus.publish("maintenance", {"action": "clear", "dev_id": key})
+        self._audit_portal_log("scdfe_d-web", "INFO", f"门户解除检修挂牌 设备={key}")
+        return {"dev_id": key, "removed": removed}
+
     def get_alarms(
         self,
         *,
@@ -2768,18 +3061,30 @@ class PortalService:
         acked: str | None = None,
         category: str | None = None,
         search: str | None = None,
+        hide_maintenance: bool = False,
     ) -> dict[str, Any]:
         devices = self._read_all_devices()
         all_alarms = self._collect_raw_alarms(devices)
+        maint_map = self._load_maintenance_map()
+        maint_suppressed = 0
+        for a in all_alarms:
+            m_info = maint_map.get(a.get("dev_id") or "")
+            a["maintenance"] = bool(m_info)
+            a["maintenance_reason"] = m_info.get("reason", "") if m_info else ""
+            if m_info:
+                maint_suppressed += 1
         summary = {
             "total": len(all_alarms),
-            "unacked": sum(1 for a in all_alarms if not a["acked"]),
+            "unacked": sum(1 for a in all_alarms if not a["acked"] and not a["maintenance"]),
             "over_max": sum(1 for a in all_alarms if a["type"] == "over_max"),
             "under_min": sum(1 for a in all_alarms if a["type"] == "under_min"),
             "comm_error": sum(1 for a in all_alarms if a["type"] == "comm_error"),
             "control_failed": sum(1 for a in all_alarms if a["type"] == "control_failed"),
+            "maintenance_suppressed": maint_suppressed,
         }
         items = all_alarms
+        if hide_maintenance:
+            items = [a for a in items if not a["maintenance"]]
         if alarm_type and alarm_type in {"over_max", "under_min", "comm_error", "control_failed"}:
             items = [a for a in items if a["type"] == alarm_type]
         if acked == "0":
@@ -2800,6 +3105,7 @@ class PortalService:
         sev_rank = {"high": 0, "medium": 1, "low": 2}
         items.sort(
             key=lambda a: (
+                1 if a["maintenance"] else 0,
                 1 if a["acked"] else 0,
                 sev_rank.get(a["severity"], 9),
                 -(a["time_ms"] or 0),
@@ -2809,17 +3115,27 @@ class PortalService:
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "summary": summary,
+            "maintenance_count": len(maint_map),
             "items": items[:500],
             "total": len(items),
         }
 
-    def ack_alarms(self, *, keys: list[str] | None = None, ack_all: bool = False) -> dict[str, Any]:
+    def ack_alarms(
+        self,
+        *,
+        keys: list[str] | None = None,
+        ack_all: bool = False,
+        operator: str = "",
+        note: str = "",
+    ) -> dict[str, Any]:
         devices = self._read_all_devices()
         # 重新计算当前活动告警指纹
         wanted = set(keys or [])
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        op_text = (operator or "值班员").strip()[:64]
+        note_text = (note or "").strip()[:240]
         acked_cnt = 0
-        acked_rows: list[tuple[str, str]] = []
+        acked_rows: list[tuple[str, str, str, str]] = []
         with self._alarm_lock:
             for dev in devices:
                 table = dev["table_name"]
@@ -2837,8 +3153,13 @@ class PortalService:
                     key = f"{table}:{idx}:m:{m['metric']}:{atype}"
                     if ack_all or key in wanted:
                         fp = f"{atype}|{m.get('source_time')}|{m.get('max_value')}|{m.get('min_value')}"
-                        self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
-                        acked_rows.append((now_iso, key))
+                        self._acked_alarms[key] = {
+                            "fp": fp,
+                            "acked_at": now_iso,
+                            "ack_operator": op_text,
+                            "ack_note": note_text,
+                        }
+                        acked_rows.append((now_iso, op_text, note_text, key))
                         acked_cnt += 1
                 for c in dev.get("controls") or ():
                     if c.get("cmd_status") != CTRL_STATUS_FAILED:
@@ -2847,14 +3168,19 @@ class PortalService:
                     key = f"{table}:{idx}:c:{c['control']}:{atype}"
                     if ack_all or key in wanted:
                         fp = f"{atype}|{c.get('cmd_time')}|{c.get('cmd_ack_time')}|{c.get('value')}"
-                        self._acked_alarms[key] = {"fp": fp, "acked_at": now_iso}
-                        acked_rows.append((now_iso, key))
+                        self._acked_alarms[key] = {
+                            "fp": fp,
+                            "acked_at": now_iso,
+                            "ack_operator": op_text,
+                            "ack_note": note_text,
+                        }
+                        acked_rows.append((now_iso, op_text, note_text, key))
                         acked_cnt += 1
         if acked_rows:
             try:
                 with self._history_lock, self._open_history() as conn:
                     conn.executemany(
-                        "UPDATE alarm_events SET acked=1, acked_at=? WHERE alarm_key=?",
+                        "UPDATE alarm_events SET acked=1, acked_at=?, ack_operator=?, ack_note=? WHERE alarm_key=?",
                         acked_rows,
                     )
                     conn.commit()
@@ -2863,9 +3189,10 @@ class PortalService:
             self._audit_portal_log(
                 "scdfe_d-web",
                 "INFO",
-                f"门户确认告警 数量={acked_cnt} 全部确认={bool(ack_all)}",
+                f"门户确认告警 数量={acked_cnt} 全部确认={bool(ack_all)} 操作人={op_text} 备注={note_text}",
             )
-        return {"acked_count": acked_cnt, "acked_at": now_iso}
+            self.event_bus.publish("alarm", {"action": "ack", "acked_count": acked_cnt})
+        return {"acked_count": acked_cnt, "acked_at": now_iso, "operator": op_text, "note": note_text}
 
     def get_alarm_history(
         self,
@@ -2927,6 +3254,8 @@ class PortalService:
                         "recovered_ms": d["recovered_ms"],
                         "acked": bool(d["acked"]),
                         "acked_at": d["acked_at"],
+                        "ack_operator": d.get("ack_operator") or "",
+                        "ack_note": d.get("ack_note") or "",
                     })
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -3018,6 +3347,8 @@ class PortalService:
 
         with self._cache_lock:
             self._devices_cache = None
+            self._pf_live_cache = None
+            self._overview_cache = None
 
         collector_ok = self.is_collector_running()
         dev_name = row_dict.get("name") or f"{table_name}-{idx}"
@@ -3028,6 +3359,44 @@ class PortalService:
             f"RTU={int(rtu)} 点号={int(pnt)} 值={norm_val} 时标={cmd_ms} 转发在线={collector_ok}",
         )
         label, unit = CONTROL_META.get(control, (control, ""))
+        warning_msg = "" if collector_ok else "scdfe_d 后台转发线程未启动，指令已写入宽表待启动后转发"
+        try:
+            with self._history_lock, self._open_history() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO control_audit(
+                        ts_ms, table_name, idx, device_name, control, control_label, kind, target_value, operator, status, detail
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cmd_ms,
+                        table_name,
+                        int(idx),
+                        str(dev_name),
+                        control,
+                        label,
+                        kind.upper(),
+                        f"{norm_val}{(' ' + unit) if unit else ''}",
+                        "值班员",
+                        "pending" if collector_ok else "queued_offline",
+                        warning_msg or f"RTU {int(rtu)} · 点 {int(pnt)}",
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            LOG.debug("failed to persist control audit", exc_info=True)
+        self.event_bus.publish(
+            "control",
+            {
+                "dev_id": f"{table_name}-{int(idx)}",
+                "device_name": str(dev_name),
+                "control": control,
+                "label": label,
+                "value": norm_val,
+                "unit": unit,
+                "collector_running": collector_ok,
+            },
+        )
         return {
             "table_name": table_name,
             "idx": int(idx),
@@ -3043,8 +3412,154 @@ class PortalService:
             "rtu_id": int(rtu),
             "point_no": int(pnt),
             "collector_running": collector_ok,
-            "warning": "" if collector_ok else "scdfe_d 后台转发线程未启动，指令已写入宽表待启动后转发",
+            "warning": warning_msg,
         }
+
+    def get_control_audit(self, *, limit: int = 50) -> dict[str, Any]:
+        """检索最近控调指令审计回执记录。"""
+        limit = max(1, min(200, int(limit)))
+        items: list[dict[str, Any]] = []
+        if self.history_db.is_file():
+            try:
+                with self._open_history(readonly=True) as conn:
+                    rows = conn.execute(
+                        "SELECT id, ts_ms, table_name, idx, device_name, control, control_label, kind, "
+                        "target_value, operator, status, detail FROM control_audit ORDER BY ts_ms DESC LIMIT ?",
+                        (limit,),
+                    ).fetchall()
+                    items = [dict(r) for r in rows]
+            except sqlite3.Error:
+                items = []
+        return {"items": items, "total": len(items)}
+
+    def get_comm_topology(self) -> dict[str, Any]:
+        """构建主站 → 协议通道 → RTU → 关联设备与质量分布的链路拓扑快照。"""
+        comm = self._read_comm_snapshot()
+        devices = self._read_all_devices()
+        rtu_devs: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        rtu_valid_pts: dict[int, int] = defaultdict(int)
+        rtu_bound_pts: dict[int, int] = defaultdict(int)
+        for d in devices:
+            seen_rtus: set[int] = set()
+            for m in d.get("metrics") or ():
+                rid = m.get("rtu_id")
+                if rid is None:
+                    continue
+                rid_i = int(rid)
+                seen_rtus.add(rid_i)
+                rtu_bound_pts[rid_i] += 1
+                if m.get("valid"):
+                    rtu_valid_pts[rid_i] += 1
+            for rid_i in seen_rtus:
+                rtu_devs[rid_i].append({
+                    "dev_id": d["dev_id"],
+                    "name": d["name"],
+                    "category": d["category"],
+                    "alarm_count": d.get("alarm_count", 0),
+                })
+
+        ch_map = {int(ch["channel_id"]): ch for ch in comm.get("channels") or () if ch.get("channel_id") is not None}
+        links: list[dict[str, Any]] = []
+        for r in comm.get("rtus") or ():
+            rid = int(r["rtu_id"])
+            cid = r.get("channel_id")
+            ch = ch_map.get(int(cid)) if cid is not None else None
+            devs = rtu_devs.get(rid, [])
+            bound = rtu_bound_pts.get(rid, 0)
+            valid = rtu_valid_pts.get(rid, 0)
+            health_pct = round((valid / bound) * 100.0, 1) if bound > 0 else 100.0
+            links.append({
+                "rtu_id": rid,
+                "rtu_name": r.get("name") or f"RTU-{rid}",
+                "channel_id": cid,
+                "channel_type": (ch or {}).get("channel_type") or r.get("channel_type") or "—",
+                "endpoint": (ch or {}).get("endpoint") or "—",
+                "connection_state": r.get("connection_state") or "offline",
+                "device_count": len(devs),
+                "bound_points": bound,
+                "valid_points": valid,
+                "health_pct": health_pct,
+                "fault_devices": [x for x in devs if x["alarm_count"] > 0][:8],
+            })
+        return {
+            "timestamp": comm["timestamp"],
+            "station_name": "SCADA 主站",
+            "links": links,
+            "point_totals": comm.get("point_totals") or {},
+        }
+
+    def get_history_summary(self) -> dict[str, Any]:
+        if not self.history_db.is_file():
+            return {"db_size_mb": 0.0, "minute_rollup_rows": 0, "maintenance_active": 0, "control_audit_rows": 0}
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = self._history_stats_cache
+            if cached is not None and (now_mono - cached[0]) < 10.0:
+                return cached[1]
+        with self._open_history(readonly=True) as conn:
+            stats = get_history_stats(conn, self.history_db)
+        with self._cache_lock:
+            self._history_stats_cache = (now_mono, stats)
+        return stats
+
+    def build_daily_report(self, *, date_str: str | None = None, fmt: str = "json") -> tuple[str, bytes | dict[str, Any]]:
+        """生成站级运行日报（支持 json / csv / html 可打印版）。"""
+        day_label = (date_str or datetime.now().strftime("%Y-%m-%d")).strip()
+        cockpit = self.get_polar_cockpit(hours=24.0)
+        devices = self._read_all_devices()
+        cum = cockpit.get("cumulative") or {}
+        res = cockpit.get("resilience") or {}
+        derived = cockpit.get("derived") or {}
+        dq = cockpit.get("data_quality") or {}
+        st = cockpit.get("polar_stats") or {}
+
+        kpis = [
+            {"group": "累计电量", "name": "累计供电量", "value": cum.get("total_supply_wkwh", "—"), "unit": "万kWh"},
+            {"group": "累计电量", "name": "科考总负荷", "value": cum.get("total_load_wkwh", "—"), "unit": "万kWh"},
+            {"group": "节能减碳", "name": "累计节油量", "value": cum.get("diesel_saved_tons", "—"), "unit": "吨"},
+            {"group": "节能减碳", "name": "累计减碳量", "value": cum.get("co2_reduced_tons", "—"), "unit": "吨 CO₂"},
+            {"group": "实时能效", "name": "绿电占比", "value": st.get("green_ratio_pct", "—"), "unit": "%"},
+            {"group": "保供自持", "name": "孤网自持时长", "value": res.get("autonomy_hours", "—"), "unit": "h"},
+            {"group": "保供自持", "name": "柴油剩余续航", "value": derived.get("diesel_endurance_hours", "—"), "unit": "h"},
+            {"group": "氢能系统", "name": "电-氢-电综合效率", "value": derived.get("h2_roundtrip_eff_pct", "—"), "unit": "%"},
+            {"group": "氢能系统", "name": "储氢压力", "value": res.get("hydro_pressure_mpa", "—"), "unit": "MPa"},
+            {"group": "新能源", "name": "估算限电/弃电", "value": derived.get("curtailment_kw", "—"), "unit": "kW"},
+            {"group": "运行质量", "name": "量测数据健康率", "value": dq.get("health_pct", 100.0), "unit": "%"},
+            {"group": "运行质量", "name": "在线 RTU / 告警未确认", "value": f"{st.get('rtu_online', 0)}/{st.get('rtu_total', 0)} · {st.get('alarm_unacked', 0)}", "unit": "台 / 条"},
+        ]
+
+        dev_rows = []
+        for d in devices:
+            m_map = {m["metric"]: m for m in d.get("metrics") or ()}
+            p_m = m_map.get("p") or m_map.get("ac_p") or m_map.get("dc_p") or m_map.get("i_p")
+            p_val = round(float(p_m["value"]), 2) if (p_m and p_m.get("value") is not None) else "—"
+            status_text = "合闸" if d.get("position") == 1 else ("分闸" if d.get("position") == 0 else ("运行" if d.get("run") == 1 else "—"))
+            dev_rows.append({
+                "name": d["name"],
+                "category": d["category"],
+                "table_name": d["table_name"],
+                "idx": d["idx"],
+                "valid_count": d["valid_count"],
+                "bound_count": d["bound_count"],
+                "p_kw": p_val,
+                "status_text": status_text,
+                "alarm_count": d.get("alarm_count", 0),
+            })
+
+        report_obj = {
+            "station_name": cockpit.get("station_name", "南极秦岭站综合能量管理系统"),
+            "date": day_label,
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "quality_health_pct": dq.get("health_pct", 100.0),
+            "kpis": kpis,
+            "devices": dev_rows,
+        }
+        fmt_l = str(fmt or "json").lower()
+        if fmt_l == "csv":
+            return "text/csv; charset=utf-8", render_daily_report_csv(report_obj)
+        if fmt_l == "html":
+            return "text/html; charset=utf-8", render_daily_report_html(report_obj)
+        return "application/json; charset=utf-8", report_obj
 
     def compare_trends(
         self,
@@ -3451,6 +3966,13 @@ class PortalService:
                 {"key": "load", "label": "总负荷", "points": power_series["load"]},
             ],
             "storage_schedule": storage_schedule,
+            "derived": compute_polar_derived_metrics(
+                rt=rt,
+                env=env,
+                model_params_map=self._read_model_params()[0],
+                devices=devices,
+            ),
+            "data_quality": overview.get("data_quality") or {},
             "health": overview["health"],
         }
         with self._cache_lock:

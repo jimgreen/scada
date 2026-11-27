@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="/static/ui-theme.css" />
     <link rel="stylesheet" href="/static/portal.css" />
     <script defer src="/static/ui-i18n.js"></script>
+    <script defer src="/static/portal-charts.js"></script>
+    <script defer src="/static/portal-extras.js"></script>
     <script defer src="/static/portal.js"></script>
   </head>
   <body class="view-home">
@@ -47,6 +49,7 @@
             <span class="dot"></span>
             <span id="conn-text">连接中</span>
           </div>
+          <span class="dq-pill" id="dq-pill" title="数据健康">--%</span>
         </div>
       </div>
 
@@ -57,6 +60,9 @@
       </div>
 
       <div class="header-tools">
+        <button type="button" class="btn secondary topbar-mini-btn" id="cmd-palette-btn" title="命令面板 (Ctrl+K)">⌘K</button>
+        <button type="button" class="btn secondary topbar-mini-btn" id="control-lock-btn" title="切换只读监盘 / 值班控调">值班控调</button>
+        <button type="button" class="btn secondary topbar-mini-btn" id="control-audit-btn" title="操作审计">操作审计</button>
         <a class="portal-cross-link" id="portal-jump-d" href="http://127.0.0.1:8980/" target="_blank" rel="noopener">工程配置 ↗</a>
         <span class="live-clock" id="live-clock">--:--:--</span>
       </div>
@@ -629,6 +635,10 @@
                   <span class="ck-head-gem" aria-hidden="true"></span>
                   <h2>极地能效与环境</h2>
                   <span class="ck-head-slash" aria-hidden="true"></span>
+                  <div class="ck-report-actions">
+                    <a class="ck-mini-link" id="ck-report-csv" href="/api/report/daily?format=csv" download>导出 CSV</a>
+                    <a class="ck-mini-link" id="ck-report-html" href="/api/report/daily?format=html" target="_blank" rel="noopener">打印报表</a>
+                  </div>
                 </header>
                 <div class="ck-stat-grid">
                   <div class="ck-stat-box">
@@ -655,6 +665,12 @@
                     <span>告警 / RTU</span>
                     <strong id="ck-st-health">-- / --</strong>
                   </button>
+                </div>
+                <div class="ck-derived-strip" id="ck-derived-strip">
+                  <span>柴油续航 <strong id="ck-drv-endurance">-- h</strong></span>
+                  <span>氢能往返效率 <strong id="ck-drv-h2eff">--%</strong></span>
+                  <span>估算限电 <strong id="ck-drv-curtail">-- kW</strong></span>
+                  <span class="ck-drv-badge" id="ck-drv-weather">极地气象正常</span>
                 </div>
               </article>
 
@@ -1008,6 +1024,11 @@
             </div>
             <div class="toolbar-right">
               <input id="pf-search" type="search" placeholder="搜索定位设备…" aria-label="搜索定位设备" />
+              <select id="pf-canvas-mode" aria-label="画布风格">
+                <option value="native">原色画布</option>
+                <option value="dark-blend">暗夜融合</option>
+              </select>
+              <label class="chk"><input type="checkbox" id="pf-fault-only" /> 仅异常/分闸</label>
               <label class="chk"><input type="checkbox" id="pf-show-arrows" checked /> 流动箭头</label>
               <label class="chk"><input type="checkbox" id="pf-show-meas" checked /> 量测值</label>
               <label class="chk"><input type="checkbox" id="pf-show-labels" checked /> 设备名称</label>
@@ -1031,15 +1052,23 @@
                 <span><i class="swatch flow-dc"></i>直流潮流</span>
                 <span id="pf-zoom-label">100%</span>
               </div>
+              <div class="pf-minimap" id="pf-minimap" title="点击或拖拽快速平移潮流图">
+                <div class="pf-minimap-grid"></div>
+                <div class="pf-minimap-vp"></div>
+              </div>
 
-              <!-- 设备鼠标悬浮框 -->
+              <!-- 设备鼠标悬浮/点击锁定框 -->
               <div class="pf-popover" id="pf-dev-popover" hidden>
                 <div class="pf-pop-head">
                   <div class="pf-pop-title-wrap">
                     <strong id="pf-dev-pop-name">设备详情</strong>
                     <small id="pf-dev-pop-meta"></small>
                   </div>
-                  <button type="button" class="btn secondary pf-pop-jump" id="pf-jump-device">日曲线 →</button>
+                  <div class="pf-pop-head-actions">
+                    <button type="button" class="btn secondary pf-pop-icon-btn" id="pf-pin-device" title="固定弹窗">📌</button>
+                    <button type="button" class="btn secondary pf-pop-jump" id="pf-jump-device">日曲线 →</button>
+                    <button type="button" class="btn secondary pf-pop-icon-btn" id="pf-close-device" title="关闭">✕</button>
+                  </div>
                 </div>
                 <div class="pf-pop-tabs" id="pf-dev-pop-tabs" role="tablist" aria-label="设备参数与指令分页" hidden></div>
                 <div class="pf-pop-metrics" id="pf-dev-pop-metrics"></div>
@@ -1102,6 +1131,7 @@
                   <button type="button" class="sub-tab-btn active" data-dev-filter="all">全部</button>
                   <button type="button" class="sub-tab-btn" data-dev-filter="alarm">仅异常</button>
                   <button type="button" class="sub-tab-btn" data-dev-filter="running">仅运行</button>
+                  <button type="button" class="sub-tab-btn" data-dev-filter="starred">收藏</button>
                 </div>
                 <input id="dev-search" type="search" placeholder="筛选设备名称…" aria-label="筛选设备名称" />
               </div>
@@ -1139,12 +1169,20 @@
                         <button type="button" class="btn secondary" id="compare-toggle-btn">同图对比</button>
                         <button type="button" class="btn secondary" id="compare-clear-btn">清空</button>
                       </div>
+                      <input type="date" id="trend-date" aria-label="选择历史日期" title="选择历史日期" />
+                      <label class="chk"><input type="checkbox" id="trend-compare-prev" /> 昨日同比</label>
+                      <select id="trend-axis-mode" aria-label="坐标轴模式">
+                        <option value="dual">自动双轴</option>
+                        <option value="single">单轴</option>
+                        <option value="norm">归一化 %</option>
+                      </select>
                       <select id="trend-hours" aria-label="曲线时间窗">
                         <option value="1">近 1 小时</option>
                         <option value="6">近 6 小时</option>
                         <option value="12">近 12 小时</option>
                         <option value="24" selected>近 24 小时</option>
                       </select>
+                      <button type="button" class="btn secondary" id="trend-reset-zoom" hidden>复位缩放</button>
                       <button type="button" class="btn secondary" id="trend-export-csv">导出 CSV</button>
                     </div>
                   </div>
@@ -1190,6 +1228,8 @@
             <div class="comm-summary comm-summary-inline" id="alarm-summary"></div>
             <div class="toolbar-right">
               <label class="chk" id="alarm-group-wrap"><input type="checkbox" id="alarm-group-rtu" checked /> 按 RTU 折叠</label>
+              <label class="chk"><input type="checkbox" id="alarm-hide-maint" /> 隐藏挂牌</label>
+              <label class="chk"><input type="checkbox" id="alarm-audio-toggle" /> 告警声音</label>
               <select id="alarm-ack-filter" aria-label="确认状态">
                 <option value="">全部状态</option>
                 <option value="0">未确认</option>
@@ -1239,6 +1279,7 @@
           </div>
 
           <div class="comm-overview-split" id="comm-overview-panel">
+            <div class="comm-topology-panel" id="comm-topology-bar" aria-label="通信链路拓扑"></div>
             <div class="table-panel comm-sub-panel" id="comm-rtus-panel">
               <div class="panel-head">
                 <span>RTU 状态</span>
@@ -1390,6 +1431,37 @@
         <div class="limit-dialog-actions">
           <button type="button" class="btn secondary" id="limit-cancel">取消</button>
           <button type="submit" class="btn primary" id="limit-save">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- 控调指令审计抽屉 -->
+    <aside id="control-audit-drawer" class="audit-drawer" hidden aria-label="操作审计">
+      <div class="audit-drawer-head">
+        <h3>操作审计</h3>
+        <div class="audit-drawer-tools">
+          <button type="button" class="btn secondary" id="audit-refresh-btn">刷新</button>
+          <button type="button" class="btn secondary" id="audit-close-btn" aria-label="关闭">✕</button>
+        </div>
+      </div>
+      <div class="audit-drawer-body" id="audit-drawer-body"></div>
+    </aside>
+
+    <!-- 告警确认备注 / 检修挂牌弹窗 -->
+    <dialog id="alarm-note-dialog" class="limit-dialog" aria-labelledby="alarm-note-title">
+      <form id="alarm-note-form" novalidate>
+        <div class="limit-dialog-head">
+          <h3 id="alarm-note-title">确认告警</h3>
+          <button type="button" class="btn secondary" id="alarm-note-close" aria-label="关闭">×</button>
+        </div>
+        <div class="limit-dialog-meta" id="alarm-note-meta"></div>
+        <div class="limit-fields">
+          <label>操作人<input id="alarm-note-operator" type="text" placeholder="操作人（可选）" /></label>
+          <label id="alarm-note-reason-lbl">备注<input id="alarm-note-text" type="text" placeholder="处置备注（可选）" /></label>
+        </div>
+        <div class="limit-dialog-actions">
+          <button type="button" class="btn secondary" id="alarm-note-cancel">取消</button>
+          <button type="submit" class="btn primary" id="alarm-note-ok">确认</button>
         </div>
       </form>
     </dialog>
