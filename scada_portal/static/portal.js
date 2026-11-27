@@ -4,13 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  // 默认未显式选过主题时启用科幻·电光青，与南极秦岭站底图统一
-  try {
-    if (!localStorage.getItem("scada_ui_theme")) {
-      document.documentElement.dataset.theme = "sci-fi-cyan";
-      localStorage.setItem("scada_ui_theme", "sci-fi-cyan");
-    }
-  } catch (_) {}
+  // 默认主题由 <html data-theme="sci-fi-cyan"> 与 ui-i18n.js 统一同步，避免 data-theme 与 data-color-scheme 失配
 
   const SERIES_COLORS_DARK = ["#38BDF8", "#34D399", "#FBBF24", "#FB7185", "#A78BFA", "#2DD4BF", "#F97316"];
   const SERIES_COLORS_LIGHT = ["#2563EB", "#0D9488", "#D97706", "#DC2626", "#7C3AED", "#0284C7", "#EA580C"];
@@ -2501,9 +2495,10 @@
         return (
           `<div class="metric-box">` +
           `<div class="m-top">` +
-          `<div class="m-main"><span class="m-name">${esc(m.label)}</span><span class="metric-val">${esc(valStr)}<small>${esc(m.unit || "")}</small></span></div>` +
+          `<span class="m-name" title="${esc(m.label)}">${esc(m.label)}</span>` +
           `${qBadge}` +
           `</div>` +
+          `<div class="m-main"><span class="metric-val">${esc(valStr)}<small>${esc(m.unit || "")}</small></span></div>` +
           `<div class="m-foot"><span>RTU ${m.rtu_id ?? "-"} / #${m.point_no ?? "-"}</span>${limitBtn}</div>` +
           `</div>`
         );

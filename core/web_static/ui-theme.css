@@ -1123,7 +1123,7 @@ html[data-theme] button.ui-fullscreen-toggle.is-active {
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border-strong, #334155));
   background: var(--bg-surface);
   color: var(--text-primary);
-  box-shadow: var(--shadow-float, 0 12px 28px rgba(0, 0, 0, 0.35));
+  box-shadow: var(--shadow-dialog, 0 12px 28px rgba(0, 0, 0, 0.35));
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3056,4 +3056,15 @@ html[data-theme] a.ui-ico-btn.xs {
   height: 22px;
   min-height: 22px;
   padding: 0 6px !important;
+}
+
+/* 跨应用统一标题层级（H2 15px > 正文 13px）与侧栏辅标最小字号 */
+html[data-theme] .workbench .card h2,
+html[data-theme] .workbench .panel h2 {
+  font-size: 15px !important;
+  font-weight: 600;
+}
+html[data-theme] .workbench-sidebar .nav span,
+html[data-theme] .sidebar .nav span {
+  font-size: 11px !important;
 }

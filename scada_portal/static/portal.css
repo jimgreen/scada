@@ -78,7 +78,7 @@ body:not(.view-home) .cockpit-bg-img {
 
 /* ==================== 悬浮式星舰主桥顶栏 ==================== */
 .portal-topbar {
-  height: 54px;
+  height: 56px;
   padding: 0 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -1623,21 +1623,22 @@ html[data-theme] .pf-mp-tabs button.pf-mp-tab.active {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 6px;
-  max-height: 150px;
+  grid-template-columns: repeat(auto-fill, minmax(186px, 1fr));
+  gap: 8px;
+  max-height: 196px;
   overflow-y: auto;
   flex-shrink: 0;
 }
 
 .metric-box {
-  padding: 6px 9px;
-  border-radius: 6px;
+  padding: 7px 10px;
+  border-radius: 12px;
   background: var(--bg-subtle, #0d1b33);
   border: var(--border, 1px solid rgba(0, 229, 255, 0.16));
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .metric-box .m-top {
@@ -1653,18 +1654,20 @@ html[data-theme] .pf-mp-tabs button.pf-mp-tab.active {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .metric-box .m-name {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-secondary, #7da2c4);
   white-space: nowrap;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .metric-box .metric-val {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary, #e6f7ff);
   white-space: nowrap;
@@ -1673,13 +1676,13 @@ html[data-theme] .pf-mp-tabs button.pf-mp-tab.active {
 
 .metric-box .metric-val small {
   margin-left: 3px;
-  font-size: 10px;
-  font-weight: 400;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-secondary, #7da2c4);
 }
 
 .metric-box .m-foot {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary, #7da2c4);
   display: flex;
   justify-content: space-between;
@@ -4757,18 +4760,23 @@ html[data-theme] .pf-popover button#pf-pin-device.active {
 
 .pf-minimap {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
-  width: 152px;
-  height: 92px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color, rgba(56, 189, 248, 0.35));
-  background: var(--bg-surface, rgba(8, 17, 33, 0.86));
-  backdrop-filter: blur(6px);
+  left: 12px;
+  bottom: 52px;
+  width: 136px;
+  height: 82px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #67e8f9) 28%, transparent);
+  background: color-mix(in srgb, var(--bg-surface, #081121) 80%, transparent);
+  backdrop-filter: blur(10px);
   overflow: hidden;
   cursor: crosshair;
   z-index: 8;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  opacity: 0.88;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  transition: opacity 180ms ease;
+}
+.pf-minimap:hover {
+  opacity: 1;
 }
 .pf-minimap-grid {
   position: absolute;
@@ -6264,4 +6272,64 @@ html[data-theme] .wx-mode-seg button {
 .dev-item.selected {
   background: linear-gradient(120deg, color-mix(in srgb, var(--accent, #67e8f9) 20%, transparent), rgba(167, 139, 250, 0.12)) !important;
   box-shadow: inset 3px 0 0 var(--accent, #67e8f9), 0 6px 20px color-mix(in srgb, var(--accent, #67e8f9) 14%, transparent) !important;
+}
+
+/* 7. 全页面防溢出、字号下限(>=11px)、标题层级与弹窗间距校准 */
+.portal-shell {
+  height: calc(100vh - 56px);
+}
+.ck-panel {
+  overflow: hidden !important;
+}
+.ck-head {
+  overflow: hidden;
+  min-width: 0;
+}
+.ck-head h2,
+.ef-card-head h2 {
+  font-size: 13.5px !important;
+  flex-shrink: 0;
+}
+.ck-curve-legend {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  justify-content: flex-start;
+}
+.ck-sched-legend-bar {
+  flex: 0 0 auto !important;
+  margin: -2px 0 4px !important;
+  flex-wrap: wrap !important;
+  overflow: visible !important;
+  gap: 3px 5px !important;
+}
+.ck-leg-chip {
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px !important;
+}
+.ck-drv-badge,
+.ck-node-readout small,
+.ds-tile-sub,
+.log-file-btn small,
+.comm-topo-root small {
+  font-size: 11px !important;
+}
+.ds-matrix-grid {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)) !important;
+}
+.weather-dialog {
+  width: min(600px, calc(100vw - 24px)) !important;
+}
+.wx-preview {
+  gap: 7px 12px !important;
+  padding: 9px 10px !important;
+}
+.wx-prev-item {
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-surface, #0c1932) 55%, transparent);
+  gap: 8px !important;
 }

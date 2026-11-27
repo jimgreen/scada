@@ -2412,7 +2412,12 @@
 
   try {
     const savedTheme = localStorage.getItem(THEME_KEY);
-    if (savedTheme) currentTheme = normalizeTheme(savedTheme);
+    const htmlPreset = document.documentElement?.dataset?.theme;
+    if (savedTheme) {
+      currentTheme = normalizeTheme(savedTheme);
+    } else if (htmlPreset && THEMES.includes(normalizeTheme(htmlPreset))) {
+      currentTheme = normalizeTheme(htmlPreset);
+    }
     const savedLang = localStorage.getItem(LANG_KEY);
     if (LANGS.includes(savedLang)) currentLang = savedLang;
   } catch (_) {
