@@ -1205,8 +1205,13 @@ html[data-theme] .dk-wx-mode button.active {
   margin-bottom: 10px;
 }
 html[data-theme] .dk-wx-presets button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   padding: 4px !important;
   min-height: 26px;
+  border-radius: 999px !important;
   font-size: 11px !important;
   white-space: nowrap;
   overflow: hidden;

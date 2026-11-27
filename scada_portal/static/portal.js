@@ -236,7 +236,12 @@
     const btn = $("#control-lock-btn");
     if (!btn) return;
     btn.classList.toggle("is-locked", !state.controlUnlocked);
-    btn.textContent = state.controlUnlocked ? tr("值班控调") : tr("只读监盘");
+    const label = state.controlUnlocked ? tr("值班控调") : tr("只读监盘");
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.innerHTML = state.controlUnlocked
+      ? '<svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.2-2.4"/></svg>'
+      : '<svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   }
 
   // 动态同步顶栏跳转 scdfe_d（同主机 8980 端口）
@@ -3113,7 +3118,7 @@
     const efWxBtn = $("#ef-weather-btn");
     if (efWxBtn) {
       efWxBtn.classList.toggle("is-manual", env.mode === "manual");
-      efWxBtn.textContent = env.mode === "manual" ? tr(env.preset_label || "推演") : tr("工况输入");
+      efWxBtn.title = env.mode === "manual" ? `${tr(env.preset_label || "工况推演")} · ${tr("工况输入")}` : tr("配置南极气象工况");
     }
     syncAllWeatherBadges(env, efCpl);
     $("#ef-env-dcu").textContent = `${fmtNum(env.dc_voltage_v, 1)} V`;
@@ -3991,7 +3996,7 @@
     const wxBtn = $("#ck-weather-btn");
     if (wxBtn) {
       wxBtn.classList.toggle("is-manual", effWx.mode === "manual");
-      wxBtn.textContent = effWx.mode === "manual" ? `${tr(effWx.preset_label || "推演")}` : tr("工况输入");
+      wxBtn.title = effWx.mode === "manual" ? `${tr(effWx.preset_label || "工况推演")} · ${tr("工况输入")}` : tr("配置南极气象工况");
     }
     if ($("#ck-st-temp")) {
       const icingTag = Number(effWx.icing_level || 0) > 0 ? ` · ${tr(effWx.icing_label || "")}` : "";
@@ -4614,8 +4619,8 @@
         `<div class="ds-alarm-bot">` +
         `<span>${esc(tr(a.attr_label || a.metric || ""))}${valStr}</span>` +
         `<span class="ds-alarm-ops">` +
-        `<button type="button" class="btn secondary" data-ds-aloc="${idx}">${esc(tr("定位"))}</button>` +
-        `<button type="button" class="btn secondary" data-ds-aack="${idx}">${esc(tr("确认"))}</button>` +
+        `<button type="button" class="ui-ico-btn xs" data-ds-aloc="${idx}" title="${esc(tr("定位"))}" aria-label="${esc(tr("定位"))}"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>` +
+        `<button type="button" class="ui-ico-btn xs" data-ds-aack="${idx}" title="${esc(tr("确认"))}" aria-label="${esc(tr("确认"))}"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>` +
         `</span>` +
         `</div>` +
         `</div>`
@@ -5223,8 +5228,8 @@
     const wStr = wx.wind_speed_ms != null ? `${fmtNum(wx.wind_speed_ms, 1)}m/s` : "--m/s";
     const valTxt = `${tStr} · ${wStr}`;
     const windTxt = cp?.wind?.state === "超速切出"
-      ? `${tr("风耦")} ${tr("切出")}`
-      : `${tr("风耦")} ${fmtNum(cp?.wind?.avail_pct, 0)}%`;
+      ? tr("切出")
+      : `${fmtNum(cp?.wind?.avail_pct, 0)}%`;
     const lvl = cp?.alert_level || "normal";
     const tip = `${labelTxt} · ${tStr} / ${wStr} · ${tr(wx.icing_label || "无覆冰")} · ${tr(cp?.strategy || "")}`;
 

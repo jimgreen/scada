@@ -5807,9 +5807,13 @@ html[data-theme] .wx-mode-seg button.active {
   margin-bottom: 10px;
 }
 html[data-theme] .wx-presets button {
-  padding: 4px 4px !important;
-  min-height: 26px;
-  border-radius: 5px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 5px !important;
+  min-height: 28px;
+  border-radius: 999px !important;
   border: 1px solid color-mix(in srgb, var(--border-strong, #334155) 75%, transparent) !important;
   background: color-mix(in srgb, var(--bg-subtle, #0c1b33) 65%, transparent) !important;
   color: var(--text-secondary) !important;

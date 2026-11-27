@@ -17,13 +17,13 @@
     </div>
     <div class="actions dk-ctrl-actions">
       <button type="button" id="dk-weather-btn" class="dk-weather-pill" title="配置南极气象与环境工况">
-        <span id="dk-wx-label">现场实测</span>
+        <svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20M4.93 19.07 19.07 4.93"/></svg>
         <strong id="dk-wx-val">--°C · --m/s</strong>
-        <em id="dk-wx-cpl">风耦 --%</em>
+        <em id="dk-wx-cpl">--%</em>
       </button>
-      <button id="collect-once" disabled>采集一次</button>
-      <button id="collect-start" class="primary" disabled>启动采集</button>
-      <button id="collect-stop" disabled>停止采集</button>
+      <button id="collect-once" disabled title="采集一次" aria-label="采集一次"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg> 采集</button>
+      <button id="collect-start" class="primary" disabled title="启动采集" aria-label="启动采集"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg> 启动</button>
+      <button id="collect-stop" disabled title="停止采集" aria-label="停止采集"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> 停止</button>
     </div>
   </div>
   <div id="interval-error" class="error" role="alert" hidden></div>
@@ -396,12 +396,12 @@
       <button type="button" id="dk-wx-close" aria-label="关闭">×</button>
     </div>
     <div class="dk-wx-presets" id="dk-wx-presets" role="group">
-      <button type="button" data-dk-wx-preset="live">现场实测</button>
-      <button type="button" data-dk-wx-preset="summer_sunny">极昼晴朗</button>
-      <button type="button" data-dk-wx-preset="katabatic_gale">强下降风</button>
-      <button type="button" data-dk-wx-preset="polar_night_cold">极夜极寒</button>
-      <button type="button" data-dk-wx-preset="blizzard_icing">暴雪重冰</button>
-      <button type="button" data-dk-wx-preset="calm_overcast">静风阴天</button>
+      <button type="button" data-dk-wx-preset="live" title="现场实测"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M6.3 17.7a8 8 0 0 1 0-11.4m11.4 0a8 8 0 0 1 0 11.4"/></svg>实测</button>
+      <button type="button" data-dk-wx-preset="summer_sunny" title="极昼晴朗"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>极昼</button>
+      <button type="button" data-dk-wx-preset="katabatic_gale" title="强下降风"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2"/></svg>强风</button>
+      <button type="button" data-dk-wx-preset="polar_night_cold" title="极夜极寒"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>极夜</button>
+      <button type="button" data-dk-wx-preset="blizzard_icing" title="暴雪重冰"><svg class="ui-ico sm c-danger" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20"/></svg>暴雪</button>
+      <button type="button" data-dk-wx-preset="calm_overcast" title="静风阴天"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>静风</button>
     </div>
     <div class="dk-wx-grid">
       <label><span>环境气温 (°C)</span><div class="dk-wx-r"><input id="dk-wx-temp-r" type="range" min="-55" max="10" step="0.5" value="-12"><input id="dk-wx-temp" type="number" min="-65" max="20" step="0.5" value="-12"></div></label>

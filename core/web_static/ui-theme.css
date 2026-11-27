@@ -2973,3 +2973,63 @@ html[data-theme] dialog::backdrop {
   background: rgba(6, 13, 28, 0.56);
   backdrop-filter: blur(8px);
 }
+
+/* ==================== 全站统一高可读线性矢量图标规范 (.ui-ico) ==================== */
+.ui-ico {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -2px;
+}
+.ui-ico.sm {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.85;
+}
+.ui-ico.lg {
+  width: 16px;
+  height: 16px;
+}
+.ui-ico.c-accent { color: var(--accent); }
+.ui-ico.c-ok { color: var(--ok); }
+.ui-ico.c-warn { color: var(--warn); }
+.ui-ico.c-danger { color: var(--danger); }
+
+html[data-theme] button.ui-ico-btn,
+html[data-theme] a.ui-ico-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 7px !important;
+  border-radius: 999px !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border-color)) !important;
+  background: color-mix(in srgb, var(--bg-subtle) 76%, transparent) !important;
+  color: var(--text-primary) !important;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+html[data-theme] button.ui-ico-btn:hover,
+html[data-theme] a.ui-ico-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-subtle)) !important;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+html[data-theme] button.ui-ico-btn.xs,
+html[data-theme] a.ui-ico-btn.xs {
+  min-width: 24px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 6px !important;
+}

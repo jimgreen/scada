@@ -2640,14 +2640,17 @@
     box.id = "ui-global-controls";
     box.className = "ui-global-controls";
 
-    // 顶栏单一紧凑触发按钮（仅占 ~48px 宽，释放顶栏空间）
+    // 顶栏单一紧凑触发按钮（地球图标 + 主题微光点 + 简码，释放顶栏空间）
     const toggleBtn = document.createElement("button");
     toggleBtn.type = "button";
     toggleBtn.id = "ui-prefs-toggle";
     toggleBtn.className = "ui-prefs-toggle";
     toggleBtn.setAttribute("aria-haspopup", "true");
     toggleBtn.setAttribute("aria-expanded", "false");
-    toggleBtn.innerHTML = '<i class="ui-prefs-dot" aria-hidden="true"></i><span class="ui-prefs-code">中</span><span class="ui-prefs-caret" aria-hidden="true">▾</span>';
+    toggleBtn.innerHTML =
+      '<svg class="ui-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>' +
+      '<i class="ui-prefs-dot" aria-hidden="true"></i>' +
+      '<span class="ui-prefs-code">中</span>';
 
     // 悬浮偏好面板（挂载至 body 避免被顶栏 overflow 裁切）
     const pop = document.createElement("div");

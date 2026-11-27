@@ -2205,10 +2205,10 @@
       modeBar.setAttribute('aria-label', '左栏模式');
       modeBar.innerHTML =
         '<div class="dk-sb-mode-seg">'
-        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="floating">悬浮</button>'
-        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="docked">内嵌</button>'
+        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="floating" title="悬浮模式" aria-label="悬浮模式"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="5" y="6" width="6" height="12" rx="1"/></svg></button>'
+        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="docked" title="内嵌固定" aria-label="内嵌固定"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>'
         + '</div>'
-        + '<button type="button" class="dk-sb-hide-btn" id="dk-sb-hide-btn" title="隐藏左栏" aria-label="隐藏左栏">◂</button>';
+        + '<button type="button" class="dk-sb-hide-btn" id="dk-sb-hide-btn" title="隐藏左栏" aria-label="隐藏左栏"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>';
       sidebar.insertBefore(modeBar, sidebar.firstChild);
     }
 
@@ -2337,8 +2337,8 @@
       if ($('#dk-wx-val')) $('#dk-wx-val').textContent = `${Number(eff.temperature_c ?? -12).toFixed(0)}°C · ${Number(eff.wind_speed_ms ?? 0).toFixed(1)}m/s`;
       if ($('#dk-wx-cpl')) {
         $('#dk-wx-cpl').textContent = cpl.wind?.state === '超速切出'
-          ? `${tFn('风耦')} ${tFn('切出')}`
-          : `${tFn('风耦')} ${Number(cpl.wind?.avail_pct ?? 0).toFixed(0)}%`;
+          ? tFn('切出')
+          : `${Number(cpl.wind?.avail_pct ?? 0).toFixed(0)}%`;
       }
       btn.title = `${tFn(eff.preset_label || '')} · ${tFn(cpl.strategy || '')}`;
     };
