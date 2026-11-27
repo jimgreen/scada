@@ -277,7 +277,7 @@ class PortalHandler(BaseScadaHandlerMixin, BaseHTTPRequestHandler):
 
         try:
             # 静态页面与前端资源
-            if path in {"/", "/index.html", "/cockpit", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs"}:
+            if path in {"/", "/index.html", "/cockpit", "/dispatch", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs"}:
                 return self._serve_file(STATIC_DIR / "index.html")
             if path.startswith("/static/"):
                 rel = path.removeprefix("/static/")

@@ -1,23 +1,269 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scdfe_d · 设备量测</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/point-trend.css"></head>
 <body><header></header><main>
 <p id="alert" role="alert" hidden></p>
-<section id="overview-stats" class="stats stats-compact" aria-label="采集概况" hidden><div><span>设备</span><strong id="device-count">—</strong></div><div><span>量测属性</span><strong id="property-count">—</strong></div><div><span>点表映射</span><strong id="mapping-count">—</strong></div><div><span>可用量测</span><strong id="valid-count">—</strong></div><div><span>指令点</span><strong id="control-count">—</strong></div></section>
-<section id="overview" class="panel" hidden>
-<div class="toolbar overview-bar">
-<span id="collector-state" class="badge">未启动</span>
-<form id="interval-form" class="interval-form">
-<label>采集周期（秒）<input id="interval" type="number" min="1" max="60" step="1" value="5" required disabled aria-describedby="interval-effective interval-feedback interval-error"></label>
-<button type="submit" id="interval-save" disabled>保存周期</button>
-<span id="interval-effective" class="muted"></span>
-<span id="interval-feedback" class="muted" role="status"></span>
-</form>
-<span id="last-refresh" class="muted"></span>
-<div class="actions"><button id="collect-once" disabled>采集一次</button><button id="collect-start" class="primary" disabled>启动采集</button><button id="collect-stop" disabled>停止采集</button></div>
-</div>
-<div id="interval-error" class="error" role="alert" hidden></div>
-<div id="collector-error" role="alert"></div>
-<div class="table-wrap"><table><thead><tr><th>设备类型</th><th>设备数</th><th>量测有效 / 绑定</th><th>指令点</th><th>操作</th></tr></thead><tbody id="category-rows"></tbody></table></div>
-<div id="overview-recent-ctrl" class="overview-recent-ctrl" hidden><div class="recent-ctrl-head"><span>最近指令流水</span><a href="/controls">进入指令下发 →</a></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th>设定值</th><th>状态</th></tr></thead><tbody id="overview-ctrl-rows"></tbody></table></div></div>
+<section id="overview-stats" class="stats stats-compact dk-hidden-legacy" aria-label="采集概况" hidden><div><span>设备</span><strong id="device-count">—</strong></div><div><span>量测属性</span><strong id="property-count">—</strong></div><div><span>点表映射</span><strong id="mapping-count">—</strong></div><div><span>可用量测</span><strong id="valid-count">—</strong></div><div><span>指令点</span><strong id="control-count">—</strong></div></section>
+<section id="overview" class="dk-screen" hidden>
+  <!-- 顶部紧凑引擎操控条（36px 单行，完整保留原有周期与启停控制 ID） -->
+  <div class="dk-control-strip">
+    <div class="dk-ctrl-left">
+      <span id="collector-state" class="badge">未启动</span>
+      <form id="interval-form" class="interval-form">
+        <label>采集周期（秒）<input id="interval" type="number" min="1" max="60" step="1" value="5" required disabled aria-describedby="interval-effective interval-feedback interval-error"></label>
+        <button type="submit" id="interval-save" disabled>保存周期</button>
+        <span id="interval-effective" class="muted"></span>
+        <span id="interval-feedback" class="muted" role="status"></span>
+      </form>
+      <span id="last-refresh" class="muted dk-last-refresh"></span>
+    </div>
+    <div class="actions dk-ctrl-actions">
+      <button id="collect-once" disabled>采集一次</button>
+      <button id="collect-start" class="primary" disabled>启动采集</button>
+      <button id="collect-stop" disabled>停止采集</button>
+    </div>
+  </div>
+  <div id="interval-error" class="error" role="alert" hidden></div>
+  <div id="collector-error" role="alert"></div>
+
+  <!-- 三栏全息数据引擎大屏主体（左：总览+分类占比 / 中：全息引擎枢纽+耗时质量双轴曲线 / 右：分类台账+实时流水） -->
+  <div class="dk-grid">
+    <!-- 左栏 -->
+    <div class="dk-col dk-col-left">
+      <article class="dk-panel dk-panel-kpi">
+        <header class="dk-head">
+          <span class="dk-head-gem" aria-hidden="true"></span>
+          <h2>模型与点表总览</h2>
+          <span class="dk-head-slash" aria-hidden="true"></span>
+          <span class="dk-head-meta" id="dk-source-tag">scdfe_c.db</span>
+        </header>
+        <div class="dk-orb-grid">
+          <div class="dk-orb-item">
+            <span class="dk-orb" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
+            <strong id="dk-kpi-devices">—</strong>
+            <small>模型设备</small>
+          </div>
+          <div class="dk-orb-item">
+            <span class="dk-orb" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h4l3-7 4 14 3-7h2"/></svg></span>
+            <strong id="dk-kpi-mappings">—</strong>
+            <small>点表映射</small>
+          </div>
+          <div class="dk-orb-item">
+            <span class="dk-orb ok" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5"/></svg></span>
+            <strong id="dk-kpi-valid">—</strong>
+            <small>可用量测</small>
+          </div>
+          <div class="dk-orb-item">
+            <span class="dk-orb warn" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></svg></span>
+            <strong id="dk-kpi-controls">—</strong>
+            <small>控调指令点</small>
+          </div>
+        </div>
+        <div class="dk-rate-bars">
+          <div class="dk-rate-row">
+            <span>点表映射覆盖率</span>
+            <div class="dk-rate-track"><i id="dk-bar-bind" style="width:0%"></i></div>
+            <strong id="dk-val-bind">—</strong>
+          </div>
+          <div class="dk-rate-row">
+            <span>量测实时有效率</span>
+            <div class="dk-rate-track"><i class="ok" id="dk-bar-valid" style="width:0%"></i></div>
+            <strong id="dk-val-valid">—</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="dk-panel dk-panel-mix">
+        <header class="dk-head">
+          <span class="dk-head-gem" aria-hidden="true"></span>
+          <h2>设备分类占比</h2>
+          <span class="dk-head-slash" aria-hidden="true"></span>
+          <span class="dk-head-meta" id="dk-cat-total">— 类</span>
+        </header>
+        <div class="dk-mix-body">
+          <div class="dk-donut-wrap">
+            <svg class="dk-donut-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="dk-donut-halo" cx="60" cy="60" r="54"></circle>
+              <circle class="dk-donut-track" cx="60" cy="60" r="42"></circle>
+              <g id="dk-donut-arcs"></g>
+            </svg>
+            <div class="dk-donut-center">
+              <strong id="dk-donut-pct">—</strong>
+              <span>设备总量</span>
+            </div>
+          </div>
+          <div class="dk-mix-bars" id="dk-mix-bars"></div>
+        </div>
+      </article>
+    </div>
+
+    <!-- 中栏 -->
+    <div class="dk-col dk-col-center">
+      <article class="dk-panel dk-panel-hub">
+        <div class="dk-hub-stage">
+          <svg class="dk-hub-svg" viewBox="0 0 680 330" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <defs>
+              <radialGradient id="dk-core-glow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#38e8ff" stop-opacity="0.72" />
+                <stop offset="52%" stop-color="#0284c7" stop-opacity="0.22" />
+                <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+              </radialGradient>
+              <linearGradient id="dk-cube-top" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#bae6fd" stop-opacity="0.95" />
+                <stop offset="100%" stop-color="#0284c7" stop-opacity="0.7" />
+              </linearGradient>
+              <linearGradient id="dk-cube-left" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.88" />
+                <stop offset="100%" stop-color="#0c4a6e" stop-opacity="0.75" />
+              </linearGradient>
+              <linearGradient id="dk-cube-right" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#2dd4bf" stop-opacity="0.82" />
+                <stop offset="100%" stop-color="#0f766e" stop-opacity="0.72" />
+              </linearGradient>
+              <filter id="dk-glow" x="-30%" y="-30%" width="160%" height="160%">
+                <feGaussianBlur stdDeviation="2.6" result="b" />
+                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+
+            <!-- 底座旋转星环 -->
+            <g transform="translate(340, 186) scale(1, 0.38)">
+              <circle r="138" class="dk-hub-ring outer dk-spin-cw" />
+              <circle r="106" class="dk-hub-ring mid dk-spin-ccw" />
+              <circle r="74" class="dk-hub-ring core" />
+            </g>
+
+            <!-- 6 条动态数据总线光轨（左 3 采集链路 / 右 3 控调与门户链路） -->
+            <g class="dk-hub-tracks">
+              <path class="dk-flow-track" d="M 118 76 Q 214 92 290 160" />
+              <path class="dk-flow-track" d="M 96 172 Q 192 174 268 174" />
+              <path class="dk-flow-track" d="M 124 270 Q 222 256 292 204" />
+              <path class="dk-flow-track" d="M 390 160 Q 466 92 562 76" />
+              <path class="dk-flow-track" d="M 412 174 Q 488 174 584 172" />
+              <path class="dk-flow-track" d="M 388 204 Q 458 256 556 270" />
+            </g>
+            <g class="dk-hub-pulses" id="dk-hub-pulses" filter="url(#dk-glow)">
+              <path class="dk-flow-pulse" d="M 118 76 Q 214 92 290 160" />
+              <path class="dk-flow-pulse" d="M 96 172 Q 192 174 268 174" />
+              <path class="dk-flow-pulse" d="M 124 270 Q 222 256 292 204" />
+              <path class="dk-flow-pulse ok" d="M 390 160 Q 466 92 562 76" />
+              <path class="dk-flow-pulse warn" d="M 412 174 Q 488 174 584 172" />
+              <path class="dk-flow-pulse ok" d="M 388 204 Q 458 256 556 270" />
+            </g>
+
+            <!-- 中央全息数据引擎 3D 魔方核心 -->
+            <g class="dk-core-wrap" transform="translate(340, 166)">
+              <ellipse cx="0" cy="24" rx="80" ry="30" fill="url(#dk-core-glow)" opacity="0.88" />
+              <g class="dk-core-float">
+                <polygon points="0,-46 44,-22 0,2 -44,-22" fill="url(#dk-cube-top)" stroke="#e0faff" stroke-width="1" />
+                <polygon points="-44,-22 0,2 0,48 -44,24" fill="url(#dk-cube-left)" stroke="#7dd3fc" stroke-width="0.9" />
+                <polygon points="44,-22 0,2 0,48 44,24" fill="url(#dk-cube-right)" stroke="#5eead4" stroke-width="0.9" />
+                <polygon points="0,-28 24,-15 0,-2 -24,-15" fill="none" stroke="#ffffff" stroke-width="0.9" opacity="0.8" />
+                <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-size="11" font-weight="700" font-family="Consolas, monospace" letter-spacing="1">SCDFE-D</text>
+              </g>
+            </g>
+          </svg>
+
+          <div class="dk-hub-badge">设备模型量测与控调引擎枢纽</div>
+          <div class="dk-hub-center-stat">
+            <span>批次 <strong id="dk-hub-batch">#—</strong></span>
+            <i></i>
+            <span>耗时 <strong id="dk-hub-dur">— ms</strong></span>
+            <i></i>
+            <span>周期 <strong id="dk-hub-int">— s</strong></span>
+          </div>
+
+          <!-- 6 大紧凑快捷业务节点（零硬框、防遮挡） -->
+          <a class="dk-node dk-node-tl" href="/diagnostics">
+            <span class="dk-node-title">源库与诊断</span>
+            <span class="dk-node-disc" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-src">scdfe_c.db</strong><small id="dk-n-src-sub">实时采集源</small></div>
+          </a>
+          <a class="dk-node dk-node-ml" href="/measurements">
+            <span class="dk-node-title">量测与参数</span>
+            <span class="dk-node-disc" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-meas">—</strong><small>YC / YX 监视</small></div>
+          </a>
+          <a class="dk-node dk-node-bl" href="/mappings">
+            <span class="dk-node-title">量测定义</span>
+            <span class="dk-node-disc" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m17 3 4 4-4 4M3 7h18M7 21l-4-4 4-4m14 4H3"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-map">—</strong><small>属性映射维护</small></div>
+          </a>
+          <a class="dk-node dk-node-tr" id="dk-jump-portal-node" href="http://127.0.0.1:8981/" target="_blank" rel="noopener">
+            <span class="dk-node-title">监控门户 ↗</span>
+            <span class="dk-node-disc ok" aria-hidden="true"><svg viewBox="0 0 24 24"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><path d="M12 22V12M21 7l-9 5-9-5"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-portal">scada_portal</strong><small>全站潮流大屏</small></div>
+          </a>
+          <a class="dk-node dk-node-mr" href="/controls">
+            <span class="dk-node-title">指令下发</span>
+            <span class="dk-node-disc warn" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-ctrl">—</strong><small id="dk-n-ctrl-sub">待回执 0</small></div>
+          </a>
+          <a class="dk-node dk-node-br" href="/logs">
+            <span class="dk-node-title">运行日志</span>
+            <span class="dk-node-disc ok" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+            <div class="dk-node-readout"><strong id="dk-n-log">审计流水</strong><small>批次与变更记录</small></div>
+          </a>
+        </div>
+      </article>
+
+      <article class="dk-panel dk-panel-chart">
+        <header class="dk-head">
+          <span class="dk-head-gem" aria-hidden="true"></span>
+          <h2>采集耗时与有效率曲线</h2>
+          <span class="dk-head-slash" aria-hidden="true"></span>
+          <div class="dk-chart-legend">
+            <span><i style="background:#38bdf8"></i>耗时 ms</span>
+            <span><i style="background:#34d399"></i>有效率 %</span>
+          </div>
+          <span class="dk-head-meta" id="dk-chart-meta">近 0 批</span>
+        </header>
+        <div class="dk-canvas-wrap" id="dk-chart-wrap">
+          <canvas id="dk-perf-canvas"></canvas>
+        </div>
+      </article>
+    </div>
+
+    <!-- 右栏 -->
+    <div class="dk-col dk-col-right">
+      <article class="dk-panel dk-panel-cats">
+        <header class="dk-head">
+          <span class="dk-head-gem" aria-hidden="true"></span>
+          <h2>设备分类台账</h2>
+          <span class="dk-head-slash" aria-hidden="true"></span>
+          <a class="dk-head-link" href="/measurements">全部 →</a>
+        </header>
+        <div class="table-wrap dk-table-wrap">
+          <table>
+            <thead><tr><th>设备类型</th><th class="num">设备</th><th class="num">有效/绑定</th><th class="num">指令</th><th>操作</th></tr></thead>
+            <tbody id="category-rows"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="dk-panel dk-panel-stream">
+        <header class="dk-head">
+          <span class="dk-head-gem" aria-hidden="true"></span>
+          <h2>引擎实时流水</h2>
+          <span class="dk-head-slash" aria-hidden="true"></span>
+          <div class="dk-mini-tabs" id="dk-stream-tabs" role="tablist">
+            <button type="button" class="active" data-dk-tab="batches">采集批次</button>
+            <button type="button" data-dk-tab="controls">指令流水</button>
+          </div>
+        </header>
+        <div id="dk-stream-batches" class="table-wrap dk-table-wrap">
+          <table>
+            <thead><tr><th class="num">批次</th><th>完成时间</th><th class="num">耗时</th><th class="num">有效/总数</th><th>状态</th></tr></thead>
+            <tbody id="dk-batch-rows"></tbody>
+          </table>
+        </div>
+        <div id="overview-recent-ctrl" class="table-wrap dk-table-wrap" hidden>
+          <table>
+            <thead><tr><th>时间</th><th>来源</th><th>设备</th><th>属性</th><th class="num">设定值</th><th>状态</th></tr></thead>
+            <tbody id="overview-ctrl-rows"></tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+  </div>
 </section>
 <section id="measure-panel" class="panel flexible" hidden>
 <div class="toolbar filters measure-bar">

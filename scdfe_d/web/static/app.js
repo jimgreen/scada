@@ -15,9 +15,31 @@
   const logsMode = mode === '/logs';
   const deviceMode = mappingMode || queryMode || parameterMode;
   const jumpPortalLink = $('#jump-portal-link');
+  const portalUrl = location.protocol + '//' + location.hostname + ':8981/';
   if (jumpPortalLink) {
-    jumpPortalLink.href = location.protocol + '//' + location.hostname + ':8981/';
+    jumpPortalLink.href = portalUrl;
   }
+  const jumpPortalNode = $('#dk-jump-portal-node');
+  if (jumpPortalNode) {
+    jumpPortalNode.href = portalUrl;
+  }
+  // 与 scada_portal 对齐默认科幻主题（若用户未手动选过主题）
+  try {
+    if (!localStorage.getItem('scada_ui_theme')) {
+      document.documentElement.dataset.theme = 'sci-fi-cyan';
+      document.documentElement.dataset.colorScheme = 'dark';
+      localStorage.setItem('scada_ui_theme', 'sci-fi-cyan');
+    }
+  } catch (_) {}
+
+  const tr = text => (
+    window.scadaI18n && typeof window.scadaI18n.translateText === 'function'
+      ? window.scadaI18n.translateText(String(text ?? ''))
+      : String(text ?? '')
+  );
+  let dkRefreshes = [];
+  let dkChartHoverX = null;
+  let dkStreamTab = 'batches';
   const pointTrendHost = $('#point-trend');
   const pointTrend = queryMode && pointTrendHost ? window.scadaPointTrend?.mount(pointTrendHost) : null;
   const liveColumnOffset = 0;
@@ -187,15 +209,290 @@
       + '</span></td></tr>').join('') || '<tr><td colspan="5" class="empty">暂无设备。</td></tr>';
     const recentCtrls = overview.recent_controls || [];
     const recentWrap = $('#overview-recent-ctrl');
+    const batchesWrap = $('#dk-stream-batches');
     if (recentWrap) {
-      recentWrap.hidden = !recentCtrls.length;
       if (recentCtrls.length) {
         $('#overview-ctrl-rows').innerHTML = recentCtrls.map(r => '<tr><td>' + html(time(r.at))
           + '</td><td>' + html(r.source === 'db_watch' ? '库监视' : 'Web')
           + '</td><td class="name">' + html(r.device_name || r.model_table)
-          + '</td><td><code>' + html(r.control) + '</code></td><td class="quantity-value">' + html(number(r.value))
+          + '</td><td><code>' + html(r.control) + '</code></td><td class="num">' + html(number(r.value))
           + '</td><td><span class="ctrl-status s-' + html(r.cmd_status) + '">' + html(r.status_label) + '</span></td></tr>').join('');
+      } else {
+        $('#overview-ctrl-rows').innerHTML = '<tr><td colspan="6" class="empty">暂无指令流水</td></tr>';
       }
+      recentWrap.hidden = dkStreamTab !== 'controls';
+      if (batchesWrap) batchesWrap.hidden = dkStreamTab !== 'batches';
+    }
+    renderDashboardOverview(overview);
+    // 异步拉取最近采集批次以驱动中下双轴性能曲线与右下批次流水
+    api('/api/history').then(hist => {
+      if (request !== overviewRequest) return;
+      dkRefreshes = Array.isArray(hist.refreshes) ? hist.refreshes : [];
+      renderDashboardBatches(dkRefreshes);
+      drawDkPerfChart();
+    }).catch(() => {});
+  }
+
+  const DK_PALETTE = ['#38bdf8', '#34d399', '#fbbf24', '#fb7185', '#a78bfa', '#2dd4bf', '#f97316', '#60a5fa', '#e879f9'];
+
+  function renderDashboardOverview(ov) {
+    if (!ov || !$('#dk-kpi-devices')) return;
+    const c = ov.counts || {};
+    const last = ov.last_refresh;
+    const devCnt = Number(c.device || 0);
+    const propCnt = Number(c.device_measurement || 0);
+    const mapCnt = Number(c.scada_point_mapping || 0);
+    const valCnt = Number(c.valid || 0);
+    const ctrlCnt = Number(c.control || 0);
+    const pendingCnt = Number(c.control_pending || 0);
+
+    $('#dk-kpi-devices').textContent = String(devCnt);
+    $('#dk-kpi-mappings').textContent = String(mapCnt);
+    $('#dk-kpi-valid').textContent = String(valCnt);
+    $('#dk-kpi-controls').textContent = String(ctrlCnt);
+
+    const bindPct = propCnt > 0 ? Math.min(100, (mapCnt / propCnt) * 100) : 0;
+    const validPct = mapCnt > 0 ? Math.min(100, (valCnt / mapCnt) * 100) : 0;
+    $('#dk-bar-bind').style.width = bindPct.toFixed(1) + '%';
+    $('#dk-val-bind').textContent = bindPct.toFixed(1) + '%';
+    $('#dk-bar-valid').style.width = validPct.toFixed(1) + '%';
+    $('#dk-val-valid').textContent = validPct.toFixed(1) + '%';
+
+    // 中央全息枢纽与 6 节点摘要
+    const busy = Boolean(ov.collector?.running || ov.collector?.external_running);
+    $('#dk-hub-pulses')?.classList.toggle('paused', !busy);
+    $('#dk-hub-batch').textContent = last ? '#' + last.refresh_id : '#—';
+    $('#dk-hub-dur').textContent = last && last.duration_ms != null ? Number(last.duration_ms).toFixed(2) + ' ms' : '— ms';
+    $('#dk-hub-int').textContent = number(ov.interval_seconds) + ' s';
+
+    let srcLabel = 'scdfe_c.db';
+    if (last?.source_database) {
+      try {
+        const parsed = JSON.parse(last.source_database);
+        const first = Array.isArray(parsed) && parsed.length ? String(parsed[0]) : String(last.source_database);
+        srcLabel = first.split(/[\\/]/).pop() || 'scdfe_c.db';
+      } catch (_) {
+        srcLabel = String(last.source_database).split(/[\\/]/).pop() || 'scdfe_c.db';
+      }
+    }
+    if ($('#dk-source-tag')) $('#dk-source-tag').textContent = srcLabel;
+    if ($('#dk-n-src')) $('#dk-n-src').textContent = srcLabel;
+    if ($('#dk-n-meas')) $('#dk-n-meas').textContent = valCnt + ' / ' + mapCnt;
+    if ($('#dk-n-map')) $('#dk-n-map').textContent = propCnt + ' 项';
+    if ($('#dk-n-ctrl')) $('#dk-n-ctrl').textContent = ctrlCnt + ' 点';
+    if ($('#dk-n-ctrl-sub')) $('#dk-n-ctrl-sub').textContent = '待回执 ' + pendingCnt;
+
+    // 左下：设备分类星环 Donut 图 + 发光进度条
+    const cats = (ov.categories || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0));
+    const labels = ov.category_labels || {};
+    if ($('#dk-cat-total')) $('#dk-cat-total').textContent = cats.length + ' 类';
+    if ($('#dk-donut-pct')) $('#dk-donut-pct').textContent = String(devCnt);
+
+    const arcsEl = $('#dk-donut-arcs');
+    const barsEl = $('#dk-mix-bars');
+    if (arcsEl && barsEl) {
+      const total = Math.max(1, cats.reduce((s, r) => s + Number(r.count || 0), 0));
+      const circum = 2 * Math.PI * 42;
+      let offset = 0;
+      arcsEl.innerHTML = cats.map((row, idx) => {
+        const seg = (Number(row.count || 0) / total) * circum;
+        const color = DK_PALETTE[idx % DK_PALETTE.length];
+        const circle = '<circle class="dk-donut-arc" cx="60" cy="60" r="42" stroke="' + color
+          + '" stroke-dasharray="' + seg.toFixed(2) + ' ' + circum.toFixed(2)
+          + '" stroke-dashoffset="' + (-offset).toFixed(2) + '"></circle>';
+        offset += seg;
+        return circle;
+      }).join('');
+
+      barsEl.innerHTML = cats.slice(0, 6).map((row, idx) => {
+        const pct = (Number(row.count || 0) / total) * 100;
+        const color = DK_PALETTE[idx % DK_PALETTE.length];
+        const name = labels[row.category] || row.category;
+        return '<a class="dk-bar-item" href="/measurements?category=' + encodeURIComponent(row.category) + '">'
+          + '<div class="dk-bar-top"><span>' + html(name) + '</span><strong>' + html(row.count) + ' · ' + pct.toFixed(0) + '%</strong></div>'
+          + '<div class="dk-bar-track"><div class="dk-bar-fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></div></div>'
+          + '</a>';
+      }).join('');
+    }
+  }
+
+  function renderDashboardBatches(list) {
+    const tbody = $('#dk-batch-rows');
+    if (!tbody) return;
+    if (!list || !list.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无采集批次</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.slice(0, 20).map(r => {
+      const ok = !r.error;
+      const tShort = r.finished_at ? new Date(r.finished_at).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
+      const dur = r.duration_ms != null ? Number(r.duration_ms).toFixed(2) + ' ms' : '—';
+      return '<tr>'
+        + '<td class="num">#' + html(r.refresh_id) + '</td>'
+        + '<td>' + html(tShort) + '</td>'
+        + '<td class="num">' + html(dur) + '</td>'
+        + '<td class="num">' + html(r.valid_count ?? 0) + ' / ' + html(r.total_count ?? 0) + '</td>'
+        + '<td>' + (ok ? '<span class="badge ok">正常</span>' : '<span class="badge bad" title="' + html(r.error) + '">异常</span>') + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  function drawDkPerfChart() {
+    const canvas = $('#dk-perf-canvas');
+    const wrap = $('#dk-chart-wrap');
+    if (!canvas || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    const dpr = window.devicePixelRatio || 1;
+    const tw = Math.round(rect.width * dpr);
+    const th = Math.round(rect.height * dpr);
+    if (canvas.width !== tw || canvas.height !== th) {
+      canvas.width = tw;
+      canvas.height = th;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    const isDark = document.documentElement.dataset.colorScheme !== 'light';
+    const axisColor = isDark ? '#8db7d8' : '#64748b';
+    const gridColor = isDark ? 'rgba(148, 163, 184, 0.14)' : 'rgba(100, 116, 139, 0.18)';
+    const durColor = isDark ? '#38bdf8' : '#0284c7';
+    const rateColor = isDark ? '#34d399' : '#059669';
+
+    const pts = (dkRefreshes || []).slice(0, 40).reverse();
+    if ($('#dk-chart-meta')) $('#dk-chart-meta').textContent = '近 ' + pts.length + ' 批';
+    if (!pts.length) {
+      ctx.fillStyle = axisColor;
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(tr('暂无采集批次样本'), rect.width / 2, rect.height / 2);
+      return;
+    }
+
+    const pad = { top: 14, right: 42, bottom: 24, left: 46 };
+    const pw = Math.max(10, rect.width - pad.left - pad.right);
+    const ph = Math.max(10, rect.height - pad.top - pad.bottom);
+
+    const durs = pts.map(p => Number(p.duration_ms || 0));
+    const rates = pts.map(p => (Number(p.total_count || 0) > 0 ? (Number(p.valid_count || 0) / Number(p.total_count)) * 100 : 0));
+    const maxDur = Math.max(10, Math.ceil(Math.max(...durs) * 1.25));
+
+    const xFor = i => pad.left + (pts.length === 1 ? pw / 2 : (i / (pts.length - 1)) * pw);
+    const yDur = v => pad.top + (1 - Math.min(maxDur, Math.max(0, v)) / maxDur) * ph;
+    const yRate = v => pad.top + (1 - Math.min(100, Math.max(0, v)) / 100) * ph;
+
+    // 水平网格 + 左右轴刻度
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.font = '10.5px "JetBrains Mono", Consolas, monospace';
+    for (let i = 0; i <= 4; i += 1) {
+      const r = i / 4;
+      const y = pad.top + r * ph;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + pw, y);
+      ctx.stroke();
+      ctx.fillStyle = durColor;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText((maxDur * (1 - r)).toFixed(maxDur >= 20 ? 0 : 1), pad.left - 6, y);
+      ctx.fillStyle = rateColor;
+      ctx.textAlign = 'left';
+      ctx.fillText(Math.round(100 * (1 - r)) + '%', pad.left + pw + 6, y);
+    }
+    ctx.setLineDash([]);
+
+    // X 轴批次时间
+    ctx.fillStyle = axisColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const xCount = Math.min(5, pts.length);
+    for (let k = 0; k < xCount; k += 1) {
+      const idx = xCount === 1 ? 0 : Math.round((k / (xCount - 1)) * (pts.length - 1));
+      const d = pts[idx].finished_at ? new Date(pts[idx].finished_at) : null;
+      const lbl = d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('zh-CN', { hour12: false }) : '#' + pts[idx].refresh_id;
+      ctx.fillText(lbl, xFor(idx), pad.top + ph + 6);
+    }
+
+    // 耗时面积 + 曲线（左轴）
+    ctx.beginPath();
+    durs.forEach((v, i) => {
+      const x = xFor(i);
+      const y = yDur(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = durColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.lineTo(xFor(durs.length - 1), pad.top + ph);
+    ctx.lineTo(xFor(0), pad.top + ph);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ph);
+    grad.addColorStop(0, isDark ? 'rgba(56, 189, 248, 0.24)' : 'rgba(2, 132, 199, 0.16)');
+    grad.addColorStop(1, 'rgba(56, 189, 248, 0.01)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // 有效率曲线（右轴）
+    ctx.beginPath();
+    rates.forEach((v, i) => {
+      const x = xFor(i);
+      const y = yRate(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = rateColor;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // 悬停十字准星与提示框
+    if (dkChartHoverX !== null && dkChartHoverX >= pad.left && dkChartHoverX <= pad.left + pw) {
+      const ratio = (dkChartHoverX - pad.left) / pw;
+      const idx = Math.max(0, Math.min(pts.length - 1, Math.round(ratio * (pts.length - 1))));
+      const cx = xFor(idx);
+      ctx.strokeStyle = isDark ? 'rgba(0, 229, 255, 0.48)' : 'rgba(2, 132, 199, 0.45)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(cx, pad.top);
+      ctx.lineTo(cx, pad.top + ph);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = durColor;
+      ctx.beginPath();
+      ctx.arc(cx, yDur(durs[idx]), 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = rateColor;
+      ctx.beginPath();
+      ctx.arc(cx, yRate(rates[idx]), 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      const p = pts[idx];
+      const line1 = '#' + p.refresh_id + ' · ' + (p.finished_at ? new Date(p.finished_at).toLocaleTimeString('zh-CN', { hour12: false }) : '');
+      const line2 = tr('耗时') + ': ' + durs[idx].toFixed(2) + ' ms';
+      const line3 = tr('有效率') + ': ' + rates[idx].toFixed(1) + '% (' + (p.valid_count ?? 0) + '/' + (p.total_count ?? 0) + ')';
+      ctx.font = '10.5px "JetBrains Mono", Consolas, monospace';
+      const bw = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width, ctx.measureText(line3).width) + 18;
+      const bh = 54;
+      const bx = cx + 10 + bw > rect.width ? cx - 10 - bw : cx + 10;
+      const by = pad.top + 4;
+      ctx.fillStyle = isDark ? 'rgba(8, 17, 33, 0.94)' : 'rgba(255, 255, 255, 0.96)';
+      ctx.strokeStyle = isDark ? 'rgba(0, 229, 255, 0.45)' : 'rgba(148, 163, 184, 0.55)';
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = isDark ? '#e6f7ff' : '#0f172a';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(line1, bx + 8, by + 6);
+      ctx.fillStyle = durColor;
+      ctx.fillText(line2, bx + 8, by + 22);
+      ctx.fillStyle = rateColor;
+      ctx.fillText(line3, bx + 8, by + 37);
     }
   }
 
@@ -1849,6 +2146,162 @@
     await loadLogs({ append: true });
   }));
   $('#log-export').addEventListener('click', exportLogs);
+
+  // 大屏流水双页签与采集耗时曲线悬停/主题/语言联动
+  for (const btn of document.querySelectorAll('#dk-stream-tabs [data-dk-tab]')) {
+    btn.addEventListener('click', () => {
+      dkStreamTab = btn.dataset.dkTab || 'batches';
+      for (const b of document.querySelectorAll('#dk-stream-tabs [data-dk-tab]')) {
+        b.classList.toggle('active', b === btn);
+      }
+      if ($('#dk-stream-batches')) $('#dk-stream-batches').hidden = dkStreamTab !== 'batches';
+      if ($('#overview-recent-ctrl')) $('#overview-recent-ctrl').hidden = dkStreamTab !== 'controls';
+    });
+  }
+  let dkChartRaf = 0;
+  $('#dk-perf-canvas')?.addEventListener('mousemove', event => {
+    const r = event.target.getBoundingClientRect();
+    dkChartHoverX = event.clientX - r.left;
+    if (!dkChartRaf) {
+      dkChartRaf = requestAnimationFrame(() => {
+        dkChartRaf = 0;
+        drawDkPerfChart();
+      });
+    }
+  });
+  $('#dk-perf-canvas')?.addEventListener('mouseleave', () => {
+    dkChartHoverX = null;
+    drawDkPerfChart();
+  });
+  document.addEventListener('scada:theme-change', () => drawDkPerfChart());
+  document.addEventListener('scada:lang-change', () => drawDkPerfChart());
+  window.addEventListener('resize', () => {
+    if (mode === '/') drawDkPerfChart();
+  });
+
+  // 左侧导航栏模式控制：支持「悬浮 / 内嵌」切换，两种模式均可隐藏（与 scada_portal 共享偏好）
+  (() => {
+    const SB_KEY = 'scada_sidebar_prefs';
+    const shell = document.querySelector('body[data-module="d"] .workbench-shell');
+    const sidebar = document.querySelector('body[data-module="d"] .workbench-sidebar');
+    if (!shell || !sidebar) return;
+
+    let trigger = document.getElementById('dk-edge-trigger');
+    if (!trigger) {
+      trigger = document.createElement('div');
+      trigger.id = 'dk-edge-trigger';
+      trigger.className = 'dk-edge-trigger';
+      trigger.title = tr('展开左栏');
+      trigger.setAttribute('aria-label', tr('展开左栏'));
+      trigger.innerHTML = '<span></span>';
+      shell.insertBefore(trigger, sidebar);
+    }
+
+    let modeBar = sidebar.querySelector('.dk-sb-mode-bar');
+    if (!modeBar) {
+      modeBar = document.createElement('div');
+      modeBar.className = 'dk-sb-mode-bar';
+      modeBar.setAttribute('role', 'group');
+      modeBar.setAttribute('aria-label', '左栏模式');
+      modeBar.innerHTML =
+        '<div class="dk-sb-mode-seg">'
+        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="floating">悬浮</button>'
+        + '<button type="button" class="dk-sb-mode-btn" data-dk-sb-mode="docked">内嵌</button>'
+        + '</div>'
+        + '<button type="button" class="dk-sb-hide-btn" id="dk-sb-hide-btn" title="隐藏左栏" aria-label="隐藏左栏">◂</button>';
+      sidebar.insertBefore(modeBar, sidebar.firstChild);
+    }
+
+    let prefs = { mode: 'floating', hidden: true };
+    try {
+      const saved = JSON.parse(localStorage.getItem(SB_KEY) || 'null');
+      if (saved && (saved.mode === 'floating' || saved.mode === 'docked')) {
+        prefs.mode = saved.mode;
+        prefs.hidden = saved.mode === 'floating' ? true : Boolean(saved.hidden);
+      }
+    } catch (_) {}
+
+    let hideTimer = null;
+    const persist = () => {
+      try { localStorage.setItem(SB_KEY, JSON.stringify(prefs)); } catch (_) {}
+    };
+    const syncUi = () => {
+      const isDocked = prefs.mode === 'docked';
+      shell.classList.toggle('sidebar-docked', isDocked);
+      shell.classList.toggle('sidebar-hidden', isDocked && prefs.hidden);
+      if (isDocked) sidebar.classList.remove('is-open');
+      modeBar.querySelectorAll('[data-dk-sb-mode]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.dkSbMode === prefs.mode);
+      });
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    };
+
+    const openFloating = () => {
+      if (prefs.mode !== 'floating') return;
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      sidebar.classList.add('is-open');
+    };
+    const scheduleCloseFloating = (delay = 220) => {
+      if (prefs.mode !== 'floating') return;
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        sidebar.classList.remove('is-open');
+      }, delay);
+    };
+
+    modeBar.querySelectorAll('[data-dk-sb-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const nextMode = btn.dataset.dkSbMode === 'docked' ? 'docked' : 'floating';
+        prefs.mode = nextMode;
+        prefs.hidden = nextMode === 'floating';
+        persist();
+        syncUi();
+      });
+    });
+    modeBar.querySelector('#dk-sb-hide-btn')?.addEventListener('click', () => {
+      if (prefs.mode === 'docked') {
+        prefs.hidden = true;
+        persist();
+        syncUi();
+      } else {
+        if (hideTimer) clearTimeout(hideTimer);
+        sidebar.classList.remove('is-open');
+      }
+    });
+
+    trigger.addEventListener('mouseenter', () => {
+      if (prefs.mode === 'floating') openFloating();
+    });
+    trigger.addEventListener('click', () => {
+      if (prefs.mode === 'docked') {
+        prefs.hidden = false;
+        persist();
+        syncUi();
+      } else {
+        openFloating();
+      }
+    });
+    sidebar.addEventListener('mouseenter', () => {
+      if (prefs.mode === 'floating') openFloating();
+    });
+    sidebar.addEventListener('mouseleave', () => {
+      if (prefs.mode === 'floating') scheduleCloseFloating(220);
+    });
+    document.addEventListener('mousemove', event => {
+      if (prefs.mode !== 'floating') return;
+      if (event.clientX <= 14 && event.clientY >= 50) {
+        openFloating();
+      } else if (sidebar.classList.contains('is-open') && event.clientX > sidebar.offsetWidth + 24 && !sidebar.matches(':hover')) {
+        scheduleCloseFloating(200);
+      }
+    });
+
+    syncUi();
+  })();
 
   run(init)();
   const update = run(refresh);

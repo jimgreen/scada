@@ -64,8 +64,16 @@
       </div>
     </header>
 
-    <div class="portal-shell">
-      <aside class="portal-sidebar" aria-label="主导航">
+    <div class="portal-shell" id="portal-shell">
+      <div class="sidebar-edge-trigger" id="sidebar-edge-trigger" title="展开左栏" aria-label="展开左栏"><span></span></div>
+      <aside class="portal-sidebar" id="portal-sidebar" aria-label="主导航">
+        <div class="sidebar-mode-bar" role="group" aria-label="左栏模式">
+          <div class="sidebar-mode-seg">
+            <button type="button" class="sidebar-mode-btn active" data-sb-mode="floating">悬浮</button>
+            <button type="button" class="sidebar-mode-btn" data-sb-mode="docked">内嵌</button>
+          </div>
+          <button type="button" class="sidebar-hide-btn" id="sidebar-hide-btn" title="隐藏左栏" aria-label="隐藏左栏">◂</button>
+        </div>
         <nav class="portal-nav" id="portal-nav">
           <button type="button" class="nav-item active" data-view="home">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
@@ -74,6 +82,10 @@
           <button type="button" class="nav-item" data-view="cockpit">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><path d="M12 22V12M21 7l-9 5-9-5"/></svg>
             <span>极地管控</span>
+          </button>
+          <button type="button" class="nav-item" data-view="dispatch">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>
+            <span>运行态势</span>
           </button>
           <button type="button" class="nav-item" data-view="energyflow">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h5m6 0h5M4 12h16M4 18h5m6 0h5"/><circle cx="12" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/></svg>
@@ -674,9 +686,9 @@
                   </button>
                 </div>
                 <div class="ck-derived-strip" id="ck-derived-strip">
-                  <span>柴油续航 <strong id="ck-drv-endurance">-- h</strong></span>
-                  <span>氢能往返效率 <strong id="ck-drv-h2eff">--%</strong></span>
-                  <span>估算限电 <strong id="ck-drv-curtail">-- kW</strong></span>
+                  <span title="柴油续航">续航 <strong id="ck-drv-endurance">--h</strong></span>
+                  <span title="氢能往返效率">氢效 <strong id="ck-drv-h2eff">--%</strong></span>
+                  <span title="估算限电">限电 <strong id="ck-drv-curtail">--kW</strong></span>
                   <span class="ck-drv-badge" id="ck-drv-weather">极地气象正常</span>
                 </div>
               </article>
@@ -771,6 +783,148 @@
                 <div class="ck-canvas-wrap">
                   <canvas id="ck-storage-canvas"></canvas>
                 </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 1.4 运行态势大屏（电网安全、设备矩阵与战情联动） ==================== -->
+        <section id="view-dispatch" class="portal-view ds-view" hidden>
+          <!-- 顶部单行战情指标条 -->
+          <div class="ds-ticker" id="ds-ticker" aria-label="电网运行态势摘要">
+            <div class="ds-tick-item"><span>系统频率</span><strong id="ds-tk-freq">-- Hz</strong></div>
+            <div class="ds-tick-item"><span>交流母线</span><strong id="ds-tk-acv">-- V</strong></div>
+            <div class="ds-tick-item"><span>直流母线</span><strong id="ds-tk-dcv">-- V</strong></div>
+            <div class="ds-tick-item"><span>总发电</span><strong id="ds-tk-gen">-- kW</strong></div>
+            <div class="ds-tick-item"><span>总负荷</span><strong id="ds-tk-load">-- kW</strong></div>
+            <div class="ds-tick-item"><span>功率平衡</span><strong id="ds-tk-bal">-- kW</strong></div>
+            <div class="ds-tick-item"><span>绿电占比</span><strong id="ds-tk-green">--%</strong></div>
+            <div class="ds-tick-item"><span>在线 RTU</span><strong id="ds-tk-rtu">-- / --</strong></div>
+            <button type="button" class="ds-tick-btn" id="ds-tk-alarm-btn"><span>未确认告警</span><strong id="ds-tk-alarm">0</strong></button>
+          </div>
+
+          <!-- 三栏战情主网格 -->
+          <div class="ds-grid">
+            <!-- 左栏：安全裕度弧形仪表 + 源荷实时平衡对比 -->
+            <div class="ds-col ds-col-left">
+              <article class="ck-panel ds-panel-gauges">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>电气安全裕度</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <span class="ck-head-meta" id="ds-sec-status">运行稳定</span>
+                </header>
+                <div class="ds-gauge-grid" id="ds-gauge-grid">
+                  <div class="ds-gauge-card">
+                    <svg class="ds-gauge-svg" viewBox="0 0 120 74" aria-hidden="true">
+                      <path class="ds-g-track" d="M 14 64 A 46 46 0 0 1 106 64" />
+                      <path class="ds-g-arc" id="ds-g-acv" d="M 14 64 A 46 46 0 0 1 106 64" />
+                    </svg>
+                    <div class="ds-g-val"><strong id="ds-gv-acv">--</strong><small>V</small></div>
+                    <span class="ds-g-lbl">交流母线 (380V)</span>
+                  </div>
+                  <div class="ds-gauge-card">
+                    <svg class="ds-gauge-svg" viewBox="0 0 120 74" aria-hidden="true">
+                      <path class="ds-g-track" d="M 14 64 A 46 46 0 0 1 106 64" />
+                      <path class="ds-g-arc ok" id="ds-g-dcv" d="M 14 64 A 46 46 0 0 1 106 64" />
+                    </svg>
+                    <div class="ds-g-val"><strong id="ds-gv-dcv">--</strong><small>V</small></div>
+                    <span class="ds-g-lbl">直流母线 (750V)</span>
+                  </div>
+                  <div class="ds-gauge-card">
+                    <svg class="ds-gauge-svg" viewBox="0 0 120 74" aria-hidden="true">
+                      <path class="ds-g-track" d="M 14 64 A 46 46 0 0 1 106 64" />
+                      <path class="ds-g-arc" id="ds-g-soc" d="M 14 64 A 46 46 0 0 1 106 64" />
+                    </svg>
+                    <div class="ds-g-val"><strong id="ds-gv-soc">--</strong><small>%</small></div>
+                    <span class="ds-g-lbl">电储能 SOC</span>
+                  </div>
+                  <div class="ds-gauge-card">
+                    <svg class="ds-gauge-svg" viewBox="0 0 120 74" aria-hidden="true">
+                      <path class="ds-g-track" d="M 14 64 A 46 46 0 0 1 106 64" />
+                      <path class="ds-g-arc ok" id="ds-g-h2" d="M 14 64 A 46 46 0 0 1 106 64" />
+                    </svg>
+                    <div class="ds-g-val"><strong id="ds-gv-h2">--</strong><small>%</small></div>
+                    <span class="ds-g-lbl">储氢余量</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="ck-panel ds-panel-balance">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>实时源荷功率构成</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <span class="ck-head-meta" id="ds-bal-meta">发/荷 --</span>
+                </header>
+                <div class="ds-balance-wrap" id="ds-balance-wrap">
+                  <canvas id="ds-balance-canvas"></canvas>
+                </div>
+              </article>
+            </div>
+
+            <!-- 中栏：全站主设备实时态势矩阵 + 24h 源荷/绿电复合趋势 -->
+            <div class="ds-col ds-col-center">
+              <article class="ck-panel ds-panel-matrix">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>全站主设备态势矩阵</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <div class="ds-matrix-tabs" id="ds-matrix-tabs" role="tablist">
+                    <button type="button" class="active" data-ds-cat="all">全部</button>
+                    <button type="button" data-ds-cat="gen">发电</button>
+                    <button type="button" data-ds-cat="storage">储氢</button>
+                    <button type="button" data-ds-cat="converter">变流</button>
+                    <button type="button" data-ds-cat="breaker">开关</button>
+                    <button type="button" data-ds-cat="abnormal">仅异常</button>
+                  </div>
+                  <span class="ck-head-meta" id="ds-matrix-cnt">0 台</span>
+                </header>
+                <div class="ds-matrix-grid" id="ds-matrix-grid"></div>
+              </article>
+
+              <article class="ck-panel ds-panel-trend">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>全站源荷与绿电态势曲线</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <div class="ds-trend-legend">
+                    <span><i style="background:#38bdf8"></i>总发电</span>
+                    <span><i style="background:#a78bfa"></i>总负荷</span>
+                    <span><i style="background:#34d399"></i>绿电 %</span>
+                  </div>
+                  <div class="ck-hours-seg" id="ds-hours-seg" role="group" aria-label="态势时间窗">
+                    <button type="button" data-ds-hours="1">1h</button>
+                    <button type="button" class="active" data-ds-hours="6">6h</button>
+                    <button type="button" data-ds-hours="24">24h</button>
+                  </div>
+                </header>
+                <div class="ck-canvas-wrap" id="ds-trend-wrap">
+                  <canvas id="ds-trend-canvas"></canvas>
+                </div>
+              </article>
+            </div>
+
+            <!-- 右栏：高优告警快报 + 通信链路健康雷达 -->
+            <div class="ds-col ds-col-right">
+              <article class="ck-panel ds-panel-alarms">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>实时高优告警快报</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <button type="button" class="ck-mini-link ds-head-action" id="ds-jump-alarms">告警中心 →</button>
+                </header>
+                <div class="ds-alarm-list" id="ds-alarm-list"></div>
+              </article>
+
+              <article class="ck-panel ds-panel-comm">
+                <header class="ck-head">
+                  <span class="ck-head-gem" aria-hidden="true"></span>
+                  <h2>通信链路健康雷达</h2>
+                  <span class="ck-head-slash" aria-hidden="true"></span>
+                  <button type="button" class="ck-mini-link ds-head-action" id="ds-jump-comm">通信图 →</button>
+                </header>
+                <div class="ds-comm-list" id="ds-comm-list"></div>
               </article>
             </div>
           </div>

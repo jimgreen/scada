@@ -166,7 +166,8 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
     sidebar = f'''<aside class="workbench-sidebar" aria-label="功能目录">
 <nav aria-label="主导航">{''.join(links)}</nav></aside>'''
     html = data.decode("utf-8")
-    html = html.replace("<html ", '<html data-theme="minimalist-light" ', 1)
+    default_theme = 'sci-fi-cyan" data-color-scheme="dark' if module == "d" else 'minimalist-light" data-color-scheme="light'
+    html = html.replace("<html ", f'<html data-theme="{default_theme}" ', 1)
     html = html.replace("<head>", '<head><script src="/static/audit-client.js"></script>', 1)
     head_extra = '<link rel="stylesheet" href="/static/workbench.css"><link rel="stylesheet" href="/static/database-selector.css">'
     if "/static/ui-theme.css" not in html:
@@ -179,7 +180,7 @@ def render_workbench(data: bytes, module: str, filename: str) -> bytes:
         '<script defer src="/static/layout-resizer.js"></script>'
     )
     html = html.replace("</head>", head_extra + "</head>", 1)
-    html = html.replace("<body", '<body class="workbench"', 1)
+    html = html.replace("<body", f'<body class="workbench" data-module="{escape(module)}" data-page="{escape(active)}"', 1)
     html = re.sub(r"<header\b[^>]*>.*?</header>", lambda _: topbar, html, count=1, flags=re.S)
     # The former horizontal menu is replaced by actual page links in the sidebar.
     html = re.sub(r'<nav class="top-nav">.*?</nav>', "", html, flags=re.S)

@@ -99,6 +99,11 @@
     cockpitHiddenSched: new Set(),
     cockpitPowerHoverX: null,
     cockpitSchedHoverX: null,
+    // 运行态势大屏状态
+    dispatchHours: 6,
+    dispatchFilter: "all",
+    dispatchData: null,
+    dispatchTrendHoverX: null,
   };
 
   function esc(val) {
@@ -442,7 +447,7 @@
 
   // ==================== 视图切换与路由 ====================
   function switchView(view, updateHash = true) {
-    const valid = ["home", "cockpit", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
+    const valid = ["home", "cockpit", "dispatch", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
     if (!valid.includes(view)) view = "home";
     state.view = view;
     document.body.classList.toggle("view-home", view === "home");
@@ -462,6 +467,9 @@
     }
     if (view === "cockpit") {
       requestAnimationFrame(() => drawCockpitCharts());
+    }
+    if (view === "dispatch") {
+      requestAnimationFrame(() => drawDispatchCharts());
     }
     if (view === "powerflow" && state.svgLoaded) {
       requestAnimationFrame(() => fitSvgView());
@@ -3866,7 +3874,7 @@
     $("#ck-autonomy-h").textContent = fmtNum(res.autonomy_hours, 1);
     $("#ck-wind-saved").textContent = fmtNum(res.wind_saved_tons, 1);
     $("#ck-pv-saved").textContent = fmtNum(res.pv_saved_tons, 1);
-    const pText = res.hydro_pressure_mpa != null ? ` · ${fmtNum(res.hydro_pressure_mpa, 2)} MPa` : "";
+    const pText = res.hydro_pressure_mpa != null ? `/${fmtNum(res.hydro_pressure_mpa, 2)}MPa` : "";
     $("#ck-h2-reserve").textContent = `${fmtNum(res.hydro_soc_pct, 1)}%${pText}`;
 
     // 中上 C1：能量枢纽 6 节点 + 光轨方向
@@ -3916,7 +3924,7 @@
     $("#ck-st-temp").textContent = st.temperature_c != null ? `${fmtNum(st.temperature_c, 1)} °C` : "—";
     $("#ck-st-wind").textContent = st.wind_speed_ms != null ? `${fmtNum(st.wind_speed_ms, 1)} m/s` : "—";
     $("#ck-st-irr").textContent = st.irradiance_wm2 != null ? `${fmtNum(st.irradiance_wm2, 0)} W/m²` : "—";
-    $("#ck-st-bus").textContent = `${fmtNum(st.dc_voltage_v, 0)} / ${fmtNum(st.ac_voltage_v, 0)} V`;
+    $("#ck-st-bus").textContent = `${fmtNum(st.dc_voltage_v, 0)}/${fmtNum(st.ac_voltage_v, 0)}V`;
     const healthEl = $("#ck-st-health");
     healthEl.textContent = `${st.alarm_unacked ?? 0} / ${st.rtu_online ?? 0}/${st.rtu_total ?? 0}`;
     healthEl.style.color = Number(st.alarm_unacked || 0) > 0 ? "var(--warn)" : "var(--ok)";
@@ -3943,9 +3951,9 @@
     }
     // 极地特色衍生指标（柴油续航 / 氢能往返效率 / 估算限电 / 气象状态）
     const drv = data.derived || {};
-    if ($("#ck-drv-endurance")) $("#ck-drv-endurance").textContent = `${fmtNum(drv.diesel_endurance_hours, 1)} h`;
+    if ($("#ck-drv-endurance")) $("#ck-drv-endurance").textContent = `${fmtNum(drv.diesel_endurance_hours, 1)}h`;
     if ($("#ck-drv-h2eff")) $("#ck-drv-h2eff").textContent = `${fmtNum(drv.h2_roundtrip_eff_pct, 1)}%`;
-    if ($("#ck-drv-curtail")) $("#ck-drv-curtail").textContent = `${fmtNum(drv.curtailment_kw, 1)} kW`;
+    if ($("#ck-drv-curtail")) $("#ck-drv-curtail").textContent = `${fmtNum(drv.curtailment_kw, 1)}kW`;
     const wEl = $("#ck-drv-weather");
     if (wEl) {
       const wa = drv.weather_alert || "normal";
@@ -3998,6 +4006,756 @@
   bindCkCanvasHover("ck-power-canvas", "cockpitPowerHoverX");
   bindCkCanvasHover("ck-storage-canvas", "cockpitSchedHoverX");
 
+  // ==================== 1.4 运行态势战情大屏（#view-dispatch） ====================
+  const DS_GAUGE_ARC_LEN = 145;
+
+  /**
+   * 驱动运行态势大屏的 SVG 半圆弧形安全裕度仪表
+   */
+  function setDsGauge(arcId, valId, rawVal, min, max, digits, levelFn) {
+    const arc = $("#" + arcId);
+    const valEl = $("#" + valId);
+    const num = rawVal === null || rawVal === undefined || Number.isNaN(Number(rawVal)) ? null : Number(rawVal);
+    if (valEl) valEl.textContent = num === null ? "--" : fmtNum(num, digits);
+    if (!arc) return "ok";
+    const ratio = num === null ? 0 : Math.max(0.03, Math.min(1, (num - min) / Math.max(1e-6, max - min)));
+    arc.style.strokeDashoffset = (DS_GAUGE_ARC_LEN * (1 - ratio)).toFixed(1);
+    const lvl = num === null ? "" : (levelFn ? levelFn(num) : "ok");
+    arc.classList.remove("ok", "warn", "danger");
+    if (lvl) arc.classList.add(lvl);
+    return lvl || "ok";
+  }
+
+  /**
+   * 依据设备表名与分类归并至运行态势主设备矩阵的五大业务槽位
+   */
+  function classifyDispatchDevice(dev) {
+    const cat = String(dev.category || "").toLowerCase();
+    const tbl = String(dev.table_name || "").toLowerCase();
+    if (cat === "wind" || cat === "pv" || cat === "diesel" || tbl.includes("generator") || tbl.includes("pv") || tbl.includes("wind")) {
+      return "gen";
+    }
+    if (cat === "storage" || cat === "hydrogen" || tbl.includes("storage") || tbl.includes("hydro") || tbl.includes("electrolyzer") || tbl.includes("fuelcell")) {
+      return "storage";
+    }
+    if (cat === "converter" || tbl.includes("dcac") || tbl.includes("dcdc") || tbl.includes("converter") || tbl.includes("transformer") || tbl.includes("pcs")) {
+      return "converter";
+    }
+    if (cat === "breaker" || cat === "switch" || tbl.includes("breaker") || tbl.includes("switch")) {
+      return "breaker";
+    }
+    return "other";
+  }
+
+  /**
+   * 提取单台设备在态势磁贴上的主值、副值与运行健康状态
+   */
+  function summarizeDispatchTile(dev) {
+    const metrics = dev.metrics || [];
+    const byName = new Map();
+    for (const m of metrics) {
+      if (m && m.metric) byName.set(String(m.metric).toLowerCase(), m);
+    }
+    const alarmCnt = Number(dev.alarm_count || 0);
+    const hasCommErr = metrics.some((m) => Number(m.quality) === 2 && !m.disabled);
+    const hasLimitErr = metrics.some((m) => (Number(m.quality) === 3 || Number(m.quality) === 4) && !m.disabled);
+
+    const pM = byName.get("p") || byName.get("p_gen") || byName.get("p_load") || byName.get("p_ac") || byName.get("p_dc");
+    const socM = byName.get("soc");
+    const uM = byName.get("u") || byName.get("uab") || byName.get("u_dc") || byName.get("u_ac");
+    const posM = byName.get("position");
+    const runM = byName.get("run") || byName.get("status");
+
+    let mainText = "—";
+    let subText = "";
+    let isRunning = false;
+
+    if (posM && posM.value !== null && posM.value !== undefined) {
+      const closed = Number(posM.value) === 1;
+      mainText = tr(closed ? "合闸" : "分闸");
+      isRunning = closed;
+      if (pM && pM.display_value != null) subText = `${fmtNum(pM.display_value, 1)} kW`;
+      else if (uM && uM.display_value != null) subText = `${fmtNum(uM.display_value, 0)} V`;
+    } else if (pM && pM.display_value != null) {
+      const pv = Number(pM.display_value);
+      mainText = `${fmtNum(pv, 1)} ${pM.unit || "kW"}`;
+      isRunning = Math.abs(pv) > 0.2;
+      if (socM && socM.display_value != null) subText = `SOC ${fmtNum(socM.display_value, 0)}%`;
+      else if (uM && uM.display_value != null) subText = `${fmtNum(uM.display_value, 0)} V`;
+    } else if (socM && socM.display_value != null) {
+      mainText = `SOC ${fmtNum(socM.display_value, 1)}%`;
+      isRunning = Number(socM.display_value) > 0;
+    } else if (uM && uM.display_value != null) {
+      mainText = `${fmtNum(uM.display_value, 1)} ${uM.unit || "V"}`;
+      isRunning = Number(uM.display_value) > 10;
+    } else if (runM && runM.value !== null && runM.value !== undefined) {
+      isRunning = Number(runM.value) === 1;
+      mainText = tr(isRunning ? "运行" : "停运");
+    }
+
+    if (runM && runM.value !== null && runM.value !== undefined) {
+      isRunning = isRunning || Number(runM.value) === 1;
+    }
+
+    let stateCls = isRunning ? "" : "is-idle";
+    if (hasLimitErr || alarmCnt > 0) stateCls = "is-fault";
+    else if (hasCommErr) stateCls = "is-warn";
+
+    if (alarmCnt > 0) {
+      subText = `${tr("告警")} ${alarmCnt}`;
+    } else if (!subText) {
+      subText = `#${dev.idx ?? 0}`;
+    }
+
+    return {
+      mainText,
+      subText,
+      stateCls,
+      abnormal: stateCls === "is-fault" || stateCls === "is-warn",
+      score: (stateCls === "is-fault" ? 300 : stateCls === "is-warn" ? 200 : isRunning ? 100 : 10),
+    };
+  }
+
+  /**
+   * 绘制左下角「实时源荷功率构成」横向对比条形图
+   */
+  function drawDispatchBalanceChart() {
+    const canvas = $("#ds-balance-canvas");
+    if (!canvas || !state.dispatchData?.cockpit) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.round(rect.width);
+    const H = Math.round(rect.height);
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const pal = cockpitPalette();
+    const dark = isDarkTheme();
+    const n = state.dispatchData.cockpit.hub?.nodes || {};
+
+    const esP = Number(n.storage?.p_kw || 0);
+    const esDis = n.storage?.state === "discharge" ? Math.abs(esP) : 0;
+    const esChg = n.storage?.state === "charge" ? Math.abs(esP) : 0;
+
+    const rows = [
+      { label: tr("风电"), val: Math.max(0, Number(n.wind?.p_kw || 0)), color: pal.series[0], group: "gen" },
+      { label: tr("光伏"), val: Math.max(0, Number(n.pv?.p_kw || 0)), color: pal.series[1], group: "gen" },
+      { label: tr("柴发"), val: Math.max(0, Number(n.diesel?.p_kw || 0)), color: pal.series[2], group: "gen" },
+      { label: tr("电储放电"), val: esDis, color: pal.series[3], group: "gen" },
+      { label: tr("氢电"), val: Math.max(0, Number(n.hydrogen?.gen_kw || 0)), color: "#2dd4bf", group: "gen" },
+      { label: tr("交流负荷"), val: Math.max(0, Number(n.load?.ac_kw || 0)), color: pal.series[4], group: "load" },
+      { label: tr("直流负荷"), val: Math.max(0, Number(n.load?.dc_kw || 0)), color: "#818cf8", group: "load" },
+      { label: tr("制氢"), val: Math.max(0, Number(n.hydrogen?.prod_kw || 0)), color: "#34d399", group: "load" },
+      { label: tr("电储充电"), val: esChg, color: "#fb923c", group: "load" },
+    ];
+
+    const maxV = Math.max(10, ...rows.map((r) => r.val));
+    const padL = 62;
+    const padR = 54;
+    const padT = 8;
+    const padB = 8;
+    const sepGap = 8;
+    const availH = Math.max(40, H - padT - padB - sepGap);
+    const rowH = availH / rows.length;
+    const barH = Math.max(5, Math.min(11, rowH * 0.56));
+    const barW = Math.max(20, W - padL - padR);
+
+    ctx.font = "10.5px Inter, 'Microsoft YaHei', sans-serif";
+    let y = padT;
+    rows.forEach((r, idx) => {
+      if (idx === 5) {
+        // 发电侧与负荷侧分隔虚线
+        ctx.strokeStyle = pal.grid;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(4, y + sepGap * 0.45);
+        ctx.lineTo(W - 4, y + sepGap * 0.45);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        y += sepGap;
+      }
+      const cy = y + rowH * 0.5;
+      // 左侧标签
+      ctx.fillStyle = pal.axis;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText(r.label.slice(0, 6), padL - 6, cy);
+
+      // 轨道底色
+      ctx.fillStyle = dark ? "rgba(148,163,184,0.12)" : "rgba(15,23,42,0.08)";
+      const by = cy - barH * 0.5;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(padL, by, barW, barH, 3);
+      else ctx.rect(padL, by, barW, barH);
+      ctx.fill();
+
+      // 柱体填充
+      const fw = r.val > 0 ? Math.max(3, (r.val / maxV) * barW) : 0;
+      if (fw > 0) {
+        ctx.fillStyle = r.color;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(padL, by, fw, barH, 3);
+        else ctx.rect(padL, by, fw, barH);
+        ctx.fill();
+      }
+
+      // 右侧数值
+      ctx.fillStyle = pal.text;
+      ctx.font = "10.5px 'JetBrains Mono', Consolas, monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(`${r.val.toFixed(1)} kW`, W - 4, cy);
+      ctx.font = "10.5px Inter, 'Microsoft YaHei', sans-serif";
+      y += rowH;
+    });
+  }
+
+  /**
+   * 渲染中上「全站主设备态势矩阵」磁贴并绑定点击跳转潮流图
+   */
+  function renderDispatchMatrix() {
+    const grid = $("#ds-matrix-grid");
+    const cntEl = $("#ds-matrix-cnt");
+    if (!grid) return;
+    const allDevs = state.dispatchData?.devices || [];
+    const filter = state.dispatchFilter || "all";
+
+    const entries = allDevs.map((dev) => ({
+      dev,
+      group: classifyDispatchDevice(dev),
+      info: summarizeDispatchTile(dev),
+    }));
+
+    const filtered = entries
+      .filter((e) => {
+        if (filter === "all") return e.group !== "other" || e.info.abnormal;
+        if (filter === "abnormal") return e.info.abnormal;
+        return e.group === filter;
+      })
+      .sort((a, b) => b.info.score - a.info.score);
+
+    const list = filtered.length || filter !== "all" ? filtered : entries;
+    if (cntEl) cntEl.textContent = `${list.length} ${tr("台")}`;
+
+    if (!list.length) {
+      grid.innerHTML = `<div class="empty-hint" style="grid-column:1/-1;padding:18px 0;">${esc(tr(filter === "abnormal" ? "当前无异常设备" : "暂无设备"))}</div>`;
+      return;
+    }
+
+    grid.innerHTML = list.slice(0, 48).map(({ dev, info }) => {
+      const name = tr(dev.name || dev.dev_id || "");
+      return (
+        `<button type="button" class="ds-tile ${info.stateCls}" data-ds-dev="${esc(dev.dev_id)}" title="${esc(name)} (${esc(dev.table_name)} #${dev.idx})">` +
+        `<div class="ds-tile-top"><span class="ds-tile-name">${esc(name)}</span><i class="ds-tile-dot"></i></div>` +
+        `<div class="ds-tile-bot"><span class="ds-tile-val">${esc(info.mainText)}</span><span class="ds-tile-sub">${esc(info.subText)}</span></div>` +
+        `</button>`
+      );
+    }).join("");
+
+    grid.querySelectorAll("[data-ds-dev]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const devId = btn.dataset.dsDev;
+        if (!devId) return;
+        switchView("powerflow");
+        await loadPowerflow();
+        state.pfPinned = true;
+        focusSvgDevice(devId);
+      });
+    });
+  }
+
+  /**
+   * 绘制中下「全站源荷与绿电态势曲线」（左轴：总发电/总负荷 kW，右轴：绿电占比 %）
+   */
+  function drawDispatchTrendChart() {
+    const canvas = $("#ds-trend-canvas");
+    if (!canvas || !state.dispatchData?.cockpit) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.round(rect.width);
+    const H = Math.round(rect.height);
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const pal = cockpitPalette();
+    const dark = isDarkTheme();
+    const curves = state.dispatchData.cockpit.power_curves || [];
+    const byKey = new Map(curves.map((c) => [c.key, c.points || []]));
+
+    // 汇总每个时间戳上的风电/光伏/柴发/储能放电与总负荷
+    const bucket = new Map();
+    const addPts = (key, field) => {
+      for (const pt of (byKey.get(key) || [])) {
+        const ts = Number(pt[0]);
+        const val = Number(pt[1]);
+        if (!Number.isFinite(ts) || !Number.isFinite(val)) continue;
+        // 按 30 秒粒度对齐聚合
+        const k = Math.round(ts / 30000) * 30000;
+        let row = bucket.get(k);
+        if (!row) {
+          row = { ts: k, wind: 0, pv: 0, diesel: 0, storage: 0, load: 0 };
+          bucket.set(k, row);
+        }
+        row[field] = val;
+      }
+    };
+    addPts("wind", "wind");
+    addPts("pv", "pv");
+    addPts("diesel", "diesel");
+    addPts("storage", "storage");
+    addPts("load", "load");
+
+    const rows = Array.from(bucket.values()).sort((a, b) => a.ts - b.ts);
+    const padL = 44;
+    const padR = 38;
+    const padT = 14;
+    const padB = 22;
+    const plotW = Math.max(10, W - padL - padR);
+    const plotH = Math.max(10, H - padT - padB);
+
+    if (!rows.length) {
+      ctx.fillStyle = pal.axis;
+      ctx.font = "12px Inter, 'Microsoft YaHei', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(tr("暂无采样曲线"), W / 2, H / 2);
+      return;
+    }
+
+    const genPts = [];
+    const loadPts = [];
+    const greenPts = [];
+    let minT = rows[0].ts;
+    let maxT = rows[rows.length - 1].ts;
+    let maxKw = 10;
+
+    for (const r of rows) {
+      const greenKw = Math.max(0, r.wind) + Math.max(0, r.pv);
+      const genKw = greenKw + Math.max(0, r.diesel) + Math.max(0, r.storage);
+      const loadKw = Math.max(0, r.load);
+      const greenPct = genKw > 0.5 ? Math.max(0, Math.min(100, (greenKw / genKw) * 100)) : 0;
+      genPts.push([r.ts, genKw]);
+      loadPts.push([r.ts, loadKw]);
+      greenPts.push([r.ts, greenPct]);
+      if (genKw > maxKw) maxKw = genKw;
+      if (loadKw > maxKw) maxKw = loadKw;
+    }
+    if (maxT <= minT) {
+      minT -= 60000;
+      maxT += 60000;
+    }
+    maxKw = maxKw * 1.15;
+
+    const xOf = (t) => padL + ((t - minT) / (maxT - minT)) * plotW;
+    const yKw = (v) => padT + ((maxKw - v) / maxKw) * plotH;
+    const yPct = (p) => padT + ((100 - p) / 100) * plotH;
+
+    // 水平网格 + 左右双 Y 轴刻度
+    const ticks = 4;
+    ctx.font = "10.5px 'JetBrains Mono', Consolas, monospace";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i <= ticks; i += 1) {
+      const frac = i / ticks;
+      const y = padT + frac * plotH;
+      const kwVal = maxKw * (1 - frac);
+      const pctVal = 100 * (1 - frac);
+      ctx.strokeStyle = pal.grid;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(W - padR, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = pal.axis;
+      ctx.textAlign = "right";
+      ctx.fillText(kwVal >= 100 ? kwVal.toFixed(0) : kwVal.toFixed(1), padL - 5, y);
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#34d399";
+      ctx.fillText(`${Math.round(pctVal)}%`, W - padR + 5, y);
+    }
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = pal.axis;
+    ctx.fillText("kW", 6, 2);
+
+    // X 轴时间刻度
+    const xTicks = 4;
+    ctx.textAlign = "center";
+    ctx.fillStyle = pal.axis;
+    for (let i = 0; i <= xTicks; i += 1) {
+      const t = minT + (i / xTicks) * (maxT - minT);
+      const x = xOf(t);
+      const d = new Date(t);
+      const lbl = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      ctx.fillText(lbl, Math.max(padL + 14, Math.min(W - padR - 14, x)), H - padB + 5);
+    }
+
+    const drawSeries = (pts, yMap, color, { fill = false, dashed = false } = {}) => {
+      if (!pts.length) return;
+      const coords = pts.map((p) => [xOf(p[0]), yMap(p[1])]);
+      if (fill && coords.length >= 2) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(coords[0][0], coords[0][1]);
+        for (let i = 1; i < coords.length; i += 1) ctx.lineTo(coords[i][0], coords[i][1]);
+        ctx.lineTo(coords[coords.length - 1][0], padT + plotH);
+        ctx.lineTo(coords[0][0], padT + plotH);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+        grad.addColorStop(0, color + (dark ? "40" : "24"));
+        grad.addColorStop(1, color + "04");
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.save();
+      ctx.beginPath();
+      if (coords.length === 1) {
+        ctx.arc(coords[0][0], coords[0][1], 3, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+      } else {
+        ctx.moveTo(coords[0][0], coords[0][1]);
+        for (let i = 1; i < coords.length; i += 1) ctx.lineTo(coords[i][0], coords[i][1]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = dashed ? 1.8 : 2;
+        if (dashed) ctx.setLineDash([5, 3]);
+        if (dark && !dashed) {
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 7;
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    };
+
+    drawSeries(genPts, yKw, "#38bdf8", { fill: true });
+    drawSeries(loadPts, yKw, "#a78bfa", { fill: true });
+    drawSeries(greenPts, yPct, "#34d399", { fill: false, dashed: true });
+
+    // 悬停十字准星与 Tooltip
+    const hoverX = state.dispatchTrendHoverX;
+    if (hoverX !== null && hoverX >= padL && hoverX <= W - padR) {
+      const targetT = minT + ((hoverX - padL) / plotW) * (maxT - minT);
+      let bestIdx = 0;
+      let bestDist = Math.abs(genPts[0][0] - targetT);
+      for (let i = 1; i < genPts.length; i += 1) {
+        const d = Math.abs(genPts[i][0] - targetT);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      const snapT = genPts[bestIdx][0];
+      const sx = xOf(snapT);
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(sx, padT);
+      ctx.lineTo(sx, padT + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const tipRows = [
+        { label: tr("总发电"), val: `${genPts[bestIdx][1].toFixed(1)} kW`, color: "#38bdf8", y: yKw(genPts[bestIdx][1]) },
+        { label: tr("总负荷"), val: `${loadPts[bestIdx][1].toFixed(1)} kW`, color: "#a78bfa", y: yKw(loadPts[bestIdx][1]) },
+        { label: tr("绿电占比"), val: `${greenPts[bestIdx][1].toFixed(1)}%`, color: "#34d399", y: yPct(greenPts[bestIdx][1]) },
+      ];
+      tipRows.forEach((trw) => {
+        ctx.fillStyle = trw.color;
+        ctx.beginPath();
+        ctx.arc(sx, trw.y, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      const d = new Date(snapT);
+      const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+      const boxW = 154;
+      const boxH = 22 + tipRows.length * 15;
+      const bx = sx + 10 + boxW > W - padR ? Math.max(padL + 2, sx - boxW - 10) : sx + 10;
+      const by = padT + 2;
+      ctx.fillStyle = pal.tipBg;
+      ctx.strokeStyle = pal.tipBorder;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(bx, by, boxW, boxH, 6);
+      else ctx.rect(bx, by, boxW, boxH);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = "10.5px 'JetBrains Mono', Consolas, monospace";
+      ctx.fillStyle = pal.axis;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(timeStr, bx + 8, by + 5);
+      tipRows.forEach((r, idx) => {
+        const ry = by + 20 + idx * 15;
+        ctx.fillStyle = r.color;
+        ctx.beginPath();
+        ctx.arc(bx + 11, ry + 6, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = pal.text;
+        ctx.textAlign = "left";
+        ctx.fillText(r.label.slice(0, 8), bx + 18, ry);
+        ctx.textAlign = "right";
+        ctx.fillText(r.val, bx + boxW - 8, ry);
+      });
+    }
+  }
+
+  function drawDispatchCharts() {
+    if (!state.dispatchData) return;
+    drawDispatchBalanceChart();
+    drawDispatchTrendChart();
+  }
+
+  /**
+   * 渲染右上「实时高优告警快报」
+   */
+  function renderDispatchAlarms(alarmRes) {
+    const listEl = $("#ds-alarm-list");
+    if (!listEl) return;
+    const rawItems = (alarmRes?.items || []).filter((a) => !a.acked && !a.maintenance);
+    const prio = (t) => (t === "control_failed" ? 0 : (t === "over_max" || t === "under_min") ? 1 : 2);
+    const sorted = rawItems.slice().sort((a, b) => prio(a.type) - prio(b.type) || Number(b.time_ms || 0) - Number(a.time_ms || 0));
+
+    if (!sorted.length) {
+      listEl.innerHTML = `<div class="empty-hint" style="padding:20px 0;">${esc(tr("当前无未确认告警"))} · ${esc(tr("系统运行正常"))}</div>`;
+      return;
+    }
+
+    const topItems = sorted.slice(0, 12);
+    listEl.innerHTML = topItems.map((a, idx) => {
+      const warnCls = a.type === "comm_error" ? " is-warn" : "";
+      const valStr = a.value == null || a.value === ""
+        ? ""
+        : ` · ${typeof a.value === "number" ? fmtNum(a.value, 1) : esc(a.value)}${a.unit ? " " + esc(a.unit) : ""}`;
+      return (
+        `<div class="ds-alarm-card${warnCls}">` +
+        `<div class="ds-alarm-top"><strong>${esc(tr(a.device_name || a.dev_id))}</strong>${alarmTypeBadge(a.type)}</div>` +
+        `<div class="ds-alarm-bot">` +
+        `<span>${esc(tr(a.attr_label || a.metric || ""))}${valStr}</span>` +
+        `<span class="ds-alarm-ops">` +
+        `<button type="button" class="btn secondary" data-ds-aloc="${idx}">${esc(tr("定位"))}</button>` +
+        `<button type="button" class="btn secondary" data-ds-aack="${idx}">${esc(tr("确认"))}</button>` +
+        `</span>` +
+        `</div>` +
+        `</div>`
+      );
+    }).join("");
+
+    listEl.querySelectorAll("[data-ds-aloc]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = topItems[Number(btn.dataset.dsAloc)];
+        if (!a?.dev_id) return;
+        switchView("powerflow");
+        await loadPowerflow();
+        state.pfPinned = true;
+        focusSvgDevice(a.dev_id);
+      });
+    });
+    listEl.querySelectorAll("[data-ds-aack]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const a = topItems[Number(btn.dataset.dsAack)];
+        if (!a?.key) return;
+        const noteRes = await openAlarmNoteDialog({
+          title: "确认告警",
+          meta: `${a.device_name} · ${a.attr_label}`,
+          reasonPlaceholder: "处置备注（可选）",
+        });
+        if (!noteRes) return;
+        await apiPost("/api/alarms/ack", { keys: [a.key], operator: noteRes.operator, note: noteRes.text });
+        window.ScadaExtras?.showToast("告警已确认", "ok");
+        await loadDispatchView();
+      });
+    });
+  }
+
+  /**
+   * 渲染右下「通信链路健康雷达」
+   */
+  function renderDispatchComm(topoRes) {
+    const listEl = $("#ds-comm-list");
+    if (!listEl) return;
+    const links = topoRes?.links || [];
+    if (!links.length) {
+      listEl.innerHTML = `<div class="empty-hint" style="padding:18px 0;">${esc(tr("暂无链路"))}</div>`;
+      return;
+    }
+    listEl.innerHTML = links.map((lk) => {
+      const online = lk.connection_state === "connected";
+      const pct = Math.max(0, Math.min(100, Number(lk.health_pct || 0)));
+      const cls = !online ? "is-offline" : (pct < 90 ? "is-warn" : "");
+      const faultCnt = (lk.fault_devices || []).length;
+      const barColor = !online ? "var(--danger, #f87171)" : (pct < 90 ? "var(--warn, #fbbf24)" : "var(--ok, #34d399)");
+      return (
+        `<div class="ds-comm-card ${cls}">` +
+        `<div class="ds-comm-top"><strong>RTU ${lk.rtu_id} · ${esc(tr(lk.rtu_name || ""))}</strong><span style="font-family:var(--font-mono,monospace);font-weight:700;color:${barColor}">${pct.toFixed(0)}%</span></div>` +
+        `<div class="ds-comm-meta"><span>${esc(lk.channel_type || "--")} · ${lk.device_count ?? 0} ${esc(tr("台"))}</span><span>${faultCnt ? `${esc(tr("异常"))} ${faultCnt}` : esc(tr(online ? "在线" : "离线"))}</span></div>` +
+        `<div class="comm-topo-bar"><i style="width:${pct}%;background:${barColor}"></i></div>` +
+        `</div>`
+      );
+    }).join("");
+  }
+
+  /**
+   * 统一渲染运行态势大屏（顶部战情条、弧形仪表、源荷平衡、设备矩阵、双轴曲线、告警与通信）
+   */
+  function renderDispatchView(cockpit, devRes, alarmRes, topoRes) {
+    state.dispatchData = {
+      cockpit,
+      devices: devRes?.items || [],
+      alarms: alarmRes,
+      topo: topoRes,
+    };
+
+    const hub = cockpit?.hub || {};
+    const n = hub.nodes || {};
+    const st = cockpit?.polar_stats || {};
+    const res = cockpit?.resilience || {};
+    const health = cockpit?.health || {};
+
+    // 从全站设备量测中提取实时交流系统频率均值
+    const freqVals = [];
+    for (const dev of state.dispatchData.devices) {
+      for (const m of (dev.metrics || [])) {
+        if (!m || m.disabled) continue;
+        const mn = String(m.metric || "").toLowerCase();
+        const unit = String(m.unit || "").toLowerCase();
+        if ((mn === "f" || mn === "freq" || unit === "hz") && m.display_value != null) {
+          const v = Number(m.display_value);
+          if (Number.isFinite(v) && v >= 45 && v <= 55) freqVals.push(v);
+        }
+      }
+    }
+    const freqAvg = freqVals.length ? freqVals.reduce((a, b) => a + b, 0) / freqVals.length : null;
+
+    const acV = st.ac_voltage_v;
+    const dcV = st.dc_voltage_v;
+    const genKw = Number(hub.total_gen_kw ?? 0);
+    const loadKw = Number(hub.total_load_kw ?? 0);
+    const balKw = genKw - loadKw;
+    const greenPct = hub.green_ratio_pct ?? st.green_ratio_pct;
+    const unacked = Number(alarmRes?.summary?.unacked ?? health.alarm_unacked ?? 0);
+
+    // 顶部单行战情指标条
+    if ($("#ds-tk-freq")) $("#ds-tk-freq").textContent = freqAvg != null ? `${fmtNum(freqAvg, 2)} Hz` : "-- Hz";
+    if ($("#ds-tk-acv")) $("#ds-tk-acv").textContent = `${fmtNum(acV, 1)} V`;
+    if ($("#ds-tk-dcv")) $("#ds-tk-dcv").textContent = `${fmtNum(dcV, 1)} V`;
+    if ($("#ds-tk-gen")) $("#ds-tk-gen").textContent = `${fmtNum(genKw, 1)} kW`;
+    if ($("#ds-tk-load")) $("#ds-tk-load").textContent = `${fmtNum(loadKw, 1)} kW`;
+    if ($("#ds-tk-bal")) {
+      $("#ds-tk-bal").textContent = `${balKw >= 0 ? "+" : ""}${fmtNum(balKw, 1)} kW`;
+      $("#ds-tk-bal").style.color = Math.abs(balKw) > Math.max(30, loadKw * 0.25) ? "var(--warn)" : "var(--ok)";
+    }
+    if ($("#ds-tk-green")) $("#ds-tk-green").textContent = `${fmtNum(greenPct, 1)}%`;
+    if ($("#ds-tk-rtu")) $("#ds-tk-rtu").textContent = `${health.rtu_online ?? st.rtu_online ?? 0} / ${health.rtu_total ?? st.rtu_total ?? 0}`;
+    if ($("#ds-tk-alarm")) $("#ds-tk-alarm").textContent = String(unacked);
+    $("#ds-tk-alarm-btn")?.classList.toggle("is-ok", unacked <= 0);
+
+    // 左上：4 枚电气安全裕度弧形仪表
+    const lvls = [
+      setDsGauge("ds-g-acv", "ds-gv-acv", acV, 320, 440, 1, (v) => (Math.abs(v - 380) > 28 ? "danger" : Math.abs(v - 380) > 15 ? "warn" : "ok")),
+      setDsGauge("ds-g-dcv", "ds-gv-dcv", dcV, 650, 850, 1, (v) => (Math.abs(v - 750) > 45 ? "danger" : Math.abs(v - 750) > 25 ? "warn" : "ok")),
+      setDsGauge("ds-g-soc", "ds-gv-soc", n.storage?.soc_pct, 0, 100, 1, (v) => (v < 15 ? "danger" : v < 25 ? "warn" : "ok")),
+      setDsGauge("ds-g-h2", "ds-gv-h2", res.hydro_soc_pct ?? n.hydrogen?.soc_pct, 0, 100, 1, (v) => (v < 15 ? "danger" : v < 25 ? "warn" : "ok")),
+    ];
+    const secEl = $("#ds-sec-status");
+    if (secEl) {
+      const hasDanger = lvls.includes("danger");
+      const hasWarn = lvls.includes("warn");
+      secEl.textContent = tr(hasDanger ? "越限预警" : hasWarn ? "需关注" : "运行稳定");
+      secEl.style.color = hasDanger ? "var(--danger)" : hasWarn ? "var(--warn)" : "var(--ok)";
+    }
+
+    if ($("#ds-bal-meta")) {
+      $("#ds-bal-meta").textContent = `${fmtNum(genKw, 1)} / ${fmtNum(loadKw, 1)} kW`;
+    }
+
+    // 侧栏健康与告警徽标同步
+    if (cockpit?.health) {
+      if ($("#health-rtus")) $("#health-rtus").textContent = `${health.rtu_online} / ${health.rtu_total}`;
+      if ($("#health-points")) $("#health-points").textContent = `${health.valid_measurements} / ${health.bound_measurements}`;
+      if ($("#health-gen")) $("#health-gen").textContent = `${fmtNum(genKw, 1)} kW`;
+      if ($("#health-load")) $("#health-load").textContent = `${fmtNum(loadKw, 1)} kW`;
+      updateAlarmBadge(unacked);
+      updateCollectorBadge(health.collector_running);
+    }
+    if (cockpit?.data_quality) {
+      updateDataQualityPill(cockpit.data_quality);
+    }
+
+    renderDispatchMatrix();
+    renderDispatchAlarms(alarmRes);
+    renderDispatchComm(topoRes);
+    drawDispatchCharts();
+  }
+
+  async function loadDispatchView() {
+    const [cockpit, devRes, alarmRes, topoRes] = await Promise.all([
+      api(`/api/polar-cockpit?hours=${encodeURIComponent(state.dispatchHours)}`),
+      api("/api/devices"),
+      api("/api/alarms?acked=0"),
+      api("/api/comm/topology"),
+    ]);
+    renderDispatchView(cockpit, devRes, alarmRes, topoRes);
+  }
+
+  // 运行态势交互绑定（设备分类快滤、时间窗切换、快捷跳转、趋势图十字准星）
+  $$("#ds-matrix-tabs [data-ds-cat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.dispatchFilter = btn.dataset.dsCat || "all";
+      $$("#ds-matrix-tabs [data-ds-cat]").forEach((b) => b.classList.toggle("active", b === btn));
+      renderDispatchMatrix();
+    });
+  });
+  $$("#ds-hours-seg [data-ds-hours]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.dispatchHours = Number(btn.dataset.dsHours || 6);
+      $$("#ds-hours-seg [data-ds-hours]").forEach((b) => b.classList.toggle("active", b === btn));
+      loadDispatchView().catch((err) => setConnection(false, err.message));
+    });
+  });
+  $("#ds-tk-alarm-btn")?.addEventListener("click", () => switchView("alarms"));
+  $("#ds-jump-alarms")?.addEventListener("click", () => switchView("alarms"));
+  $("#ds-jump-comm")?.addEventListener("click", () => switchView("comm"));
+
+  let dsHoverRaf = 0;
+  const dsTrendCanvas = $("#ds-trend-canvas");
+  if (dsTrendCanvas) {
+    dsTrendCanvas.addEventListener("mousemove", (e) => {
+      const r = dsTrendCanvas.getBoundingClientRect();
+      state.dispatchTrendHoverX = e.clientX - r.left;
+      if (!dsHoverRaf) {
+        dsHoverRaf = requestAnimationFrame(() => {
+          dsHoverRaf = 0;
+          drawDispatchTrendChart();
+        });
+      }
+    });
+    dsTrendCanvas.addEventListener("mouseleave", () => {
+      state.dispatchTrendHoverX = null;
+      drawDispatchTrendChart();
+    });
+  }
+
   // ==================== 轮询调度、快捷键盘与主题同步 ====================
   let pendingRefresh = false;
   let overviewTick = 0;
@@ -4015,6 +4773,8 @@
         tasks.push(loadOverview());
       } else if (viewAtStart === "cockpit") {
         tasks.push(loadPolarCockpit());
+      } else if (viewAtStart === "dispatch") {
+        tasks.push(loadDispatchView());
       } else if (viewAtStart === "energyflow") {
         tasks.push(loadEnergyFlow());
       } else {
@@ -4069,7 +4829,7 @@
       }
       return;
     }
-    const keyViewMap = { "1": "home", "2": "cockpit", "3": "energyflow", "4": "powerflow", "5": "devices", "6": "alarms", "7": "comm", "8": "logs" };
+    const keyViewMap = { "1": "home", "2": "cockpit", "3": "dispatch", "4": "energyflow", "5": "powerflow", "6": "devices", "7": "alarms", "8": "comm", "9": "logs" };
     if (keyViewMap[e.key]) {
       switchView(keyViewMap[e.key]);
     }
@@ -4240,12 +5000,13 @@
     const items = [
       { group: "视图", title: "系统首页", sub: "1", action: () => switchView("home") },
       { group: "视图", title: "极地管控", sub: "2", action: () => switchView("cockpit") },
-      { group: "视图", title: "全景流向", sub: "3", action: () => switchView("energyflow") },
-      { group: "视图", title: "潮流图", sub: "4", action: () => switchView("powerflow") },
-      { group: "视图", title: "设备图", sub: "5", action: () => switchView("devices") },
-      { group: "视图", title: "告警中心", sub: "6", action: () => switchView("alarms") },
-      { group: "视图", title: "通信图", sub: "7", action: () => switchView("comm") },
-      { group: "视图", title: "运行日志", sub: "8", action: () => switchView("logs") },
+      { group: "视图", title: "运行态势", sub: "3", action: () => switchView("dispatch") },
+      { group: "视图", title: "全景流向", sub: "4", action: () => switchView("energyflow") },
+      { group: "视图", title: "潮流图", sub: "5", action: () => switchView("powerflow") },
+      { group: "视图", title: "设备图", sub: "6", action: () => switchView("devices") },
+      { group: "视图", title: "告警中心", sub: "7", action: () => switchView("alarms") },
+      { group: "视图", title: "通信图", sub: "8", action: () => switchView("comm") },
+      { group: "视图", title: "运行日志", sub: "9", action: () => switchView("logs") },
       {
         group: "操作",
         title: state.controlUnlocked ? "只读监盘" : "值班控调",
@@ -4300,13 +5061,19 @@
     : null;
   sseClient?.start();
 
-  // 监听语言切换，实时重绘 Canvas 图表、顶栏动态状态与极地管控面板
+  // 监听语言切换，实时重绘 Canvas 图表、顶栏动态状态与极地管控/运行态势面板
   document.addEventListener("scada:lang-change", () => {
     applyControlLockUi();
     syncPinButtonUi();
     window.ScadaCharts?.clearCache();
     drawTrendChart();
     if (state.view === "cockpit") drawCockpitCharts();
+    if (state.view === "dispatch") {
+      renderDispatchMatrix();
+      if (state.dispatchData?.alarms) renderDispatchAlarms(state.dispatchData.alarms);
+      if (state.dispatchData?.topo) renderDispatchComm(state.dispatchData.topo);
+      drawDispatchCharts();
+    }
   });
 
   // 监听主题切换与窗口缩放，实时同步 SVG 和日曲线配色与尺寸
@@ -4316,6 +5083,7 @@
     renderTrendChips();
     drawTrendChart();
     if (state.view === "cockpit") drawCockpitCharts();
+    if (state.view === "dispatch") drawDispatchCharts();
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
   document.addEventListener("visibilitychange", () => {
@@ -4326,6 +5094,7 @@
   window.addEventListener("resize", () => {
     if (state.view === "home") updateHeroFlowLines(lastRealtimeEnergy);
     if (state.view === "cockpit") drawCockpitCharts();
+    if (state.view === "dispatch") drawDispatchCharts();
     if (state.view === "devices") drawTrendChart();
   });
 
@@ -4335,10 +5104,127 @@
     }).observe($("#hero-stage"));
   }
 
+  // 左侧导航栏模式控制：支持「悬浮 / 内嵌」切换，两种模式均可隐藏（双端共享偏好）
+  (() => {
+    const SB_KEY = "scada_sidebar_prefs";
+    const shell = $("#portal-shell");
+    const sidebar = $("#portal-sidebar");
+    const trigger = $("#sidebar-edge-trigger");
+    const hideBtn = $("#sidebar-hide-btn");
+    if (!shell || !sidebar) return;
+
+    let prefs = { mode: "floating", hidden: true };
+    try {
+      const saved = JSON.parse(localStorage.getItem(SB_KEY) || "null");
+      if (saved && (saved.mode === "floating" || saved.mode === "docked")) {
+        prefs.mode = saved.mode;
+        prefs.hidden = saved.mode === "floating" ? true : Boolean(saved.hidden);
+      }
+    } catch (_) {}
+
+    let hideTimer = null;
+    const persist = () => {
+      try { localStorage.setItem(SB_KEY, JSON.stringify(prefs)); } catch (_) {}
+    };
+    const triggerLayoutReflow = () => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event("resize"));
+        if (state.view === "powerflow" && state.svgLoaded) pfMinimap?.update();
+      });
+    };
+
+    const syncUi = () => {
+      const isDocked = prefs.mode === "docked";
+      shell.classList.toggle("sidebar-docked", isDocked);
+      shell.classList.toggle("sidebar-hidden", isDocked && prefs.hidden);
+      if (isDocked) {
+        sidebar.classList.remove("is-open");
+      }
+      sidebar.querySelectorAll("[data-sb-mode]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.sbMode === prefs.mode);
+      });
+      triggerLayoutReflow();
+    };
+
+    const openFloating = () => {
+      if (prefs.mode !== "floating") return;
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      sidebar.classList.add("is-open");
+    };
+
+    const scheduleCloseFloating = (delay = 220) => {
+      if (prefs.mode !== "floating") return;
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        sidebar.classList.remove("is-open");
+      }, delay);
+    };
+
+    sidebar.querySelectorAll("[data-sb-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const nextMode = btn.dataset.sbMode === "docked" ? "docked" : "floating";
+        prefs.mode = nextMode;
+        prefs.hidden = nextMode === "floating";
+        persist();
+        syncUi();
+      });
+    });
+
+    hideBtn?.addEventListener("click", () => {
+      if (prefs.mode === "docked") {
+        prefs.hidden = true;
+        persist();
+        syncUi();
+      } else {
+        if (hideTimer) clearTimeout(hideTimer);
+        sidebar.classList.remove("is-open");
+      }
+    });
+
+    trigger?.addEventListener("mouseenter", () => {
+      if (prefs.mode === "floating") openFloating();
+    });
+    trigger?.addEventListener("click", () => {
+      if (prefs.mode === "docked") {
+        prefs.hidden = false;
+        persist();
+        syncUi();
+      } else {
+        openFloating();
+      }
+    });
+    sidebar.addEventListener("mouseenter", () => {
+      if (prefs.mode === "floating") openFloating();
+    });
+    sidebar.addEventListener("mouseleave", () => {
+      if (prefs.mode === "floating") scheduleCloseFloating(220);
+    });
+    sidebar.querySelectorAll(".nav-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (prefs.mode === "floating") scheduleCloseFloating(120);
+      });
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (prefs.mode !== "floating") return;
+      if (e.clientX <= 14 && e.clientY >= 54) {
+        openFloating();
+      } else if (sidebar.classList.contains("is-open") && e.clientX > sidebar.offsetWidth + 24 && !sidebar.matches(":hover")) {
+        scheduleCloseFloating(200);
+      }
+    });
+
+    syncUi();
+  })();
+
   // 启动入口（同时支持 #hash 与 /cockpit、/energy-flow、/alarms 等路径直达）
   const initialHash = location.hash.replace(/^#/, "");
   const pathViewMap = {
     "/cockpit": "cockpit",
+    "/dispatch": "dispatch",
     "/energy-flow": "energyflow",
     "/powerflow": "powerflow",
     "/devices": "devices",
@@ -4346,7 +5232,7 @@
     "/comm": "comm",
     "/logs": "logs",
   };
-  const validViews = ["home", "cockpit", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
+  const validViews = ["home", "cockpit", "dispatch", "energyflow", "powerflow", "devices", "alarms", "comm", "logs"];
   const initialView = validViews.includes(initialHash)
     ? initialHash
     : (pathViewMap[location.pathname] || "home");

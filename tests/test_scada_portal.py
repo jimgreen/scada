@@ -248,7 +248,7 @@ class ScadaPortalTests(unittest.TestCase):
 
     def test_static_pages_and_assets_served(self):
         for path in (
-            "/", "/powerflow", "/devices", "/comm", "/logs",
+            "/", "/cockpit", "/dispatch", "/energy-flow", "/powerflow", "/devices", "/alarms", "/comm", "/logs",
             "/static/portal.css", "/static/portal.js",
             "/static/ui-theme.css", "/static/ui-i18n.js",
             "/static/assets/qinling-hero.jpg",
@@ -260,7 +260,7 @@ class ScadaPortalTests(unittest.TestCase):
 
         _, _, html = http_get(self.httpd.server_port, "/")
         text = html.decode("utf-8")
-        for view_id in ("view-home", "view-powerflow", "view-devices", "view-comm", "view-logs"):
+        for view_id in ("view-home", "view-cockpit", "view-dispatch", "view-energyflow", "view-powerflow", "view-devices", "view-alarms", "view-comm", "view-logs"):
             self.assertIn(view_id, text)
 
         _, _, js = http_get(self.httpd.server_port, "/static/portal.js")
