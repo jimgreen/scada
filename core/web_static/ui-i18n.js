@@ -2462,7 +2462,7 @@
   function translateTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE) return;
     const parent = node.parentElement;
-    if (!parent || parent.closest("script, style, code, pre, .lb-content, .log-content, #status-json, #schema-json, #ui-lang-select, #ui-theme-select")) {
+    if (!parent || parent.closest("script, style, code, pre, .lb-content, .log-content, #status-json, #schema-json, #ui-lang-select, #ui-theme-select, #ui-prefs-toggle, #ui-prefs-popover")) {
       return;
     }
     const raw = node.nodeValue || "";
@@ -2579,6 +2579,26 @@
       });
       themeSelect.value = currentTheme;
     }
+    const langShort = currentLang === "en-US" ? "EN" : (currentLang === "ru-RU" ? "RU" : "中");
+    const toggleBtn = document.getElementById("ui-prefs-toggle");
+    if (toggleBtn) {
+      const codeEl = toggleBtn.querySelector(".ui-prefs-code");
+      if (codeEl) codeEl.textContent = langShort;
+      const themeName = t(`ui.theme.${currentTheme}`, currentTheme);
+      const langName = currentLang === "en-US" ? "English" : (currentLang === "ru-RU" ? "Русский" : "中文");
+      toggleBtn.title = `${langName} · ${themeName}`;
+      toggleBtn.setAttribute("aria-label", `${t("ui.lang.label")} / ${t("ui.theme.label")}`);
+    }
+    const pop = document.getElementById("ui-prefs-popover");
+    if (pop) {
+      const lLbl = pop.querySelector("[data-ui-prefs-lang-lbl]");
+      const tLbl = pop.querySelector("[data-ui-prefs-theme-lbl]");
+      if (lLbl) lLbl.textContent = t("ui.lang.label");
+      if (tLbl) tLbl.textContent = t("ui.theme.label");
+      pop.querySelectorAll("[data-ui-lang-btn]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.uiLangBtn === currentLang);
+      });
+    }
   }
 
   function applyTheme(theme, persist = true) {
@@ -2620,15 +2640,62 @@
     box.id = "ui-global-controls";
     box.className = "ui-global-controls";
 
+    // 顶栏单一紧凑触发按钮（仅占 ~48px 宽，释放顶栏空间）
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.id = "ui-prefs-toggle";
+    toggleBtn.className = "ui-prefs-toggle";
+    toggleBtn.setAttribute("aria-haspopup", "true");
+    toggleBtn.setAttribute("aria-expanded", "false");
+    toggleBtn.innerHTML = '<i class="ui-prefs-dot" aria-hidden="true"></i><span class="ui-prefs-code">中</span><span class="ui-prefs-caret" aria-hidden="true">▾</span>';
+
+    // 悬浮偏好面板（挂载至 body 避免被顶栏 overflow 裁切）
+    const pop = document.createElement("div");
+    pop.id = "ui-prefs-popover";
+    pop.className = "ui-prefs-popover";
+    pop.hidden = true;
+
+    const langRow = document.createElement("div");
+    langRow.className = "ui-prefs-row";
+    const langLbl = document.createElement("span");
+    langLbl.className = "ui-prefs-lbl";
+    langLbl.setAttribute("data-ui-prefs-lang-lbl", "");
+    langLbl.textContent = t("ui.lang.label");
+
+    const langSeg = document.createElement("div");
+    langSeg.className = "ui-prefs-lang-seg";
+    [
+      ["zh-CN", "中文"],
+      ["en-US", "EN"],
+      ["ru-RU", "RU"],
+    ].forEach(([code, text]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ui-prefs-lang-btn";
+      b.dataset.uiLangBtn = code;
+      b.textContent = text;
+      b.addEventListener("click", () => applyLang(code));
+      langSeg.append(b);
+    });
+
+    // 保留 #ui-lang-select 兼容脚本/自动化查询
     const select = document.createElement("select");
     select.id = "ui-lang-select";
-    select.className = "ui-lang-select";
+    select.className = "ui-lang-select ui-prefs-sr";
     select.innerHTML =
       '<option value="zh-CN">中文</option>' +
       '<option value="en-US">English</option>' +
       '<option value="ru-RU">Русский</option>';
     select.value = currentLang;
     select.addEventListener("change", () => applyLang(select.value));
+    langRow.append(langLbl, langSeg, select);
+
+    const themeRow = document.createElement("div");
+    themeRow.className = "ui-prefs-row";
+    const themeLbl = document.createElement("span");
+    themeLbl.className = "ui-prefs-lbl";
+    themeLbl.setAttribute("data-ui-prefs-theme-lbl", "");
+    themeLbl.textContent = t("ui.theme.label");
 
     const themeSelect = document.createElement("select");
     themeSelect.id = "ui-theme-select";
@@ -2641,8 +2708,45 @@
     }
     themeSelect.value = currentTheme;
     themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
+    themeRow.append(themeLbl, themeSelect);
 
-    box.append(select, themeSelect);
+    pop.append(langRow, themeRow);
+    document.body.append(pop);
+
+    const positionPopover = () => {
+      const r = toggleBtn.getBoundingClientRect();
+      const popW = pop.offsetWidth || 216;
+      const left = Math.max(8, Math.min(window.innerWidth - popW - 8, r.right - popW));
+      const top = Math.min(window.innerHeight - 110, r.bottom + 6);
+      pop.style.left = `${left}px`;
+      pop.style.top = `${top}px`;
+    };
+    const closePopover = () => {
+      if (pop.hidden) return;
+      pop.hidden = true;
+      toggleBtn.setAttribute("aria-expanded", "false");
+    };
+    const openPopover = () => {
+      pop.hidden = false;
+      toggleBtn.setAttribute("aria-expanded", "true");
+      positionPopover();
+    };
+
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pop.hidden) openPopover();
+      else closePopover();
+    });
+    pop.addEventListener("click", (e) => e.stopPropagation());
+    document.addEventListener("click", closePopover);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closePopover();
+    });
+    window.addEventListener("resize", () => {
+      if (!pop.hidden) positionPopover();
+    });
+
+    box.append(toggleBtn);
     tools.append(box);
     updateControls();
   }

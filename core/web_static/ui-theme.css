@@ -1045,16 +1045,117 @@ a:hover {
 .ui-global-controls {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding-left: 10px;
+  gap: 4px;
+  padding-left: 6px;
   margin-left: 2px;
   border-left: var(--border);
   flex-shrink: 0;
 }
 
+/* 顶栏单一紧凑语言/主题聚合按钮（仅约 48px 宽） */
+html[data-theme] button.ui-prefs-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  border-radius: var(--radius-btn) !important;
+  border: var(--border) !important;
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--ease), background var(--ease);
+}
+html[data-theme] button.ui-prefs-toggle:hover,
+html[data-theme] button.ui-prefs-toggle[aria-expanded="true"] {
+  border-color: var(--accent) !important;
+  background: var(--bg-hover, var(--bg-subtle)) !important;
+}
+.ui-prefs-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.ui-prefs-caret {
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+/* 语言/主题轻量悬浮面板 */
+.ui-prefs-popover {
+  position: fixed;
+  z-index: 9999;
+  width: 218px;
+  padding: 10px;
+  border-radius: var(--radius-card, 8px);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border-strong, #334155));
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-float, 0 12px 28px rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ui-prefs-popover[hidden] {
+  display: none !important;
+}
+.ui-prefs-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ui-prefs-lbl {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.ui-prefs-lang-seg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+html[data-theme] button.ui-prefs-lang-btn {
+  height: 26px;
+  min-height: 26px;
+  padding: 0 4px !important;
+  font-size: 11.5px !important;
+  font-weight: 500;
+  border-radius: var(--radius-btn) !important;
+  border: var(--border) !important;
+  background: var(--bg-subtle) !important;
+  color: var(--text-secondary) !important;
+  cursor: pointer;
+}
+html[data-theme] button.ui-prefs-lang-btn.active {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-weight: 700;
+}
+.ui-prefs-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}
+
 .ui-lang-select,
 .ui-theme-select {
-  height: 30px;
+  height: 28px;
+  width: 100%;
   padding: 0 8px !important;
   font-size: 12px !important;
   font-weight: 500;
@@ -1064,16 +1165,6 @@ a:hover {
   color: var(--text-primary) !important;
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease);
-}
-
-.ui-lang-select {
-  min-width: 78px;
-  max-width: 108px;
-}
-
-.ui-theme-select {
-  min-width: 106px;
-  max-width: 162px;
 }
 
 .ui-lang-select:hover,
