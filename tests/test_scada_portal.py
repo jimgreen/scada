@@ -427,9 +427,18 @@ class ScadaPortalTests(unittest.TestCase):
         self.assertEqual(status, 200)
         ck = json.loads(ck_raw.decode("utf-8"))
         self.assertEqual(set(ck["hub"]["nodes"].keys()), {"wind", "pv", "storage", "load", "hydrogen", "diesel"})
+        # 累计电量严格来自历史库真实积分（无虚构历史基数），单测仅 1 帧故 < 0.01 万kWh 且 > 0
         self.assertGreater(ck["cumulative"]["total_supply_wkwh"], 0.0)
-        self.assertGreater(ck["cumulative"]["co2_reduced_tons"], 0.0)
-        self.assertGreaterEqual(ck["resilience"]["autonomy_hours"], 0.0)
+        self.assertLess(ck["cumulative"]["total_supply_wkwh"], 1.0)
+        # 测试模型库未定义柴发油耗/油箱与储能容量，绝不伪造节油/减碳/续航/自持/氢效
+        self.assertIsNone(ck["cumulative"]["diesel_saved_tons"])
+        self.assertIsNone(ck["cumulative"]["co2_reduced_tons"])
+        self.assertIsNone(ck["resilience"]["autonomy_hours"])
+        self.assertIsNone(ck["derived"]["diesel_endurance_hours"])
+        self.assertIsNone(ck["derived"]["h2_roundtrip_eff_pct"])
+        # 测试库未绑定母线电压时绝不伪造 750V / 380V
+        self.assertIsNone(ef["dc_bus"]["voltage_v"])
+        self.assertIsNone(ef["ac_bus"]["voltage_v"])
         self.assertEqual(len(ck["source_mix"]), 4)
         self.assertEqual(len(ck["power_curves"]), 5)
         self.assertGreaterEqual(len(ck["storage_schedule"]), 1)
@@ -702,12 +711,17 @@ class ScadaPortalTests(unittest.TestCase):
             c.close()
             return r.status, (json.loads(raw) if raw else {})
 
-        # 1. 默认读取现场实测模式与 6 组南极气象预设
+        # 1. 默认读取现场实测模式与 6 组南极气象预设；测试库无气象传感器时严格返回 None（零虚构）
         st0, w0 = req_json("GET", "/api/weather")
         self.assertEqual(st0, 200)
         self.assertEqual(w0["profile"]["mode"], "measured")
         self.assertGreaterEqual(len(w0["presets"]), 6)
-        self.assertIn("coupling", w0)
+        self.assertIsNone(w0["effective"]["temperature_c"])
+        self.assertIsNone(w0["effective"]["wind_speed_ms"])
+        self.assertIsNone(w0["effective"]["irradiance_wm2"])
+        self.assertIsNone(w0["effective"]["pressure_hpa"])
+        self.assertIsNone(w0["coupling"]["bess"]["cap_retention_pct"])
+        self.assertIsNone(w0["coupling"]["thermal"]["heating_delta_kw"])
 
         # 2. 切换为暴雪重冰工况并验证耦合影响同步至 polar-cockpit 与 overview
         st1, w1 = req_json("PUT", "/api/weather", {"preset": "blizzard_icing"})
@@ -733,8 +747,8 @@ class ScadaPortalTests(unittest.TestCase):
         for el_id in ("topbar-weather-pill", "home-weather-btn", "ck-weather-btn", "ds-tk-weather-btn", "ef-weather-btn", "health-weather-row", "weather-dialog"):
             self.assertIn(el_id, html_txt)
 
-        # 3. 强下降风超速切出判定（风速 >= 25 m/s）
-        st2, w2 = req_json("PUT", "/api/weather", {"mode": "manual", "preset": "custom", "wind_speed_ms": 27.5, "temperature_c": -20.0})
+        # 3. 强下降风超速切出判定（大于模型库真实 cut_out_wind_speed = 35 m/s）
+        st2, w2 = req_json("PUT", "/api/weather", {"mode": "manual", "preset": "custom", "wind_speed_ms": 36.0, "temperature_c": -20.0})
         self.assertEqual(st2, 200)
         self.assertEqual(w2["coupling"]["wind"]["avail_pct"], 0.0)
         self.assertEqual(w2["coupling"]["wind"]["state"], "超速切出")
@@ -745,10 +759,12 @@ class ScadaPortalTests(unittest.TestCase):
         st_bad2, _ = req_json("PUT", "/api/weather", {"mode": "manual", "icing_level": 9})
         self.assertEqual(st_bad2, 400)
 
-        # 5. 一键恢复现场实测模式
+        # 5. 一键恢复现场实测模式，人工推演值全部清空回归真实传感器（None）
         st3, w3 = req_json("PUT", "/api/weather", {"mode": "measured", "preset": "live"})
         self.assertEqual(st3, 200)
         self.assertEqual(w3["effective"]["mode"], "measured")
+        self.assertIsNone(w3["effective"]["temperature_c"])
+        self.assertIsNone(w3["effective"]["pressure_hpa"])
 
 
 if __name__ == "__main__":

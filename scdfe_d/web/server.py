@@ -93,7 +93,7 @@ def _d_extract_measured_weather(store) -> tuple[dict, float]:
         "irradiance_wm2": round(sum(irradiances) / len(irradiances), 1) if irradiances else None,
         "temperature_c": round(sum(temperatures) / len(temperatures), 1) if temperatures else None,
     }
-    return measured, max(15.0, round(total_load_kw, 1))
+    return measured, (round(total_load_kw, 1) if total_load_kw > 0 else None)
 
 
 def _d_load_weather_profile(store) -> dict:
@@ -115,18 +115,33 @@ def _d_load_weather_profile(store) -> dict:
                 "FROM polar_weather_profile WHERE id=1"
             ).fetchone()
             if row is not None:
-                prof.update({
-                    "mode": row[0] or "measured",
-                    "preset": row[1] or "live",
-                    "temperature_c": row[2],
-                    "wind_speed_ms": row[3],
-                    "irradiance_wm2": row[4],
-                    "pressure_hpa": float(row[5] if row[5] is not None else 985.0),
-                    "icing_level": int(row[6] if row[6] is not None else 0),
-                    "snow_condition": row[7] or "clear",
-                    "updated_ms": int(row[8] or 0),
-                    "operator": row[9] or "",
-                })
+                mode = row[0] or "measured"
+                if mode == "measured":
+                    prof.update({
+                        "mode": "measured",
+                        "preset": "live",
+                        "temperature_c": None,
+                        "wind_speed_ms": None,
+                        "irradiance_wm2": None,
+                        "pressure_hpa": None,
+                        "icing_level": None,
+                        "snow_condition": None,
+                        "updated_ms": int(row[8] or 0),
+                        "operator": row[9] or "",
+                    })
+                else:
+                    prof.update({
+                        "mode": mode,
+                        "preset": row[1] or "custom",
+                        "temperature_c": row[2],
+                        "wind_speed_ms": row[3],
+                        "irradiance_wm2": row[4],
+                        "pressure_hpa": float(row[5]) if row[5] is not None else None,
+                        "icing_level": int(row[6]) if row[6] is not None else None,
+                        "snow_condition": row[7] if row[7] else None,
+                        "updated_ms": int(row[8] or 0),
+                        "operator": row[9] or "",
+                    })
     except sqlite3.Error:
         LOG.debug("scdfe_d weather profile read fallback", exc_info=True)
     return prof
@@ -138,10 +153,10 @@ def _d_get_weather_state(store) -> dict:
     effective = merge_effective_weather(measured, profile)
     coupling = compute_polar_weather_coupling(
         effective=effective,
-        wind_rated_kw=200.0,
-        pv_rated_kw=150.0,
+        wind_rated_kw=None,
+        pv_rated_kw=None,
         base_load_kw=load_kw,
-        base_autonomy_h=4.0,
+        base_autonomy_h=None,
     )
     return {
         "measured": measured,

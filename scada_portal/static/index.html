@@ -1017,12 +1017,12 @@
                 <h2>交直流微电网与氢能全景流向</h2>
                 <div class="ef-head-balance">
                   <span class="ef-bal-side">
-                    <span class="ef-bus-tag dc" id="ef-dc-volt">DC 750V</span>
+                    <span class="ef-bus-tag dc" id="ef-dc-volt">DC --V</span>
                     <span class="ef-bal-stat" id="ef-dc-balance">发 -- / 荷 -- kW</span>
                   </span>
                   <span class="ef-bal-sep" aria-hidden="true"></span>
                   <span class="ef-bal-side">
-                    <span class="ef-bus-tag ac" id="ef-ac-volt">AC 380V</span>
+                    <span class="ef-bus-tag ac" id="ef-ac-volt">AC --V</span>
                     <span class="ef-bal-stat" id="ef-ac-balance">发 -- / 荷 -- kW</span>
                   </span>
                 </div>
@@ -1046,11 +1046,11 @@
                   </defs>
 
                   <!-- 直流 / 交流垂直主母线（使用圆角矩形避免垂直 line 零宽包围盒导致渐变不可见） -->
-                  <text class="ef-bus-cap dc" x="305" y="34" text-anchor="middle" id="ef-svg-dc-cap">DC 750V</text>
+                  <text class="ef-bus-cap dc" x="305" y="34" text-anchor="middle" id="ef-svg-dc-cap">DC --V</text>
                   <rect class="ef-bus-bar dc" x="302.5" y="44" width="5" height="380" rx="2.5" fill="url(#ef-dc-bus-grad)" />
                   <text class="ef-bus-foot" x="305" y="446" text-anchor="middle">直流母线</text>
 
-                  <text class="ef-bus-cap ac" x="615" y="34" text-anchor="middle" id="ef-svg-ac-cap">AC 380V</text>
+                  <text class="ef-bus-cap ac" x="615" y="34" text-anchor="middle" id="ef-svg-ac-cap">AC --V</text>
                   <rect class="ef-bus-bar ac" x="612.5" y="44" width="5" height="380" rx="2.5" fill="url(#ef-ac-bus-grad)" />
                   <text class="ef-bus-foot" x="615" y="446" text-anchor="middle">交流母线</text>
 
@@ -1111,7 +1111,7 @@
                     <g class="ef-ico c-load" transform="translate(-11,-11) scale(0.92)">
                       <path d="M13 3 6 13h5l-1 8 8-11h-5l0-7z" />
                     </g>
-                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流负荷 <tspan class="ef-n-dim" id="ef-dc-load-v">· 750V</tspan></text>
+                    <text class="ef-n-title" x="-32" y="-12" text-anchor="end">直流负荷 <tspan class="ef-n-dim" id="ef-dc-load-v">· --V</tspan></text>
                     <text class="ef-n-val" x="-32" y="9" text-anchor="end" id="ef-dc-load-kw">-- kW</text>
                     <text class="ef-n-sub" x="-32" y="25" text-anchor="end" id="ef-dc-load-sub">占总负荷 --%</text>
                   </g>
@@ -1195,7 +1195,7 @@
                     <g class="ef-ico c-load" transform="translate(-11,-11) scale(0.92)">
                       <path d="M13 3 6 13h5l-1 8 8-11h-5l0-7z" />
                     </g>
-                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流负荷 <tspan class="ef-n-dim" id="ef-ac-load-v">· 380V</tspan></text>
+                    <text class="ef-n-title" x="30" y="-10" text-anchor="start">交流负荷 <tspan class="ef-n-dim" id="ef-ac-load-v">· --V</tspan></text>
                     <text class="ef-n-val" x="30" y="10" text-anchor="start" id="ef-ac-load-kw">-- kW</text>
                     <text class="ef-n-sub" x="30" y="25" text-anchor="start" id="ef-ac-load-sub">占总负荷 --%</text>
                   </g>
@@ -1217,7 +1217,7 @@
                 <div class="ef-kv" title="太阳辐照度"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg> 辐照</span><strong id="ef-env-irr">-- W/m²</strong></div>
                 <div class="ef-kv" title="叶片覆冰与积雪天气"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20"/></svg> 工况</span><strong id="ef-env-ice">--</strong></div>
                 <div class="ef-kv" title="风电耦合 / 电储低温容量"><span><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13"/></svg> 风/储</span><strong id="ef-cpl-wb">-- / --</strong></div>
-                <div class="ef-kv" title="极寒采暖负荷增量"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg> 采暖</span><strong id="ef-cpl-heat">+0 kW</strong></div>
+                <div class="ef-kv" title="极寒采暖负荷增量"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg> 采暖</span><strong id="ef-cpl-heat">-- kW</strong></div>
                 <div class="ef-kv-sep"></div>
                 <div class="ef-kv"><span>直流母线</span><strong id="ef-env-dcu">-- V</strong></div>
                 <div class="ef-kv"><span>交流母线</span><strong id="ef-env-acu">-- V</strong></div>
@@ -1716,34 +1716,35 @@
           <label class="wx-field">
             <span class="wx-flbl">环境气温 <small>°C</small></span>
             <div class="wx-range-row">
-              <input id="wx-temp-range" type="range" min="-55" max="10" step="0.5" value="-12" />
-              <input id="wx-temp" type="number" min="-65" max="20" step="0.5" value="-12" />
+              <input id="wx-temp-range" type="range" min="-55" max="10" step="0.5" value="0" />
+              <input id="wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="无实测" />
             </div>
           </label>
           <label class="wx-field">
             <span class="wx-flbl">瞬时风速 <small>m/s</small></span>
             <div class="wx-range-row">
-              <input id="wx-wind-range" type="range" min="0" max="40" step="0.5" value="8.5" />
-              <input id="wx-wind" type="number" min="0" max="60" step="0.5" value="8.5" />
+              <input id="wx-wind-range" type="range" min="0" max="40" step="0.5" value="0" />
+              <input id="wx-wind" type="number" min="0" max="60" step="0.5" placeholder="无实测" />
             </div>
           </label>
           <label class="wx-field">
             <span class="wx-flbl">太阳辐照 <small>W/m²</small></span>
             <div class="wx-range-row">
-              <input id="wx-irr-range" type="range" min="0" max="1100" step="10" value="260" />
-              <input id="wx-irr" type="number" min="0" max="1400" step="5" value="260" />
+              <input id="wx-irr-range" type="range" min="0" max="1100" step="10" value="0" />
+              <input id="wx-irr" type="number" min="0" max="1400" step="5" placeholder="无实测" />
             </div>
           </label>
           <label class="wx-field">
             <span class="wx-flbl">大气气压 <small>hPa</small></span>
             <div class="wx-range-row">
               <input id="wx-pres-range" type="range" min="930" max="1030" step="1" value="985" />
-              <input id="wx-pres" type="number" min="900" max="1050" step="1" value="985" />
+              <input id="wx-pres" type="number" min="900" max="1050" step="1" placeholder="无实测" />
             </div>
           </label>
           <label class="wx-field">
             <span class="wx-flbl">叶片覆冰</span>
             <select id="wx-icing">
+              <option value="">--</option>
               <option value="0">无覆冰</option>
               <option value="1">轻度覆冰</option>
               <option value="2">中度覆冰</option>
@@ -1753,6 +1754,7 @@
           <label class="wx-field">
             <span class="wx-flbl">积雪天气</span>
             <select id="wx-snow">
+              <option value="">--</option>
               <option value="clear">晴朗</option>
               <option value="overcast">阴云</option>
               <option value="blowing_snow">吹雪</option>

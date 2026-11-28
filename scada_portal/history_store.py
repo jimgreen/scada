@@ -192,7 +192,7 @@ def ensure_extended_history_schema(conn: sqlite3.Connection) -> None:
         if "ack_note" not in cols:
             conn.execute("ALTER TABLE alarm_events ADD COLUMN ack_note TEXT NOT NULL DEFAULT ''")
 
-    # 5. 南极气象条件与环境工况输入持久化配置表（单行 id=1）
+    # 5. 南极气象条件与环境工况输入持久化配置表（单行 id=1，所有环境物理量允许 NULL，绝不内置假默认值）
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS polar_weather_profile (
@@ -202,14 +202,54 @@ def ensure_extended_history_schema(conn: sqlite3.Connection) -> None:
             temperature_c REAL,
             wind_speed_ms REAL,
             irradiance_wm2 REAL,
-            pressure_hpa REAL NOT NULL DEFAULT 985.0,
-            icing_level INTEGER NOT NULL DEFAULT 0,
-            snow_condition TEXT NOT NULL DEFAULT 'clear',
+            pressure_hpa REAL,
+            icing_level INTEGER,
+            snow_condition TEXT,
             updated_ms INTEGER NOT NULL DEFAULT 0,
             operator TEXT NOT NULL DEFAULT ''
         )
         """
     )
+    # 兼容旧库：若旧版 polar_weather_profile 存在 NOT NULL 约束，平滑迁移为允许 NULL
+    wx_info = conn.execute("PRAGMA table_info(polar_weather_profile)").fetchall()
+    if any(r[1] in {"pressure_hpa", "icing_level", "snow_condition"} and int(r[3] or 0) == 1 for r in wx_info):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS polar_weather_profile_v2 (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                mode TEXT NOT NULL DEFAULT 'measured',
+                preset TEXT NOT NULL DEFAULT 'live',
+                temperature_c REAL,
+                wind_speed_ms REAL,
+                irradiance_wm2 REAL,
+                pressure_hpa REAL,
+                icing_level INTEGER,
+                snow_condition TEXT,
+                updated_ms INTEGER NOT NULL DEFAULT 0,
+                operator TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO polar_weather_profile_v2 (
+                id, mode, preset, temperature_c, wind_speed_ms, irradiance_wm2,
+                pressure_hpa, icing_level, snow_condition, updated_ms, operator
+            )
+            SELECT id, mode, preset,
+                   CASE WHEN mode='measured' THEN NULL ELSE temperature_c END,
+                   CASE WHEN mode='measured' THEN NULL ELSE wind_speed_ms END,
+                   CASE WHEN mode='measured' THEN NULL ELSE irradiance_wm2 END,
+                   CASE WHEN mode='measured' THEN NULL ELSE pressure_hpa END,
+                   CASE WHEN mode='measured' THEN NULL ELSE icing_level END,
+                   CASE WHEN mode='measured' THEN NULL ELSE snow_condition END,
+                   updated_ms, operator
+            FROM polar_weather_profile
+            """
+        )
+        conn.execute("DROP TABLE polar_weather_profile")
+        conn.execute("ALTER TABLE polar_weather_profile_v2 RENAME TO polar_weather_profile")
+        conn.commit()
 
 
 def upsert_minute_rollup(

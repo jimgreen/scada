@@ -640,16 +640,24 @@
     updateCollectorBadge(h.collector_running);
     updateDataQualityPill(data.data_quality);
 
-    $("#kpi-days").textContent = k.running_days ?? "--";
-    $("#kpi-load-total").textContent = fmtNum(k.load_total_wkwh, 1);
-    $("#kpi-diesel-total").textContent = fmtNum(k.diesel_total_wkwh, 1);
-    $("#kpi-renew-total").textContent = fmtNum(k.renewable_total_wkwh, 1);
-    $("#kpi-diesel-saved").textContent = fmtNum(k.diesel_saved_tons, 1);
+    const fmtCum = (v, digits = 2) => {
+      if (v === null || v === undefined || v === "") return "--";
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "--";
+      if (n > 0 && n < 0.05) return n.toFixed(Math.max(digits, 3));
+      return n.toFixed(digits);
+    };
 
-    $("#kpi-wind-total").textContent = fmtNum(k.wind_total_wkwh, 2);
-    $("#kpi-pv-total").textContent = fmtNum(k.pv_total_wkwh, 2);
-    $("#kpi-storage-total").textContent = fmtNum(k.storage_total_wkwh, 2);
-    $("#kpi-hydro-total").textContent = fmtNum(k.hydro_total_wkwh, 2);
+    $("#kpi-days").textContent = k.running_days ?? "--";
+    $("#kpi-load-total").textContent = fmtCum(k.load_total_wkwh, 2);
+    $("#kpi-diesel-total").textContent = fmtCum(k.diesel_total_wkwh, 2);
+    $("#kpi-renew-total").textContent = fmtCum(k.renewable_total_wkwh, 2);
+    $("#kpi-diesel-saved").textContent = fmtCum(k.diesel_saved_tons, 2);
+
+    $("#kpi-wind-total").textContent = fmtCum(k.wind_total_wkwh, 2);
+    $("#kpi-pv-total").textContent = fmtCum(k.pv_total_wkwh, 2);
+    $("#kpi-storage-total").textContent = fmtCum(k.storage_total_wkwh, 2);
+    $("#kpi-hydro-total").textContent = fmtCum(k.hydro_total_wkwh, 2);
 
     const sharePct = Number(k.renewable_share_pct ?? 0);
     $("#kpi-renew-share").textContent = fmtNum(sharePct, 1);
@@ -664,7 +672,7 @@
     $("#rt-h2gen").textContent = fmtNum(rt.hydrogen_gen_kw, 1);
     $("#rt-diesel").textContent = fmtNum(rt.diesel_kw, 1);
     $("#rt-storage").textContent = fmtNum(rt.storage_kw, 1);
-    $("#rt-storage-soc").textContent = `kW / ${fmtNum(rt.storage_soc_pct, 0)}%`;
+    $("#rt-storage-soc").textContent = rt.storage_soc_pct != null ? `kW / ${fmtNum(rt.storage_soc_pct, 0)}%` : "kW / --%";
     $("#rt-load").textContent = fmtNum(rt.load_kw, 1);
 
     const effWx = data.weather?.effective || {};
@@ -674,8 +682,8 @@
     $("#env-irr").textContent = fmtNum(effWx.irradiance_wm2 ?? rt.irradiance, 0);
     $("#env-h2").textContent =
       rt.hydro_pressure_mpa !== null && rt.hydro_pressure_mpa !== undefined
-        ? `${fmtNum(rt.hydro_pressure_mpa, 2)} MPa / ${fmtNum(rt.hydro_soc_pct, 0)}%`
-        : `${fmtNum(rt.hydro_soc_pct, 0)}%`;
+        ? `${fmtNum(rt.hydro_pressure_mpa, 2)} MPa / ${rt.hydro_soc_pct != null ? `${fmtNum(rt.hydro_soc_pct, 0)}%` : "--%"}`
+        : (rt.hydro_soc_pct != null ? `${fmtNum(rt.hydro_soc_pct, 0)}%` : "--");
     if ($("#home-weather-tag")) {
       $("#home-weather-tag").textContent = tr(effWx.preset_label || (effWx.mode === "manual" ? "工况推演" : "现场实测"));
     }
@@ -2975,15 +2983,15 @@
     $("#ef-kpi-valid").textContent = String(s.valid_measurements ?? 0);
     $("#ef-kpi-valid-sub").textContent = `/ ${s.bound_measurements ?? 0}`;
 
-    // 交直流平衡栏与母线电压
-    const dcV = Math.round(dc.voltage_v || 750);
-    const acV = Math.round(ac.voltage_v || 380);
-    if ($("#ef-dc-volt")) $("#ef-dc-volt").textContent = `DC ${dcV}V`;
+    // 交直流平衡栏与母线电压（严格源自实时数据库，无实测值显示 --）
+    const dcVText = dc.voltage_v != null ? String(Math.round(dc.voltage_v)) : "--";
+    const acVText = ac.voltage_v != null ? String(Math.round(ac.voltage_v)) : "--";
+    if ($("#ef-dc-volt")) $("#ef-dc-volt").textContent = `DC ${dcVText}V`;
     if ($("#ef-dc-balance")) $("#ef-dc-balance").textContent = `发 ${fmtNum(dc.gen_kw, 1)} / 荷 ${fmtNum(dc.load_kw, 1)} kW`;
-    if ($("#ef-ac-volt")) $("#ef-ac-volt").textContent = `AC ${acV}V`;
+    if ($("#ef-ac-volt")) $("#ef-ac-volt").textContent = `AC ${acVText}V`;
     if ($("#ef-ac-balance")) $("#ef-ac-balance").textContent = `发 ${fmtNum(ac.gen_kw, 1)} / 荷 ${fmtNum(ac.load_kw, 1)} kW`;
-    $("#ef-svg-dc-cap").textContent = `DC ${dcV}V`;
-    $("#ef-svg-ac-cap").textContent = `AC ${acV}V`;
+    $("#ef-svg-dc-cap").textContent = `DC ${dcVText}V`;
+    $("#ef-svg-ac-cap").textContent = `AC ${acVText}V`;
 
     // 左侧直流节点
     const dcWind = n.dc_wind || {};
@@ -3005,7 +3013,8 @@
     setFlowLineState("ef-line-dc-storage", dcEs.state === "discharge" ? "fwd" : dcEs.state === "charge" ? "rev" : "idle");
 
     const dcLoad = n.dc_load || {};
-    $("#ef-dc-load-v").textContent = `· ${Math.round(dcLoad.voltage_v || dcV)}V`;
+    const dcLoadV = dcLoad.voltage_v != null ? String(Math.round(dcLoad.voltage_v)) : dcVText;
+    $("#ef-dc-load-v").textContent = `· ${dcLoadV}V`;
     $("#ef-dc-load-kw").textContent = `${fmtNum(dcLoad.p_kw, 1)} kW`;
     $("#ef-dc-load-sub").textContent = `占总负荷 ${fmtNum(dcLoad.share_pct, 1)}%`;
     setFlowLineState("ef-line-dc-load", (dcLoad.p_kw || 0) > 0.2 ? "fwd" : "idle");
@@ -3051,7 +3060,7 @@
 
     const fc = n.fuel_cell || {};
     $("#ef-fc-kw").textContent = `${fmtNum(fc.p_kw, 1)} kW`;
-    $("#ef-fc-flow").textContent = `${fc.flow_nm3h != null ? fmtNum(fc.flow_nm3h, 2) : "0.00"} Nm³/h`;
+    $("#ef-fc-flow").textContent = `${fc.flow_nm3h != null ? fmtNum(fc.flow_nm3h, 2) : "--"} Nm³/h`;
     setFlowLineState("ef-line-h2-fc", (fc.flow_nm3h || 0) > 0.05 || (fc.p_kw || 0) > 0.2 ? "fwd" : "idle");
     setFlowLineState("ef-line-fc-dc", (fc.p_kw || 0) > 0.2 ? "fwd" : "idle");
 
@@ -3081,34 +3090,45 @@
     setFlowLineState("ef-line-diesel", (diesel.p_kw || 0) > 0.2 ? "fwd" : "idle");
 
     const acLoad = n.ac_load || {};
-    $("#ef-ac-load-v").textContent = `· ${Math.round(acLoad.voltage_v || acV)}V`;
+    const acLoadV = acLoad.voltage_v != null ? String(Math.round(acLoad.voltage_v)) : acVText;
+    $("#ef-ac-load-v").textContent = `· ${acLoadV}V`;
     $("#ef-ac-load-kw").textContent = `${fmtNum(acLoad.p_kw, 1)} kW`;
     $("#ef-ac-load-sub").textContent = `占总负荷 ${fmtNum(acLoad.share_pct, 1)}%`;
     setFlowLineState("ef-line-ac-load", (acLoad.p_kw || 0) > 0.2 ? "fwd" : "idle");
 
-    // 右侧环境与数据源面板（含极地气象与能源系统物理耦合）
-    const sampleDt = data.latest_sample_time ? new Date(data.latest_sample_time) : new Date();
-    $("#ef-sample-time").textContent = Number.isNaN(sampleDt.getTime())
+    // 右侧环境与数据源面板（含气象与能源系统物理耦合；无实测值严格显示 --）
+    const sampleDt = data.latest_sample_time ? new Date(data.latest_sample_time) : null;
+    $("#ef-sample-time").textContent = (!sampleDt || Number.isNaN(sampleDt.getTime()))
       ? "--:--:--"
       : sampleDt.toLocaleTimeString("zh-CN", { hour12: false });
     const efCpl = data.coupling || {};
     if ($("#ef-env-temp")) {
       $("#ef-env-temp").textContent = env.temperature_c != null ? `${fmtNum(env.temperature_c, 1)} °C` : "-- °C";
-      $("#ef-env-temp").title = `${tr("风寒体感")} ${fmtNum(env.wind_chill_c, 1)} °C`;
+      $("#ef-env-temp").title = env.wind_chill_c != null ? `${tr("风寒体感")} ${fmtNum(env.wind_chill_c, 1)} °C` : tr("未配置气温传感器");
     }
     $("#ef-env-wind").textContent = env.wind_speed_ms != null ? `${fmtNum(env.wind_speed_ms, 2)} m/s` : "--";
     $("#ef-env-irr").textContent = env.irradiance_wm2 != null ? `${fmtNum(env.irradiance_wm2, 1)} W/m²` : "--";
     if ($("#ef-env-ice")) {
-      $("#ef-env-ice").textContent = `${tr(env.icing_label || "无覆冰")} · ${tr(env.snow_label || "晴朗")}`;
+      const iceParts = [env.icing_label ? tr(env.icing_label) : "", env.snow_label ? tr(env.snow_label) : ""].filter(Boolean);
+      $("#ef-env-ice").textContent = iceParts.length ? iceParts.join(" · ") : "--";
     }
     if ($("#ef-cpl-wb")) {
-      const wTxt = efCpl.wind?.state === "超速切出" ? tr("切出") : `${fmtNum(efCpl.wind?.avail_pct, 0)}%`;
-      $("#ef-cpl-wb").textContent = `${wTxt} / ${fmtNum(efCpl.bess?.cap_retention_pct, 0)}%`;
+      const wTxt = efCpl.wind?.state === "超速切出"
+        ? tr("切出")
+        : (efCpl.wind?.avail_pct != null ? `${fmtNum(efCpl.wind.avail_pct, 0)}%` : "--");
+      const bTxt = efCpl.bess?.cap_retention_pct != null ? `${fmtNum(efCpl.bess.cap_retention_pct, 0)}%` : "--";
+      $("#ef-cpl-wb").textContent = `${wTxt} / ${bTxt}`;
     }
     if ($("#ef-cpl-heat")) {
-      const hDelta = Number(efCpl.thermal?.heating_delta_kw || 0);
-      $("#ef-cpl-heat").textContent = `+${fmtNum(hDelta, 1)} kW`;
-      $("#ef-cpl-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--accent)");
+      const hRaw = efCpl.thermal?.heating_delta_kw;
+      if (hRaw == null) {
+        $("#ef-cpl-heat").textContent = "-- kW";
+        $("#ef-cpl-heat").style.color = "";
+      } else {
+        const hDelta = Number(hRaw);
+        $("#ef-cpl-heat").textContent = `+${fmtNum(hDelta, 1)} kW`;
+        $("#ef-cpl-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--accent)");
+      }
     }
     const efWxBtn = $("#ef-weather-btn");
     if (efWxBtn) {
@@ -3116,8 +3136,8 @@
       efWxBtn.title = env.mode === "manual" ? `${tr(env.preset_label || "工况推演")} · ${tr("工况输入")}` : tr("配置南极气象工况");
     }
     syncAllWeatherBadges(env, efCpl);
-    $("#ef-env-dcu").textContent = `${fmtNum(env.dc_voltage_v, 1)} V`;
-    $("#ef-env-acu").textContent = `${fmtNum(env.ac_voltage_v, 1)} V`;
+    $("#ef-env-dcu").textContent = env.dc_voltage_v != null ? `${fmtNum(env.dc_voltage_v, 1)} V` : "-- V";
+    $("#ef-env-acu").textContent = env.ac_voltage_v != null ? `${fmtNum(env.ac_voltage_v, 1)} V` : "-- V";
     $("#ef-src-model").textContent = src.model_db || "—";
     $("#ef-src-d").textContent = src.d_db || "—";
     $("#ef-src-c").textContent = src.c_db || "—";
@@ -3898,19 +3918,28 @@
     const rn = data.renewables || {};
 
     // 左上 L1
-    $("#ck-run-days").textContent = `${data.running_days ?? "--"} 天`;
-    $("#ck-total-supply").textContent = fmtNum(cum.total_supply_wkwh, 2);
-    $("#ck-total-load").textContent = fmtNum(cum.total_load_wkwh, 2);
-    $("#ck-diesel-saved").textContent = fmtNum(cum.diesel_saved_tons, 1);
-    $("#ck-co2-reduced").textContent = fmtNum(cum.co2_reduced_tons, 1);
+    const fmtCkCum = (v, d = 2) => {
+      if (v === null || v === undefined || v === "") return "--";
+      const num = Number(v);
+      if (!Number.isFinite(num)) return "--";
+      if (num > 0 && num < 0.05) return num.toFixed(Math.max(d, 3));
+      return num.toFixed(d);
+    };
+    $("#ck-run-days").textContent = data.running_days != null ? `${data.running_days} 天` : "-- 天";
+    $("#ck-total-supply").textContent = fmtCkCum(cum.total_supply_wkwh, 2);
+    $("#ck-total-load").textContent = fmtCkCum(cum.total_load_wkwh, 2);
+    $("#ck-diesel-saved").textContent = fmtCkCum(cum.diesel_saved_tons, 2);
+    $("#ck-co2-reduced").textContent = fmtCkCum(cum.co2_reduced_tons, 2);
 
     // 左中 L2
-    $("#ck-replace-pct").textContent = `替代率 ${fmtNum(res.diesel_replace_pct, 1)}%`;
-    $("#ck-autonomy-h").textContent = fmtNum(res.autonomy_hours, 1);
-    $("#ck-wind-saved").textContent = fmtNum(res.wind_saved_tons, 1);
-    $("#ck-pv-saved").textContent = fmtNum(res.pv_saved_tons, 1);
+    $("#ck-replace-pct").textContent = res.diesel_replace_pct != null ? `替代率 ${fmtNum(res.diesel_replace_pct, 1)}%` : "替代率 --%";
+    $("#ck-autonomy-h").textContent = res.autonomy_hours != null ? fmtNum(res.autonomy_hours, 1) : "--";
+    $("#ck-wind-saved").textContent = fmtCkCum(res.wind_saved_tons, 2);
+    $("#ck-pv-saved").textContent = fmtCkCum(res.pv_saved_tons, 2);
     const pText = res.hydro_pressure_mpa != null ? `/${fmtNum(res.hydro_pressure_mpa, 2)}MPa` : "";
-    $("#ck-h2-reserve").textContent = `${fmtNum(res.hydro_soc_pct, 1)}%${pText}`;
+    $("#ck-h2-reserve").textContent = res.hydro_soc_pct != null
+      ? `${fmtNum(res.hydro_soc_pct, 1)}%${pText}`
+      : (res.hydro_pressure_mpa != null ? `${fmtNum(res.hydro_pressure_mpa, 2)}MPa` : "--");
 
     // 中上 C1：能量枢纽 6 节点 + 光轨方向
     $("#ck-hub-green").textContent = `${fmtNum(hub.green_ratio_pct, 1)}%`;
@@ -3994,25 +4023,38 @@
       wxBtn.title = effWx.mode === "manual" ? `${tr(effWx.preset_label || "工况推演")} · ${tr("工况输入")}` : tr("配置南极气象工况");
     }
     if ($("#ck-st-temp")) {
-      const icingTag = Number(effWx.icing_level || 0) > 0 ? ` · ${tr(effWx.icing_label || "")}` : "";
-      $("#ck-st-temp").title = `${tr("风寒体感")} ${fmtNum(effWx.wind_chill_c, 1)} °C · ${tr("空气密度")} ${fmtNum(effWx.air_density_kgm3, 2)} kg/m³${icingTag}`;
+      const tipParts = [];
+      if (effWx.wind_chill_c != null) tipParts.push(`${tr("风寒体感")} ${fmtNum(effWx.wind_chill_c, 1)} °C`);
+      if (effWx.air_density_kgm3 != null) tipParts.push(`${tr("空气密度")} ${fmtNum(effWx.air_density_kgm3, 2)} kg/m³`);
+      if (effWx.icing_level != null && Number(effWx.icing_level) > 0 && effWx.icing_label) tipParts.push(tr(effWx.icing_label));
+      $("#ck-st-temp").title = tipParts.join(" · ") || tr("未配置气温传感器");
     }
     if ($("#ck-drv-wind")) {
       const wObj = cpl.wind || {};
-      $("#ck-drv-wind").textContent = wObj.state === "超速切出" ? tr("切出") : `${fmtNum(wObj.avail_pct, 0)}%`;
-      $("#ck-drv-wind").style.color = wObj.level === "danger" ? "var(--danger)" : (wObj.level === "warn" ? "var(--warn)" : "var(--ok)");
+      $("#ck-drv-wind").textContent = wObj.state === "超速切出"
+        ? tr("切出")
+        : (wObj.avail_pct != null ? `${fmtNum(wObj.avail_pct, 0)}%` : "--");
+      $("#ck-drv-wind").style.color = wObj.level === "danger" ? "var(--danger)" : (wObj.level === "warn" ? "var(--warn)" : (wObj.avail_pct != null ? "var(--ok)" : ""));
     }
     if ($("#ck-drv-bess")) {
       const bObj = cpl.bess || {};
-      $("#ck-drv-bess").textContent = `${fmtNum(bObj.cap_retention_pct, 0)}%`;
-      $("#ck-drv-bess").style.color = bObj.level === "danger" ? "var(--danger)" : (bObj.level === "warn" ? "var(--warn)" : "var(--accent)");
+      $("#ck-drv-bess").textContent = bObj.cap_retention_pct != null ? `${fmtNum(bObj.cap_retention_pct, 0)}%` : "--";
+      $("#ck-drv-bess").style.color = bObj.level === "danger" ? "var(--danger)" : (bObj.level === "warn" ? "var(--warn)" : (bObj.cap_retention_pct != null ? "var(--accent)" : ""));
     }
     if ($("#ck-drv-heat")) {
-      const hDelta = Number(cpl.thermal?.heating_delta_kw || 0);
-      $("#ck-drv-heat").textContent = `+${fmtNum(hDelta, 0)}kW`;
-      $("#ck-drv-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
+      const hRaw = cpl.thermal?.heating_delta_kw;
+      if (hRaw == null) {
+        $("#ck-drv-heat").textContent = "--";
+        $("#ck-drv-heat").style.color = "";
+      } else {
+        const hDelta = Number(hRaw);
+        $("#ck-drv-heat").textContent = `+${fmtNum(hDelta, 0)}kW`;
+        $("#ck-drv-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
+      }
     }
-    if ($("#ck-drv-endurance")) $("#ck-drv-endurance").textContent = `${fmtNum(drv.diesel_endurance_hours, 1)}h`;
+    if ($("#ck-drv-endurance")) {
+      $("#ck-drv-endurance").textContent = drv.diesel_endurance_hours != null ? `${fmtNum(drv.diesel_endurance_hours, 1)}h` : "--";
+    }
     const wEl = $("#ck-drv-weather");
     if (wEl) {
       const wa = cpl.alert_level || drv.weather_alert || "normal";
@@ -4745,27 +4787,37 @@
       $("#ds-tk-wlabel").textContent = tr(effWx.preset_label || (effWx.mode === "manual" ? "工况推演" : "现场实测"));
     }
     if ($("#ds-tk-wval")) {
-      $("#ds-tk-wval").textContent = `${fmtNum(effWx.temperature_c ?? st.temperature_c, 0)}°C / ${fmtNum(effWx.wind_speed_ms ?? st.wind_speed_ms, 1)}m/s`;
+      const tV = effWx.temperature_c ?? st.temperature_c;
+      const wV = effWx.wind_speed_ms ?? st.wind_speed_ms;
+      $("#ds-tk-wval").textContent = `${tV != null ? fmtNum(tV, 0) : "--"}°C / ${wV != null ? fmtNum(wV, 1) : "--"}m/s`;
     }
     if ($("#ds-wc-wind")) {
       const wObj = cpl.wind || {};
-      $("#ds-wc-wind").textContent = wObj.state === "超速切出" ? tr("切出") : `${fmtNum(wObj.avail_pct, 0)}%`;
-      $("#ds-wc-wind").style.color = wObj.level === "danger" ? "var(--danger)" : (wObj.level === "warn" ? "var(--warn)" : "var(--ok)");
+      $("#ds-wc-wind").textContent = wObj.state === "超速切出"
+        ? tr("切出")
+        : (wObj.avail_pct != null ? `${fmtNum(wObj.avail_pct, 0)}%` : "--");
+      $("#ds-wc-wind").style.color = wObj.level === "danger" ? "var(--danger)" : (wObj.level === "warn" ? "var(--warn)" : (wObj.avail_pct != null ? "var(--ok)" : ""));
     }
     if ($("#ds-wc-pv")) {
       const pObj = cpl.pv || {};
-      $("#ds-wc-pv").textContent = `${fmtNum(pObj.eff_pct, 0)}%`;
-      $("#ds-wc-pv").style.color = pObj.level === "warn" ? "var(--warn)" : "var(--accent)";
+      $("#ds-wc-pv").textContent = pObj.eff_pct != null ? `${fmtNum(pObj.eff_pct, 0)}%` : "--";
+      $("#ds-wc-pv").style.color = pObj.level === "warn" ? "var(--warn)" : (pObj.eff_pct != null ? "var(--accent)" : "");
     }
     if ($("#ds-wc-bess")) {
       const bObj = cpl.bess || {};
-      $("#ds-wc-bess").textContent = `${fmtNum(bObj.cap_retention_pct, 0)}%`;
-      $("#ds-wc-bess").style.color = bObj.level === "danger" ? "var(--danger)" : (bObj.level === "warn" ? "var(--warn)" : "var(--ok)");
+      $("#ds-wc-bess").textContent = bObj.cap_retention_pct != null ? `${fmtNum(bObj.cap_retention_pct, 0)}%` : "--";
+      $("#ds-wc-bess").style.color = bObj.level === "danger" ? "var(--danger)" : (bObj.level === "warn" ? "var(--warn)" : (bObj.cap_retention_pct != null ? "var(--ok)" : ""));
     }
     if ($("#ds-wc-heat")) {
-      const hDelta = Number(cpl.thermal?.heating_delta_kw || 0);
-      $("#ds-wc-heat").textContent = `+${fmtNum(hDelta, 0)}kW`;
-      $("#ds-wc-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
+      const hRaw = cpl.thermal?.heating_delta_kw;
+      if (hRaw == null) {
+        $("#ds-wc-heat").textContent = "--";
+        $("#ds-wc-heat").style.color = "";
+      } else {
+        const hDelta = Number(hRaw);
+        $("#ds-wc-heat").textContent = `+${fmtNum(hDelta, 0)}kW`;
+        $("#ds-wc-heat").style.color = hDelta >= 35 ? "var(--danger)" : (hDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
+      }
     }
     syncAllWeatherBadges(effWx, cpl);
 
@@ -5224,9 +5276,10 @@
     const valTxt = `${tStr} · ${wStr}`;
     const windTxt = cp?.wind?.state === "超速切出"
       ? tr("切出")
-      : `${fmtNum(cp?.wind?.avail_pct, 0)}%`;
+      : (cp?.wind?.avail_pct != null ? `${fmtNum(cp.wind.avail_pct, 0)}%` : "--");
     const lvl = cp?.alert_level || "normal";
-    const tip = `${labelTxt} · ${tStr} / ${wStr} · ${tr(wx.icing_label || "无覆冰")} · ${tr(cp?.strategy || "")}`;
+    const icingTip = wx.icing_label ? ` · ${tr(wx.icing_label)}` : "";
+    const tip = `${labelTxt} · ${tStr} / ${wStr}${icingTip}${cp?.strategy ? ` · ${tr(cp.strategy)}` : ""}`;
 
     $$(".wx-inline-pill").forEach((pill) => {
       pill.classList.toggle("is-elevated", lvl === "elevated");
@@ -5249,7 +5302,7 @@
   }
 
   const WX_PRESET_DEFAULTS = {
-    live: { mode: "measured", temperature_c: -12, wind_speed_ms: 8.5, irradiance_wm2: 260, pressure_hpa: 985, icing_level: 0, snow_condition: "clear" },
+    live: { mode: "measured", temperature_c: null, wind_speed_ms: null, irradiance_wm2: null, pressure_hpa: null, icing_level: null, snow_condition: null },
     summer_sunny: { mode: "manual", temperature_c: -4, wind_speed_ms: 8.5, irradiance_wm2: 780, pressure_hpa: 988, icing_level: 0, snow_condition: "clear" },
     katabatic_gale: { mode: "manual", temperature_c: -22, wind_speed_ms: 26.5, irradiance_wm2: 180, pressure_hpa: 968, icing_level: 1, snow_condition: "blowing_snow" },
     polar_night_cold: { mode: "manual", temperature_c: -38, wind_speed_ms: 6.0, irradiance_wm2: 0, pressure_hpa: 978, icing_level: 2, snow_condition: "overcast" },
@@ -5258,81 +5311,110 @@
   };
   let wxDialogState = { mode: "measured", preset: "live", measured: {} };
 
+  function readOptNum(id) {
+    const raw = $("#" + id)?.value;
+    if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function updateWeatherPreview() {
-    const t = Number($("#wx-temp")?.value ?? -12);
-    const ws = Math.max(0, Number($("#wx-wind")?.value ?? 8.5));
-    const irr = Math.max(0, Number($("#wx-irr")?.value ?? 260));
-    const pres = Number($("#wx-pres")?.value ?? 985);
-    const icing = Number($("#wx-icing")?.value ?? 0);
-    const snow = $("#wx-snow")?.value || "clear";
+    const t = readOptNum("wx-temp");
+    const wsRaw = readOptNum("wx-wind");
+    const ws = wsRaw != null ? Math.max(0, wsRaw) : null;
+    const irrRaw = readOptNum("wx-irr");
+    const irr = irrRaw != null ? Math.max(0, irrRaw) : null;
+    const pres = readOptNum("wx-pres");
+    const icingRaw = $("#wx-icing")?.value;
+    const icing = (icingRaw !== undefined && icingRaw !== "") ? Number(icingRaw) : null;
+    const snowRaw = $("#wx-snow")?.value;
+    const snow = snowRaw ? String(snowRaw) : null;
 
-    const vKmh = ws * 3.6;
-    const wc = t <= 10 && vKmh >= 4.8
-      ? (13.12 + 0.6215 * t - 11.37 * Math.pow(vKmh, 0.16) + 0.3965 * t * Math.pow(vKmh, 0.16))
-      : t;
-    const rho = (pres * 100) / (287.05 * Math.max(180, t + 273.15));
-    const rhoFactor = Math.min(1.22, Math.max(0.85, rho / 1.225));
-    const iceFactor = [1.0, 0.88, 0.72, 0.45][icing] ?? 1.0;
+    let wc = null;
+    if (t != null && ws != null) {
+      const vKmh = ws * 3.6;
+      wc = t <= 10 && vKmh >= 4.8
+        ? (13.12 + 0.6215 * t - 11.37 * Math.pow(vKmh, 0.16) + 0.3965 * t * Math.pow(vKmh, 0.16))
+        : t;
+    } else if (t != null) {
+      wc = t;
+    }
+    const rho = (pres != null && t != null) ? ((pres * 100) / (287.05 * Math.max(180, t + 273.15))) : null;
+    const rhoFactor = rho != null ? Math.min(1.22, Math.max(0.85, rho / 1.225)) : 1.0;
+    const iceFactor = icing != null ? ([1.0, 0.88, 0.72, 0.45][icing] ?? 1.0) : 1.0;
 
-    let windTxt = "正常发电";
-    let windColor = "var(--ok)";
-    if (ws >= 25) {
-      windTxt = "超速切出 (0%)";
-      windColor = "var(--danger)";
-    } else if (ws < 3) {
-      windTxt = "低风待机 (0%)";
-      windColor = "var(--text-secondary)";
-    } else {
-      const pct = Math.min(100, Math.pow((ws - 3) / 9, 3) * rhoFactor * iceFactor * 100);
-      windTxt = `${pct.toFixed(0)}%${icing >= 2 ? " 覆冰" : ""}`;
-      windColor = icing >= 2 ? "var(--warn)" : "var(--ok)";
+    let windTxt = "--";
+    let windColor = "";
+    if (ws != null) {
+      if (ws >= 25) {
+        windTxt = "超速切出 (0%)";
+        windColor = "var(--danger)";
+      } else if (ws < 3) {
+        windTxt = "低风待机 (0%)";
+        windColor = "var(--text-secondary)";
+      } else {
+        const pct = Math.min(100, Math.pow((ws - 3) / 9, 3) * rhoFactor * iceFactor * 100);
+        windTxt = `${pct.toFixed(0)}%${icing != null && icing >= 2 ? " 覆冰" : ""}`;
+        windColor = icing != null && icing >= 2 ? "var(--warn)" : "var(--ok)";
+      }
     }
 
-    const pvTempFactor = Math.min(1.24, Math.max(0.85, 1 + (25 - t) * 0.0038));
-    const snowFactor = { clear: 1.0, overcast: 0.96, blowing_snow: 0.75, blizzard: 0.30 }[snow] ?? 1.0;
-    const pvPct = pvTempFactor * snowFactor * 100;
-    const pvTxt = irr < 5 ? tr("极夜无光") : `${pvPct.toFixed(0)}%`;
+    const pvTempFactor = t != null ? Math.min(1.24, Math.max(0.85, 1 + (25 - t) * 0.0038)) : null;
+    const snowFactor = snow != null ? ({ clear: 1.0, overcast: 0.96, blowing_snow: 0.75, blizzard: 0.30 }[snow] ?? 1.0) : 1.0;
+    let pvTxt = "--";
+    if (irr != null && irr < 5) {
+      pvTxt = tr("无光照");
+    } else if (pvTempFactor != null) {
+      pvTxt = `${(pvTempFactor * snowFactor * 100).toFixed(0)}%`;
+    } else if (snow != null) {
+      pvTxt = `${(snowFactor * 100).toFixed(0)}%`;
+    }
 
-    let bessPct = 98;
-    if (t < -5 && t >= -20) bessPct = 98 - (-5 - t) * 0.8;
-    else if (t < -20 && t >= -40) bessPct = 86 - (-20 - t) * 1.05;
-    else if (t < -40) bessPct = Math.max(55, 65 - (-40 - t) * 0.5);
+    let bessPct = null;
+    if (t != null) {
+      bessPct = 98;
+      if (t < -5 && t >= -20) bessPct = 98 - (-5 - t) * 0.8;
+      else if (t < -20 && t >= -40) bessPct = 86 - (-20 - t) * 1.05;
+      else if (t < -40) bessPct = Math.max(55, 65 - (-40 - t) * 0.5);
+    }
 
-    const heatDelta = Math.max(0, -10 - wc) * 1.45 + (snow === "blizzard" ? 8 : snow === "blowing_snow" ? 3.5 : 0);
+    const heatDelta = (t != null && wc != null)
+      ? (Math.max(0, -10 - wc) * 1.45 + (snow === "blizzard" ? 8 : snow === "blowing_snow" ? 3.5 : 0))
+      : null;
 
     let alertLvl = "normal";
     let strat = "绿电优先消纳";
-    if (ws >= 25) {
+    if (ws != null && ws >= 25) {
       alertLvl = "extreme";
       strat = "风机超速切出 · 柴储顶峰保供";
-    } else if (icing >= 3 || snow === "blizzard" || t <= -32) {
+    } else if ((icing != null && icing >= 3) || snow === "blizzard" || (t != null && t <= -32)) {
       alertLvl = "extreme";
       strat = "极寒重冰保供 · 启动采暖与柴发备载";
-    } else if (ws >= 17.2 || t <= -24 || icing === 2) {
+    } else if ((ws != null && ws >= 17.2) || (t != null && t <= -24) || icing === 2) {
       alertLvl = "elevated";
       strat = "大风寒潮关注 · 预留储能热备";
-    } else if (irr < 5 && ws < 3.5) {
+    } else if (irr != null && irr < 5 && ws != null && ws < 3.5) {
       alertLvl = "elevated";
       strat = "无风无光低出力 · 氢电柴发协同";
-    } else if (irr >= 650 && ws >= 6) {
+    } else if (irr != null && irr >= 650 && ws != null && ws >= 6) {
       alertLvl = "normal";
-      strat = "极昼风光充沛 · 制氢储能消纳";
+      strat = "风光充沛 · 制氢储能消纳";
     }
 
-    if ($("#wx-pv-wc")) $("#wx-pv-wc").textContent = `${wc.toFixed(1)} °C`;
-    if ($("#wx-pv-rho")) $("#wx-pv-rho").textContent = `${rho.toFixed(3)} kg/m³`;
+    if ($("#wx-pv-wc")) $("#wx-pv-wc").textContent = wc != null ? `${wc.toFixed(1)} °C` : "--°C";
+    if ($("#wx-pv-rho")) $("#wx-pv-rho").textContent = rho != null ? `${rho.toFixed(3)} kg/m³` : "-- kg/m³";
     if ($("#wx-pv-wind")) {
       $("#wx-pv-wind").textContent = windTxt;
       $("#wx-pv-wind").style.color = windColor;
     }
     if ($("#wx-pv-pv")) $("#wx-pv-pv").textContent = pvTxt;
     if ($("#wx-pv-bess")) {
-      $("#wx-pv-bess").textContent = `${bessPct.toFixed(1)}%`;
-      $("#wx-pv-bess").style.color = bessPct < 72 ? "var(--danger)" : (bessPct < 85 ? "var(--warn)" : "var(--ok)");
+      $("#wx-pv-bess").textContent = bessPct != null ? `${bessPct.toFixed(1)}%` : "--%";
+      $("#wx-pv-bess").style.color = bessPct == null ? "" : (bessPct < 72 ? "var(--danger)" : (bessPct < 85 ? "var(--warn)" : "var(--ok)"));
     }
     if ($("#wx-pv-heat")) {
-      $("#wx-pv-heat").textContent = `+${heatDelta.toFixed(1)} kW`;
-      $("#wx-pv-heat").style.color = heatDelta >= 35 ? "var(--danger)" : (heatDelta >= 15 ? "var(--warn)" : "var(--text-primary)");
+      $("#wx-pv-heat").textContent = heatDelta != null ? `+${heatDelta.toFixed(1)} kW` : "-- kW";
+      $("#wx-pv-heat").style.color = heatDelta == null ? "" : (heatDelta >= 35 ? "var(--danger)" : (heatDelta >= 15 ? "var(--warn)" : "var(--text-primary)"));
     }
     const alEl = $("#wx-pv-alert");
     if (alEl) {
@@ -5353,10 +5435,14 @@
   }
 
   function setWxNumeric(id, rangeId, val) {
-    const n = Number(val);
-    if (!Number.isFinite(n)) return;
     const inp = $("#" + id);
     const rng = $("#" + rangeId);
+    if (val === null || val === undefined || val === "") {
+      if (inp) inp.value = "";
+      return;
+    }
+    const n = Number(val);
+    if (!Number.isFinite(n)) return;
     if (inp) inp.value = String(n);
     if (rng) {
       const lo = Number(rng.min);
@@ -5379,12 +5465,12 @@
         preset: prof.preset || eff.preset || "live",
         measured: res.measured || {},
       };
-      setWxNumeric("wx-temp", "wx-temp-range", eff.temperature_c ?? -12);
-      setWxNumeric("wx-wind", "wx-wind-range", eff.wind_speed_ms ?? 8.5);
-      setWxNumeric("wx-irr", "wx-irr-range", eff.irradiance_wm2 ?? 260);
-      setWxNumeric("wx-pres", "wx-pres-range", eff.pressure_hpa ?? 985);
-      if ($("#wx-icing")) $("#wx-icing").value = String(eff.icing_level ?? 0);
-      if ($("#wx-snow")) $("#wx-snow").value = String(eff.snow_condition || "clear");
+      setWxNumeric("wx-temp", "wx-temp-range", eff.temperature_c);
+      setWxNumeric("wx-wind", "wx-wind-range", eff.wind_speed_ms);
+      setWxNumeric("wx-irr", "wx-irr-range", eff.irradiance_wm2);
+      setWxNumeric("wx-pres", "wx-pres-range", eff.pressure_hpa);
+      if ($("#wx-icing")) $("#wx-icing").value = eff.icing_level != null ? String(eff.icing_level) : "";
+      if ($("#wx-snow")) $("#wx-snow").value = eff.snow_condition != null ? String(eff.snow_condition) : "";
       syncWeatherFormUi();
     } catch (err) {
       if (errEl) {
@@ -5408,9 +5494,12 @@
       if (wxDialogState.mode === "measured") {
         wxDialogState.preset = "live";
         const m = wxDialogState.measured || {};
-        if (m.temperature_c != null) setWxNumeric("wx-temp", "wx-temp-range", m.temperature_c);
-        if (m.wind_speed_ms != null) setWxNumeric("wx-wind", "wx-wind-range", m.wind_speed_ms);
-        if (m.irradiance_wm2 != null) setWxNumeric("wx-irr", "wx-irr-range", m.irradiance_wm2);
+        setWxNumeric("wx-temp", "wx-temp-range", m.temperature_c ?? null);
+        setWxNumeric("wx-wind", "wx-wind-range", m.wind_speed_ms ?? null);
+        setWxNumeric("wx-irr", "wx-irr-range", m.irradiance_wm2 ?? null);
+        setWxNumeric("wx-pres", "wx-pres-range", m.pressure_hpa ?? null);
+        if ($("#wx-icing")) $("#wx-icing").value = "";
+        if ($("#wx-snow")) $("#wx-snow").value = "";
       } else if (wxDialogState.preset === "live") {
         wxDialogState.preset = "custom";
       }
@@ -5426,12 +5515,12 @@
       wxDialogState.preset = key;
       wxDialogState.mode = def.mode;
       const m = wxDialogState.measured || {};
-      setWxNumeric("wx-temp", "wx-temp-range", key === "live" && m.temperature_c != null ? m.temperature_c : def.temperature_c);
-      setWxNumeric("wx-wind", "wx-wind-range", key === "live" && m.wind_speed_ms != null ? m.wind_speed_ms : def.wind_speed_ms);
-      setWxNumeric("wx-irr", "wx-irr-range", key === "live" && m.irradiance_wm2 != null ? m.irradiance_wm2 : def.irradiance_wm2);
-      setWxNumeric("wx-pres", "wx-pres-range", def.pressure_hpa);
-      if ($("#wx-icing")) $("#wx-icing").value = String(def.icing_level);
-      if ($("#wx-snow")) $("#wx-snow").value = def.snow_condition;
+      setWxNumeric("wx-temp", "wx-temp-range", key === "live" ? (m.temperature_c ?? null) : def.temperature_c);
+      setWxNumeric("wx-wind", "wx-wind-range", key === "live" ? (m.wind_speed_ms ?? null) : def.wind_speed_ms);
+      setWxNumeric("wx-irr", "wx-irr-range", key === "live" ? (m.irradiance_wm2 ?? null) : def.irradiance_wm2);
+      setWxNumeric("wx-pres", "wx-pres-range", key === "live" ? (m.pressure_hpa ?? null) : def.pressure_hpa);
+      if ($("#wx-icing")) $("#wx-icing").value = def.icing_level != null ? String(def.icing_level) : "";
+      if ($("#wx-snow")) $("#wx-snow").value = def.snow_condition != null ? def.snow_condition : "";
       syncWeatherFormUi();
     });
   });
@@ -5462,7 +5551,7 @@
   $("#wx-reset-live")?.addEventListener("click", async () => {
     const errEl = $("#wx-error");
     try {
-      const res = await apiPut("/api/weather", { mode: "measured", preset: "live", icing_level: 0, snow_condition: "clear", pressure_hpa: 985 });
+      const res = await apiPut("/api/weather", { mode: "measured", preset: "live" });
       syncAllWeatherBadges(res?.effective, res?.coupling);
       $("#weather-dialog")?.close();
       window.ScadaExtras?.showToast(tr("已恢复现场实测气象"), "ok");
@@ -5480,16 +5569,18 @@
     const errEl = $("#wx-error");
     if (errEl) errEl.hidden = true;
     try {
-      const payload = {
-        mode: wxDialogState.mode,
-        preset: wxDialogState.preset,
-        temperature_c: Number($("#wx-temp")?.value),
-        wind_speed_ms: Number($("#wx-wind")?.value),
-        irradiance_wm2: Number($("#wx-irr")?.value),
-        pressure_hpa: Number($("#wx-pres")?.value),
-        icing_level: Number($("#wx-icing")?.value || 0),
-        snow_condition: $("#wx-snow")?.value || "clear",
-      };
+      const payload = wxDialogState.mode === "measured"
+        ? { mode: "measured", preset: "live" }
+        : {
+            mode: wxDialogState.mode,
+            preset: wxDialogState.preset,
+            temperature_c: readOptNum("wx-temp"),
+            wind_speed_ms: readOptNum("wx-wind"),
+            irradiance_wm2: readOptNum("wx-irr"),
+            pressure_hpa: readOptNum("wx-pres"),
+            icing_level: ($("#wx-icing")?.value !== undefined && $("#wx-icing")?.value !== "") ? Number($("#wx-icing").value) : null,
+            snow_condition: $("#wx-snow")?.value || null,
+          };
       const res = await apiPut("/api/weather", payload);
       syncAllWeatherBadges(res?.effective, res?.coupling);
       $("#weather-dialog")?.close();

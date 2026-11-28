@@ -58,9 +58,6 @@ from scdfe_d.measurement_layout import (
 )
 from scdfe_d.service import _check_limit_status, _parse_limit_number
 
-# 秦岭站正式开站投运基准日（2024-02-07 建站开站）
-STATION_COMMISSION_DATE = datetime(2024, 2, 7, tzinfo=timezone.utc)
-
 # 元数据与伴随表过滤
 _D_SKIP_TABLES = frozenset({
     "rtdb_schema_database",
@@ -451,6 +448,7 @@ class PortalService:
         self._log_files_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._maint_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
         self._history_stats_cache: tuple[float, dict[str, Any]] | None = None
+        self._history_energy_cache: tuple[float, dict[str, Any]] | None = None
 
         self._init_history_db()
         if enable_sampler:
@@ -1014,18 +1012,190 @@ class PortalService:
             "hydrogen_gen_kw": round(hydrogen_gen_kw, 2),
             "diesel_kw": round(diesel_kw, 2),
             "storage_kw": round(storage_kw, 2),
-            "storage_soc_pct": round(sum(storage_socs) / len(storage_socs), 1) if storage_socs else 0.0,
+            "storage_soc_pct": round(sum(storage_socs) / len(storage_socs), 1) if storage_socs else None,
             "load_kw": round(load_kw, 2),
             "total_load_kw": round(total_load_kw, 2),
             "renewable_kw": round(renewable_kw, 2),
             "total_gen_kw": round(total_gen_kw, 2),
             "renewable_ratio_pct": round(renewable_ratio_pct, 1),
-            "hydro_soc_pct": round(sum(hydro_socs) / len(hydro_socs), 1) if hydro_socs else 0.0,
+            "hydro_soc_pct": round(sum(hydro_socs) / len(hydro_socs), 1) if hydro_socs else None,
             "hydro_pressure_mpa": round(hydro_pressure, 2) if hydro_pressure is not None else None,
             "hydro_flow": round(hydro_flow, 2) if hydro_flow is not None else None,
             "wind_speed": round(wind_speed, 2) if wind_speed is not None else None,
             "irradiance": round(irradiance, 2) if irradiance is not None else None,
         }
+
+    def _aggregate_history_energy(
+        self,
+        devices: list[dict[str, Any]],
+        avg_sfc_g_kwh: float | None,
+    ) -> dict[str, Any]:
+        """从历史库 device_minute_rollup 真实积分各能源角色累计电量（万 kWh）与记录天数。
+        铁律：绝不叠加任何虚构历史基数；若历史库尚无分钟汇总，则仅使用本会话真实积分增量。
+        """
+        now_mono = time.monotonic()
+        with self._cache_lock:
+            cached = self._history_energy_cache
+            if cached is not None and (now_mono - cached[0]) < 30.0:
+                return dict(cached[1])
+
+        role_kwh: dict[str, float] = {
+            "wind": 0.0,
+            "pv": 0.0,
+            "diesel": 0.0,
+            "storage": 0.0,
+            "hydrogen": 0.0,
+            "load": 0.0,
+        }
+        min_ts_ms: int | None = None
+        max_ts_ms: int | None = None
+        has_rollup = False
+
+        if self.history_db.is_file():
+            # 建立设备表与能源角色映射，仅对有功功率列 p 走主键前缀扫描
+            targets: list[tuple[str, int, str]] = []
+            for dev in devices:
+                t = dev["table_name"]
+                idx = int(dev["idx"])
+                name = str(dev["name"] or "")
+                if t in {"ACGenerator", "DCGenerator"}:
+                    if "风电" in name or "风力" in name:
+                        targets.append((t, idx, "wind"))
+                    elif "光伏" in name:
+                        targets.append((t, idx, "pv"))
+                    elif "柴油" in name:
+                        targets.append((t, idx, "diesel"))
+                    elif "储能" in name:
+                        targets.append((t, idx, "storage"))
+                    elif "燃料电池" in name or "氢" in name:
+                        targets.append((t, idx, "hydrogen"))
+                elif t in {"ACLoad", "DCLoad"}:
+                    targets.append((t, idx, "load"))
+
+            try:
+                with self._open_history(readonly=True) as conn:
+                    row_r = conn.execute(
+                        "SELECT MIN(bucket_ms), MAX(bucket_ms) FROM device_minute_rollup"
+                    ).fetchone()
+                    if row_r and row_r[0] is not None and row_r[1] is not None:
+                        min_ts_ms = int(row_r[0])
+                        max_ts_ms = int(row_r[1])
+                        has_rollup = True
+                    # 同步参考日曲线原始采样最早时间（走 idx_daily_samples_ts 索引极快）
+                    row_d = conn.execute(
+                        "SELECT MIN(ts_ms), MAX(ts_ms) FROM device_daily_samples"
+                    ).fetchone()
+                    if row_d and row_d[0] is not None and row_d[1] is not None:
+                        d_min, d_max = int(row_d[0]), int(row_d[1])
+                        min_ts_ms = d_min if min_ts_ms is None else min(min_ts_ms, d_min)
+                        max_ts_ms = d_max if max_ts_ms is None else max(max_ts_ms, d_max)
+
+                    if has_rollup and targets:
+                        for tbl, idx_i, role in targets:
+                            val = conn.execute(
+                                "SELECT SUM(CASE WHEN avg_val > 0 THEN avg_val ELSE 0 END) "
+                                "FROM device_minute_rollup "
+                                "WHERE table_name=? AND idx=? AND metric='p'",
+                                (tbl, idx_i),
+                            ).fetchone()[0]
+                            if val is not None and float(val) > 0:
+                                # 每个 1 分钟桶的均值功率(kW) ÷ 60 = 真实电量(kWh)
+                                role_kwh[role] += float(val) / 60.0
+            except sqlite3.Error:
+                LOG.debug("history energy rollup aggregation fallback", exc_info=True)
+
+        if not has_rollup:
+            with self._energy_accum_lock:
+                for k in role_kwh:
+                    role_kwh[k] = float(self._session_kwh.get(k, 0.0))
+
+        running_days: int | None = None
+        if min_ts_ms is not None and max_ts_ms is not None and max_ts_ms >= min_ts_ms:
+            running_days = max(1, int((max_ts_ms - min_ts_ms) // 86_400_000) + 1)
+
+        wind_wkwh = round(role_kwh["wind"] / 10000.0, 4)
+        pv_wkwh = round(role_kwh["pv"] / 10000.0, 4)
+        storage_wkwh = round(role_kwh["storage"] / 10000.0, 4)
+        hydro_wkwh = round(role_kwh["hydrogen"] / 10000.0, 4)
+        renewable_wkwh = round(wind_wkwh + pv_wkwh + hydro_wkwh, 4)
+        diesel_wkwh = round(role_kwh["diesel"] / 10000.0, 4)
+        load_wkwh = round(role_kwh["load"] / 10000.0, 4)
+
+        # 节油量严格按模型库真实平均油耗率（g/kWh）× 真实风光累计电量（kWh）折算为吨；无模型油耗参数返回 None
+        diesel_saved_tons: float | None = None
+        if avg_sfc_g_kwh is not None and avg_sfc_g_kwh > 0:
+            green_kwh = role_kwh["wind"] + role_kwh["pv"]
+            diesel_saved_tons = round(green_kwh * avg_sfc_g_kwh / 1_000_000.0, 4)
+
+        agg = {
+            "running_days": running_days,
+            "wind_total_wkwh": wind_wkwh,
+            "pv_total_wkwh": pv_wkwh,
+            "storage_total_wkwh": storage_wkwh,
+            "hydro_total_wkwh": hydro_wkwh,
+            "renewable_total_wkwh": renewable_wkwh,
+            "diesel_total_wkwh": diesel_wkwh,
+            "load_total_wkwh": load_wkwh,
+            "diesel_saved_tons": diesel_saved_tons,
+        }
+        with self._cache_lock:
+            self._history_energy_cache = (time.monotonic(), dict(agg))
+        return agg
+
+    def _compute_real_storage_autonomy(
+        self,
+        devices: list[dict[str, Any]],
+        model_params_map: dict[str, list[dict[str, Any]]],
+        total_load_kw: float,
+    ) -> float | None:
+        """严格依据 model/devices.db 储能额定容量、SOC 下限与实时 SOC 计算孤网自持续航（小时）。
+        无真实储能容量、无实时 SOC 或当前负荷 <= 0 时返回 None，绝不虚构 400 kWh / 1500 kWh。
+        """
+        if total_load_kw <= 0.5:
+            return None
+        # 提取实时 SOC（按名称匹配，同时保留有效均值供未按名一对一对应时使用）
+        soc_by_name: dict[str, float] = {}
+        all_socs: list[float] = []
+        for dev in devices:
+            if dev["table_name"] in {"ACStorageGen", "DCStorageGen"}:
+                for m in dev.get("metrics") or ():
+                    if m["metric"] == "soc" and m.get("display_value") is not None:
+                        sv = _to_float(m["display_value"])
+                        if sv is not None:
+                            soc_by_name[str(dev["name"] or "")] = sv
+                            all_socs.append(sv)
+        if not all_socs:
+            return None
+        avg_soc = sum(all_socs) / len(all_socs)
+
+        total_cap_kwh = 0.0
+        reserve_kwh = 0.0
+        for dev in devices:
+            if dev["table_name"] not in {"ACGenerator", "DCGenerator"}:
+                continue
+            params = model_params_map.get(dev["dev_id"]) or []
+            cap_kwh: float | None = None
+            soc_low_pct = 0.0
+            for p in params:
+                k = p.get("key")
+                raw_v = str(p.get("value") or "").split()[0]
+                num = _to_float(raw_v)
+                if num is None:
+                    continue
+                if k == "energy_capacity" and num > 0:
+                    cap_kwh = num
+                elif k == "soc_lower_limit" and num >= 0:
+                    soc_low_pct = num * 100.0 if num <= 1.0 else num
+            if cap_kwh is None:
+                continue
+            total_cap_kwh += cap_kwh
+            unit_soc = soc_by_name.get(str(dev["name"] or ""), avg_soc)
+            usable_pct = max(0.0, unit_soc - soc_low_pct)
+            reserve_kwh += cap_kwh * (usable_pct / 100.0)
+
+        if total_cap_kwh <= 0:
+            return None
+        return round(reserve_kwh / total_load_kw, 1)
 
     def get_overview(self) -> dict[str, Any]:
         now_mono = time.monotonic()
@@ -1042,21 +1212,6 @@ class PortalService:
         total_valid = sum(d["valid_count"] for d in devices)
 
         now_utc = datetime.now(timezone.utc)
-        running_days = max(1, (now_utc - STATION_COMMISSION_DATE).days)
-
-        # 基于站点基准累计数 + 本会话实时积分增量（万 kWh）
-        with self._energy_accum_lock:
-            inc = dict(self._session_kwh)
-        wind_total_wkwh = round(53.95 + inc.get("wind", 0.0) / 10000.0, 4)
-        pv_total_wkwh = round(12.50 + inc.get("pv", 0.0) / 10000.0, 4)
-        storage_total_wkwh = round(48.34 + inc.get("storage", 0.0) / 10000.0, 4)
-        hydro_total_wkwh = round(0.22 + inc.get("hydrogen", 0.0) / 10000.0, 4)
-        renewable_total_wkwh = round(wind_total_wkwh + pv_total_wkwh + hydro_total_wkwh, 2)
-        diesel_total_wkwh = round(126.10 + inc.get("diesel", 0.0) / 10000.0, 2)
-        load_total_wkwh = round(184.80 + inc.get("load", 0.0) / 10000.0, 2)
-        # 约 0.25 kg/kWh 柴油节约换算（1 万 kWh ≈ 2.5 吨，基数 128.3 吨）
-        diesel_saved_tons = round(128.3 + (inc.get("wind", 0.0) + inc.get("pv", 0.0)) * 0.00025, 2)
-
         measured_env = self._extract_measured_env(devices)
         weather_profile = self._load_weather_profile()
         eff_weather = merge_effective_weather(measured_env, weather_profile)
@@ -1067,18 +1222,18 @@ class PortalService:
             model_params_map=model_params_map,
             devices=devices,
         )
-        base_autonomy_h = round(
-            (400.0 * max(0.0, float(energy.get("storage_soc_pct") or 0.0) - 10.0) / 100.0
-             + 1500.0 * max(0.0, float(energy.get("hydro_soc_pct") or 0.0) - 5.0) / 100.0)
-            / max(float(energy.get("total_load_kw") or 0.0), 15.0),
-            1,
-        )
+        hist_energy = self._aggregate_history_energy(devices, derived_tmp.get("avg_sfc_g_kwh"))
+        total_load_kw = float(energy.get("total_load_kw") or 0.0)
+        base_autonomy_h = self._compute_real_storage_autonomy(devices, model_params_map, total_load_kw)
         coupling = compute_polar_weather_coupling(
             effective=eff_weather,
-            wind_rated_kw=derived_tmp.get("wind_rated_kw", 0.0),
-            pv_rated_kw=derived_tmp.get("pv_rated_kw", 0.0),
-            base_load_kw=float(energy.get("total_load_kw") or 0.0),
+            wind_rated_kw=derived_tmp.get("wind_rated_kw"),
+            pv_rated_kw=derived_tmp.get("pv_rated_kw"),
+            base_load_kw=(total_load_kw if total_load_kw > 0 else None),
             base_autonomy_h=base_autonomy_h,
+            wind_cut_in_ms=derived_tmp.get("wind_cut_in_ms"),
+            wind_rated_ms=derived_tmp.get("wind_rated_ms"),
+            wind_cut_out_ms=derived_tmp.get("wind_cut_out_ms"),
         )
 
         result = {
@@ -1086,15 +1241,15 @@ class PortalService:
             "station_name": "南极秦岭站综合能量管理系统",
             "scene": f"{self.runtime_name}/{self.scene_name}",
             "kpis": {
-                "running_days": running_days,
-                "load_total_wkwh": load_total_wkwh,
-                "diesel_total_wkwh": diesel_total_wkwh,
-                "renewable_total_wkwh": renewable_total_wkwh,
-                "diesel_saved_tons": diesel_saved_tons,
-                "wind_total_wkwh": round(wind_total_wkwh, 2),
-                "pv_total_wkwh": round(pv_total_wkwh, 2),
-                "storage_total_wkwh": round(storage_total_wkwh, 2),
-                "hydro_total_wkwh": round(hydro_total_wkwh, 2),
+                "running_days": hist_energy["running_days"],
+                "load_total_wkwh": round(hist_energy["load_total_wkwh"], 4),
+                "diesel_total_wkwh": round(hist_energy["diesel_total_wkwh"], 4),
+                "renewable_total_wkwh": round(hist_energy["renewable_total_wkwh"], 4),
+                "diesel_saved_tons": hist_energy["diesel_saved_tons"],
+                "wind_total_wkwh": round(hist_energy["wind_total_wkwh"], 4),
+                "pv_total_wkwh": round(hist_energy["pv_total_wkwh"], 4),
+                "storage_total_wkwh": round(hist_energy["storage_total_wkwh"], 4),
+                "hydro_total_wkwh": round(hist_energy["hydro_total_wkwh"], 4),
                 "renewable_share_pct": energy["renewable_ratio_pct"],
             },
             "realtime": energy,
@@ -1159,18 +1314,33 @@ class PortalService:
                     "FROM polar_weather_profile WHERE id=1"
                 ).fetchone()
                 if row is not None:
-                    prof.update({
-                        "mode": row[0] or "measured",
-                        "preset": row[1] or "live",
-                        "temperature_c": row[2],
-                        "wind_speed_ms": row[3],
-                        "irradiance_wm2": row[4],
-                        "pressure_hpa": float(row[5] if row[5] is not None else 985.0),
-                        "icing_level": int(row[6] if row[6] is not None else 0),
-                        "snow_condition": row[7] or "clear",
-                        "updated_ms": int(row[8] or 0),
-                        "operator": row[9] or "",
-                    })
+                    mode = row[0] or "measured"
+                    if mode == "measured":
+                        prof.update({
+                            "mode": "measured",
+                            "preset": "live",
+                            "temperature_c": None,
+                            "wind_speed_ms": None,
+                            "irradiance_wm2": None,
+                            "pressure_hpa": None,
+                            "icing_level": None,
+                            "snow_condition": None,
+                            "updated_ms": int(row[8] or 0),
+                            "operator": row[9] or "",
+                        })
+                    else:
+                        prof.update({
+                            "mode": mode,
+                            "preset": row[1] or "custom",
+                            "temperature_c": row[2],
+                            "wind_speed_ms": row[3],
+                            "irradiance_wm2": row[4],
+                            "pressure_hpa": float(row[5]) if row[5] is not None else None,
+                            "icing_level": int(row[6]) if row[6] is not None else None,
+                            "snow_condition": row[7] if row[7] else None,
+                            "updated_ms": int(row[8] or 0),
+                            "operator": row[9] or "",
+                        })
         except sqlite3.Error:
             LOG.debug("polar_weather_profile read fallback", exc_info=True)
         return prof
@@ -1189,18 +1359,17 @@ class PortalService:
             model_params_map=model_params_map,
             devices=devices,
         )
-        base_autonomy_h = round(
-            (400.0 * max(0.0, float(energy.get("storage_soc_pct") or 0.0) - 10.0) / 100.0
-             + 1500.0 * max(0.0, float(energy.get("hydro_soc_pct") or 0.0) - 5.0) / 100.0)
-            / max(float(energy.get("total_load_kw") or 0.0), 15.0),
-            1,
-        )
+        total_load_kw = float(energy.get("total_load_kw") or 0.0)
+        base_autonomy_h = self._compute_real_storage_autonomy(devices, model_params_map, total_load_kw)
         coupling = compute_polar_weather_coupling(
             effective=effective,
-            wind_rated_kw=derived.get("wind_rated_kw", 0.0),
-            pv_rated_kw=derived.get("pv_rated_kw", 0.0),
-            base_load_kw=float(energy.get("total_load_kw") or 0.0),
+            wind_rated_kw=derived.get("wind_rated_kw"),
+            pv_rated_kw=derived.get("pv_rated_kw"),
+            base_load_kw=(total_load_kw if total_load_kw > 0 else None),
             base_autonomy_h=base_autonomy_h,
+            wind_cut_in_ms=derived.get("wind_cut_in_ms"),
+            wind_rated_ms=derived.get("wind_rated_ms"),
+            wind_cut_out_ms=derived.get("wind_cut_out_ms"),
         )
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1533,11 +1702,11 @@ class PortalService:
 
         dc_voltage = (
             round(sum(dc_load_u) / len(dc_load_u), 1) if dc_load_u
-            else (round(sum(dcac_dc_u) / len(dcac_dc_u), 1) if dcac_dc_u else 750.0)
+            else (round(sum(dcac_dc_u) / len(dcac_dc_u), 1) if dcac_dc_u else None)
         )
         ac_voltage = (
             round(sum(ac_load_u) / len(ac_load_u), 1) if ac_load_u
-            else (round(sum(dcac_ac_u) / len(dcac_ac_u), 1) if dcac_ac_u else 380.0)
+            else (round(sum(dcac_ac_u) / len(dcac_ac_u), 1) if dcac_ac_u else None)
         )
 
         # DCAC 变流器方向：dc_p > 0 表示从直流母线流出并送往交流母线（DC -> AC）
@@ -1575,12 +1744,13 @@ class PortalService:
             for d in devices
             if d["table_name"] in {"ACGenerator", "DCGenerator"} and "光伏" in str(d["name"])
         )
+        ef_autonomy_h = self._compute_real_storage_autonomy(devices, model_params, total_load_kw)
         ef_coupling = compute_polar_weather_coupling(
             effective=eff_env,
-            wind_rated_kw=wind_rated_est,
-            pv_rated_kw=pv_rated_est,
-            base_load_kw=total_load_kw,
-            base_autonomy_h=4.0,
+            wind_rated_kw=(wind_rated_est if wind_rated_est > 0 else None),
+            pv_rated_kw=(pv_rated_est if pv_rated_est > 0 else None),
+            base_load_kw=(total_load_kw if total_load_kw > 0 else None),
+            base_autonomy_h=ef_autonomy_h,
         )
 
         return {
@@ -3718,18 +3888,21 @@ class PortalService:
         dq = cockpit.get("data_quality") or {}
         st = cockpit.get("polar_stats") or {}
 
+        def _or_dash(v: Any) -> Any:
+            return "—" if v is None else v
+
         kpis = [
-            {"group": "累计电量", "name": "累计供电量", "value": cum.get("total_supply_wkwh", "—"), "unit": "万kWh"},
-            {"group": "累计电量", "name": "科考总负荷", "value": cum.get("total_load_wkwh", "—"), "unit": "万kWh"},
-            {"group": "节能减碳", "name": "累计节油量", "value": cum.get("diesel_saved_tons", "—"), "unit": "吨"},
-            {"group": "节能减碳", "name": "累计减碳量", "value": cum.get("co2_reduced_tons", "—"), "unit": "吨 CO₂"},
-            {"group": "实时能效", "name": "绿电占比", "value": st.get("green_ratio_pct", "—"), "unit": "%"},
-            {"group": "保供自持", "name": "孤网自持时长", "value": res.get("autonomy_hours", "—"), "unit": "h"},
-            {"group": "保供自持", "name": "柴油剩余续航", "value": derived.get("diesel_endurance_hours", "—"), "unit": "h"},
-            {"group": "氢能系统", "name": "电-氢-电综合效率", "value": derived.get("h2_roundtrip_eff_pct", "—"), "unit": "%"},
-            {"group": "氢能系统", "name": "储氢压力", "value": res.get("hydro_pressure_mpa", "—"), "unit": "MPa"},
-            {"group": "新能源", "name": "估算限电/弃电", "value": derived.get("curtailment_kw", "—"), "unit": "kW"},
-            {"group": "运行质量", "name": "量测数据健康率", "value": dq.get("health_pct", 100.0), "unit": "%"},
+            {"group": "累计电量", "name": "累计供电量", "value": _or_dash(cum.get("total_supply_wkwh")), "unit": "万kWh"},
+            {"group": "累计电量", "name": "科考总负荷", "value": _or_dash(cum.get("total_load_wkwh")), "unit": "万kWh"},
+            {"group": "节能减碳", "name": "累计节油量", "value": _or_dash(cum.get("diesel_saved_tons")), "unit": "吨"},
+            {"group": "节能减碳", "name": "累计减碳量", "value": _or_dash(cum.get("co2_reduced_tons")), "unit": "吨 CO₂"},
+            {"group": "实时能效", "name": "绿电占比", "value": _or_dash(st.get("green_ratio_pct")), "unit": "%"},
+            {"group": "保供自持", "name": "孤网自持时长", "value": _or_dash(res.get("autonomy_hours")), "unit": "h"},
+            {"group": "保供自持", "name": "柴油剩余续航", "value": _or_dash(derived.get("diesel_endurance_hours")), "unit": "h"},
+            {"group": "氢能系统", "name": "电-氢-电综合效率", "value": _or_dash(derived.get("h2_roundtrip_eff_pct")), "unit": "%"},
+            {"group": "氢能系统", "name": "储氢压力", "value": _or_dash(res.get("hydro_pressure_mpa")), "unit": "MPa"},
+            {"group": "新能源", "name": "估算限电/弃电", "value": _or_dash(derived.get("curtailment_kw")), "unit": "kW"},
+            {"group": "运行质量", "name": "量测数据健康率", "value": _or_dash(dq.get("health_pct")), "unit": "%"},
             {"group": "运行质量", "name": "在线 RTU / 告警未确认", "value": f"{st.get('rtu_online', 0)}/{st.get('rtu_total', 0)} · {st.get('alarm_unacked', 0)}", "unit": "台 / 条"},
         ]
 
@@ -4006,56 +4179,61 @@ class PortalService:
             "points": hydro_net_points,
         })
 
-        # 3. 极地微电网专属KPI：累计供电/负荷/节油/减碳、电氢孤网自持续航、电源结构占比
+        # 3. 极地微电网真实 KPI：累计供电/负荷/节油/减碳、电储孤网自持续航、电源结构占比
         wind_wkwh = float(kpis["wind_total_wkwh"])
         pv_wkwh = float(kpis["pv_total_wkwh"])
         diesel_wkwh = float(kpis["diesel_total_wkwh"])
         hydro_wkwh = float(kpis["hydro_total_wkwh"])
         storage_wkwh = float(kpis["storage_total_wkwh"])
         renew_wkwh = float(kpis["renewable_total_wkwh"])
-        total_supply_wkwh = round(renew_wkwh + diesel_wkwh, 2)
-        diesel_saved_tons = float(kpis["diesel_saved_tons"])
-        co2_reduced_tons = round(diesel_saved_tons * 3.15, 2)
-        wp_sum = max(wind_wkwh + pv_wkwh, 0.01)
-        wind_saved_tons = round(diesel_saved_tons * (wind_wkwh / wp_sum), 2)
-        pv_saved_tons = round(max(0.0, diesel_saved_tons - wind_saved_tons), 2)
-        diesel_replace_pct = round(renew_wkwh / max(total_supply_wkwh, 0.01) * 100.0, 1)
+        total_supply_wkwh = round(renew_wkwh + diesel_wkwh, 4)
+        diesel_saved_tons = kpis["diesel_saved_tons"]
+        co2_reduced_tons = round(float(diesel_saved_tons) * 3.15, 4) if diesel_saved_tons is not None else None
+        wp_sum = wind_wkwh + pv_wkwh
+        if diesel_saved_tons is not None and wp_sum > 1e-9:
+            wind_saved_tons: float | None = round(float(diesel_saved_tons) * (wind_wkwh / wp_sum), 4)
+            pv_saved_tons: float | None = round(max(0.0, float(diesel_saved_tons) - wind_saved_tons), 4)
+        elif diesel_saved_tons is not None:
+            wind_saved_tons = 0.0
+            pv_saved_tons = 0.0
+        else:
+            wind_saved_tons = None
+            pv_saved_tons = None
+        diesel_replace_pct = round(renew_wkwh / total_supply_wkwh * 100.0, 1) if total_supply_wkwh > 1e-9 else None
 
-        # 估算电储 + 氢储联合孤网自持续航小时数
-        es_soc = float(rt.get("storage_soc_pct") or 0.0)
-        h2_soc = float(rt.get("hydro_soc_pct") or 0.0)
-        es_cap_kwh = max(400.0, len(storage_units) * 120.0)
-        h2_cap_kwh = 1500.0
-        reserve_kwh = es_cap_kwh * max(0.0, es_soc - 10.0) / 100.0 + h2_cap_kwh * max(0.0, h2_soc - 5.0) / 100.0
-        base_load_kw = max(float(rt.get("total_load_kw") or 0.0), 15.0)
-        autonomy_hours = round(reserve_kwh / base_load_kw, 1)
+        # 依据 model/devices.db 真实储能额定容量 + 实时 SOC 计算孤网自持续航小时数
+        es_soc = rt.get("storage_soc_pct")
+        h2_soc = rt.get("hydro_soc_pct")
+        model_params_map = self._read_model_params()[0]
+        base_load_kw = float(rt.get("total_load_kw") or 0.0)
+        autonomy_hours = self._compute_real_storage_autonomy(devices, model_params_map, base_load_kw)
 
         # 电源结构占比（风电 / 光伏 / 柴发 / 电储氢能）
-        mix_total = max(wind_wkwh + pv_wkwh + diesel_wkwh + storage_wkwh + hydro_wkwh, 0.01)
+        mix_total = wind_wkwh + pv_wkwh + diesel_wkwh + storage_wkwh + hydro_wkwh
         source_mix = [
             {
                 "key": "wind",
                 "label": "风电",
-                "value_wkwh": round(wind_wkwh, 2),
-                "pct": round(wind_wkwh / mix_total * 100.0, 1),
+                "value_wkwh": round(wind_wkwh, 4),
+                "pct": round(wind_wkwh / mix_total * 100.0, 1) if mix_total > 1e-9 else 0.0,
             },
             {
                 "key": "pv",
                 "label": "光伏",
-                "value_wkwh": round(pv_wkwh, 2),
-                "pct": round(pv_wkwh / mix_total * 100.0, 1),
+                "value_wkwh": round(pv_wkwh, 4),
+                "pct": round(pv_wkwh / mix_total * 100.0, 1) if mix_total > 1e-9 else 0.0,
             },
             {
                 "key": "diesel",
                 "label": "柴发保供",
-                "value_wkwh": round(diesel_wkwh, 2),
-                "pct": round(diesel_wkwh / mix_total * 100.0, 1),
+                "value_wkwh": round(diesel_wkwh, 4),
+                "pct": round(diesel_wkwh / mix_total * 100.0, 1) if mix_total > 1e-9 else 0.0,
             },
             {
                 "key": "storage_h2",
                 "label": "电储与氢电",
-                "value_wkwh": round(storage_wkwh + hydro_wkwh, 2),
-                "pct": round((storage_wkwh + hydro_wkwh) / mix_total * 100.0, 1),
+                "value_wkwh": round(storage_wkwh + hydro_wkwh, 4),
+                "pct": round((storage_wkwh + hydro_wkwh) / mix_total * 100.0, 1) if mix_total > 1e-9 else 0.0,
             },
         ]
 
@@ -4074,15 +4252,18 @@ class PortalService:
         derived_metrics = compute_polar_derived_metrics(
             rt=rt,
             env=env,
-            model_params_map=self._read_model_params()[0],
+            model_params_map=model_params_map,
             devices=devices,
         )
         weather_coupling = compute_polar_weather_coupling(
             effective=env,
-            wind_rated_kw=derived_metrics.get("wind_rated_kw", 0.0),
-            pv_rated_kw=derived_metrics.get("pv_rated_kw", 0.0),
-            base_load_kw=base_load_kw,
+            wind_rated_kw=derived_metrics.get("wind_rated_kw"),
+            pv_rated_kw=derived_metrics.get("pv_rated_kw"),
+            base_load_kw=(base_load_kw if base_load_kw > 0 else None),
             base_autonomy_h=autonomy_hours,
+            wind_cut_in_ms=derived_metrics.get("wind_cut_in_ms"),
+            wind_rated_ms=derived_metrics.get("wind_rated_ms"),
+            wind_cut_out_ms=derived_metrics.get("wind_cut_out_ms"),
         )
         derived_metrics["weather_alert"] = weather_coupling["alert_level"]
 
@@ -4095,8 +4276,8 @@ class PortalService:
             "running_days": kpis["running_days"],
             "cumulative": {
                 "total_supply_wkwh": total_supply_wkwh,
-                "total_load_wkwh": round(float(kpis["load_total_wkwh"]), 2),
-                "diesel_saved_tons": round(diesel_saved_tons, 2),
+                "total_load_wkwh": round(float(kpis["load_total_wkwh"]), 4),
+                "diesel_saved_tons": diesel_saved_tons,
                 "co2_reduced_tons": co2_reduced_tons,
             },
             "resilience": {
@@ -4105,7 +4286,7 @@ class PortalService:
                 "diesel_replace_pct": diesel_replace_pct,
                 "wind_saved_tons": wind_saved_tons,
                 "pv_saved_tons": pv_saved_tons,
-                "hydro_soc_pct": round(h2_soc, 1),
+                "hydro_soc_pct": round(float(h2_soc), 1) if h2_soc is not None else None,
                 "hydro_pressure_mpa": rt.get("hydro_pressure_mpa"),
             },
             "source_mix": source_mix,
@@ -4128,7 +4309,7 @@ class PortalService:
                     },
                     "storage": {
                         "p_kw": round(es_p, 1),
-                        "soc_pct": round(es_soc, 1),
+                        "soc_pct": round(float(es_soc), 1) if es_soc is not None else None,
                         "state": es_state,
                         "online": es_on,
                         "count": es_cnt,
@@ -4141,7 +4322,7 @@ class PortalService:
                     "hydrogen": {
                         "prod_kw": round(h2_prod, 1),
                         "gen_kw": round(h2_gen, 1),
-                        "soc_pct": round(h2_soc, 1),
+                        "soc_pct": round(float(h2_soc), 1) if h2_soc is not None else None,
                         "pressure_mpa": rt.get("hydro_pressure_mpa"),
                     },
                     "diesel": {

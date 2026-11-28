@@ -404,12 +404,12 @@
       <button type="button" data-dk-wx-preset="calm_overcast" title="静风阴天"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>静风</button>
     </div>
     <div class="dk-wx-grid">
-      <label><span>环境气温 (°C)</span><div class="dk-wx-r"><input id="dk-wx-temp-r" type="range" min="-55" max="10" step="0.5" value="-12"><input id="dk-wx-temp" type="number" min="-65" max="20" step="0.5" value="-12"></div></label>
-      <label><span>瞬时风速 (m/s)</span><div class="dk-wx-r"><input id="dk-wx-wind-r" type="range" min="0" max="40" step="0.5" value="8.5"><input id="dk-wx-wind" type="number" min="0" max="60" step="0.5" value="8.5"></div></label>
-      <label><span>太阳辐照 (W/m²)</span><div class="dk-wx-r"><input id="dk-wx-irr-r" type="range" min="0" max="1100" step="10" value="260"><input id="dk-wx-irr" type="number" min="0" max="1400" step="5" value="260"></div></label>
-      <label><span>大气气压 (hPa)</span><div class="dk-wx-r"><input id="dk-wx-pres-r" type="range" min="930" max="1030" step="1" value="985"><input id="dk-wx-pres" type="number" min="900" max="1050" step="1" value="985"></div></label>
-      <label><span>叶片覆冰</span><select id="dk-wx-icing"><option value="0">无覆冰</option><option value="1">轻度覆冰</option><option value="2">中度覆冰</option><option value="3">重度覆冰</option></select></label>
-      <label><span>积雪天气</span><select id="dk-wx-snow"><option value="clear">晴朗</option><option value="overcast">阴云</option><option value="blowing_snow">吹雪</option><option value="blizzard">暴雪积雪</option></select></label>
+      <label><span>环境气温 (°C)</span><div class="dk-wx-r"><input id="dk-wx-temp-r" type="range" min="-55" max="10" step="0.5" value="0"><input id="dk-wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="无实测"></div></label>
+      <label><span>瞬时风速 (m/s)</span><div class="dk-wx-r"><input id="dk-wx-wind-r" type="range" min="0" max="40" step="0.5" value="0"><input id="dk-wx-wind" type="number" min="0" max="60" step="0.5" placeholder="无实测"></div></label>
+      <label><span>太阳辐照 (W/m²)</span><div class="dk-wx-r"><input id="dk-wx-irr-r" type="range" min="0" max="1100" step="10" value="0"><input id="dk-wx-irr" type="number" min="0" max="1400" step="5" placeholder="无实测"></div></label>
+      <label><span>大气气压 (hPa)</span><div class="dk-wx-r"><input id="dk-wx-pres-r" type="range" min="930" max="1030" step="1" value="985"><input id="dk-wx-pres" type="number" min="900" max="1050" step="1" placeholder="无实测"></div></label>
+      <label><span>叶片覆冰</span><select id="dk-wx-icing"><option value="">--</option><option value="0">无覆冰</option><option value="1">轻度覆冰</option><option value="2">中度覆冰</option><option value="3">重度覆冰</option></select></label>
+      <label><span>积雪天气</span><select id="dk-wx-snow"><option value="">--</option><option value="clear">晴朗</option><option value="overcast">阴云</option><option value="blowing_snow">吹雪</option><option value="blizzard">暴雪积雪</option></select></label>
     </div>
     <div class="dk-wx-preview">
       <div><span>风寒体感</span><strong id="dk-wx-p-wc">--°C</strong></div>
@@ -417,7 +417,7 @@
       <div><span>风电耦合</span><strong id="dk-wx-p-wind">--</strong></div>
       <div><span>光伏温效</span><strong id="dk-wx-p-pv">--</strong></div>
       <div><span>电储温容</span><strong id="dk-wx-p-bess">--%</strong></div>
-      <div><span>采暖增荷</span><strong id="dk-wx-p-heat">+0 kW</strong></div>
+      <div><span>采暖增荷</span><strong id="dk-wx-p-heat">-- kW</strong></div>
     </div>
     <div class="dk-wx-strat"><span id="dk-wx-p-alert" class="badge">极地气象正常</span><strong id="dk-wx-p-strat">绿电优先消纳</strong></div>
     <p id="dk-wx-error" class="error" role="alert" hidden></p>
