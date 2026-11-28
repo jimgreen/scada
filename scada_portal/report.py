@@ -251,7 +251,17 @@ def merge_effective_weather(measured: dict[str, Any], profile: dict[str, Any]) -
         air_density = round((float(eff_pres) * 100.0) / (287.05 * max(180.0, float(eff_temp) + 273.15)), 3)
 
     preset_key = str(profile.get("preset") or ("live" if mode == "measured" else "custom"))
-    preset_label = _PRESET_MAP[preset_key]["label"] if preset_key in _PRESET_MAP else "自定义推演"
+    has_manual_any = any(
+        profile.get(k) is not None
+        for k in ("temperature_c", "wind_speed_ms", "irradiance_wm2", "pressure_hpa", "icing_level", "snow_condition")
+    )
+    has_measured_live = any(src == "measured" for src in (temp_src, wind_src, irr_src, pres_src))
+    if preset_key in _PRESET_MAP:
+        preset_label = _PRESET_MAP[preset_key]["label"]
+    elif mode == "manual" and has_manual_any and has_measured_live:
+        preset_label = "实测+补录"
+    else:
+        preset_label = "自定义推演"
 
     return {
         "mode": mode,

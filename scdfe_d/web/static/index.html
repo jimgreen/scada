@@ -404,12 +404,32 @@
       <button type="button" data-dk-wx-preset="calm_overcast" title="静风阴天"><svg class="ui-ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>静风</button>
     </div>
     <div class="dk-wx-grid">
-      <label><span>环境气温 (°C)</span><div class="dk-wx-r"><input id="dk-wx-temp-r" type="range" min="-55" max="10" step="0.5" value="0"><input id="dk-wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="无实测"></div></label>
-      <label><span>瞬时风速 (m/s)</span><div class="dk-wx-r"><input id="dk-wx-wind-r" type="range" min="0" max="40" step="0.5" value="0"><input id="dk-wx-wind" type="number" min="0" max="60" step="0.5" placeholder="无实测"></div></label>
-      <label><span>太阳辐照 (W/m²)</span><div class="dk-wx-r"><input id="dk-wx-irr-r" type="range" min="0" max="1100" step="10" value="0"><input id="dk-wx-irr" type="number" min="0" max="1400" step="5" placeholder="无实测"></div></label>
-      <label><span>大气气压 (hPa)</span><div class="dk-wx-r"><input id="dk-wx-pres-r" type="range" min="930" max="1030" step="1" value="985"><input id="dk-wx-pres" type="number" min="900" max="1050" step="1" placeholder="无实测"></div></label>
-      <label><span>叶片覆冰</span><select id="dk-wx-icing"><option value="">--</option><option value="0">无覆冰</option><option value="1">轻度覆冰</option><option value="2">中度覆冰</option><option value="3">重度覆冰</option></select></label>
-      <label><span>积雪天气</span><select id="dk-wx-snow"><option value="">--</option><option value="clear">晴朗</option><option value="overcast">阴云</option><option value="blowing_snow">吹雪</option><option value="blizzard">暴雪积雪</option></select></label>
+      <div class="dk-wx-field" data-dk-wx-field="temperature_c">
+        <span class="dk-wx-flbl"><span>环境气温 (°C)</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-temp">未接入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="temperature_c" title="清除手工覆盖" aria-label="清除环境气温">×</button></span></span>
+        <div class="dk-wx-r"><input id="dk-wx-temp-r" type="range" min="-55" max="10" step="0.5" value="0"><input id="dk-wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="未接入"></div>
+        <div class="dk-wx-quick"><button type="button" data-dk-wx-pick="dk-wx-temp:-35">-35°</button><button type="button" data-dk-wx-pick="dk-wx-temp:-20">-20°</button><button type="button" data-dk-wx-pick="dk-wx-temp:-12">-12°</button><button type="button" data-dk-wx-pick="dk-wx-temp:-4">-4°</button></div>
+      </div>
+      <div class="dk-wx-field" data-dk-wx-field="wind_speed_ms">
+        <span class="dk-wx-flbl"><span>瞬时风速 (m/s)</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-wind">未接入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="wind_speed_ms" title="恢复实测或清空" aria-label="清除风速覆盖">×</button></span></span>
+        <div class="dk-wx-r"><input id="dk-wx-wind-r" type="range" min="0" max="40" step="0.5" value="0"><input id="dk-wx-wind" type="number" min="0" max="60" step="0.5" placeholder="未接入"></div>
+      </div>
+      <div class="dk-wx-field" data-dk-wx-field="irradiance_wm2">
+        <span class="dk-wx-flbl"><span>太阳辐照 (W/m²)</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-irr">未接入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="irradiance_wm2" title="恢复实测或清空" aria-label="清除辐照覆盖">×</button></span></span>
+        <div class="dk-wx-r"><input id="dk-wx-irr-r" type="range" min="0" max="1100" step="10" value="0"><input id="dk-wx-irr" type="number" min="0" max="1400" step="5" placeholder="未接入"></div>
+      </div>
+      <div class="dk-wx-field" data-dk-wx-field="pressure_hpa">
+        <span class="dk-wx-flbl"><span>大气气压 (hPa)</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-pres">未接入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="pressure_hpa" title="清除手工覆盖" aria-label="清除气压覆盖">×</button></span></span>
+        <div class="dk-wx-r"><input id="dk-wx-pres-r" type="range" min="930" max="1030" step="1" value="985"><input id="dk-wx-pres" type="number" min="900" max="1050" step="1" placeholder="未接入"></div>
+        <div class="dk-wx-quick"><button type="button" data-dk-wx-pick="dk-wx-pres:965">965</button><button type="button" data-dk-wx-pick="dk-wx-pres:985">985</button><button type="button" data-dk-wx-pick="dk-wx-pres:1005">1005</button></div>
+      </div>
+      <div class="dk-wx-field" data-dk-wx-field="icing_level">
+        <span class="dk-wx-flbl"><span>叶片覆冰</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-icing">未录入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="icing_level" title="清除录入" aria-label="清除覆冰录入">×</button></span></span>
+        <select id="dk-wx-icing"><option value="">--</option><option value="0">无覆冰</option><option value="1">轻度覆冰</option><option value="2">中度覆冰</option><option value="3">重度覆冰</option></select>
+      </div>
+      <div class="dk-wx-field" data-dk-wx-field="snow_condition">
+        <span class="dk-wx-flbl"><span>积雪天气</span><span class="dk-wx-fmeta"><em class="wx-src-tag" id="dk-wx-src-snow">未录入</em><button type="button" class="wx-clr-btn" data-dk-wx-clear="snow_condition" title="清除录入" aria-label="清除积雪录入">×</button></span></span>
+        <select id="dk-wx-snow"><option value="">--</option><option value="clear">晴朗</option><option value="overcast">阴云</option><option value="blowing_snow">吹雪</option><option value="blizzard">暴雪积雪</option></select>
+      </div>
     </div>
     <div class="dk-wx-preview">
       <div><span>风寒体感</span><strong id="dk-wx-p-wc">--°C</strong></div>

@@ -227,13 +227,13 @@
               <g id="hero-flow-pulses"></g>
             </svg>
 
-            <!-- 气象与储氢环境微标（图标主导，点击调参图标可输入/推演南极极端气象） -->
+            <!-- 气象与储氢环境微标（图标主导，点击调参或空态项可按需补录/推演南极气象） -->
             <div class="hero-env-badges" id="hero-env-badges">
-              <span class="env-chip" title="极地气温"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg><strong id="env-temp">--</strong> °C</span>
-              <span class="env-chip" title="瞬时风速"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg><strong id="env-wind">--</strong> m/s</span>
-              <span class="env-chip" title="太阳辐照度"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><strong id="env-irr">--</strong> W/m²</span>
+              <button type="button" class="env-chip env-chip-btn" id="env-temp-chip" data-open-weather data-wx-focus="wx-temp" title="环境气温 · 点击补录"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg><strong id="env-temp">--</strong> °C</button>
+              <button type="button" class="env-chip env-chip-btn" id="env-wind-chip" data-open-weather data-wx-focus="wx-wind" title="瞬时风速"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg><strong id="env-wind">--</strong> m/s</button>
+              <button type="button" class="env-chip env-chip-btn" id="env-irr-chip" data-open-weather data-wx-focus="wx-irr" title="太阳辐照度"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><strong id="env-irr">--</strong> W/m²</button>
               <span class="env-chip" title="储氢余量"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8.5 9v6M12.5 9v6M8.5 12h4M15.2 15h2.2"/></svg><strong id="env-h2">--</strong></span>
-              <button type="button" class="env-chip env-weather-btn" id="home-weather-btn" data-open-weather title="配置南极气象工况">
+              <button type="button" class="env-chip env-weather-btn" id="home-weather-btn" data-open-weather title="配置或补录南极气象工况">
                 <svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
                 <span id="home-weather-tag">现场实测</span>
               </button>
@@ -701,10 +701,10 @@
                     <span><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5c-6 0-11 3.5-13 9 2.5 1 5.5 1.5 8 0 3.5-2 5-5.5 5-9Z"/><path d="M6 19c1.5-2.5 4-4.5 7-6"/></svg> 绿电</span>
                     <strong id="ck-st-green">--%</strong>
                   </div>
-                  <div class="ck-stat-box" title="极地气温">
+                  <button type="button" class="ck-stat-box ck-stat-btn" id="ck-st-temp-btn" data-open-weather data-wx-focus="wx-temp" title="极地气温 · 点击补录">
                     <span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg> 气温</span>
                     <strong id="ck-st-temp">-- °C</strong>
-                  </div>
+                  </button>
                   <div class="ck-stat-box" title="瞬时风速">
                     <span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg> 风速</span>
                     <strong id="ck-st-wind">-- m/s</strong>
@@ -723,10 +723,10 @@
                   </button>
                 </div>
                 <div class="ck-derived-strip" id="ck-derived-strip">
-                  <span title="风电耦合可用率"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg><strong id="ck-drv-wind">--%</strong></span>
-                  <span title="电储能低温容量保持率"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 11h6M9 15h6"/></svg><strong id="ck-drv-bess">--%</strong></span>
-                  <span title="极寒采暖负荷增量"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg><strong id="ck-drv-heat">+0kW</strong></span>
-                  <span title="柴油储备续航"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><strong id="ck-drv-endurance">--h</strong></span>
+                  <span data-open-weather data-wx-focus="wx-wind" class="wx-tap" title="风电耦合可用率"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg><strong id="ck-drv-wind">--</strong></span>
+                  <span data-open-weather data-wx-focus="wx-temp" class="wx-tap" title="电储能低温容量保持率"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 11h6M9 15h6"/></svg><strong id="ck-drv-bess">--</strong></span>
+                  <span data-open-weather data-wx-focus="wx-temp" class="wx-tap" title="极寒采暖负荷增量"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg><strong id="ck-drv-heat">--</strong></span>
+                  <span title="柴油储备续航"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><strong id="ck-drv-endurance">--</strong></span>
                   <button type="button" class="ck-drv-badge" id="ck-drv-weather" data-open-weather>极地气象正常</button>
                 </div>
               </article>
@@ -894,11 +894,11 @@
                     <span class="ds-g-lbl">储氢余量</span>
                   </div>
                 </div>
-                <div class="ds-weather-strip" id="ds-weather-strip" data-open-weather title="气象-能源实时耦合（点击配置南极气象工况）">
-                  <span title="风电耦合可用率"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg><strong id="ds-wc-wind">--%</strong></span>
-                  <span title="光伏低温效率"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg><strong id="ds-wc-pv">--%</strong></span>
-                  <span title="电储低温容量保持率"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 11h6M9 15h6"/></svg><strong id="ds-wc-bess">--%</strong></span>
-                  <span title="极寒采暖增荷"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg><strong id="ds-wc-heat">+0kW</strong></span>
+                <div class="ds-weather-strip" id="ds-weather-strip" data-open-weather data-wx-focus="wx-temp" title="气象-能源实时耦合（点击补录或推演南极气象）">
+                  <span title="风电耦合可用率"><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13M10.7 10.8 5 13"/></svg><strong id="ds-wc-wind">--</strong></span>
+                  <span title="光伏低温效率"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg><strong id="ds-wc-pv">--</strong></span>
+                  <span title="电储低温容量保持率"><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M10 2h4M9 11h6M9 15h6"/></svg><strong id="ds-wc-bess">--</strong></span>
+                  <span title="极寒采暖增荷"><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg><strong id="ds-wc-heat">--</strong></span>
                 </div>
               </article>
 
@@ -1212,12 +1212,12 @@
                 <span class="ef-side-time" id="ef-sample-time">--:--:--</span>
               </div>
               <div class="ef-kv-list">
-                <div class="ef-kv" title="极地气温"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg> 气温</span><strong id="ef-env-temp">-- °C</strong></div>
-                <div class="ef-kv" title="瞬时风速"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2"/></svg> 风速</span><strong id="ef-env-wind">-- m/s</strong></div>
-                <div class="ef-kv" title="太阳辐照度"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg> 辐照</span><strong id="ef-env-irr">-- W/m²</strong></div>
-                <div class="ef-kv" title="叶片覆冰与积雪天气"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20"/></svg> 工况</span><strong id="ef-env-ice">--</strong></div>
-                <div class="ef-kv" title="风电耦合 / 电储低温容量"><span><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13"/></svg> 风/储</span><strong id="ef-cpl-wb">-- / --</strong></div>
-                <div class="ef-kv" title="极寒采暖负荷增量"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg> 采暖</span><strong id="ef-cpl-heat">-- kW</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-temp" title="极地气温 · 点击补录"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg> 气温</span><strong id="ef-env-temp">-- °C</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-wind" title="瞬时风速"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2"/></svg> 风速</span><strong id="ef-env-wind">-- m/s</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-irr" title="太阳辐照度"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg> 辐照</span><strong id="ef-env-irr">-- W/m²</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-icing" title="叶片覆冰与积雪天气 · 点击补录"><span><svg class="ui-ico sm c-accent" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20"/></svg> 工况</span><strong id="ef-env-ice">--</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-temp" title="风电耦合 / 电储低温容量 · 点击补录气温"><span><svg class="ui-ico sm c-ok" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="10" r="1.5"/><path d="M12 11.5V21M12 8.5 9.5 3M13.3 10.8 19 13"/></svg> 风/储</span><strong id="ef-cpl-wb">-- / --</strong></div>
+                <div class="ef-kv ef-kv-link" data-open-weather data-wx-focus="wx-temp" title="极寒采暖负荷增量 · 点击补录气温"><span><svg class="ui-ico sm c-warn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c4-2 6-5.5 6-9.5 0-3-2-6-6-10.5-4 4.5-6 7.5-6 10.5 0 4 2 7.5 6 9.5Z"/></svg> 采暖</span><strong id="ef-cpl-heat">-- kW</strong></div>
                 <div class="ef-kv-sep"></div>
                 <div class="ef-kv"><span>直流母线</span><strong id="ef-env-dcu">-- V</strong></div>
                 <div class="ef-kv"><span>交流母线</span><strong id="ef-env-acu">-- V</strong></div>
@@ -1713,36 +1713,77 @@
         </div>
 
         <div class="wx-grid">
-          <label class="wx-field">
-            <span class="wx-flbl">环境气温 <small>°C</small></span>
+          <div class="wx-field" data-wx-field="temperature_c">
+            <span class="wx-flbl">
+              <span>环境气温 <small>°C</small></span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-temp">未接入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="temperature_c" title="清除手工覆盖" aria-label="清除环境气温">×</button>
+              </span>
+            </span>
             <div class="wx-range-row">
               <input id="wx-temp-range" type="range" min="-55" max="10" step="0.5" value="0" />
-              <input id="wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="无实测" />
+              <input id="wx-temp" type="number" min="-65" max="20" step="0.5" placeholder="未接入" />
             </div>
-          </label>
-          <label class="wx-field">
-            <span class="wx-flbl">瞬时风速 <small>m/s</small></span>
+            <div class="wx-quick-row">
+              <button type="button" data-wx-pick="wx-temp:-35">-35°</button>
+              <button type="button" data-wx-pick="wx-temp:-20">-20°</button>
+              <button type="button" data-wx-pick="wx-temp:-12">-12°</button>
+              <button type="button" data-wx-pick="wx-temp:-4">-4°</button>
+            </div>
+          </div>
+          <div class="wx-field" data-wx-field="wind_speed_ms">
+            <span class="wx-flbl">
+              <span>瞬时风速 <small>m/s</small></span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-wind">未接入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="wind_speed_ms" title="恢复实测或清空" aria-label="清除风速覆盖">×</button>
+              </span>
+            </span>
             <div class="wx-range-row">
               <input id="wx-wind-range" type="range" min="0" max="40" step="0.5" value="0" />
-              <input id="wx-wind" type="number" min="0" max="60" step="0.5" placeholder="无实测" />
+              <input id="wx-wind" type="number" min="0" max="60" step="0.5" placeholder="未接入" />
             </div>
-          </label>
-          <label class="wx-field">
-            <span class="wx-flbl">太阳辐照 <small>W/m²</small></span>
+          </div>
+          <div class="wx-field" data-wx-field="irradiance_wm2">
+            <span class="wx-flbl">
+              <span>太阳辐照 <small>W/m²</small></span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-irr">未接入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="irradiance_wm2" title="恢复实测或清空" aria-label="清除辐照覆盖">×</button>
+              </span>
+            </span>
             <div class="wx-range-row">
               <input id="wx-irr-range" type="range" min="0" max="1100" step="10" value="0" />
-              <input id="wx-irr" type="number" min="0" max="1400" step="5" placeholder="无实测" />
+              <input id="wx-irr" type="number" min="0" max="1400" step="5" placeholder="未接入" />
             </div>
-          </label>
-          <label class="wx-field">
-            <span class="wx-flbl">大气气压 <small>hPa</small></span>
+          </div>
+          <div class="wx-field" data-wx-field="pressure_hpa">
+            <span class="wx-flbl">
+              <span>大气气压 <small>hPa</small></span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-pres">未接入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="pressure_hpa" title="清除手工覆盖" aria-label="清除气压覆盖">×</button>
+              </span>
+            </span>
             <div class="wx-range-row">
               <input id="wx-pres-range" type="range" min="930" max="1030" step="1" value="985" />
-              <input id="wx-pres" type="number" min="900" max="1050" step="1" placeholder="无实测" />
+              <input id="wx-pres" type="number" min="900" max="1050" step="1" placeholder="未接入" />
             </div>
-          </label>
-          <label class="wx-field">
-            <span class="wx-flbl">叶片覆冰</span>
+            <div class="wx-quick-row">
+              <button type="button" data-wx-pick="wx-pres:965">965</button>
+              <button type="button" data-wx-pick="wx-pres:985">985</button>
+              <button type="button" data-wx-pick="wx-pres:1005">1005</button>
+            </div>
+          </div>
+          <div class="wx-field" data-wx-field="icing_level">
+            <span class="wx-flbl">
+              <span>叶片覆冰</span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-icing">未录入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="icing_level" title="清除录入" aria-label="清除覆冰录入">×</button>
+              </span>
+            </span>
             <select id="wx-icing">
               <option value="">--</option>
               <option value="0">无覆冰</option>
@@ -1750,9 +1791,15 @@
               <option value="2">中度覆冰</option>
               <option value="3">重度覆冰</option>
             </select>
-          </label>
-          <label class="wx-field">
-            <span class="wx-flbl">积雪天气</span>
+          </div>
+          <div class="wx-field" data-wx-field="snow_condition">
+            <span class="wx-flbl">
+              <span>积雪天气</span>
+              <span class="wx-fmeta">
+                <em class="wx-src-tag" id="wx-src-snow">未录入</em>
+                <button type="button" class="wx-clr-btn" data-wx-clear="snow_condition" title="清除录入" aria-label="清除积雪录入">×</button>
+              </span>
+            </span>
             <select id="wx-snow">
               <option value="">--</option>
               <option value="clear">晴朗</option>
@@ -1760,7 +1807,7 @@
               <option value="blowing_snow">吹雪</option>
               <option value="blizzard">暴雪积雪</option>
             </select>
-          </label>
+          </div>
         </div>
 
         <div class="wx-preview" id="wx-preview">
@@ -1769,7 +1816,7 @@
           <div class="wx-prev-item"><span>风电耦合</span><strong id="wx-pv-wind">--</strong></div>
           <div class="wx-prev-item"><span>光伏温效</span><strong id="wx-pv-pv">--</strong></div>
           <div class="wx-prev-item"><span>电储温容</span><strong id="wx-pv-bess">--%</strong></div>
-          <div class="wx-prev-item"><span>采暖增荷</span><strong id="wx-pv-heat">+0 kW</strong></div>
+          <div class="wx-prev-item"><span>采暖增荷</span><strong id="wx-pv-heat">-- kW</strong></div>
         </div>
         <div class="wx-strategy-bar">
           <span class="ck-drv-badge" id="wx-pv-alert">极地气象正常</span>

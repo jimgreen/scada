@@ -759,7 +759,26 @@ class ScadaPortalTests(unittest.TestCase):
         st_bad2, _ = req_json("PUT", "/api/weather", {"mode": "manual", "icing_level": 9})
         self.assertEqual(st_bad2, 400)
 
-        # 5. 一键恢复现场实测模式，人工推演值全部清空回归真实传感器（None）
+        # 5. 单字段按需补录（仅录入气温 -18°C，其余留空不造数）
+        st_patch, w_patch = req_json("PUT", "/api/weather", {
+            "mode": "manual",
+            "preset": "custom",
+            "temperature_c": -18.0,
+            "wind_speed_ms": None,
+            "irradiance_wm2": None,
+            "pressure_hpa": None,
+            "icing_level": None,
+            "snow_condition": None,
+        })
+        self.assertEqual(st_patch, 200)
+        self.assertAlmostEqual(w_patch["effective"]["temperature_c"], -18.0)
+        self.assertEqual(w_patch["effective"]["sources"]["temperature"], "manual")
+        self.assertIsNone(w_patch["effective"]["wind_speed_ms"])
+        self.assertIsNone(w_patch["effective"]["pressure_hpa"])
+        self.assertIsNotNone(w_patch["coupling"]["bess"]["cap_retention_pct"])
+        self.assertIsNone(w_patch["coupling"]["wind"]["avail_pct"])
+
+        # 6. 一键恢复现场实测模式，人工推演值全部清空回归真实传感器（None）
         st3, w3 = req_json("PUT", "/api/weather", {"mode": "measured", "preset": "live"})
         self.assertEqual(st3, 200)
         self.assertEqual(w3["effective"]["mode"], "measured")

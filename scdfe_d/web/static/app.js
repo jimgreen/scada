@@ -2316,8 +2316,22 @@
       blizzard_icing: { mode: 'manual', temperature_c: -31, wind_speed_ms: 21.0, irradiance_wm2: 35, pressure_hpa: 962, icing_level: 3, snow_condition: 'blizzard' },
       calm_overcast: { mode: 'manual', temperature_c: -14, wind_speed_ms: 2.2, irradiance_wm2: 95, pressure_hpa: 992, icing_level: 0, snow_condition: 'overcast' },
     };
-    let wxState = { mode: 'measured', preset: 'live', measured: {} };
+    const SPECS = [
+      { key: 'temperature_c', numId: 'dk-wx-temp', rngId: 'dk-wx-temp-r', tagId: 'dk-wx-src-temp', kind: 'num' },
+      { key: 'wind_speed_ms', numId: 'dk-wx-wind', rngId: 'dk-wx-wind-r', tagId: 'dk-wx-src-wind', kind: 'num' },
+      { key: 'irradiance_wm2', numId: 'dk-wx-irr', rngId: 'dk-wx-irr-r', tagId: 'dk-wx-src-irr', kind: 'num' },
+      { key: 'pressure_hpa', numId: 'dk-wx-pres', rngId: 'dk-wx-pres-r', tagId: 'dk-wx-src-pres', kind: 'num' },
+      { key: 'icing_level', selId: 'dk-wx-icing', tagId: 'dk-wx-src-icing', kind: 'int' },
+      { key: 'snow_condition', selId: 'dk-wx-snow', tagId: 'dk-wx-src-snow', kind: 'str' },
+    ];
+    let wxState = {
+      mode: 'measured',
+      preset: 'live',
+      measured: {},
+      overrides: { temperature_c: null, wind_speed_ms: null, irradiance_wm2: null, pressure_hpa: null, icing_level: null, snow_condition: null },
+    };
     const tFn = s => (window.scadaI18n && typeof window.scadaI18n.translateText === 'function') ? window.scadaI18n.translateText(String(s ?? '')) : String(s ?? '');
+    const hasOv = () => Object.values(wxState.overrides).some(v => v !== null && v !== undefined && v !== '');
 
     const readNum = id => {
       const raw = $('#' + id)?.value;
@@ -2336,6 +2350,37 @@
       if ($('#' + id)) $('#' + id).value = String(n);
       const r = $('#' + rid);
       if (r) r.value = String(Math.max(Number(r.min), Math.min(Number(r.max), n)));
+    };
+
+    const fillInputs = () => {
+      const m = wxState.measured || {};
+      const ov = wxState.overrides || {};
+      SPECS.forEach(sp => {
+        const val = ov[sp.key] !== null && ov[sp.key] !== undefined ? ov[sp.key] : (m[sp.key] ?? null);
+        if (sp.kind === 'num') setPair(sp.numId, sp.rngId, val);
+        else if ($('#' + sp.selId)) $('#' + sp.selId).value = val != null ? String(val) : '';
+      });
+    };
+
+    const syncBadges = () => {
+      const m = wxState.measured || {};
+      const ov = wxState.overrides || {};
+      SPECS.forEach(sp => {
+        const box = dlg.querySelector(`[data-dk-wx-field="${sp.key}"]`);
+        const tag = $('#' + sp.tagId);
+        const clr = box?.querySelector(`[data-dk-wx-clear="${sp.key}"]`);
+        const hasManual = ov[sp.key] !== null && ov[sp.key] !== undefined && ov[sp.key] !== '';
+        const hasMeas = m[sp.key] !== null && m[sp.key] !== undefined && m[sp.key] !== '';
+        box?.classList.toggle('is-empty', !hasManual && !hasMeas);
+        if (tag) {
+          tag.className = `wx-src-tag${hasManual ? ' is-manual' : (hasMeas ? ' is-measured' : '')}`;
+          tag.textContent = hasManual ? tFn('手工') : (hasMeas ? tFn('实测') : tFn(sp.kind === 'num' ? '未接入' : '未录入'));
+        }
+        if (clr) {
+          clr.hidden = !hasManual;
+          clr.title = hasMeas ? tFn('清除覆盖并恢复实时实测') : tFn('清除手工补录');
+        }
+      });
     };
 
     const renderBtn = data => {
@@ -2409,6 +2454,7 @@
     const syncForm = () => {
       dlg.querySelectorAll('[data-dk-wx-mode]').forEach(b => b.classList.toggle('active', b.dataset.dkWxMode === wxState.mode));
       dlg.querySelectorAll('[data-dk-wx-preset]').forEach(b => b.classList.toggle('active', b.dataset.dkWxPreset === wxState.preset));
+      syncBadges();
       preview();
     };
 
@@ -2426,14 +2472,24 @@
       error('#dk-wx-error', '');
       const res = await loadWx();
       if (res) {
-        const eff = res.effective || {};
-        wxState = { mode: res.profile?.mode || 'measured', preset: res.profile?.preset || 'live', measured: res.measured || {} };
-        setPair('dk-wx-temp', 'dk-wx-temp-r', eff.temperature_c);
-        setPair('dk-wx-wind', 'dk-wx-wind-r', eff.wind_speed_ms);
-        setPair('dk-wx-irr', 'dk-wx-irr-r', eff.irradiance_wm2);
-        setPair('dk-wx-pres', 'dk-wx-pres-r', eff.pressure_hpa);
-        if ($('#dk-wx-icing')) $('#dk-wx-icing').value = eff.icing_level != null ? String(eff.icing_level) : '';
-        if ($('#dk-wx-snow')) $('#dk-wx-snow').value = eff.snow_condition != null ? String(eff.snow_condition) : '';
+        const prof = res.profile || {};
+        const mode = prof.mode || 'measured';
+        wxState = {
+          mode,
+          preset: prof.preset || 'live',
+          measured: res.measured || {},
+          overrides: mode === 'manual'
+            ? {
+                temperature_c: prof.temperature_c ?? null,
+                wind_speed_ms: prof.wind_speed_ms ?? null,
+                irradiance_wm2: prof.irradiance_wm2 ?? null,
+                pressure_hpa: prof.pressure_hpa ?? null,
+                icing_level: prof.icing_level ?? null,
+                snow_condition: prof.snow_condition ?? null,
+              }
+            : { temperature_c: null, wind_speed_ms: null, irradiance_wm2: null, pressure_hpa: null, icing_level: null, snow_condition: null },
+        };
+        fillInputs();
         syncForm();
       }
       if (!dlg.open) dlg.showModal();
@@ -2444,13 +2500,8 @@
       wxState.mode = b.dataset.dkWxMode === 'manual' ? 'manual' : 'measured';
       if (wxState.mode === 'measured') {
         wxState.preset = 'live';
-        const m = wxState.measured || {};
-        setPair('dk-wx-temp', 'dk-wx-temp-r', m.temperature_c ?? null);
-        setPair('dk-wx-wind', 'dk-wx-wind-r', m.wind_speed_ms ?? null);
-        setPair('dk-wx-irr', 'dk-wx-irr-r', m.irradiance_wm2 ?? null);
-        setPair('dk-wx-pres', 'dk-wx-pres-r', m.pressure_hpa ?? null);
-        if ($('#dk-wx-icing')) $('#dk-wx-icing').value = '';
-        if ($('#dk-wx-snow')) $('#dk-wx-snow').value = '';
+        wxState.overrides = { temperature_c: null, wind_speed_ms: null, irradiance_wm2: null, pressure_hpa: null, icing_level: null, snow_condition: null };
+        fillInputs();
       } else if (wxState.preset === 'live') {
         wxState.preset = 'custom';
       }
@@ -2462,22 +2513,48 @@
       if (!d) return;
       wxState.preset = k;
       wxState.mode = d.mode;
-      const m = wxState.measured || {};
-      setPair('dk-wx-temp', 'dk-wx-temp-r', k === 'live' ? (m.temperature_c ?? null) : d.temperature_c);
-      setPair('dk-wx-wind', 'dk-wx-wind-r', k === 'live' ? (m.wind_speed_ms ?? null) : d.wind_speed_ms);
-      setPair('dk-wx-irr', 'dk-wx-irr-r', k === 'live' ? (m.irradiance_wm2 ?? null) : d.irradiance_wm2);
-      setPair('dk-wx-pres', 'dk-wx-pres-r', k === 'live' ? (m.pressure_hpa ?? null) : d.pressure_hpa);
-      if ($('#dk-wx-icing')) $('#dk-wx-icing').value = d.icing_level != null ? String(d.icing_level) : '';
-      if ($('#dk-wx-snow')) $('#dk-wx-snow').value = d.snow_condition != null ? d.snow_condition : '';
+      wxState.overrides = k === 'live'
+        ? { temperature_c: null, wind_speed_ms: null, irradiance_wm2: null, pressure_hpa: null, icing_level: null, snow_condition: null }
+        : {
+            temperature_c: d.temperature_c,
+            wind_speed_ms: d.wind_speed_ms,
+            irradiance_wm2: d.irradiance_wm2,
+            pressure_hpa: d.pressure_hpa,
+            icing_level: d.icing_level,
+            snow_condition: d.snow_condition,
+          };
+      fillInputs();
       syncForm();
     }));
-    const onEdit = () => { wxState.mode = 'manual'; wxState.preset = 'custom'; syncForm(); };
-    [['dk-wx-temp', 'dk-wx-temp-r'], ['dk-wx-wind', 'dk-wx-wind-r'], ['dk-wx-irr', 'dk-wx-irr-r'], ['dk-wx-pres', 'dk-wx-pres-r']].forEach(([n, r]) => {
-      $('#' + r)?.addEventListener('input', e => { if ($('#' + n)) $('#' + n).value = e.target.value; onEdit(); });
-      $('#' + n)?.addEventListener('input', e => { setPair(n, r, e.target.value); onEdit(); });
+    const onFieldEdit = (key, val) => {
+      wxState.overrides[key] = (val === '' || val === undefined) ? null : val;
+      if (hasOv()) { wxState.mode = 'manual'; wxState.preset = 'custom'; }
+      else { wxState.mode = 'measured'; wxState.preset = 'live'; }
+      syncForm();
+    };
+    SPECS.filter(s => s.kind === 'num').forEach(sp => {
+      $('#' + sp.rngId)?.addEventListener('input', e => { if ($('#' + sp.numId)) $('#' + sp.numId).value = e.target.value; onFieldEdit(sp.key, Number(e.target.value)); });
+      $('#' + sp.numId)?.addEventListener('input', e => { setPair(sp.numId, sp.rngId, e.target.value); onFieldEdit(sp.key, readNum(sp.numId)); });
     });
-    $('#dk-wx-icing')?.addEventListener('change', onEdit);
-    $('#dk-wx-snow')?.addEventListener('change', onEdit);
+    $('#dk-wx-icing')?.addEventListener('change', e => onFieldEdit('icing_level', e.target.value === '' ? null : Number(e.target.value)));
+    $('#dk-wx-snow')?.addEventListener('change', e => onFieldEdit('snow_condition', e.target.value || null));
+    dlg.querySelectorAll('[data-dk-wx-clear]').forEach(b => b.addEventListener('click', () => {
+      const k = b.dataset.dkWxClear;
+      if (!k) return;
+      wxState.overrides[k] = null;
+      fillInputs();
+      if (!hasOv()) { wxState.mode = 'measured'; wxState.preset = 'live'; }
+      else wxState.preset = 'custom';
+      syncForm();
+    }));
+    dlg.querySelectorAll('[data-dk-wx-pick]').forEach(b => b.addEventListener('click', () => {
+      const [id, rawVal] = String(b.dataset.dkWxPick || '').split(':');
+      const sp = SPECS.find(x => x.numId === id);
+      const num = Number(rawVal);
+      if (!sp || !Number.isFinite(num)) return;
+      setPair(sp.numId, sp.rngId, num);
+      onFieldEdit(sp.key, num);
+    }));
     $('#dk-wx-reset')?.addEventListener('click', async () => {
       try {
         const res = await api('/api/weather', 'PUT', { mode: 'measured', preset: 'live' });
@@ -2489,18 +2566,10 @@
       e.preventDefault();
       error('#dk-wx-error', '');
       try {
-        const payload = wxState.mode === 'measured'
+        const useMeasured = wxState.mode === 'measured' || !hasOv();
+        const payload = useMeasured
           ? { mode: 'measured', preset: 'live' }
-          : {
-              mode: wxState.mode,
-              preset: wxState.preset,
-              temperature_c: readNum('dk-wx-temp'),
-              wind_speed_ms: readNum('dk-wx-wind'),
-              irradiance_wm2: readNum('dk-wx-irr'),
-              pressure_hpa: readNum('dk-wx-pres'),
-              icing_level: ($('#dk-wx-icing')?.value !== undefined && $('#dk-wx-icing')?.value !== '') ? Number($('#dk-wx-icing').value) : null,
-              snow_condition: $('#dk-wx-snow')?.value || null,
-            };
+          : { mode: 'manual', preset: wxState.preset === 'live' ? 'custom' : wxState.preset, ...wxState.overrides };
         const res = await api('/api/weather', 'PUT', payload);
         renderBtn(res);
         dlg.close();
